@@ -198,6 +198,81 @@ const toolHomeKeys = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const handoffResult =
+  "Hand-off card shown. Tell the user in one sentence; do not start the work here.";
+const handoffTool = {
+  description:
+    "Offer the user a Claude Code session for work that does not belong in this chat: multi-file edits, building or changing an agent, long runs, or anything a denied permission blocked. Studio shows a card with a Start session button; the session receives the prompt as its first message.",
+  // OpenCode builds a JSON Schema from plain per-argument schemas; the
+  // generated module stays import-free and validates in execute.
+  args: {
+    title: {
+      type: "string",
+      description: "A short name for the work, at most 60 characters.",
+    },
+    prompt: {
+      type: "string",
+      description:
+        "Self-contained instructions for the session, including the context from this chat it needs.",
+    },
+  },
+};
+
+/** @internal Shared verbatim with the generated plugin for deterministic tests. */
+export function executeHandoff(args: unknown): string {
+  const input = (args ?? {}) as { title?: unknown; prompt?: unknown };
+  if (
+    typeof input.title !== "string" ||
+    !input.title.trim() ||
+    input.title.length > 60
+  )
+    throw new Error("handoff needs a title of 1 to 60 characters");
+  if (typeof input.prompt !== "string" || !input.prompt.trim())
+    throw new Error("handoff needs a prompt");
+  return handoffResult;
+}
+
+/** @internal The generated plugin module, exposed for deterministic tests. */
+export function studioPluginSource(options: {
+  hookUrl: string;
+  readyPath: string;
+  toolHomeEnvironment: NodeJS.ProcessEnv;
+}): string {
+  return `import { writeFile } from "node:fs/promises";
+import { createStudioCompletionHooks } from ${JSON.stringify(options.hookUrl)};
+const keys = ${JSON.stringify(runtimeCredentialKeys)};
+const toolHomeKeys = ${JSON.stringify(toolHomeKeys)};
+const toolHomeEnvironment = ${JSON.stringify(options.toolHomeEnvironment)};
+const handoffResult = ${JSON.stringify(handoffResult)};
+const executeHandoff = ${executeHandoff.toString()};
+export const SapiomCredentialIsolation = async (input) => {
+  for (const key of keys) delete process.env[key];
+  const completionHooks = createStudioCompletionHooks(async (sessionID) => {
+    const response = await input.client.session.messages({ path: { id: sessionID } });
+    return response.data ?? [];
+  });
+  await writeFile(${JSON.stringify(options.readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
+  return {
+    ...completionHooks,
+    tool: {
+      handoff: {
+        ...${JSON.stringify(handoffTool)},
+        execute: async (args) => executeHandoff(args),
+      },
+    },
+    "shell.env": async (_input, output) => {
+      for (const key of keys) {
+        delete process.env[key];
+        delete output.env[key];
+      }
+      for (const key of toolHomeKeys) delete output.env[key];
+      Object.assign(output.env, toolHomeEnvironment);
+    },
+  };
+};
+`;
+}
+
 async function createCredentialIsolationPlugin(
   launchRoot: string,
   toolHomeEnvironment: NodeJS.ProcessEnv,
@@ -219,31 +294,11 @@ async function createCredentialIsolationPlugin(
     /([/\\])app\.asar([/\\])/,
     "$1app.asar.unpacked$2",
   );
-  const source = `import { writeFile } from "node:fs/promises";
-import { createStudioCompletionHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
-const keys = ${JSON.stringify(runtimeCredentialKeys)};
-const toolHomeKeys = ${JSON.stringify(toolHomeKeys)};
-const toolHomeEnvironment = ${JSON.stringify(toolHomeEnvironment)};
-export const SapiomCredentialIsolation = async (input) => {
-  for (const key of keys) delete process.env[key];
-  const completionHooks = createStudioCompletionHooks(async (sessionID) => {
-    const response = await input.client.session.messages({ path: { id: sessionID } });
-    return response.data ?? [];
+  const source = studioPluginSource({
+    hookUrl: pathToFileURL(hookPath).href,
+    readyPath,
+    toolHomeEnvironment,
   });
-  await writeFile(${JSON.stringify(readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
-  return {
-    ...completionHooks,
-    "shell.env": async (_input, output) => {
-      for (const key of keys) {
-        delete process.env[key];
-        delete output.env[key];
-      }
-      for (const key of toolHomeKeys) delete output.env[key];
-      Object.assign(output.env, toolHomeEnvironment);
-    },
-  };
-};
-`;
   await writeFile(pluginPath, source, { mode: 0o600 });
   return { pluginUrl: pathToFileURL(pluginPath).href, readyPath };
 }

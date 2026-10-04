@@ -2,7 +2,29 @@ export interface SapiomOpenCodeConfigOptions {
   bridgeUrl: string;
   runtimeToken: string;
   model?: string;
+  /** Deny every rule OpenCode would otherwise ask the user about. */
+  neverAsk?: boolean;
 }
+
+/**
+ * OpenCode 1.18.29's default agent rules with action "ask", plus the
+ * `question` and `plan_*` tools the build agent re-enables, each set to deny.
+ * A caller whose transport cannot reply to a permission or question request
+ * would otherwise hang until the user leaves.
+ */
+export const deniedAskPermissions = {
+  doom_loop: "deny",
+  external_directory: { "*": "deny" },
+  question: "deny",
+  plan_enter: "deny",
+  plan_exit: "deny",
+  read: {
+    "*": "allow",
+    "*.env": "deny",
+    "*.env.*": "deny",
+    "*.env.example": "allow",
+  },
+} as const;
 
 /** Only a revocable runtime credential enters OpenCode; Studio holds the key. */
 export function createSapiomOpenCodeConfig(
@@ -27,6 +49,7 @@ export function createSapiomOpenCodeConfig(
     model: `sapiom/${model}`,
     enabled_providers: ["sapiom"],
     plugin: [],
+    ...(options.neverAsk ? { permission: deniedAskPermissions } : {}),
     agent: {
       "sapiom-final-response": {
         mode: "primary",

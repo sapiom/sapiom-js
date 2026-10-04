@@ -1,15 +1,13 @@
 /**
- * Auto-bind (SAP-1897): when a session is unbound and a rescan discovers a
- * workflow at/under the session's cwd, the session must be bound to that
- * workflow automatically — using the same setBoundWorkflowPath mechanism that
- * PATCH /api/sessions/:id/workflow uses.
+ * No auto-bind (SAP-3834, design-map-chat.md I2). A rescan that discovers a
+ * workflow at or under an unbound session's cwd lists it on the rail and never
+ * binds or renders it for that session: the server once picked the first agent
+ * folder under a new project-root session and rendered it, which showed an
+ * unrelated agent's "No index.ts found" card. Binding happens only through
+ * PATCH /api/sessions/:id/workflow (or the FTUX draft build on the client).
  *
- * Guardrails:
- *  - Only fires when unbound (never overrides an explicit binding).
- *  - Only binds workflows at or strictly under the session's cwd.
- *  - Idempotent: a second rescan does not re-bind or churn.
- *  - Prefers the workflow at exactly cwd; falls back to the nearest under cwd.
- *  - Propagates the new binding live via the existing session.status broadcast.
+ * The automatic Canvas render of an explicitly bound session stays, and so do
+ * its execution guards, exercised here through the source watcher.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -123,7 +121,62 @@ async function collectEvents(
   };
 }
 
-describe("auto-bind on rescan (SAP-1897)", () => {
+async function waitForWorkflow(port: number, path: string): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/workflows`, {
+        headers: { "X-Harness-Token": "test-token" },
+      });
+      const workflows = (await res.json()) as Array<{ path: string }>;
+      expect(workflows.some((w) => w.path === path)).toBe(true);
+    },
+    { timeout: 10_000, interval: 150 },
+  );
+}
+
+async function bindSession(
+  port: number,
+  sessionId: string,
+  workflowPath: string,
+): Promise<void> {
+  const res = await fetch(
+    `http://127.0.0.1:${port}/api/sessions/${sessionId}/workflow`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ workflowPath }),
+    },
+  );
+  expect(res.status).toBe(200);
+}
+
+/** Rescans fire on their own schedule; give one time to land before asserting. */
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+
+async function boundPath(
+  port: number,
+  sessionId: string,
+): Promise<string | null | undefined> {
+  return (await listSessions(port)).find((s) => s.id === sessionId)
+    ?.boundWorkflowPath;
+}
+
+function bindFrames(
+  events: { messages: BusMessage[] },
+  sessionId: string,
+): BusMessage[] {
+  return events.messages.filter(
+    (m) =>
+      m.type === "session.status" &&
+      m.session.id === sessionId &&
+      m.session.boundWorkflowPath !== null,
+  );
+}
+
+describe("no auto-bind on rescan (SAP-3834)", () => {
   let dir: string;
   let cwd: string;
   let server: HarnessServer | undefined;
@@ -137,6 +190,7 @@ describe("auto-bind on rescan (SAP-1897)", () => {
 
   afterEach(async () => {
     events?.close();
+    events = undefined;
     await server?.sessionManager.flush();
     await server?.close();
     server = undefined;
@@ -174,7 +228,7 @@ describe("auto-bind on rescan (SAP-1897)", () => {
   }
 
   it(
-    "binds but never automatically executes a hostile source-only workflow discovered by the watcher",
+    "neither binds nor executes a hostile source-only workflow discovered by the watcher",
     { timeout: 20_000 },
     async () => {
       const launches = vi.fn();
@@ -188,18 +242,10 @@ describe("auto-bind on rescan (SAP-1897)", () => {
       });
 
       await scaffoldHostileSourceWorkflow(cwd, sideEffect);
-      await vi.waitFor(
-        async () => {
-          const sessions = await listSessions(port);
-          expect(
-            sessions.find((candidate) => candidate.id === session.id)
-              ?.boundWorkflowPath,
-          ).toBe(cwd);
-        },
-        { timeout: 8_000, interval: 150 },
-      );
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await waitForWorkflow(port, cwd);
+      await settle();
 
+      expect(await boundPath(port, session.id)).toBeNull();
       expect(launches).not.toHaveBeenCalled();
       await expect(access(sideEffect)).rejects.toThrow();
       await expectPrivateWorkflowEvidenceHidden(port);
@@ -207,7 +253,7 @@ describe("auto-bind on rescan (SAP-1897)", () => {
   );
 
   it(
-    "never automatically executes a hostile source-only workflow during boot auto-create",
+    "never binds or executes a hostile source-only workflow during boot auto-create",
     { timeout: 20_000 },
     async () => {
       const launches = vi.fn();
@@ -221,15 +267,18 @@ describe("auto-bind on rescan (SAP-1897)", () => {
       await vi.waitFor(() => {
         expect(server!.sessionManager.list().length).toBeGreaterThan(0);
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await settle();
 
+      expect(
+        server!.sessionManager.list().map((s) => s.boundWorkflowPath),
+      ).toEqual([null]);
       expect(launches).not.toHaveBeenCalled();
       await expect(access(sideEffect)).rejects.toThrow();
     },
   );
 
   it(
-    "never automatically executes a hostile source-only workflow on REST session creation",
+    "never binds or executes a hostile source-only workflow on REST session creation",
     { timeout: 20_000 },
     async () => {
       const launches = vi.fn();
@@ -248,40 +297,52 @@ describe("auto-bind on rescan (SAP-1897)", () => {
         body: JSON.stringify({ cwd, harness: "claude-code" }),
       });
       expect(response.status).toBe(201);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      const { id } = (await response.json()) as HarnessSession;
+      await settle();
 
+      expect(await boundPath(port, id)).toBeNull();
       expect(launches).not.toHaveBeenCalled();
       await expect(access(sideEffect)).rejects.toThrow();
     },
   );
 
   it(
-    "revalidates marker proof after dependency and fingerprint work at the actual automatic extraction boundary",
-    { timeout: 20_000 },
+    "revalidates marker proof at the automatic extraction boundary of an explicitly bound session",
+    { timeout: 25_000 },
     async () => {
       const sideEffect = join(dir, "late-marker-removal-executed");
       await scaffoldHostileSourceWorkflow(cwd, sideEffect);
       await scaffoldWorkflow(cwd);
-      // Make the temp project extraction-ready so the hook sits after the
-      // dependency probe and source fingerprint, immediately before the child
-      // launch instead of being skipped by the preparing placeholder.
+      const beforeLaunch = vi.fn(async (workflowPath: string) => {
+        await rm(join(workflowPath, "sapiom.json"));
+      });
+
+      const port = await startTestServer({
+        beforeAutomaticCanvasLaunch: beforeLaunch,
+      });
+      const session = await server!.sessionManager.create({
+        cwd,
+        harness: "claude-code",
+      });
+      await waitForWorkflow(port, cwd);
+      await settle();
+      // The explicit bind renders without dependencies installed: a
+      // placeholder, no extraction, and the install watcher armed.
+      await bindSession(port, session.id, cwd);
+      // Installing dependencies triggers the automatic render, so the hook
+      // sits after the dependency probe and source fingerprint, immediately
+      // before the child launch.
       await symlink(
         join(process.cwd(), "node_modules"),
         join(cwd, "node_modules"),
         "dir",
       );
-      const beforeLaunch = vi.fn(async (workflowPath: string) => {
-        await rm(join(workflowPath, "sapiom.json"));
-      });
-
-      await startTestServer({
-        autoCreateSession: true,
-        beforeAutomaticCanvasLaunch: beforeLaunch,
-      });
       await vi.waitFor(() => expect(beforeLaunch).toHaveBeenCalledOnce(), {
-        timeout: 8_000,
+        timeout: 10_000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Long enough for a refused launch to have run had it been allowed: the
+      // hook-free mutation of this test writes the side effect within ~5s.
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
 
       expect(beforeLaunch).toHaveBeenCalledWith(cwd);
       await expect(access(sideEffect)).rejects.toThrow();
@@ -289,11 +350,10 @@ describe("auto-bind on rescan (SAP-1897)", () => {
   );
 
   it(
-    "preserves legacy automatic Canvas authorization for a markerless cloud-linked source row",
-    { timeout: 20_000 },
+    "preserves legacy automatic Canvas authorization for a markerless cloud-linked source row bound explicitly",
+    { timeout: 25_000 },
     async () => {
       const launches = vi.fn();
-      await mkdir(cwd, { recursive: true });
       await writeFile(
         join(cwd, "index.ts"),
         `import { defineAgent } from "@sapiom/agent";
@@ -323,59 +383,54 @@ export const agent = defineAgent({ name: "linked-source" });`,
         ]),
       );
 
-      await startTestServer({
-        autoCreateSession: true,
+      const port = await startTestServer({
         beforeAutomaticCanvasLaunch: launches,
       });
+      const session = await server!.sessionManager.create({
+        cwd,
+        harness: "claude-code",
+      });
+      await settle();
+      expect(await boundPath(port, session.id)).toBeNull();
+      expect(launches).not.toHaveBeenCalled();
+
+      await bindSession(port, session.id, cwd);
+      await writeFile(
+        join(cwd, "index.ts"),
+        `import { defineAgent } from "@sapiom/agent";
+export const agent = defineAgent({ name: "linked-source-edited" });`,
+      );
       await vi.waitFor(() => expect(launches).toHaveBeenCalled(), {
-        timeout: 8_000,
+        timeout: 10_000,
       });
       expect(launches).toHaveBeenCalledWith(cwd);
     },
   );
 
   it(
-    "binds an unbound session when a workflow appears at exactly session.cwd",
+    "leaves an unbound session unbound when a workflow appears at exactly session.cwd",
     { retry: 1, timeout: 20_000 },
     async () => {
       const port = await startTestServer();
-      // Create a session in cwd — starts unbound.
       const session = await server!.sessionManager.create({
         cwd,
         harness: "claude-code",
       });
       expect(session.boundWorkflowPath).toBeNull();
-
       events = await collectEvents(port);
 
-      // Scaffold a workflow at exactly cwd — the workspace watcher fires a
-      // rescan, which should auto-bind.
       await scaffoldWorkflow(cwd);
+      await waitForWorkflow(port, cwd);
+      await settle();
 
-      await vi.waitFor(
-        async () => {
-          const sessions = await listSessions(port);
-          const s = sessions.find((x) => x.id === session.id);
-          expect(s?.boundWorkflowPath).toBe(cwd);
-        },
-        { timeout: 8_000, interval: 150 },
-      );
-
-      // The binding must have been broadcast as a session.status frame.
-      expect(
-        events.messages.some(
-          (m) =>
-            m.type === "session.status" &&
-            m.session.id === session.id &&
-            m.session.boundWorkflowPath === cwd,
-        ),
-      ).toBe(true);
+      expect(await boundPath(port, session.id)).toBeNull();
+      expect(bindFrames(events, session.id)).toEqual([]);
       await expectPrivateWorkflowEvidenceHidden(port);
     },
   );
 
   it(
-    "binds an unbound session when a workflow appears under session.cwd (nested)",
+    "leaves an unbound session unbound when a workflow appears under session.cwd (nested)",
     { retry: 1, timeout: 20_000 },
     async () => {
       const port = await startTestServer();
@@ -383,25 +438,20 @@ export const agent = defineAgent({ name: "linked-source" });`,
         cwd,
         harness: "claude-code",
       });
-      expect(session.boundWorkflowPath).toBeNull();
+      events = await collectEvents(port);
 
-      // Scaffold a workflow under a sub-directory of cwd.
       const wfDir = join(cwd, "my-agent");
       await scaffoldWorkflow(wfDir);
+      await waitForWorkflow(port, wfDir);
+      await settle();
 
-      await vi.waitFor(
-        async () => {
-          const sessions = await listSessions(port);
-          const s = sessions.find((x) => x.id === session.id);
-          expect(s?.boundWorkflowPath).toBe(wfDir);
-        },
-        { timeout: 8_000, interval: 150 },
-      );
+      expect(await boundPath(port, session.id)).toBeNull();
+      expect(bindFrames(events, session.id)).toEqual([]);
     },
   );
 
   it(
-    "prefers workflow at cwd over a nested one",
+    "leaves an unbound session unbound with workflows both at and under session.cwd",
     { retry: 1, timeout: 20_000 },
     async () => {
       const port = await startTestServer();
@@ -410,54 +460,19 @@ export const agent = defineAgent({ name: "linked-source" });`,
         harness: "claude-code",
       });
 
-      // Scaffold a nested workflow first (to register it), then the one at cwd.
       const nested = join(cwd, "nested-agent");
       await scaffoldWorkflow(nested);
-
-      // Wait for nested to appear so both are present when we add the cwd one.
-      await vi.waitFor(
-        async () => {
-          const s = await listSessions(port);
-          expect(s.find((x) => x.id === session.id)?.boundWorkflowPath).toBe(
-            nested,
-          );
-        },
-        { timeout: 8_000, interval: 150 },
-      );
-
-      // Now manually unbind (simulate the user not having an explicit binding)
-      // and scaffold at cwd.  The test validates preference logic directly by
-      // calling the PATCH route.
-      const patchRes = await fetch(
-        `http://127.0.0.1:${port}/api/sessions/${session.id}/workflow`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Harness-Token": "test-token",
-          },
-          body: JSON.stringify({ workflowPath: null }),
-        },
-      );
-      expect(patchRes.status).toBe(200);
-
-      // Scaffold a workflow at exactly cwd — next rescan should prefer it.
+      await waitForWorkflow(port, nested);
       await scaffoldWorkflow(cwd);
+      await waitForWorkflow(port, cwd);
+      await settle();
 
-      await vi.waitFor(
-        async () => {
-          const s = await listSessions(port);
-          expect(s.find((x) => x.id === session.id)?.boundWorkflowPath).toBe(
-            cwd,
-          );
-        },
-        { timeout: 8_000, interval: 150 },
-      );
+      expect(await boundPath(port, session.id)).toBeNull();
     },
   );
 
   it(
-    "does not auto-bind when the session already has an explicit binding",
+    "keeps an explicit binding when a workflow appears at session.cwd",
     { retry: 1, timeout: 20_000 },
     async () => {
       const port = await startTestServer();
@@ -483,35 +498,19 @@ export const agent = defineAgent({ name: "linked-source" });`,
         cwd,
         harness: "claude-code",
       });
+      await bindSession(port, session.id, preexisting);
 
-      // Explicitly bind to the pre-existing workflow.
-      const patchRes = await fetch(
-        `http://127.0.0.1:${port}/api/sessions/${session.id}/workflow`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Harness-Token": "test-token",
-          },
-          body: JSON.stringify({ workflowPath: preexisting }),
-        },
-      );
-      expect(patchRes.status).toBe(200);
-
-      // Now scaffold a workflow at cwd — a rescan should NOT override the
-      // explicit binding.
+      // Scaffold a workflow at cwd — a rescan must not change the binding.
       await scaffoldWorkflow(cwd);
+      await waitForWorkflow(port, cwd);
+      await settle();
 
-      // Wait long enough for a rescan to have fired; binding must stay.
-      await new Promise<void>((resolve) => setTimeout(resolve, 3_000));
-      const sessions = await listSessions(port);
-      const s = sessions.find((x) => x.id === session.id);
-      expect(s?.boundWorkflowPath).toBe(preexisting);
+      expect(await boundPath(port, session.id)).toBe(preexisting);
     },
   );
 
   it(
-    "does not auto-bind when no workflow exists at or under session.cwd",
+    "does not bind when no workflow exists at or under session.cwd",
     { retry: 1, timeout: 20_000 },
     async () => {
       const port = await startTestServer();
@@ -532,15 +531,13 @@ export const agent = defineAgent({ name: "linked-source" });`,
         body: JSON.stringify({ path: outside }),
       });
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
-      const sessions = await listSessions(port);
-      const s = sessions.find((x) => x.id === session.id);
-      expect(s?.boundWorkflowPath).toBeNull();
+      await settle();
+      expect(await boundPath(port, session.id)).toBeNull();
     },
   );
 
   it(
-    "is idempotent — a second rescan does not re-bind or emit redundant events",
+    "never binds across repeated rescans",
     { retry: 1, timeout: 25_000 },
     async () => {
       const port = await startTestServer();
@@ -548,115 +545,43 @@ export const agent = defineAgent({ name: "linked-source" });`,
         cwd,
         harness: "claude-code",
       });
-
       events = await collectEvents(port);
 
-      // Scaffold the first workflow as a SUBDIRECTORY of cwd (not at cwd itself).
-      // This is deliberate: when the first workflow lives at `cwd/first-agent`,
-      // the watcher's fingerprint is "cwd/first-agent".  Adding a sibling
-      // `cwd/second-agent` later changes the fingerprint to
-      // "cwd/first-agent|cwd/second-agent", which fires a real onChange.
-      // (If the workflow were at cwd itself, the fingerprint walk stops there
-      // and never descends into any sub-directory, so adding a nested entry
-      // would NOT change the fingerprint and the watcher would never fire.)
+      // Two structural changes under cwd, each firing a real rescan: the
+      // watcher's fingerprint is the set of sapiom.json-bearing directories,
+      // and adding a sibling changes it.
       const firstWorkflow = join(cwd, "first-agent");
       await scaffoldWorkflow(firstWorkflow);
-
-      // Wait for the initial auto-bind to land (session binds to firstWorkflow).
-      await vi.waitFor(
-        async () => {
-          const s = await listSessions(port);
-          expect(s.find((x) => x.id === session.id)?.boundWorkflowPath).toBe(
-            firstWorkflow,
-          );
-        },
-        { timeout: 8_000, interval: 150 },
-      );
-
-      // Count session.status frames after the first (real) bind.
-      const framesAfterBind = events.messages.filter(
-        (m) => m.type === "session.status" && m.session.id === session.id,
-      ).length;
-      expect(framesAfterBind).toBeGreaterThan(0);
-
-      // Force a REAL second rescan: scaffold a second (peer) workflow directory
-      // under cwd.  The workspace watcher is fingerprint-based — it fires
-      // onChange only when the SET of sapiom.json-bearing directories changes.
-      // Adding a sibling directory changes the fingerprint and guarantees a
-      // rescan fires; the `!session.boundWorkflowPath` guard is now false, so
-      // the auto-bind code runs but does NOT re-bind.
+      await waitForWorkflow(port, firstWorkflow);
       const secondWorkflow = join(cwd, "second-agent");
       await scaffoldWorkflow(secondWorkflow);
+      await waitForWorkflow(port, secondWorkflow);
+      await settle();
 
-      // Wait for the second workflow to appear in the registry — this confirms
-      // the workspace watcher detected the structural change, fired onChange,
-      // and `rescanWorkspaceForSession` completed.
-      await vi.waitFor(
-        async () => {
-          const res = await fetch(`http://127.0.0.1:${port}/api/workflows`, {
-            headers: { "X-Harness-Token": "test-token" },
-          });
-          const workflows = (await res.json()) as Array<{ path: string }>;
-          expect(workflows.some((w) => w.path === secondWorkflow)).toBe(true);
-        },
-        { timeout: 10_000, interval: 200 },
-      );
-
-      // The binding must remain on the FIRST workflow — the
-      // `!session.boundWorkflowPath` guard (now false) prevented any re-bind.
-      const sessions = await listSessions(port);
-      expect(sessions.find((x) => x.id === session.id)?.boundWorkflowPath).toBe(
-        firstWorkflow,
-      );
-
-      // No NEW session.status frames should have been emitted for a bind
-      // attempt on account of the second rescan (the guard prevented it).
-      const framesAfterSecondRescan = events.messages.filter(
-        (m) => m.type === "session.status" && m.session.id === session.id,
-      ).length;
-      expect(framesAfterSecondRescan).toBe(framesAfterBind);
+      expect(await boundPath(port, session.id)).toBeNull();
+      expect(bindFrames(events, session.id)).toEqual([]);
     },
   );
 
   it(
-    "auto-binds when workflow already exists at session.cwd before the session starts (on-start rescan)",
+    "leaves a session unbound when its workflow exists before the session starts (on-start rescan)",
     { retry: 1, timeout: 20_000 },
     async () => {
-      // Scaffold the workflow BEFORE the server starts and the session is created.
-      // This reproduces the cloned/deployed-template scenario: the watcher is armed
-      // with the workflow already present as its baseline snapshot, so it never fires
-      // onChange for it.  Without the on-start rescan the session would stay unbound
-      // indefinitely; with it, the one-time rescan in the "running" branch picks it up.
+      // The cloned/deployed-template case: the watcher's baseline already
+      // holds the workflow, so only the one-time on-start rescan sees it.
       await scaffoldWorkflow(cwd);
 
       const port = await startTestServer();
       events = await collectEvents(port);
-
-      // Create the session — its cwd already contains the workflow.
       const session = await server!.sessionManager.create({
         cwd,
         harness: "claude-code",
       });
+      await waitForWorkflow(port, cwd);
+      await settle();
 
-      // The on-start rescan must auto-bind without any file-change event from the watcher.
-      await vi.waitFor(
-        async () => {
-          const sessions = await listSessions(port);
-          const s = sessions.find((x) => x.id === session.id);
-          expect(s?.boundWorkflowPath).toBe(cwd);
-        },
-        { timeout: 8_000, interval: 150 },
-      );
-
-      // The binding must also be broadcast as a session.status frame.
-      expect(
-        events.messages.some(
-          (m) =>
-            m.type === "session.status" &&
-            m.session.id === session.id &&
-            m.session.boundWorkflowPath === cwd,
-        ),
-      ).toBe(true);
+      expect(await boundPath(port, session.id)).toBeNull();
+      expect(bindFrames(events, session.id)).toEqual([]);
     },
   );
 });

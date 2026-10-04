@@ -11,29 +11,58 @@ import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 import { isConversationId } from "../shared/assistant-state.js";
 export { isConversationId } from "../shared/assistant-state.js";
 
-/** One native conversation per Studio session; the host holds the owner lock. */
+/** One native conversation per host key; the host holds the owner lock. */
 export class OpenCodeAssociations {
   private pending = new WeakMap<HostedOpenCode, Promise<string>>();
 
   ensure(hosted: HostedOpenCode): Promise<string> {
     const existing = this.pending.get(hosted);
     if (existing) return existing;
-    const pending = this.load(hosted).catch((error) => {
-      this.pending.delete(hosted);
+    const pending: Promise<string> = this.load(hosted).catch((error) => {
+      if (this.pending.get(hosted) === pending) this.pending.delete(hosted);
       throw error;
     });
     this.pending.set(hosted, pending);
     return pending;
   }
 
-  private async load(hosted: HostedOpenCode): Promise<string> {
+  /** Starts a new conversation and saves it in place of the current one. */
+  reset(hosted: HostedOpenCode): Promise<string> {
+    const previous = this.pending.get(hosted) ?? Promise.resolve("");
+    const pending: Promise<string> = previous
+      .catch(() => "")
+      .then(() =>
+        this.transaction(hosted, (file) =>
+          this.create(
+            hosted,
+            file,
+            AbortSignal.any([hosted.signal, AbortSignal.timeout(15000)]),
+          ),
+        ),
+      )
+      .catch((error) => {
+        if (this.pending.get(hosted) === pending) this.pending.delete(hosted);
+        throw error;
+      });
+    this.pending.set(hosted, pending);
+    return pending;
+  }
+
+  private load(hosted: HostedOpenCode): Promise<string> {
+    return this.transaction(hosted, (file) => this.readOrCreate(hosted, file));
+  }
+
+  private async transaction(
+    hosted: HostedOpenCode,
+    run: (file: string) => Promise<string>,
+  ): Promise<string> {
     const file = join(hosted.stateRoot, "association.json");
     // Held through commit even if the runtime retires during filesystem I/O.
     // A replacement host must finish this transaction before reading a mapping.
     const unlock = await new DurableFileLock(file).acquire();
     try {
       hosted.signal.throwIfAborted();
-      return await this.readOrCreate(hosted, file);
+      return await run(file);
     } finally {
       await unlock();
     }
@@ -97,6 +126,14 @@ export class OpenCodeAssociations {
         );
       return saved.conversationId;
     }
+    return this.create(hosted, file, signal);
+  }
+
+  private async create(
+    hosted: HostedOpenCode,
+    file: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     const session = await hosted.server.fetchJson<{ id: string }>("/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -15,7 +16,15 @@ import type { HostedOpenCode } from "./opencode-host.js";
 import type { AssistantObservation } from "../shared/assistant-state.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import type { AssistantGrant } from "./assistant-access.js";
-import { OpenCodeHost, OpenCodeTransportError } from "./opencode-host.js";
+import type { StudioProjectIdentity } from "@sapiom/agent-map/node/studio-project-catalog";
+import {
+  OpenCodeAccessError,
+  OpenCodeHost,
+  OpenCodeTransportError,
+  authorizeMapChat,
+  mapChatHostKey,
+  mapChatIdleMs,
+} from "./opencode-host.js";
 
 const initial: AssistantObservation = {
   activity: "unknown",
@@ -713,5 +722,116 @@ describe("host-owned Assistant observation", () => {
     });
     expect(hosted.signal.aborted).toBe(false);
     expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe("project map chat host", () => {
+  const projectId = "project_018f0000-0000-4000-8000-000000000001";
+  const key = mapChatHostKey(projectId);
+  const project = (status: "active" | "missing") =>
+    ({
+      projectId,
+      rootBindings: [
+        { id: "a", repositoryId: null, localRootRef: cwd, status },
+      ],
+    }) as unknown as StudioProjectIdentity;
+
+  it("authorizes the key only for a known project with an active root", async () => {
+    const resolve = vi.fn(async (id: string) =>
+      id === projectId ? project("active") : null,
+    );
+    expect(await authorizeMapChat(key, resolve)).toEqual({
+      harnessSessionId: key,
+      cwd,
+    });
+    expect(
+      await authorizeMapChat(mapChatHostKey("project_unknown"), resolve),
+    ).toBeNull();
+    expect(await authorizeMapChat(projectId, resolve)).toBeNull();
+    expect(
+      await authorizeMapChat(key, async () => project("missing")),
+    ).toBeNull();
+    expect(
+      await authorizeMapChat(key, async () => {
+        throw new Error("catalog unavailable");
+      }),
+    ).toBeNull();
+
+    authorize.mockImplementation((id) => authorizeMapChat(id, resolve));
+    const hosted = await host.ensure(key);
+    expect(hosted.cwd).toBe(await realpath(cwd));
+    const unknown = host.ensure(mapChatHostKey("project_unknown"));
+    await expect(unknown).rejects.toBeInstanceOf(OpenCodeAccessError);
+    await expect(unknown).rejects.toMatchObject({
+      failure: openCodeTransportFailure("access_denied"),
+    });
+  });
+
+  it("denies every ask for the map chat only", async () => {
+    await host.ensure(key);
+    await host.ensure("studio-a");
+    const permission = start.mock.calls[0][0].config.permission;
+    expect(permission).toMatchObject({
+      doom_loop: "deny",
+      external_directory: { "*": "deny" },
+      question: "deny",
+    });
+    expect(JSON.stringify(permission)).not.toContain('"ask"');
+    expect(start.mock.calls[1][0].config).not.toHaveProperty("permission");
+  });
+
+  it("keeps the map chat out of the Assistant session state and lets a reset rebind it", async () => {
+    const hosted = await host.ensure(key);
+    host.observe(hosted, "ses_a");
+    expect(createObserver).not.toHaveBeenCalled();
+    expect(host.getAssistantState().sessions).toEqual([]);
+    expect(() => host.observe(hosted, "ses_b")).toThrow(
+      "saved Assistant conversation",
+    );
+    host.forget(hosted);
+    host.observe(hosted, "ses_b");
+    expect(host.getAssistantState().sessions).toEqual([]);
+  });
+
+  it("stops an unheld map chat after 15 idle minutes and never a Studio session", async () => {
+    let now = 0;
+    const idle = new OpenCodeHost({
+      access: {
+        get: () => grant,
+        getFailureCode: () => "transport_unavailable",
+        getBrowserState,
+        subscribe: () => () => {},
+      },
+      bridge: { issue, model: "gpt-luna" },
+      origin: () => "http://127.0.0.1:1234",
+      stateRoot: root,
+      authorize,
+      start,
+      createObserver,
+      now: () => now,
+    });
+    try {
+      const map = await idle.ensure(key);
+      const session = await idle.ensure("studio-a");
+      const release = idle.hold(map);
+      now = mapChatIdleMs * 2;
+      idle.retireIdle();
+      expect(map.signal.aborted).toBe(false);
+      release();
+      release();
+      now += mapChatIdleMs - 1;
+      idle.retireIdle();
+      expect(map.signal.aborted).toBe(false);
+      now += 1;
+      idle.retireIdle();
+      expect(map.signal.aborted).toBe(true);
+      expect(session.signal.aborted).toBe(false);
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      // The next question starts it again.
+      expect(await idle.ensure(key)).not.toBe(map);
+      expect(start).toHaveBeenCalledTimes(3);
+    } finally {
+      await idle.close();
+    }
   });
 });

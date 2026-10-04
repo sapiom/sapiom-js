@@ -5,6 +5,7 @@ import {
 } from "../core/opencode-association.js";
 import {
   OpenCodeTransportError,
+  mapChatProjectId,
   type OpenCodeHost,
 } from "../core/opencode-host.js";
 import { createBootTokenMiddleware } from "./auth.js";
@@ -17,7 +18,7 @@ import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
 import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 
 export function createOpenCodeRouter(
-  host: Pick<OpenCodeHost, "ensure" | "observe">,
+  host: Pick<OpenCodeHost, "ensure" | "observe" | "hold" | "forget">,
   bootToken: string,
 ): Router {
   const router = express.Router();
@@ -39,7 +40,7 @@ export function createOpenCodeRouter(
     const id = req.params.harnessSessionId!;
     const read = req.method === "GET";
     const conversation =
-      /^session\/(ses_[A-Za-z0-9_-]+)(\/message|\/prompt_async|\/final-response)?$/.exec(
+      /^session\/(ses_[A-Za-z0-9_-]+)(\/message|\/prompt_async|\/final-response|\/abort)?$/.exec(
         path,
       );
     const collection = [
@@ -51,17 +52,25 @@ export function createOpenCodeRouter(
     const prompt =
       !read && req.method === "POST" && conversation?.[2] === "/prompt_async";
     const attach = req.method === "POST" && path === "attach";
+    const stop = req.method === "POST" && conversation?.[2] === "/abort";
+    // New chat: only the map chat replaces its conversation (design Q2).
+    const reset =
+      req.method === "POST" &&
+      path === "reset" &&
+      mapChatProjectId(id) !== null;
     const recover =
       req.method === "POST" && conversation?.[2] === "/final-response";
     const allowed =
       attach ||
+      reset ||
       prompt ||
+      stop ||
       recover ||
       (read &&
         (path === "event" ||
           collection ||
           (conversation &&
-            !["/prompt_async", "/final-response"].includes(
+            !["/prompt_async", "/final-response", "/abort"].includes(
               conversation[2] ?? "",
             ))));
     const queryAllowed = Object.entries(req.query).every(
@@ -72,7 +81,7 @@ export function createOpenCodeRouter(
     );
     if (
       !allowed ||
-      !/^[A-Za-z0-9_-]{1,128}$/.test(id) ||
+      !/^(?:map:)?[A-Za-z0-9_-]{1,128}$/.test(id) ||
       !queryAllowed ||
       (conversation && !isConversationId(conversation[1])) ||
       (recover &&
@@ -92,8 +101,33 @@ export function createOpenCodeRouter(
     const cancel = () => disconnected.abort();
     res.once("close", cancel);
     res.setHeader("Cache-Control", "no-store");
+    let release = () => {};
     try {
       const hosted = await host.ensure(id);
+      release = host.hold(hosted);
+      if (reset) {
+        if (finalResponse.isRunning(hosted)) {
+          res
+            .status(409)
+            .json({ error: "Assistant is finishing the previous response" });
+          return;
+        }
+        const previous = await associations.ensure(hosted).catch(() => null);
+        // A running answer must not keep spending into a hidden conversation.
+        if (previous)
+          await hosted.server
+            .fetch(`/session/${previous}/abort`, {
+              method: "POST",
+              signal: AbortSignal.timeout(5000),
+            })
+            .then((response) => response.body?.cancel())
+            .catch(() => {});
+        host.forget(hosted);
+        const next = await associations.reset(hosted);
+        host.observe(hosted, next);
+        res.json({ conversationId: next });
+        return;
+      }
       const nativeId = await associations.ensure(hosted);
       if (conversation && conversation[1] !== nativeId) {
         res.status(403).json({
@@ -184,6 +218,7 @@ export function createOpenCodeRouter(
         );
       else res.destroy();
     } finally {
+      release();
       disconnected.abort();
       res.off("close", cancel);
     }

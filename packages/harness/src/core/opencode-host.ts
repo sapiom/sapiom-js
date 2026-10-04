@@ -28,6 +28,7 @@ import type {
   OpenCodeBridgeCredential,
 } from "../server/opencode-bridge.js";
 
+import type { StudioProjectIdentity } from "@sapiom/agent-map/node/studio-project-catalog";
 import type { OpenCodeObserver } from "./opencode-observer.js";
 import {
   isConversationId,
@@ -64,6 +65,8 @@ interface Managed {
   credential?: OpenCodeBridgeCredential;
   unlock?: DurableFileLockRelease;
   cleanupFailed?: boolean;
+  holds: number;
+  lastActive: number;
 }
 interface Options {
   access: Pick<
@@ -75,6 +78,7 @@ interface Options {
   stateRoot: string;
   authorize: (id: string) => Promise<OpenCodeWorkspace | null>;
   start?: typeof startOpenCodeServer;
+  now?: () => number;
   createObserver: (
     hosted: HostedOpenCode,
     id: string,
@@ -96,6 +100,34 @@ export class OpenCodeAccessError extends OpenCodeTransportError {
     this.message = message;
   }
 }
+const mapChatPrefix = "map:";
+/** The project's map chat: an OpenCode host that is never a Studio session. */
+export const mapChatHostKey = (projectId: string): string =>
+  `${mapChatPrefix}${projectId}`;
+export const mapChatProjectId = (id: string): string | null =>
+  id.startsWith(mapChatPrefix) ? id.slice(mapChatPrefix.length) : null;
+/** A map chat with no request for this long stops its process (design Q4). */
+export const mapChatIdleMs = 15 * 60_000;
+
+/** A map chat runs at its project's first active root, or nowhere. */
+export async function authorizeMapChat(
+  id: string,
+  resolveProject: (projectId: string) => Promise<StudioProjectIdentity | null>,
+): Promise<OpenCodeWorkspace | null> {
+  const projectId = mapChatProjectId(id);
+  if (!projectId) return null;
+  let project: StudioProjectIdentity | null;
+  try {
+    project = await resolveProject(projectId);
+  } catch {
+    return null;
+  }
+  const root = project?.rootBindings.find(
+    (binding) => binding.status === "active",
+  )?.localRootRef;
+  return root ? { harnessSessionId: id, cwd: root } : null;
+}
+
 const authority = (grant: AssistantGrant) =>
   createHash("sha256")
     .update(
@@ -126,6 +158,7 @@ export class OpenCodeHost {
   constructor(private readonly options: Options) {
     this.assistantAccess = options.access.getBrowserState();
     this.workspaceTimer = setInterval(() => {
+      this.retireIdle();
       for (const [id, entry] of this.entries) {
         void this.workspace(id)
           .then(async (workspace) => {
@@ -195,6 +228,44 @@ export class OpenCodeHost {
     this.summaries.clear();
     this.assistantChanged();
   }
+  /** Keeps a map chat's process alive until the returned release runs. */
+  hold(hosted: HostedOpenCode): () => void {
+    const entry = this.entries.get(hosted.harnessSessionId);
+    if (!entry || entry.hosted !== hosted) return () => {};
+    entry.holds++;
+    entry.lastActive = this.now();
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      entry.holds--;
+      entry.lastActive = this.now();
+    };
+  }
+  /** Stops map chats with no open request for mapChatIdleMs. */
+  retireIdle(): void {
+    const now = this.now();
+    for (const [id, entry] of this.entries)
+      if (
+        mapChatProjectId(id) !== null &&
+        entry.hosted &&
+        entry.holds === 0 &&
+        now - entry.lastActive >= mapChatIdleMs
+      )
+        void this.retire(id);
+  }
+  /** Ends the current observation so a reset conversation can be observed. */
+  forget(hosted: HostedOpenCode): void {
+    const entry = this.entries.get(hosted.harnessSessionId);
+    if (!entry || entry.hosted !== hosted) return;
+    const binding = entry.observation;
+    entry.observation = undefined;
+    this.removeSummary(hosted.harnessSessionId);
+    binding?.observer?.dispose();
+  }
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
   private removeSummary(id: string): void {
     if (this.summaries.delete(id)) this.assistantChanged();
   }
@@ -228,6 +299,8 @@ export class OpenCodeHost {
     }
     const binding: ObservationBinding = { conversationId };
     entry.observation = binding;
+    // The Assistant state lists Studio sessions; the map chat is not one (I5).
+    if (mapChatProjectId(id) !== null) return;
     try {
       binding.observer = this.options.createObserver(
         hosted,
@@ -293,8 +366,10 @@ export class OpenCodeHost {
       existing &&
       existing.workspace.cwd === cwd &&
       existing.authority === authority(grant)
-    )
+    ) {
+      existing.lastActive = this.now();
       return existing.ready!;
+    }
     if (existing)
       await this.retire(id, openCodeTransportFailure("access_denied"));
     // A prior retirement must finish before another process uses its database.
@@ -312,6 +387,8 @@ export class OpenCodeHost {
       workspace: { harnessSessionId: id, cwd },
       authority: authority(grant),
       abort: new AbortController(),
+      holds: 0,
+      lastActive: this.now(),
     };
     this.entries.set(id, entry);
     entry.ready = this.start(entry, grant);
@@ -431,6 +508,8 @@ export class OpenCodeHost {
         bridgeUrl: `${this.options.origin()}/opencode-runtime/${entry.credential.id}`,
         runtimeToken: entry.credential.token,
         model: this.options.bridge.model,
+        // The map chat's transport has no reply path for a permission prompt (I4).
+        neverAsk: mapChatProjectId(entry.workspace.harnessSessionId) !== null,
       });
       startupAttempted = true;
       server = await (this.options.start ?? startOpenCodeServer)({
