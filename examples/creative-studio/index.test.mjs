@@ -566,6 +566,33 @@ test("runStructured gives up after three prose replies", async () => {
   assert.equal(calls, 3);
 });
 
+test("runStructured treats a thrown LlmStructuredOutputMissingError as a prose reply", async () => {
+  let calls = 0;
+  const { ctx: c } = ctx(
+    {},
+    {
+      llm: {
+        run: async () => {
+          calls++;
+          const err = new Error("no tool call");
+          err.name = "LlmStructuredOutputMissingError";
+          throw err;
+        },
+        structuredOf: () => undefined,
+      },
+    },
+  );
+  assert.equal(
+    await runStructured(
+      c,
+      { messages: [], max_tokens: 10 },
+      { name: "t", schema: {} },
+    ),
+    undefined,
+  );
+  assert.equal(calls, 3);
+});
+
 test("when both keyframes fail, the better attempt is animated, not the last", async () => {
   const good = {
     same_person: true,

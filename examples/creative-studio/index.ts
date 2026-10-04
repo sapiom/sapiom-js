@@ -671,6 +671,20 @@ export async function runStructured(
         output: tool,
       });
     } catch (err) {
+      // `run` throws when the forced tool call never arrived; that is a prose reply, not a
+      // failed call. Matched by name: the template pins the published @sapiom/tools.
+      if (
+        err instanceof Error &&
+        err.name === "LlmStructuredOutputMissingError"
+      ) {
+        lastError = undefined;
+        ctx.logger.warn("model answered without the tool call", {
+          tool: tool.name,
+          attempt,
+          stopReason: (err as { stopReason?: string }).stopReason,
+        });
+        continue;
+      }
       // A gateway blip (a 502 "upstream_unavailable" was seen on prod) is worth
       // another try; the last error is rethrown if every attempt fails.
       lastError = err;
