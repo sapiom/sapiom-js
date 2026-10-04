@@ -10,12 +10,13 @@
  * Channel: `alerts.channel`, else the default desk's triage channel.
  *
  * State: `watchdog_alerts` holds every failure already posted, so a redelivered event or a retried
- * step does not post twice; a lock per failure covers two deliveries at once. A failure is posted, then recorded (post then record, a known
- * limitation).
+ * step does not post twice. The row and the post share a transaction (see `report`), so a failed
+ * post leaves no row and the failure is posted on retry. A commit that fails after Slack accepted
+ * the post leaves no row either, and a retry posts again (post then record, a known limitation).
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 
-import { FLEET_ID, agentSlug } from "../../_shared/fleet-id";
+import { agentSlug } from "../../_shared/fleet-id";
 import { getConfigOr } from "../../_shared/config";
 import { defaultDesk, NoDeskError } from "../../_shared/desks";
 import { withDb, type Db } from "../../_shared/db";
@@ -56,45 +57,37 @@ async function alertChannel(db: Db): Promise<string> {
 }
 
 /**
- * Report one failure. Exported so tests run it against an in-memory database. Two deliveries of
- * the same failure in parallel would both pass the lookup and post twice, so the lookup, post and
- * record run under a lock named for the failure.
+ * Report one failure. Exported so tests run it against an in-memory database.
+ *
+ * The claim row is inserted before the post, in one transaction with it. A second delivery of the
+ * same failure blocks on that row's unique key until the first commits (then it inserts nothing
+ * and stops) or rolls back after a failed post (then it claims the failure and posts). No
+ * advisory lock, so a run holds one pooled connection.
  */
 export async function report(ctx: SlackCtx, db: Db, event: RunFailed) {
   if (!isWatched(event.slug))
     return { outcome: "not_this_fleet", slug: event.slug };
   const key = failureKey(event);
-  const run = await db.tryLock(`${FLEET_ID}.watchdog.${key}`, () =>
-    reportOnce(ctx, db, event, key),
-  );
-  // The holder posts it, or fails and is retried.
-  return run.held
-    ? run.value
-    : { outcome: "in_progress", executionId: event.executionId };
-}
-
-async function reportOnce(
-  ctx: SlackCtx,
-  db: Db,
-  event: RunFailed,
-  key: string,
-) {
-  const seen = await db.query(
-    "select 1 from watchdog_alerts where failure_key = $1",
-    [key],
-  );
-  if (seen.length > 0)
-    return { outcome: "already_reported", executionId: event.executionId };
-
   const channel = await alertChannel(db);
-  const msg = failureMessage(
-    describeFailure(event, await issueNumberOf(db, event.executionId)),
-  );
-  await post(ctx, { channel, text: msg.text, blocks: msg.blocks });
-  await db.query(
-    "insert into watchdog_alerts (failure_key, execution_id, agent) values ($1, $2, $3) on conflict do nothing",
-    [key, event.executionId, event.slug],
-  );
+  const issueNumber = await issueNumberOf(db, event.executionId);
+  const posted = await db.transaction(async (tx) => {
+    // Select first: pg-mem's `on conflict do nothing returning` returns the existing row.
+    const seen = await tx.query(
+      "select 1 from watchdog_alerts where failure_key = $1",
+      [key],
+    );
+    if (seen.length > 0) return false;
+    const claimed = await tx.query(
+      "insert into watchdog_alerts (failure_key, execution_id, agent) values ($1, $2, $3) on conflict do nothing returning failure_key",
+      [key, event.executionId, event.slug],
+    );
+    if (claimed.length === 0) return false;
+    const msg = failureMessage(describeFailure(event, issueNumber));
+    await post(ctx, { channel, text: msg.text, blocks: msg.blocks });
+    return true;
+  });
+  if (!posted)
+    return { outcome: "already_reported", executionId: event.executionId };
   await db.query(
     `delete from watchdog_alerts where posted_at < now() - interval '${KEEP_ALERTS_DAYS} days'`,
   );

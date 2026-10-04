@@ -7,7 +7,7 @@ import { memoryDb, setLocalDb, type Db } from "../../_shared/db";
 import { upsertDesk } from "../../_shared/desks";
 import { RunFailed } from "../../_shared/events";
 import { fakeCtx } from "../../_shared/test-ctx";
-import { FLEET_ID, agentSlug } from "../../_shared/fleet-id";
+import { agentSlug } from "../../_shared/fleet-id";
 import fleet from "../../fleet.json";
 import { agent, report } from "./index";
 import {
@@ -279,19 +279,10 @@ describe("report", () => {
   });
 
   it("posts once when two deliveries of a failure run at the same time", async () => {
-    const e = event();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const held = db.tryLock(
-      `${FLEET_ID}.watchdog.${failureKey(e)}`,
-      () => gate,
-    );
-    const other = run(e);
-    expect(await other.done).toMatchObject({ outcome: "in_progress" });
-    expect(posts(other.logs)).toEqual([]);
-    release();
-    await held;
-    expect(await run(e).done).toMatchObject({ outcome: "posted" });
+    const [a, b] = [run(event()), run(event())];
+    const outcomes = [(await a.done).outcome, (await b.done).outcome].sort();
+    expect(outcomes).toEqual(["already_reported", "posted"]);
+    expect([...posts(a.logs), ...posts(b.logs)]).toHaveLength(1);
   });
 
   it("fails when there is no channel to alert", async () => {
