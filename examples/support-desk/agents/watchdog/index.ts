@@ -10,12 +10,12 @@
  * Channel: `alerts.channel`, else the default desk's triage channel.
  *
  * State: `watchdog_alerts` holds every failure already posted, so a redelivered event or a retried
- * step does not post twice. A failure is posted, then recorded (post then record, a known
+ * step does not post twice; a lock per failure covers two deliveries at once. A failure is posted, then recorded (post then record, a known
  * limitation).
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 
-import { agentSlug } from "../../_shared/fleet-id";
+import { FLEET_ID, agentSlug } from "../../_shared/fleet-id";
 import { getConfigOr } from "../../_shared/config";
 import { defaultDesk, NoDeskError } from "../../_shared/desks";
 import { withDb, type Db } from "../../_shared/db";
@@ -55,11 +55,30 @@ async function alertChannel(db: Db): Promise<string> {
   return channel;
 }
 
-/** Report one failure. Exported so tests run it against an in-memory database. */
+/**
+ * Report one failure. Exported so tests run it against an in-memory database. Two deliveries of
+ * the same failure in parallel would both pass the lookup and post twice, so the lookup, post and
+ * record run under a lock named for the failure.
+ */
 export async function report(ctx: SlackCtx, db: Db, event: RunFailed) {
   if (!isWatched(event.slug))
     return { outcome: "not_this_fleet", slug: event.slug };
   const key = failureKey(event);
+  const run = await db.tryLock(`${FLEET_ID}.watchdog.${key}`, () =>
+    reportOnce(ctx, db, event, key),
+  );
+  // The holder posts it, or fails and is retried.
+  return run.held
+    ? run.value
+    : { outcome: "in_progress", executionId: event.executionId };
+}
+
+async function reportOnce(
+  ctx: SlackCtx,
+  db: Db,
+  event: RunFailed,
+  key: string,
+) {
   const seen = await db.query(
     "select 1 from watchdog_alerts where failure_key = $1",
     [key],

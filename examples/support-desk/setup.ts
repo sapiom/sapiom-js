@@ -17,7 +17,7 @@
  *    hash and active build match `.sapiom/fleet-state.json` is left alone.
  * 5. Attach the fleet.json `triggers` that are missing, after listing the attached ones (cron
  *    triggers are not deduped server-side), and resume matching ones that are paused.
- *    `smokeTriggers` are never attached.
+ *    `smokeTriggers` are never attached. A trigger in `RETIRED_TRIGGERS` (scripts/fleet.ts) is detached.
  * 6. Write `.sapiom/fleet-state.json` (ids and hashes only).
  *
  * Selection: every project that is neither `optional` nor `smoke`; `--only <key>` acts on exactly
@@ -65,6 +65,7 @@ import {
   missingTriggers,
   parseArgs,
   pausedToResume,
+  retiredToDetach,
   sameTrigger,
   selectProjects,
   triggerBody,
@@ -340,6 +341,10 @@ async function triggers(
         triggerBody(t),
       );
       changed(`${triggerLabel(t)}: attached (trigger ${made.id})`);
+    }
+    for (const old of retiredToDetach(p.key, attached)) {
+      await client.request("DELETE", `/triggers/${old.id}`);
+      changed(`${p.key}: detached retired trigger ${old.id}`);
     }
     const live = await client.get<AttachedTrigger[]>(
       `/definitions/${p.slug}/triggers`,

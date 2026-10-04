@@ -2,9 +2,9 @@
 -- alerts go. One row per failure posted, keyed on the run and when that failure finished, since a
 -- resumed run that fails again is a new failure with the same execution id.
 
-drop table watchdog_state;
-drop table watchdog_alerted;
-drop table watchdog_reported;
+drop table if exists watchdog_state;
+drop table if exists watchdog_alerted;
+drop table if exists watchdog_reported;
 
 create table watchdog_alerts (
   failure_key text primary key,

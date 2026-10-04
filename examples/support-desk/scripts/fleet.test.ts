@@ -8,6 +8,8 @@ import {
   TRIGGERS,
   triggerBody,
   pausedToResume,
+  retiredToDetach,
+  RETIRED_TRIGGERS,
   selectProjects,
   triggersFor,
   type AttachedTrigger,
@@ -251,5 +253,27 @@ describe("bundleHash", () => {
         dependencies: { zod: "4.1.13", postgres: "3.4.9" },
       }),
     ).not.toBe(a);
+  });
+});
+
+describe("retired triggers", () => {
+  it("detaches the watchdog's old poll, active or paused, and nothing else", () => {
+    const poll = { kind: "schedule_cron", cron: "*/5 * * * *" } as const;
+    const have = [
+      attached({ id: "7", ...poll }),
+      attached({ id: "8", ...poll, status: "paused" }),
+      attached({ id: "9", ...poll, status: "disabled" }),
+      attached({ id: "10", kind: "event", eventType: "sapiom.run.failed" }),
+    ];
+    expect(retiredToDetach("watchdog", have).map((t) => t.id)).toEqual([
+      "7",
+      "8",
+    ]);
+    expect(retiredToDetach("controller", have)).toEqual([]);
+  });
+
+  it("are never also wanted", () => {
+    for (const r of RETIRED_TRIGGERS)
+      expect(missingTriggers(TRIGGERS, [])).not.toContainEqual(r);
   });
 });

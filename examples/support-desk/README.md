@@ -245,7 +245,7 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 3. Adds three starter policy articles when the knowledge base is empty.
 4. Links and deploys each project, skipping one whose bundle is already the live build.
 5. Lists each agent's triggers and attaches only the missing ones. The server dedups event
-   triggers but not cron.
+   triggers but not cron. It detaches the triggers in `RETIRED_TRIGGERS` (`scripts/fleet.ts`).
 6. Writes `.sapiom/fleet-state.json`: definition, build and trigger ids, with no keys.
 
 `--skip <key>` leaves a project out, and `--only <key>` acts on exactly the named projects,
@@ -302,15 +302,16 @@ fails costs no watchdog runs.
   so a redelivered event posts nothing and a resumed run that fails again posts again.
 - **Silent cases.** The engine does not send the watchdog its own failure. A failed Slack post fails
   the watchdog's run, which the Runs page shows.
-- **Upgrading.** Setup attaches the event trigger but never detaches a trigger: cancel the
-  watchdog's old `*/5 * * * *` cron (Console, or `sapiom agents schedule`) after the upgrade.
+- **Upgrading.** Setup attaches the event trigger and detaches the watchdog's old `*/5 * * * *`
+  cron, which would otherwise fail every tick: the new entry step needs a `sapiom.run.failed`
+  payload. It is the one trigger setup detaches (`RETIRED_TRIGGERS` in `scripts/fleet.ts`).
 
 ### Daily digest
 
 The digest's post time is its trigger in `fleet.json` (`0 9 * * *` in `America/Los_Angeles`, every
 day), not a `config` row. To change it, edit that trigger's `cron` or `timezone` (`0 9 * * 1-5` for
 weekdays only), cancel the old trigger (Console, or `sapiom agents schedule`), then run
-`pnpm run setup`. Setup never detaches a trigger, so a skipped cancel leaves both schedules firing;
+`pnpm run setup`. Setup detaches only retired triggers, never a changed one, so a skipped cancel leaves both schedules firing;
 the `digests` table still keeps it to one post per desk per day. A failed post fails the run, which
 the watchdog reports; rerun the digest agent to post the desks still missing that day. Past about
 50 Slack blocks the message ends with `+k more open issues`. Issues stay grouped by status, past-SLA
