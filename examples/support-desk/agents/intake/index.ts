@@ -22,6 +22,7 @@ import {
 } from "../../_shared/blocks";
 import { customerChannel, getConfigOr } from "../../_shared/config";
 import {
+  cardChannel,
   defaultDesk,
   deskBySlug,
   deskByTriageChannel,
@@ -421,7 +422,7 @@ const team = defineStep({
       await recordRun(db, ctx, AGENT, issue.id);
 
       if (issue.triageRootTs) {
-        const triageChannel = (await deskForIssue(db, issue)).triageChannel;
+        const triageChannel = await cardChannel(db, issue);
         await refreshCard(
           ctx,
           triageChannel,
@@ -860,23 +861,25 @@ const announce = defineStep({
           blocks: issueCard(locked, account),
         });
         return {
-          issue: await setTriageRoot(tx, locked.id, card.ts),
+          issue: await setTriageRoot(tx, locked.id, triageChannel, card.ts),
           carded: true,
         };
       });
+      // An existing card stays where it was posted, even after its desk's channel moved.
+      const cardIn = issue.triageChannel ?? triageChannel;
       if (carded) {
         // First sighting (or a retry after a failed card post): the message goes under the new card.
         await post(ctx, {
-          channel: triageChannel,
+          channel: cardIn,
           threadTs: issue.triageRootTs!,
           text: mirror,
         });
       } else if (input.decision === "link") {
         // The card shows the status the follow-up set; a replay refreshes it but mirrors nothing.
-        await refreshCard(ctx, triageChannel, issue, account);
+        await refreshCard(ctx, cardIn, issue, account);
         if (!input.duplicate)
           await post(ctx, {
-            channel: triageChannel,
+            channel: cardIn,
             threadTs: issue.triageRootTs!,
             text: mirror,
           });
@@ -1044,11 +1047,18 @@ const button = defineStep({
       await showWorking(ctx, input, verb, workingCard);
 
     return withDb(ctx, async (db) => {
-      // Issue cards and nudges live only in the triage channel. A click from anywhere else (say a
-      // customer replaying a payload with a guessed issue id) is ignored before any write.
+      // Restrict issue decisions to desk or stored card channels so forged customer clicks cannot
+      // change an issue.
       const from = input.container?.channel_id;
+      const rows = await db.query<{
+        desk_id: string | null;
+        triage_channel: string | null;
+      }>("select desk_id, triage_channel from issues where id = $1", [
+        issueId.data,
+      ]);
+      const fromCard = !!from && rows[0]?.triage_channel === from;
       const desk = from ? await deskByTriageChannel(db, from) : null;
-      if (!desk) {
+      if (!desk && !fromCard) {
         ctx.logger.warn("issue action outside the triage channel; ignored", {
           actionId: action.action_id,
           channel: from ?? null,
@@ -1060,18 +1070,14 @@ const button = defineStep({
         });
       }
       await recordRun(db, ctx, AGENT);
-      const rows = await db.query<{ desk_id: string | null }>(
-        "select desk_id from issues where id = $1",
-        [issueId.data],
-      );
       if (rows.length === 0) {
         await restoreClicked(ctx, input);
         return terminate({ skipped: `issue ${issueId.data} not found` });
       }
-      // A card lives in its own desk's triage channel: a click from another desk's channel is not
-      // a decision on this issue.
+      // A click from another desk's triage channel is not a decision on this issue, unless the
+      // card itself sits there (posted before its desk's channel moved).
       const owner = await deskForIssue(db, { deskId: rows[0].desk_id });
-      if (owner.id !== desk.id) {
+      if (desk && !fromCard && owner.id !== desk.id) {
         ctx.logger.warn(
           "issue action from another desk's triage channel; ignored",
           {
@@ -1087,7 +1093,7 @@ const button = defineStep({
           skipped: `issue ${issueId.data} belongs to desk ${owner.slug}, not ${desk.slug}`,
         });
       }
-      const triageChannel = desk.triageChannel;
+      const triageChannel = rows[0].triage_channel ?? owner.triageChannel;
       await recordRun(db, ctx, AGENT, issueId.data);
       if (verb !== "take" && verb !== "close")
         return terminate({

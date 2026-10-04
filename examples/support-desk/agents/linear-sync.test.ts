@@ -6,13 +6,15 @@ import { connectors } from "@sapiom/tools";
 import { fixture } from "../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../_shared/db";
 import { setConfig } from "../_shared/config";
-import { upsertDesk } from "../_shared/desks";
+import { defaultDesk, upsertDesk } from "../_shared/desks";
 import {
   accountByChannel,
   getIssue,
   messageBySourceEventId,
   openIssue,
+  setCardDirty,
   setStatus,
+  setTriageRoot,
   updateIssue,
 } from "../_shared/issues";
 import { fakeCtx } from "../_shared/test-ctx";
@@ -442,6 +444,37 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     expect(channelOf("1790889356.002")).toEqual(["C0TESTTRI01", "C0TESTTRI01"]);
     expect((await getIssue(db, onSupport)).status).toBe("on_you");
     expect((await getIssue(db, onTest)).status).toBe("on_you");
+  });
+
+  it("after the desk's triage channel moves, posts and redraws in each card's channel", async () => {
+    const resolved = await newOnHold(1);
+    const dirty = await newOnHold(2);
+    await setStatus(db, dirty, "on_you");
+    await setCardDirty(db, dirty, true);
+    for (const [id, ts] of [
+      [resolved, "1790889356.001"],
+      [dirty, "1790889356.002"],
+    ])
+      await setTriageRoot(db, id, "C0TRIAGE001", ts);
+    const support = (await defaultDesk(db))!;
+    await upsertDesk(
+      db,
+      { ...support, triageChannel: "C0NEW" },
+      { overwrite: true },
+    );
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    await sync(live().ctx as never, db);
+    const slack = [
+      ...posts(),
+      ...calls.filter((c) => c.method === "chat.update"),
+    ];
+    const channelOf = (ts: string) =>
+      slack
+        .filter((c) => c.args.threadTs === ts || c.args.ts === ts)
+        .map((c) => c.args.channel);
+    expect(channelOf("1790889356.001")).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+    expect(channelOf("1790889356.002")).toEqual(["C0TRIAGE001"]);
+    expect(slack.some((c) => c.args.channel === "C0NEW")).toBe(false);
   });
 
   it("keys a repeat escalation of the same issue and Linear identifier apart", async () => {

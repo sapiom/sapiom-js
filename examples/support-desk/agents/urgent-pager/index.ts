@@ -58,7 +58,10 @@ const page = defineStep({
         if (!oncall)
           throw new MissingConfigError(`desks.${desk.slug}.oncallSlackId`);
         const link = issue?.triageRootTs
-          ? permalink(desk.triageChannel, issue.triageRootTs)
+          ? permalink(
+              issue.triageChannel ?? desk.triageChannel,
+              issue.triageRootTs,
+            )
           : permalink(
               input.slack.channel,
               input.slack.ts,

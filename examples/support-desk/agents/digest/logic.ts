@@ -24,6 +24,8 @@ export interface DigestIssue {
   accountName: string;
   ownerSlackId: string | null;
   triageRootTs: string | null;
+  /** Where the card was posted; null falls back to the desk's channel. */
+  triageChannel: string | null;
   createdAt: Date;
 }
 
@@ -102,7 +104,7 @@ export function digestMessage(input: {
   const line = (i: Ranked) => {
     const ref = i.triageRootTs
       ? mrkdwnLink(
-          permalink(desk.triageChannel, i.triageRootTs),
+          permalink(i.triageChannel ?? desk.triageChannel, i.triageRootTs),
           `#${i.number}`,
         )
       : `#${i.number}`;
