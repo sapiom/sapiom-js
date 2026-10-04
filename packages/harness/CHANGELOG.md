@@ -1,5 +1,11 @@
 # @sapiom/harness
 
+## 0.19.1
+
+### Patch Changes
+
+- 668b337: Keep resumable sessions available after account disconnect by restarting them without credentials. Studio sessions and projects no longer depend on the signed-in account: resume uses the session's saved project, and switching or disconnecting accounts no longer invalidates sessions, project setup, Agent Map access, or workspace selections.
+
 ## 0.19.0
 
 ### Minor Changes
