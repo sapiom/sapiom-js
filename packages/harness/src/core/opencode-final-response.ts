@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { HostedOpenCode } from "./opencode-host.js";
+import { mapChatProjectId, type HostedOpenCode } from "./opencode-host.js";
 import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 import {
@@ -147,7 +147,11 @@ export class OpenCodeFinalResponse {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ...openCodeCompletionPrompt(),
+            // A recovered map chat turn keeps the map chat's rules (hand-off,
+            // no shell); a Studio session's turn keeps the default prompt.
+            ...openCodeCompletionPrompt({
+              mapChat: mapChatProjectId(hosted.harnessSessionId) !== null,
+            }),
             model: hosted.model,
             agent: turnRecoveryAgent,
             parts: [
