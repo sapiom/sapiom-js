@@ -42,8 +42,8 @@ import {
 import { unavailableWorkflowDeployment } from "./workflow-deployment";
 import { macroNeedsReadySession } from "./macro-actions";
 import { type ConnectivityErrorInput } from "./connectivity";
-import { isWithinDir, samePath } from "./paths";
-import { projectToOpen } from "./project-tree";
+import { basenameOf, isWithinDir, samePath } from "./paths";
+import { projectRootConflict, projectRoots, projectToOpen } from "./project-tree";
 import {
   agentNeedsOwnProject,
   applyProjectRemoval,
@@ -453,6 +453,14 @@ export function useHarnessState(): HarnessStateHook {
    */
   const settingsRef = useRef<HarnessSettings | null>(null);
   settingsRef.current = settings;
+  const projectRootsStateRef = useRef<{
+    workspaceScopes: NonNullable<AppState["workspaceScopes"]>;
+    studioProjects: NonNullable<AppState["studioProjects"]>;
+  }>({ workspaceScopes: [], studioProjects: [] });
+  projectRootsStateRef.current = {
+    workspaceScopes: state?.workspaceScopes ?? [],
+    studioProjects: state?.studioProjects ?? [],
+  };
   /**
    * Removed projects, restored from the last session (SAP-2932).
    *
@@ -1978,16 +1986,17 @@ export function useHarnessState(): HarnessStateHook {
          nothing on screen changed. That is the same "adding a project did
          nothing" symptom the scan below exists to fix, arriving by a different
          door, and it also undercut the reason dropping those rows is safe. The
-         claim is that any folder is one Add-a-project away from coming back;
-         that has to be true of agent folders too, and the honest form of it is
-         that you get the project the agent lives in.
+         claim is that Add-a-project always opens a project visible in the rail.
+         That has to be true of agent folders too, and the honest form is that
+         you get the project the agent lives in.
 
          THE SAME QUESTION THE RAIL ASKS, not merely the same function. This hop
          The eligible projects are the rail's own derivation, passed through
          rather than rebuilt here: see `projectToOpen`. Sessions carry `status`,
          because a live session in an agentless folder is a project and an
          exited one is not. */
-      const root = projectToOpen(requested, {
+      const { workspaceScopes, studioProjects } = projectRootsStateRef.current;
+      const sources = {
         agentPaths: workflowsRef.current.map((workflow) => workflow.path),
         recentDirs: settingsRef.current?.recentDirs ?? [],
         pendingCwds: pendingWorkspacesRef.current.map((pending) => pending.cwd),
@@ -1996,10 +2005,37 @@ export function useHarnessState(): HarnessStateHook {
           createdAt: session.createdAt,
           status: session.status,
         })),
+        pinnedRoots: workspaceScopes.map((scope) => scope.cwd),
         // Containment, not order: `projectRoots` sorts its output and nothing
         // here reads the order.
         sort: "recent",
-      });
+      } as const;
+      const root = projectToOpen(requested, sources);
+      const labelFor = (cwd: string): string => {
+        const scope = workspaceScopes.find((candidate) =>
+          samePath(candidate.cwd, cwd),
+        );
+        return (
+          studioProjects.find(
+            (project) => project.projectId === scope?.projectId,
+          )?.displayName ?? basenameOf(cwd)
+        );
+      };
+      const roots = [
+        ...projectRoots(sources).map((cwd) => ({ cwd, label: labelFor(cwd) })),
+        ...workspaceScopes.map(({ cwd }) => ({ cwd, label: labelFor(cwd) })),
+      ];
+      const conflict = projectRootConflict(root, roots);
+      if (conflict?.kind === "inside") {
+        throw new Error(
+          `That folder is inside the project ${conflict.label}. Open ${conflict.label} instead.`,
+        );
+      }
+      if (conflict?.kind === "contains") {
+        throw new Error(
+          `That folder contains the project ${conflict.label}. Projects can't be nested.`,
+        );
+      }
       const swallowed = closedProjectsRef.current.filter((closed) =>
         rootContains(root, closed),
       );

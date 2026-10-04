@@ -85,14 +85,48 @@ it("leaves unknown repositories and absent catalogs untouched", async () => {
   ).toEqual([project.projectId]);
 });
 
-it("uses the most-specific root while an explicit selector scopes lookup", async () => {
+it("loads and reconciles legacy nested roots with most-specific resolution", async () => {
   const { catalog, project, cwd } = await registered();
   const nested = await catalog.create("Nested");
-  await catalog.addRootBinding(nested.projectId, join(cwd, "nested"));
+  const nestedRoot = join(cwd, "nested");
+  await fs.mkdir(join(nestedRoot, "src"), { recursive: true });
+  await catalog.addRootBinding(nested.projectId, join(root, "nested-provisional"));
+  const persisted = JSON.parse(await fs.readFile(catalogPath, "utf8")) as {
+    projects: Array<{
+      projectId: string;
+      rootBindings: Array<{ localRootRef: string }>;
+    }>;
+  };
+  const nestedRecord = persisted.projects.find(
+    (candidate) => candidate.projectId === nested.projectId,
+  );
+  expect(nestedRecord?.rootBindings).toHaveLength(1);
+  nestedRecord!.rootBindings[0]!.localRootRef = nestedRoot;
+  await fs.writeFile(catalogPath, JSON.stringify(persisted));
+
+  const legacyCatalog = new StudioProjectCatalog(catalogPath);
+  const reconciled = await legacyCatalog.reconcile([
+    { workspaceKey: "outer-workspace", cwd },
+    { workspaceKey: "nested-workspace", cwd: nestedRoot },
+  ]);
+  expect(reconciled.projects).toHaveLength(2);
+  expect(reconciled.workspaceScopes).toHaveLength(2);
+  expect(
+    reconciled.workspaceScopes.find((scope) => scope.cwd === cwd)?.projectId,
+  ).toBe(project.projectId);
+  expect(
+    reconciled.workspaceScopes.find((scope) => scope.cwd === nestedRoot)
+      ?.projectId,
+  ).toBe(nested.projectId);
+  expect(
+    (await legacyCatalog.resolveIdentityForPath(join(nestedRoot, "src")))
+      ?.projectId,
+  ).toBe(nested.projectId);
+
   const input = {
     kind: "repository" as const,
     stateRoot,
-    cwd: join(cwd, "nested", "src"),
+    cwd: join(nestedRoot, "src"),
   };
   expect(await resolveAgentMapProject(input)).toMatchObject({
     kind: "resolved",
@@ -101,6 +135,149 @@ it("uses the most-specific root while an explicit selector scopes lookup", async
   expect(
     await resolveAgentMapProject({ ...input, projectId: project.projectId }),
   ).toMatchObject({ kind: "resolved", projectId: project.projectId });
+});
+
+it("maps a newly discovered inner scope to its existing outer project", async () => {
+  const { catalog, project, cwd } = await registered();
+  const innerRoot = join(cwd, "inner");
+  await fs.mkdir(innerRoot, { recursive: true });
+  const before = await catalog.resolveIdentity(project.projectId);
+
+  const reconciled = await catalog.reconcile([
+    { workspaceKey: "outer-workspace", cwd },
+    { workspaceKey: "inner-workspace", cwd: innerRoot },
+  ]);
+
+  expect(reconciled.projects).toHaveLength(1);
+  expect(
+    reconciled.workspaceScopes.find((scope) => scope.cwd === innerRoot)
+      ?.projectId,
+  ).toBe(project.projectId);
+  expect(
+    (await catalog.resolveIdentity(project.projectId))?.rootBindings,
+  ).toEqual(before?.rootBindings);
+});
+
+it("does not mint an outer scope that contains an existing project", async () => {
+  const innerRoot = join(root, "outer", "inner");
+  await fs.mkdir(innerRoot, { recursive: true });
+  const catalog = new StudioProjectCatalog(catalogPath);
+  const inner = await catalog.create("Inner");
+  await catalog.addRootBinding(inner.projectId, innerRoot);
+
+  const reconciled = await catalog.reconcile([
+    { workspaceKey: "outer-workspace", cwd: join(root, "outer") },
+  ]);
+
+  expect(reconciled.projects).toHaveLength(1);
+  expect(reconciled.projects[0]?.projectId).toBe(inner.projectId);
+  expect(reconciled.workspaceScopes).toEqual([]);
+});
+
+it("lets a shallower new scope own inner scopes discovered in the same batch", async () => {
+  const outerRoot = join(root, "outer");
+  const innerRoot = join(outerRoot, "inner");
+  await fs.mkdir(join(innerRoot, "src"), { recursive: true });
+  const catalog = new StudioProjectCatalog(catalogPath);
+
+  const reconciled = await catalog.reconcile([
+    { workspaceKey: "inner-workspace", cwd: innerRoot },
+    { workspaceKey: "outer-workspace", cwd: outerRoot },
+  ]);
+
+  expect(reconciled.projects).toHaveLength(1);
+  expect(reconciled.projects[0]?.bindings).toHaveLength(1);
+  expect(reconciled.workspaceScopes.map((scope) => scope.projectId)).toEqual([
+    reconciled.projects[0]?.projectId,
+    reconciled.projects[0]?.projectId,
+  ]);
+});
+
+it("does not add a legacy-alias binding that overlaps another project", async () => {
+  const catalog = new StudioProjectCatalog(catalogPath);
+  const outerRoot = join(root, "outer");
+  const outer = await catalog.create("Outer");
+  await catalog.addRootBinding(outer.projectId, outerRoot);
+  const aliased = await catalog.create("Aliased");
+  const aliasedRoot = join(root, "aliased");
+  await catalog.addRootBinding(aliased.projectId, aliasedRoot, {
+    legacyWorkspaceKey: "legacy-alias",
+  });
+
+  const reconciled = await catalog.reconcile([
+    {
+      workspaceKey: "legacy-alias",
+      cwd: join(outerRoot, "inner"),
+    },
+  ]);
+
+  expect(reconciled.workspaceScopes).toEqual([]);
+  expect(reconciled.projects).toHaveLength(2);
+  expect(
+    (await catalog.resolveIdentity(aliased.projectId))?.rootBindings,
+  ).toHaveLength(1);
+});
+
+it.each(["inside", "containing"] as const)(
+  "rejects addRootBinding when its root is %s another project's root",
+  async (relation) => {
+    const catalog = new StudioProjectCatalog(catalogPath);
+    const occupiedRoot =
+      relation === "inside"
+        ? join(root, "occupied")
+        : join(root, "container", "occupied");
+    const conflictingRoot =
+      relation === "inside"
+        ? join(occupiedRoot, "nested")
+        : join(root, "container");
+    const occupied = await catalog.create("Occupied");
+    await catalog.addRootBinding(occupied.projectId, occupiedRoot);
+    const candidate = await catalog.create("Candidate");
+
+    await expect(
+      catalog.addRootBinding(candidate.projectId, conflictingRoot),
+    ).rejects.toMatchObject({ code: "malformed_state" });
+  },
+);
+
+it.each(["inside", "containing"] as const)(
+  "rejects moveRootBinding when its destination is %s another project's root",
+  async (relation) => {
+    const catalog = new StudioProjectCatalog(catalogPath);
+    const occupiedRoot =
+      relation === "inside"
+        ? join(root, "occupied")
+        : join(root, "container", "occupied");
+    const conflictingRoot =
+      relation === "inside"
+        ? join(occupiedRoot, "nested")
+        : join(root, "container");
+    const occupied = await catalog.create("Occupied");
+    await catalog.addRootBinding(occupied.projectId, occupiedRoot);
+    const candidate = await catalog.create("Candidate");
+    await catalog.addRootBinding(candidate.projectId, join(root, "candidate"));
+    const binding = (
+      await catalog.resolveIdentity(candidate.projectId)
+    )!.rootBindings[0]!;
+
+    await expect(
+      catalog.moveRootBinding(
+        candidate.projectId,
+        binding.id,
+        conflictingRoot,
+      ),
+    ).rejects.toMatchObject({ code: "malformed_state" });
+  },
+);
+
+it("allows nested root bindings within the same project", async () => {
+  const { catalog, project, cwd } = await registered();
+
+  await catalog.addRootBinding(project.projectId, join(cwd, "nested"));
+
+  expect(
+    (await catalog.resolveIdentity(project.projectId))?.rootBindings,
+  ).toHaveLength(2);
 });
 
 it("preserves identity through symlinks and explicitly registered worktree roots", async () => {
