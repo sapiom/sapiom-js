@@ -11,20 +11,12 @@ import { defaultDesk } from "./desks";
 import type { SlackRef } from "./events";
 
 export type IssueStatus =
-  | "new"
-  | "on_you"
-  | "on_customer"
-  | "on_hold"
-  | "closed";
+  "new" | "on_you" | "on_customer" | "on_hold" | "closed";
 /** Widen when a new source adapter lands; never a free string. */
 export type IssueSource = "slack";
 export type Direction = "customer" | "agent" | "internal";
 export type DraftStatus =
-  | "pending"
-  | "approved"
-  | "dismissed"
-  | "escalated"
-  | "superseded";
+  "pending" | "approved" | "dismissed" | "escalated" | "superseded";
 export type DraftDecision = Exclude<DraftStatus, "pending">;
 
 export const ISSUE_STATUSES: readonly IssueStatus[] = [
