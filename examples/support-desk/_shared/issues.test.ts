@@ -16,7 +16,7 @@ import {
   ensureAccount,
   getIssue,
   issueByCustomerThread,
-  issueByTriageRoot,
+  issuesByTriageRoot,
   linkMessage,
   lockIssue,
   openIssue,
@@ -145,8 +145,9 @@ describe("issues.ts on a database", () => {
       linearIdentifier: "SAP-1",
       linearIssueId: "uuid-1",
     });
-    const found = await issueByTriageRoot(db, "9.9");
-    expect(found).toMatchObject({
+    const found = await issuesByTriageRoot(db, "9.9");
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
       ownerSlackId: "U1",
       triageChannel: "C0T",
       triageRootTs: "9.9",

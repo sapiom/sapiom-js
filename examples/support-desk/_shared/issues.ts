@@ -11,12 +11,20 @@ import { defaultDesk } from "./desks";
 import type { SlackRef } from "./events";
 
 export type IssueStatus =
-  "new" | "on_you" | "on_customer" | "on_hold" | "closed";
+  | "new"
+  | "on_you"
+  | "on_customer"
+  | "on_hold"
+  | "closed";
 /** Widen when a new source adapter lands; never a free string. */
 export type IssueSource = "slack";
 export type Direction = "customer" | "agent" | "internal";
 export type DraftStatus =
-  "pending" | "approved" | "dismissed" | "escalated" | "superseded";
+  | "pending"
+  | "approved"
+  | "dismissed"
+  | "escalated"
+  | "superseded";
 export type DraftDecision = Exclude<DraftStatus, "pending">;
 
 export const ISSUE_STATUSES: readonly IssueStatus[] = [
@@ -351,16 +359,13 @@ export async function issueByCustomerThread(
   return rows[0] ? toIssue(rows[0]) : null;
 }
 
-/** The issue whose triage card is the thread root `ts` in the triage channel. */
-export async function issueByTriageRoot(
-  db: Db,
-  ts: string,
-): Promise<Issue | null> {
+/** Every issue whose triage card has the root `ts`: a Slack ts is unique only within a channel. */
+export async function issuesByTriageRoot(db: Db, ts: string): Promise<Issue[]> {
   const rows = await db.query(
-    "select * from issues where triage_root_ts = $1 limit 1",
+    "select * from issues where triage_root_ts = $1",
     [ts],
   );
-  return rows[0] ? toIssue(rows[0]) : null;
+  return rows.map(toIssue);
 }
 
 export async function openIssuesForAccount(

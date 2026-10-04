@@ -49,7 +49,7 @@ import {
   getAccount,
   getIssue,
   issueByCustomerThread,
-  issueByTriageRoot,
+  issuesByTriageRoot,
   latestCustomerTs,
   linkMessage,
   lockIssue,
@@ -526,8 +526,9 @@ async function cardIssue(
   channel: string,
   rootTs: string,
 ): Promise<Issue | null> {
-  const issue = await issueByTriageRoot(db, rootTs);
-  return issue && (await cardChannel(db, issue)) === channel ? issue : null;
+  for (const issue of await issuesByTriageRoot(db, rootTs))
+    if ((await cardChannel(db, issue)) === channel) return issue;
+  return null;
 }
 
 async function candidatesFor(db: Db, accountId: string): Promise<Candidate[]> {

@@ -1365,6 +1365,40 @@ describe("intake agent", () => {
         ]);
       });
 
+      it("cards sharing a ts in two channels each keep their own notes", async () => {
+        const issue = await cardedThenMoved();
+        const second = bugIn("C0CUSTOMER2", "Ev0COLLIDE1");
+        second.event.ts = "1790890400.000400";
+        const { output } = await run(
+          second,
+          makeCtx("exec-bug-collide", JEV.bug).ctx,
+        );
+        const otherId = output.issueId as string;
+        expect(otherId).not.toBe(issue.id);
+        await db.query(
+          "update issues set triage_root_ts = $1, triage_channel = 'C0OTHER' where id = $2",
+          [issue.triageRootTs, otherId],
+        );
+        const own = makeCtx("exec-note-collide-own");
+        expect(
+          (
+            await run(
+              replyIn("C0TRIAGE001", "Ev0COLLIDE2", issue.triageRootTs),
+              own.ctx,
+            )
+          ).output,
+        ).toMatchObject({ outcome: "internal", issueId: issue.id });
+        const other = makeCtx("exec-note-collide-other");
+        expect(
+          (
+            await run(
+              replyIn("C0OTHER", "Ev0COLLIDE3", issue.triageRootTs),
+              other.ctx,
+            )
+          ).output,
+        ).toMatchObject({ outcome: "internal", issueId: otherId });
+      });
+
       it("a reply in the new channel under the old card's ts is stored unattached", async () => {
         const issue = await cardedThenMoved();
         expect(
