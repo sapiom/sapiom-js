@@ -1187,7 +1187,7 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
         return { ok: true, user: { id: args.user, name: args.user } };
       },
     };
-    (t.ctx as { isLocalTrace: boolean }).isLocalTrace = false;
+    Object.assign(t.ctx, { isLocalTrace: false, attempts: 0 });
     Object.assign(t.ctx.sapiom as Record<string, unknown>, {
       connectors: { slack },
       database: {
@@ -1199,7 +1199,8 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
         .filter((c) => c.method === "chat.postMessage")
         .filter((c) => c.args.channel === channel)
         .map((c) => c.args);
-    return { ...t, sent, posts };
+    const retry = () => Object.assign(t.ctx, { attempts: 1 });
+    return { ...t, sent, posts, retry };
   }
 
   beforeEach(async () => {
@@ -1230,6 +1231,7 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
     await expect(step("apply").run(decided.input, live.ctx)).rejects.toThrow(
       "linkMessage failed",
     );
+    live.retry();
     expect(
       await messageBySourceEventId(db, `draft:${FIXTURE_DRAFT}`),
     ).toBeNull();
@@ -1252,6 +1254,7 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
     await expect(step("receive").run(created, live.ctx)).rejects.toThrow(
       "setDraftCard failed",
     );
+    live.retry();
 
     const done = await step("receive").run(created, live.ctx);
     const cards = live.posts("C0TRIAGE001");
