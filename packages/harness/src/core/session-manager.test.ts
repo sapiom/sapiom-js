@@ -4558,6 +4558,93 @@ describe("SessionManager", () => {
     expect(spawns).toHaveLength(4);
   });
 
+  it("does not let a late credential check overwrite a replacement runtime", async () => {
+    const canResumeResult = deferred<boolean>();
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn()
+        .mockImplementationOnce(() => canResumeResult.promise)
+        .mockResolvedValue(true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/credential-race",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-credential-race");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    const emittedStates: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => {
+      if (updated.id === session.id) emittedStates.push(updated.mcpAuthState);
+    });
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() => expect(adapter.canResume).toHaveBeenCalledOnce());
+
+    const oldRuntimeExit = manager.kill(session.id);
+    expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce();
+    spawns[0]!.emitExit(0);
+    await oldRuntimeExit;
+
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      status: "running",
+      mcpAuthState: "current",
+    });
+    expect(spawns).toHaveLength(2);
+
+    canResumeResult.resolve(true);
+    await removal;
+
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(emittedStates).not.toContain("restarting");
+
+    manager.reconcileMcpCredentialGeneration(3);
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restart-required");
+  });
+
+  it("restores the prior auth state when the exact-runtime kill declines", async () => {
+    const { manager, adapter, spawns } = makeManager({
+      currentCredentialGeneration: () => 1,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 1, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/credential-kill-race",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-kill-race");
+    delete session.mcpAuthState;
+    const killIfRuntime = vi
+      .spyOn(manager, "killIfRuntime")
+      .mockResolvedValue(false);
+    const emittedStates: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => {
+      if (updated.id === session.id) emittedStates.push(updated.mcpAuthState);
+    });
+
+    await manager.relaunchCredentialBearingSessions(1);
+
+    expect(killIfRuntime).toHaveBeenCalledWith(
+      session.id,
+      manager.getRuntimeEpoch(session.id),
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).not.toHaveProperty("mcpAuthState");
+    expect(emittedStates).toEqual(["restarting", undefined]);
+  });
+
   it("kills credential-bearing bound subsessions without ordinary relaunch", async () => {
     let generation = 1;
     const adapter = createFakeAdapter({

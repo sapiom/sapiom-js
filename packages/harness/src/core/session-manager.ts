@@ -939,13 +939,32 @@ export class SessionManager {
             resumable = false;
           }
         }
+        if (this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch) return;
+
+        const previousMcpAuthState = session?.mcpAuthState;
         if (resumable && session) {
           session.mcpAuthState = "restarting";
           this.emitStatus(session, runtimeEpoch);
         }
 
         const killed = await this.killIfRuntime(id, runtimeEpoch);
-        if (!killed || !resumable || !session) return;
+        if (!killed) {
+          if (
+            resumable &&
+            session &&
+            this.sessions.get(id) === session &&
+            session.mcpAuthState === "restarting"
+          ) {
+            if (previousMcpAuthState === undefined) {
+              delete session.mcpAuthState;
+            } else {
+              session.mcpAuthState = previousMcpAuthState;
+            }
+            this.emitStatus(session);
+          }
+          return;
+        }
+        if (!resumable || !session) return;
 
         session.mcpAuthState = "restarting";
         this.emitStatus(session);
