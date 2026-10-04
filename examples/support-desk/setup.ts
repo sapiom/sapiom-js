@@ -17,7 +17,8 @@
  *    hash and active build match `.sapiom/fleet-state.json` is left alone.
  * 5. Attach the fleet.json `triggers` that are missing, after listing the attached ones (cron
  *    triggers are not deduped server-side), and resume matching ones that are paused.
- *    `smokeTriggers` are never attached. A trigger in `RETIRED_TRIGGERS` (scripts/fleet.ts) is detached.
+ *    `smokeTriggers` are never attached. A trigger in `RETIRED_TRIGGERS` (scripts/fleet.ts) is detached,
+ *    and so is every trigger of an agent in `RETIRED_PROJECTS`.
  * 6. Write `.sapiom/fleet-state.json` (ids and hashes only).
  *
  * Selection: every project that is not `optional`, `smoke` or `manual`; `--only <key>` acts on exactly
@@ -46,7 +47,7 @@ import {
   migrate,
   resolveConnectionString,
 } from "./_shared/db";
-import { FLEET_ID } from "./_shared/fleet-id";
+import { FLEET_ID, agentSlug } from "./_shared/fleet-id";
 import { seedStarters } from "./_shared/kb";
 import { listTools } from "./_shared/linear";
 import {
@@ -65,6 +66,8 @@ import {
   missingTriggers,
   parseArgs,
   pausedToResume,
+  RETIRED_PROJECTS,
+  RETIRED_TRIGGERS,
   retiredToDetach,
   sameTrigger,
   selectProjects,
@@ -321,7 +324,8 @@ async function triggers(
   const wanted = triggersFor(selected);
   for (const p of selected) {
     const mine = wanted.filter((t) => t.project === p.key);
-    if (!mine.length) continue;
+    if (!mine.length && !RETIRED_TRIGGERS.some((r) => r.project === p.key))
+      continue;
     const attached = await client.get<AttachedTrigger[]>(
       `/definitions/${p.slug}/triggers`,
     );
@@ -353,6 +357,20 @@ async function triggers(
       id: live.find((a) => sameTrigger(t, a))?.id ?? "",
       label: triggerLabel(t),
     }));
+  }
+  for (const key of RETIRED_PROJECTS) {
+    const slug = agentSlug(key);
+    const attached = await client
+      .get<AttachedTrigger[]>(`/definitions/${slug}/triggers`)
+      .catch((err: unknown) => {
+        // Never deployed in this org: nothing to detach.
+        if ((err as { status?: unknown })?.status === 404) return [];
+        throw err;
+      });
+    for (const old of attached.filter((a) => a.status !== "disabled")) {
+      await client.request("DELETE", `/triggers/${old.id}`);
+      changed(`${key}: detached trigger ${old.id} of a retired agent`);
+    }
   }
 }
 

@@ -126,13 +126,24 @@ function lastRound(
   return last;
 }
 
-/** Engineering owns the next move on hold, so suppress draft and customer follow-ups there. */
-export function dueNudges(input: RuleInput): Nudge[] {
+/** A nudge round with the time it becomes due; {@link dueNudges} keeps the ones due by `now`. */
+export interface TimedNudge extends Nudge {
+  dueAt: Date;
+}
+
+/**
+ * The next round of every nudge whose condition holds, due or not, with when it is due: the later
+ * of the rule's threshold and the repeat gap after the last round. The controller sends the due
+ * ones; `_shared/timers.ts` schedules the ticket's next tick at the earliest of the rest, so both
+ * read the same rule. Engineering owns the next move on hold, so draft and customer follow-ups
+ * are suppressed there.
+ */
+export function nudgeRounds(input: RuleInput): TimedNudge[] {
   const drafts = groupBy(input.drafts);
   const messages = groupBy(input.messages);
   const sent = groupBy(input.sent);
   const jevCheck = input.jevCheck ?? true;
-  const due: Nudge[] = [];
+  const out: TimedNudge[] = [];
 
   for (const issue of input.issues) {
     if (issue.status === "closed" || !issue.triageRootTs) continue;
@@ -148,48 +159,52 @@ export function dueNudges(input: RuleInput): Nudge[] {
       ? "next_response"
       : "first_response";
     // Only the threshold moves with the SLA; each rule keeps its own start time.
-    const old = sla
-      ? (t: Date) =>
-          input.now.getTime() >=
-          slaDeadline(sla, issue.priority, clock, t).getTime()
-      : (t: Date) => input.now.getTime() - t.getTime() >= thresholdMs;
+    const threshold = sla
+      ? (t: Date) => slaDeadline(sla, issue.priority, clock, t).getTime()
+      : (t: Date) => t.getTime() + thresholdMs;
     const issueSent = sent.get(issue.id) ?? [];
-    const add = (kind: NudgeKind, refId: string) => {
+    const add = (kind: NudgeKind, refId: string, since: Date) => {
       const skip = skipKey(kind, refId);
       if (jevCheck && issueSent.some((s) => s.kind === skip)) return;
+      let dueMs = threshold(since);
       const last = lastRound(issueSent, `${kind}:${refId}`);
       if (last) {
         const gaps = input.repeatMinutes;
         if (gaps.length === 0) return;
         const gapMs = gaps[Math.min(last.n, gaps.length) - 1] * 60_000;
-        if (input.now.getTime() - last.sentAt.getTime() < gapMs) return;
+        dueMs = Math.max(dueMs, last.sentAt.getTime() + gapMs);
       }
       const n = (last?.n ?? 0) + 1;
-      due.push({
+      out.push({
         issueId: issue.id,
         kind,
         refId,
         n,
         key: nudgeKey(kind, refId, n),
+        dueAt: new Date(dueMs),
       });
     };
     const onHold = issue.status === "on_hold";
     const issueDrafts = drafts.get(issue.id) ?? [];
 
-    if (!issue.ownerSlackId && old(issue.createdAt)) add("no_owner", issue.id);
+    if (!issue.ownerSlackId) add("no_owner", issue.id, issue.createdAt);
 
-    if (issueDrafts.length === 0 && old(issue.createdAt))
-      add("no_draft", issue.id);
+    if (issueDrafts.length === 0) add("no_draft", issue.id, issue.createdAt);
 
     const pending = newest(issueDrafts.filter((d) => d.status === "pending"));
-    if (!onHold && pending && old(pending.createdAt))
-      add("draft_pending", pending.id);
+    if (!onHold && pending) add("draft_pending", pending.id, pending.createdAt);
 
     const last = lastCustomerMessage(messages.get(issue.id) ?? []);
-    if (!onHold && last && old(last.createdAt))
-      add("customer_waiting", last.id);
+    if (!onHold && last) add("customer_waiting", last.id, last.createdAt);
   }
-  return due;
+  return out;
+}
+
+/** The nudge rounds due by `input.now`. */
+export function dueNudges(input: RuleInput): Nudge[] {
+  return nudgeRounds(input)
+    .filter((n) => n.dueAt.getTime() <= input.now.getTime())
+    .map(({ dueAt: _dueAt, ...n }) => n);
 }
 
 function lastCustomerMessage(messages: MessageRow[]): MessageRow | undefined {
@@ -231,13 +246,23 @@ export interface EscalationInput {
   jevCheck?: boolean;
 }
 
-/** Select only the highest due level and suppress previously reached levels to avoid catch-up paging. */
-export function dueEscalations(input: EscalationInput): Escalation[] {
+interface EscalationClock {
+  issue: IssueRow;
+  deskId: string;
+  levels: readonly number[];
+  holding: { kind: EscalationKind; refId: string; since: Date }[];
+  /** When the oldest holding condition began; levels count from here. */
+  sinceMs: number;
+  /** The highest level already sent, 0 for none. */
+  sentLevel: number;
+}
+
+/** Each escalating issue's conditions, the start of its clock and the level it already reached. */
+function escalationClocks(input: EscalationInput): EscalationClock[] {
   const messages = groupBy(input.messages);
   const sent = groupBy(input.sent);
   const jevCheck = input.jevCheck ?? true;
-  const now = input.now.getTime();
-  const due: Escalation[] = [];
+  const out: EscalationClock[] = [];
 
   for (const issue of input.issues) {
     if (issue.status === "closed" || !issue.triageRootTs) continue;
@@ -246,7 +271,7 @@ export function dueEscalations(input: EscalationInput): Escalation[] {
     if (!levels?.length) continue;
     const issueSent = new Set((sent.get(issue.id) ?? []).map((s) => s.kind));
 
-    const holding: { kind: EscalationKind; refId: string; since: Date }[] = [];
+    const holding: EscalationClock["holding"] = [];
     if (!issue.ownerSlackId)
       holding.push({
         kind: "no_owner",
@@ -266,22 +291,42 @@ export function dueEscalations(input: EscalationInput): Escalation[] {
       });
     if (holding.length === 0) continue;
 
-    const ageMs = now - Math.min(...holding.map((h) => h.since.getTime()));
+    const sentLevel = Math.max(
+      0,
+      ...[...issueSent]
+        .filter((k) => k.startsWith("escalate:"))
+        .map((k) => Number(k.slice("escalate:".length)))
+        .filter(Number.isFinite),
+    );
+    out.push({
+      issue,
+      deskId,
+      levels,
+      holding,
+      sinceMs: Math.min(...holding.map((h) => h.since.getTime())),
+      sentLevel,
+    });
+  }
+  return out;
+}
+
+/** Select only the highest due level and suppress previously reached levels to avoid catch-up paging. */
+export function dueEscalations(input: EscalationInput): Escalation[] {
+  const now = input.now.getTime();
+  const due: Escalation[] = [];
+  for (const c of escalationClocks(input)) {
+    const ageMs = now - c.sinceMs;
     let level = 0;
-    levels.forEach((m, i) => {
+    c.levels.forEach((m, i) => {
       if (ageMs >= m * 60_000) level = i + 1;
     });
-    if (level === 0) continue;
-    const sentLevels = [...issueSent]
-      .filter((k) => k.startsWith("escalate:"))
-      .map((k) => Number(k.slice("escalate:".length)));
-    if (sentLevels.some((l) => l >= level)) continue;
+    if (level === 0 || c.sentLevel >= level) continue;
 
     due.push({
-      issueId: issue.id,
-      deskId,
+      issueId: c.issue.id,
+      deskId: c.deskId,
       level,
-      reasons: holding.map((h) => ({
+      reasons: c.holding.map((h) => ({
         kind: h.kind,
         refId: h.refId,
         minutes: Math.floor((now - h.since.getTime()) / 60_000),
@@ -290,4 +335,24 @@ export function dueEscalations(input: EscalationInput): Escalation[] {
     });
   }
   return due;
+}
+
+/**
+ * When each escalating issue reaches its next unsent level, due or not. A desk in `skipDesks` (one
+ * with nobody to notify) is left out, as the controller leaves it out of a send.
+ */
+export function escalationTimes(
+  input: EscalationInput,
+  skipDesks: ReadonlySet<string> = new Set(),
+): { issueId: string; dueAt: Date }[] {
+  const out: { issueId: string; dueAt: Date }[] = [];
+  for (const c of escalationClocks(input)) {
+    if (skipDesks.has(c.deskId)) continue;
+    const next = c.levels
+      .filter((_, i) => i + 1 > c.sentLevel)
+      .map((m) => c.sinceMs + m * 60_000);
+    if (next.length > 0)
+      out.push({ issueId: c.issue.id, dueAt: new Date(Math.min(...next)) });
+  }
+  return out;
 }

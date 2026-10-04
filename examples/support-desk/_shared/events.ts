@@ -167,7 +167,7 @@ export const Events = {
   }),
   "issue.on_hold": Envelope.extend({ linearIdentifier: z.string() }),
   "issue.nudged": Envelope.extend({ kind: z.string() }),
-  /** linear-sync saw the escalated issue's Linear issue reach a completed state. */
+  /** The escalated issue's Linear issue reached a completed state, or someone clicked Resolved. */
   "issue.engineering_resolved": Envelope.extend({
     linearIdentifier: z.string(),
     linearState: z.string(),

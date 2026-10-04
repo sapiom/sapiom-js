@@ -1,11 +1,11 @@
 /**
  * The drawer's ticket actions. A Console button emits the `slack.block_actions` event a click on
- * the Slack card would produce, through the tenant events API. intake handles Take and Close, the
+ * the Slack card would produce, through the tenant events API. intake handles Take, Close and Resolved, the
  * copilot handles Approve, Escalate and Dismiss, each on its existing path: one implementation of
  * every verb, and the Slack card redraws as it does after a click in Slack.
  *
  * The click names the card the Slack button sits on: the issue card (`triage_root_ts` in the desk's
- * triage channel) for Take and Close, the draft card for the draft verbs. intake accepts an issue
+ * triage channel) for Take, Close and Resolved, the draft card for the draft verbs. intake accepts an issue
  * action only from the issue's own triage channel, so that is the channel the click carries.
  *
  * The App Link forwards no viewer identity, so the viewer picks who they act as (a member of the
@@ -58,8 +58,8 @@ const ownerOf = (verb: string): ActionOwner | null =>
 
 /**
  * The click to emit for `verb` on the target, or why the Slack card would not offer that button:
- * Take only on an open, unowned issue; Close only on an open one; the draft verbs only while a
- * draft is pending and its card is posted.
+ * Take only on an open, unowned issue; Resolved only on an On Hold one; Close only on an open one;
+ * the draft verbs only while a draft is pending and its card is posted.
  */
 export function planAction(
   verb: string,
@@ -79,6 +79,12 @@ export function planAction(
   let channel: string;
   let ts: string;
   if (owner === "issue") {
+    if (verb === "resolve" && issue.status !== "on_hold")
+      return {
+        ok: false,
+        status: 409,
+        reason: "the ticket is not On Hold",
+      };
     if (verb === "take" && issue.ownerSlackId)
       return {
         ok: false,

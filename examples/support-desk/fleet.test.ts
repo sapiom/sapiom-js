@@ -8,7 +8,12 @@ import { getConfig, getConfigOr, setConfig } from "./_shared/config";
 import { memoryDb } from "./_shared/db";
 import { Events, PlatformEvents, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
-import { defaultDesk, deskBySlug, setDefaultDesk, upsertDesk } from "./_shared/desks";
+import {
+  defaultDesk,
+  deskBySlug,
+  setDefaultDesk,
+  upsertDesk,
+} from "./_shared/desks";
 import {
   assertDistinctTriageChannels,
   exampleKeys,
@@ -45,6 +50,8 @@ describe("fleet.json", () => {
       expect(keys).toContain(t.project);
       if (t.kind === "event") expect(known).toContain(t.eventType);
       else expect(t.kind).toBe("schedule_cron");
+      // The controller runs on per-ticket timers (`_shared/timers.ts`), never a cron.
+      if (t.kind !== "event") expect(t.project).not.toBe("controller");
     }
   });
 
@@ -127,7 +134,9 @@ describe("fleet.json", () => {
       oncallSlackId: "U0ONB",
     });
     await seedFleet(db, "setup", {
-      desks: [{ slug: "a", name: "A", triageChannel: "C0OLD", nudgeMinutes: 5 }],
+      desks: [
+        { slug: "a", name: "A", triageChannel: "C0OLD", nudgeMinutes: 5 },
+      ],
     });
     expect(await deskBySlug(db, "a")).toMatchObject({
       isDefault: true,
@@ -139,7 +148,12 @@ describe("fleet.json", () => {
 
   it("setDefaultDesk moves the flag and rejects an unknown desk", async () => {
     const db = await memoryDb();
-    await upsertDesk(db, { slug: "a", name: "A", triageChannel: "C0A", isDefault: true });
+    await upsertDesk(db, {
+      slug: "a",
+      name: "A",
+      triageChannel: "C0A",
+      isDefault: true,
+    });
     await upsertDesk(db, { slug: "b", name: "B", triageChannel: "C0B" });
     await setDefaultDesk(db, "b");
     expect((await defaultDesk(db))?.slug).toBe("b");
@@ -168,7 +182,9 @@ describe("fleet.json", () => {
         default: true,
       },
     ]);
-    const local = { "channels.customer": [{ channelId: "C2", accountName: "Acme" }] };
+    const local = {
+      "channels.customer": [{ channelId: "C2", accountName: "Acme" }],
+    };
     expect(exampleKeys(mergeConfig(local), desks)).toEqual([]);
     // An explicit desks list wins, and no legacy triage channel falls back to the examples.
     expect(mergeDesks([], legacy)).toEqual([]);

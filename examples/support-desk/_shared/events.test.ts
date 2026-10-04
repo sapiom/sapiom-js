@@ -11,7 +11,7 @@ import {
 
 const fixtures = loadFixtures();
 /** A cron fire's stored input has no event schema; its agent's own test covers it. */
-const events = fixtures.filter((f) => f.type !== "schedule_cron");
+const events = fixtures.filter((f) => !f.type.startsWith("schedule_"));
 
 describe("fixtures", () => {
   it("loads every fixtures/<dir>/, agent fixtures included", () => {

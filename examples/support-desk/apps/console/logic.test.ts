@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AttachedTrigger, ReceiptFire, ReceiptSummary } from "./logic";
 import {
+  sameTrigger,
   AGENTS,
   boardSla,
   costOf,
@@ -62,7 +63,6 @@ describe("fleet agents", () => {
       "copilot",
       "escalation",
       "controller",
-      "linear-sync",
       "urgent-pager",
       "watchdog",
       "digest",
@@ -75,7 +75,6 @@ describe("fleet agents", () => {
       "copilot",
       "escalation",
       "controller",
-      "linear-sync",
       "watchdog",
       "digest",
     ]);
@@ -92,8 +91,11 @@ describe("trigger diffing", () => {
         ev("3", "slack.block_actions", "paused"),
       ]),
     ).toBe(false);
-    expect(isOn("controller", [cron("9", "*/2 * * * *")])).toBe(true);
-    expect(isOn("controller", [cron("9", "*/5 * * * *")])).toBe(false);
+    // The controller lists no trigger: its per-ticket timers are not a switch's triggers.
+    expect(isOn("controller", [cron("9", "*/2 * * * *")])).toBe(false);
+    expect(planSwitch("controller", false, [cron("9", "*/2 * * * *")])).toEqual(
+      { create: [], resume: [], remove: [] },
+    );
   });
 
   it("matches the digest's cron only in its zone, a missing zone meaning UTC", () => {
@@ -105,7 +107,10 @@ describe("trigger diffing", () => {
     expect(isOn("digest", [cron("5", "0 9 * * *")])).toBe(false);
     expect(isOn("digest", [{ ...pacific, timezone: "UTC" }])).toBe(false);
     expect(
-      isOn("controller", [{ ...cron("6", "*/2 * * * *"), timezone: "UTC" }]),
+      sameTrigger(
+        { project: "digest", kind: "schedule_cron", cron: "0 9 * * *" },
+        { ...cron("6", "0 9 * * *"), timezone: "UTC" },
+      ),
     ).toBe(true);
     expect(planSwitch("digest", true, [cron("5", "0 9 * * *")]).create).toEqual(
       [
@@ -172,9 +177,13 @@ describe("trigger diffing", () => {
   });
 
   it("switching off deletes only the triggers fleet.json lists, duplicates included", () => {
-    const plan = planSwitch("controller", false, [
-      cron("8", "*/2 * * * *"),
-      cron("9", "*/2 * * * *", "paused"),
+    const pacific = (id: string, status?: string) => ({
+      ...cron(id, "0 9 * * *", status),
+      timezone: "America/Los_Angeles",
+    });
+    const plan = planSwitch("digest", false, [
+      pacific("8"),
+      pacific("9", "paused"),
       cron("10", "0 * * * *"),
     ]);
     expect(plan).toEqual({ create: [], resume: [], remove: ["8", "9"] });

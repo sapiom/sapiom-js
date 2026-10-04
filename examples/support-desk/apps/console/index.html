@@ -1012,9 +1012,10 @@
               </div>
               <div class="arrow" style="margin-top: 6px">separately</div>
               <div class="box">
-                <strong>Cron agents</strong>controller, linear-sync and digest
-                start runs on a schedule, no event involved. The watchdog runs
-                on the engine's <code>sapiom.run.failed</code>
+                <strong>Timers and crons</strong>the controller runs for one
+                ticket when that ticket's timer fires; the digest runs on a
+                daily schedule. The watchdog runs on the engine's
+                <code>sapiom.run.failed</code>
               </div>
             </div>
           </section>
@@ -1041,9 +1042,10 @@
           <h2>Testing</h2>
           <div class="form">
             <div class="row">
-              <button id="ctl-run" class="mut">Run controller now</button>
+              <button id="ctl-run" class="mut">Reset ticket timers</button>
               <span class="hint"
-                >One controller pass: nudges and escalations due now.</span
+                >One controller run that sets every open ticket's timer again;
+                anything already due fires within a minute.</span
               >
             </div>
             <div class="row">
@@ -1487,6 +1489,7 @@
           : "";
         const ticketActions = [
           !t.owner && !closed ? actButton(t, "take", "Take") : "",
+          t.status === "on_hold" ? actButton(t, "resolve", "Resolved") : "",
           !closed ? actButton(t, "close", "Close", "danger") : "",
         ].join("");
         return `${head(`#${t.number} · ${esc(t.account)}`, t.title || "(untitled)")}

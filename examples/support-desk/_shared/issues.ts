@@ -11,12 +11,20 @@ import { defaultDesk } from "./desks";
 import type { SlackRef } from "./events";
 
 export type IssueStatus =
-  "new" | "on_you" | "on_customer" | "on_hold" | "closed";
+  | "new"
+  | "on_you"
+  | "on_customer"
+  | "on_hold"
+  | "closed";
 /** Widen when a new source adapter lands; never a free string. */
 export type IssueSource = "slack";
 export type Direction = "customer" | "agent" | "internal";
 export type DraftStatus =
-  "pending" | "approved" | "dismissed" | "escalated" | "superseded";
+  | "pending"
+  | "approved"
+  | "dismissed"
+  | "escalated"
+  | "superseded";
 export type DraftDecision = Exclude<DraftStatus, "pending">;
 
 export const ISSUE_STATUSES: readonly IssueStatus[] = [
@@ -64,12 +72,18 @@ export interface Issue {
   linearIdentifier: string | null;
   /** 050_linear_url: null for issues escalated before it, and on Linear replies without a URL. */
   linearUrl: string | null;
-  /** 100_linear_state: the Linear state linear-sync last read; null until its first check. */
+  /** 100_linear_state: the Linear state last read; null until its first check. */
   linearState: string | null;
+  /** 061_linear_sync: when its Linear issue was last read; null until the first read. */
+  linearCheckedAt: Date | null;
   /** 062_escalation_generation: when the issue last entered On Hold; one value per escalation. */
   onHoldAt: Date | null;
   /** 062_escalation_generation: the triage card is stale; cleared once it is redrawn. */
   cardDirty: boolean;
+  /** 110_ticket_timers: the controller's pending one-shot schedule for this issue; null when none. */
+  nextTickId: string | null;
+  /** 110_ticket_timers: when that schedule fires. */
+  nextTickAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   closedAt: Date | null;
@@ -170,8 +184,11 @@ const toIssue = (r: Row): Issue => ({
   linearIdentifier: (r.linear_identifier as string | null) ?? null,
   linearUrl: (r.linear_url as string | null) ?? null,
   linearState: (r.linear_state as string | null) ?? null,
+  linearCheckedAt: (r.linear_checked_at as Date | null) ?? null,
   onHoldAt: (r.on_hold_at as Date | null) ?? null,
   cardDirty: (r.card_dirty as boolean | null) ?? false,
+  nextTickId: (r.next_tick_id as string | null) ?? null,
+  nextTickAt: (r.next_tick_at as Date | null) ?? null,
   createdAt: r.created_at as Date,
   updatedAt: r.updated_at as Date,
   closedAt: (r.closed_at as Date | null) ?? null,
@@ -374,27 +391,6 @@ export async function openIssuesForAccount(
   return rows.map(toIssue);
 }
 
-/** On Hold issues linked to Linear, least recently checked first (061_linear_sync), at most `limit`. */
-export async function onHoldLinked(db: Db, limit: number): Promise<Issue[]> {
-  const rows = await db.query(
-    `select * from issues
-     where status = 'on_hold' and linear_identifier is not null
-     order by linear_checked_at asc nulls first, number asc
-     limit $1`,
-    [limit],
-  );
-  return rows.map(toIssue);
-}
-
-/** Issues whose triage card is stale (062_escalation_generation), oldest first, at most `limit`. */
-export async function cardDirty(db: Db, limit: number): Promise<Issue[]> {
-  const rows = await db.query(
-    "select * from issues where card_dirty order by updated_at asc limit $1",
-    [limit],
-  );
-  return rows.map(toIssue);
-}
-
 /** Mark the triage card stale or fresh; set with the status move, cleared after a successful redraw. */
 export async function setCardDirty(
   db: Db,
@@ -407,8 +403,7 @@ export async function setCardDirty(
   ]);
 }
 
-/** Stamp the time linear-sync last read this issue's Linear state, so the next tick checks others first. */
-/** Stamp the Linear read; `state`, when the read returned one, replaces the stored Linear state. */
+/** Stamp a Linear read; `state`, when the read returned one, replaces the stored Linear state. */
 export async function markLinearChecked(
   db: Db,
   issueId: string,
@@ -417,6 +412,19 @@ export async function markLinearChecked(
   await db.query(
     "update issues set linear_checked_at = now(), linear_state = coalesce($2, linear_state) where id = $1",
     [issueId, state || null],
+  );
+}
+
+/** Store the issue's pending controller schedule (`_shared/timers.ts`), or clear it with nulls. */
+export async function setNextTick(
+  db: Db,
+  issueId: string,
+  id: string | null,
+  at: Date | null,
+): Promise<void> {
+  await db.query(
+    "update issues set next_tick_id = $2, next_tick_at = $3 where id = $1",
+    [issueId, id, at],
   );
 }
 

@@ -103,7 +103,7 @@ describe("desk-scoped reads", () => {
     expect(parseBoardFilter("deleted")).toBeNull();
   });
 
-  it("gives each row its newest draft status and the Linear state linear-sync stored", async () => {
+  it("gives each row its newest draft status and the Linear state last read", async () => {
     const a = await issueOn(test, "a");
     const b = await issueOn(test, "b");
     await createDraft(db, { issueId: a.id, text: "first" });

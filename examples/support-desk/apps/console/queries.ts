@@ -58,7 +58,7 @@ export interface BoardRow {
   ownerSlackId: string | null;
   linearIdentifier: string | null;
   linearUrl: string | null;
-  /** The Linear state linear-sync last read (`issues.linear_state`); null until its first check. */
+  /** The Linear state last read (`issues.linear_state`); null until its first check. */
   linearState: string | null;
   /** The newest draft's status; null when the copilot has drafted nothing. */
   draftStatus: string | null;

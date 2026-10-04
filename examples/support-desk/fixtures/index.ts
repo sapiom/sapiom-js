@@ -1,8 +1,8 @@
 /**
  * Load every fixture under `fixtures/<dir>/`: `{ type, description, payload }`, where `payload` is
- * exactly what a run receives. `type` is an event type, or `schedule_cron` for a cron fire's
- * stored input. A JSON file without a `type` (such as `intake/jev.json`, canned Jev answers) is
- * test data, not a fixture, and is skipped.
+ * exactly what a run receives. `type` is an event type, `schedule_cron` for a cron fire's stored
+ * input, or `schedule_once` for a one-shot timer's. A JSON file without a `type` (such as
+ * `intake/jev.json`, canned Jev answers) is test data, not a fixture, and is skipped.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";

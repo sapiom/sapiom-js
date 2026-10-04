@@ -1,6 +1,20 @@
 /**
- * SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge.
- * SAP-3788: opt-in escalation so stalled issues can reach a person beyond triage.
+ * controller: runs for one ticket when its timer fires (`_shared/timers.ts`), sends whatever is due
+ * on it, and sets its next timer. No cron: a ticket the team handles in time never starts a run.
+ *
+ * Trigger: the per-ticket `schedule_once` that `rescheduleIssue` keeps, input `{ issueId }`. Run
+ * with no `issueId` (the Console's Run now, or by hand after install) it sends nothing and resets
+ * every open ticket's timer.
+ *
+ * A tick:
+ * 1. arms a retry timer ({@link TICK_RETRY_MINUTES}), so a run that fails partway still comes back;
+ * 2. redraws the triage card if an earlier redraw failed;
+ * 3. on an On Hold ticket whose Linear check is due, reads Linear (`_shared/linear-check.ts`), which
+ *    moves it On You when the Linear issue is Done or Canceled;
+ * 4. sends the due nudges (SAP-3787 repeat rounds; first-response and next-response targets when
+ *    `sla` is set) and escalation levels (SAP-3788), each rechecked under the issue row lock and
+ *    deduped through `nudges`, so a duplicate or late tick never sends twice;
+ * 5. sets the next timer, or clears it when nothing more will come due.
  */
 import {
   defineAgent,
@@ -13,23 +27,27 @@ import { z } from "zod/v4";
 
 import { agentSlug } from "../../_shared/fleet-id";
 import { escapeMrkdwn, nudge, slackToPlain } from "../../_shared/blocks";
-import {
-  escalations,
-  getConfigOr,
-  type DeskEscalation,
-} from "../../_shared/config";
-import { withDb, type Db, type Row } from "../../_shared/db";
-import { listDesks, oncallFor, type Desk } from "../../_shared/desks";
+import { getConfigOr } from "../../_shared/config";
+import { withDb } from "../../_shared/db";
+import { listDesks, oncallFor } from "../../_shared/desks";
 import { emit } from "../../_shared/emit";
+import { getIssue, recordNudge, recordRun } from "../../_shared/issues";
 import {
-  getIssue,
-  recordNudge,
-  recordRun,
-  type Direction,
-  type DraftStatus,
-  type IssueStatus,
-} from "../../_shared/issues";
+  checkLinear,
+  linearCheckDue,
+  redrawIfDirty,
+  type LinearCheck,
+} from "../../_shared/linear-check";
 import { permalink, post } from "../../_shared/slack";
+import {
+  TICK_RETRY_MINUTES,
+  escalationConfig,
+  rescheduleIssue,
+  rescheduleOpen,
+  snapshot,
+  thresholds,
+  type Reschedule,
+} from "../../_shared/timers";
 
 import {
   byThreadOrder,
@@ -37,15 +55,11 @@ import {
   dueNudges,
   ESCALATION_KINDS,
   NUDGE_KINDS,
-  nudgeKey,
   skipKey,
   type Escalation,
   type EscalationInput,
-  type DraftRow,
-  type IssueRow,
   type MessageRow,
   type Nudge,
-  type SentRow,
 } from "./rules";
 
 export const AGENT = agentSlug("controller");
@@ -62,8 +76,14 @@ const JEV_CONTEXT_MESSAGES = 6;
 const replyKey = (kind: Nudge["kind"], refId: string): string =>
   `reply:${kind}:${refId}`;
 
-// Accept an optional Jev bypass so scheduled runs can nudge without message classification.
-const Input = z.object({ jevCheck: z.boolean().optional() });
+/**
+ * `issueId`: the ticket whose timer fired; without it the run resets every open ticket's timer.
+ * `jevCheck: false` nudges without asking Jev whether the customer expects a reply.
+ */
+const Input = z.object({
+  issueId: z.string().uuid().optional(),
+  jevCheck: z.boolean().optional(),
+});
 
 const NudgeSchema = z.object({
   issueId: z.string(),
@@ -86,56 +106,11 @@ const EscalationSchema = z.object({
   key: z.string(),
 });
 const SendInput = z.object({
+  issueId: z.string().uuid().optional(),
   nudges: z.array(NudgeSchema),
   escalations: z.array(EscalationSchema).optional(),
+  linear: z.unknown().optional(),
 });
-
-// --- reads (plain SQL; every write goes through _shared/issues.ts) ----------------------------
-
-const OPEN = "i.status <> 'closed'";
-
-interface Snapshot {
-  issues: IssueRow[];
-  drafts: DraftRow[];
-  messages: MessageRow[];
-  sent: SentRow[];
-  now: Date;
-}
-
-/** Share threshold loading so scan and send apply the same configuration precedence. */
-async function thresholds(db: Db) {
-  return {
-    sla: await getConfigOr(db, "sla", null),
-    minutes: await getConfigOr(db, "nudge.minutes", 30),
-    repeatMinutes: await getConfigOr(db, "nudge.repeat_minutes", [60, 240]),
-    deskMinutes: Object.fromEntries(
-      (await listDesks(db)).map((d) => [d.id, d.nudgeMinutes]),
-    ),
-  };
-}
-
-/** Config entries use desk slugs, while issue rows identify desks by ID. */
-async function escalationConfig(db: Db, desks: Desk[]) {
-  const bySlug = await escalations(db);
-  const entries: Record<string, DeskEscalation> = {};
-  const unnotifiable = new Set<string>();
-  for (const d of desks) {
-    const entry = bySlug[d.slug];
-    if (!entry) continue;
-    entries[d.id] = entry;
-    // Never recorded, so it would be due again every run: keep it away from Jev and send.
-    if (!entry.groupId && !entry.oncallSlackId && !(await oncallFor(db, d)))
-      unnotifiable.add(d.id);
-  }
-  return {
-    entries,
-    unnotifiable,
-    levels: Object.fromEntries(
-      Object.entries(entries).map(([id, e]) => [id, e.levels]),
-    ),
-    defaultDeskId: desks.find((d) => d.isDefault)?.id ?? null,
-  };
-}
 
 const REASON_TEXT: Record<Escalation["reasons"][number]["kind"], string> = {
   no_owner: "no owner",
@@ -147,67 +122,16 @@ const reasonsText = (e: Escalation) =>
     .map((r) => `${REASON_TEXT[r.kind]} for ${r.minutes} min`)
     .join(", ");
 
-/**
- * Everything the rules need for the open issues (or for one, inside `send`), plus the database's
- * clock. With `issueId`, the issue row is locked, so a status change waits for the nudge.
- */
-export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
-  const where = issueId ? `${OPEN} and i.id = $1` : OPEN;
-  const params = issueId ? [issueId] : [];
-  const [issues, drafts, messages, sent, clock] = [
-    await db.query(
-      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.desk_id, i.priority, i.created_at from issues i where ${where}${issueId ? " for update" : ""}`,
-      params,
-    ),
-    await db.query(
-      `select d.id, d.issue_id, d.status, d.created_at from drafts d join issues i on i.id = d.issue_id where ${where}`,
-      params,
-    ),
-    await db.query(
-      `select m.id, m.issue_id, m.direction, m.text, m.ts, m.created_at from messages m join issues i on i.id = m.issue_id where ${where}`,
-      params,
-    ),
-    await db.query(
-      `select n.issue_id, n.kind, n.sent_at from nudges n join issues i on i.id = n.issue_id where ${where}`,
-      params,
-    ),
-    await db.query<{ now: Date }>("select now() as now"),
-  ];
-  return {
-    issues: issues.map((r: Row) => ({
-      id: r.id as string,
-      status: r.status as IssueStatus,
-      ownerSlackId: (r.owner_slack_id as string | null) ?? null,
-      triageRootTs: (r.triage_root_ts as string | null) ?? null,
-      deskId: (r.desk_id as string | null) ?? null,
-      priority: (r.priority as string | null) ?? null,
-      createdAt: new Date(r.created_at as Date),
-    })),
-    drafts: drafts.map((r: Row) => ({
-      id: r.id as string,
-      issueId: r.issue_id as string,
-      status: r.status as DraftStatus,
-      createdAt: new Date(r.created_at as Date),
-    })),
-    messages: messages.map((r: Row) => ({
-      id: r.id as string,
-      issueId: r.issue_id as string,
-      direction: r.direction as Direction,
-      text: (r.text as string | null) ?? null,
-      ts: (r.ts as string | null) ?? null,
-      createdAt: new Date(r.created_at as Date),
-    })),
-    sent: sent.map((r: Row) => ({
-      issueId: r.issue_id as string,
-      kind: r.kind as string,
-      sentAt: new Date(r.sent_at as Date),
-    })),
-    // The database clock, so a laptop or sandbox with drift cannot move a threshold.
-    now: new Date(clock[0].now),
-  };
-}
-
 // --- steps -----------------------------------------------------------------------------------
+
+/** The timer as a run's output shows it. */
+const timerOut = (t: Reschedule) => ({
+  issueId: t.issueId,
+  at: t.at?.toISOString() ?? null,
+  due: t.due ? { reason: t.due.reason, detail: t.due.detail } : null,
+  changed: t.changed,
+  ...(t.paused ? { paused: true } : {}),
+});
 
 type JevCtx = Pick<AgentExecutionContext<Record<string, unknown>>, "sapiom">;
 
@@ -249,8 +173,49 @@ const scan = defineStep({
   async run(input, ctx) {
     const jevCheck = input.jevCheck ?? true;
     return withDb(ctx, async (db) => {
-      await recordRun(db, ctx, AGENT);
-      const snap = await snapshot(db);
+      if (!input.issueId) {
+        await recordRun(db, ctx, AGENT);
+        const rearmed = await rescheduleOpen(db, ctx);
+        ctx.logger.info("controller reset every open ticket's timer", rearmed);
+        return terminate({ rearmed });
+      }
+      const issueId = input.issueId;
+      await recordRun(db, ctx, AGENT, issueId);
+      const exists = await db.query("select 1 from issues where id = $1", [
+        issueId,
+      ]);
+      if (exists.length === 0)
+        return terminate({ issueId, skipped: "issue not found" });
+      let issue = await getIssue(db, issueId);
+      // A paused controller, or a closed ticket: clear the timer and send nothing.
+      if (
+        issue.status === "closed" ||
+        (await getConfigOr(db, "controller.paused", false))
+      ) {
+        const timer = await rescheduleIssue(db, ctx, issueId);
+        return terminate({
+          issueId,
+          skipped:
+            issue.status === "closed" ? "issue is closed" : "controller paused",
+          timer: timerOut(timer),
+        });
+      }
+      const [{ now }] = await db.query<{ now: Date }>("select now() as now");
+      const nowMs = new Date(now).getTime();
+      // Replaced by the real next timer at the end; it stands only if this run fails before that.
+      await rescheduleIssue(db, ctx, issueId, {
+        at: new Date(nowMs + TICK_RETRY_MINUTES * 60_000),
+      });
+      await redrawIfDirty(ctx, db, issue);
+
+      let linear: LinearCheck | null = null;
+      const check = linearCheckDue(issue);
+      if (check && check.getTime() <= nowMs) {
+        linear = await checkLinear(ctx, db, issue, AGENT);
+        issue = await getIssue(db, issueId);
+      }
+
+      const snap = await snapshot(db, issueId);
       const candidates = dueNudges({
         ...snap,
         ...(await thresholds(db)),
@@ -327,27 +292,35 @@ const scan = defineStep({
       const due = all.filter(notifiable);
       const unnotified = all.filter((e) => !notifiable(e)).map((e) => e.key);
       ctx.logger.info("controller scan", {
-        openIssues: snap.issues.length,
+        issueId,
+        status: issue.status,
         due: candidates.length,
         nudges: nudges.length,
         escalations: due.length,
         unnotified,
         skipped,
       });
-      if (nudges.length === 0 && due.length === 0)
+      if (nudges.length === 0 && due.length === 0) {
+        const timer = await rescheduleIssue(db, ctx, issueId, { tick: true });
         return terminate({
+          issueId,
           nudged: [],
           escalated: [],
           unnotified,
           skipped,
           jevCheck,
+          linear,
+          timer: timerOut(timer),
         });
+      }
       return goto("send", {
+        issueId,
         nudges,
         escalations: due,
         unnotified,
         skipped,
         jevCheck,
+        linear,
       });
     });
   },
@@ -375,7 +348,7 @@ const send = defineStep({
         const sent = await db.transaction(async (tx) => {
           // Recheck live conditions because scan may be stale, while keeping scan's Jev decision.
           // Exclude this round's key so an otherwise-due retry reaches recordNudge's duplicate check.
-          const fresh = await snapshot(tx, n.issueId);
+          const fresh = await snapshot(tx, n.issueId, { lock: true });
           const stillDue = dueNudges({
             ...fresh,
             sent: fresh.sent.filter((s) => s.kind !== n.key),
@@ -427,7 +400,7 @@ const send = defineStep({
         const out = await db.transaction(async (tx) => {
           // Recheck under the issue lock to prevent stale conditions or racing higher levels from paging.
           // Honor Jev skip verdicts unless jevCheck is disabled.
-          const fresh = await snapshot(tx, e.issueId);
+          const fresh = await snapshot(tx, e.issueId, { lock: true });
           const due = dueEscalations({
             ...fresh,
             ...esc,
@@ -473,7 +446,21 @@ const send = defineStep({
           escalated.push({ issueId: e.issueId, key: e.key, ...out });
         else notSent.push(e.key);
       }
+      // Every issue this run touched; a tick has one, a hand-built send input may name several.
+      const issueIds = [
+        ...new Set([
+          ...(input.issueId ? [input.issueId] : []),
+          ...input.nudges.map((n) => n.issueId),
+          ...(input.escalations ?? []).map((e) => e.issueId),
+        ]),
+      ];
+      const timers = [];
+      for (const id of issueIds)
+        timers.push(
+          timerOut(await rescheduleIssue(db, ctx, id, { tick: true })),
+        );
       return terminate({
+        ...(input.issueId ? { issueId: input.issueId } : {}),
         nudged,
         escalated,
         unnotified,
@@ -481,6 +468,11 @@ const send = defineStep({
         resolved,
         skipped: input.skipped ?? [],
         jevCheck: input.jevCheck ?? true,
+        linear: input.linear ?? null,
+        timer: input.issueId
+          ? timers.find((t) => t.issueId === input.issueId)
+          : undefined,
+        ...(input.issueId ? {} : { timers }),
       });
     });
   },
@@ -489,7 +481,7 @@ const send = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk controller: a cron that pings the triage thread on a backoff while a condition stays stale (no owner, no draft, draft pending, customer waiting), and escalates to on-call and a support group when an issue stays unowned or a customer keeps waiting past a desk's escalation levels.",
+    "Support desk controller: runs for one ticket when its timer fires, pings the triage thread while a condition stays stale (no owner, no draft, draft pending, customer waiting), escalates to on-call and a support group past a desk's escalation levels, reads Linear for On Hold tickets, and sets the ticket's next timer.",
   entry: "scan",
   steps: { scan, send },
 });

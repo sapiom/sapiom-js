@@ -33,7 +33,6 @@ describe("setup selection", () => {
       "copilot",
       "escalation",
       "controller",
-      "linear-sync",
       "watchdog",
       "digest",
     ]);
@@ -62,7 +61,7 @@ describe("setup selection", () => {
           parseArgs(["--skip", "controller", "--skip", "copilot"]),
         ),
       ),
-    ).toEqual(["intake", "escalation", "linear-sync", "watchdog", "digest"]);
+    ).toEqual(["intake", "escalation", "watchdog", "digest"]);
     expect(
       keys(selectProjects(parseArgs(["--only", "intake,urgent-pager"]))),
     ).toEqual(["intake", "urgent-pager"]);
@@ -277,6 +276,14 @@ describe("retired triggers", () => {
       "8",
     ]);
     expect(retiredToDetach("controller", have)).toEqual([]);
+  });
+
+  it("detaches the controller's old scan but none of its ticket timers", () => {
+    const have = [
+      attached({ id: "1", kind: "schedule_cron", cron: "*/2 * * * *" }),
+      attached({ id: "2", kind: "schedule_once" as never }),
+    ];
+    expect(retiredToDetach("controller", have).map((t) => t.id)).toEqual(["1"]);
   });
 
   it("are never also wanted", () => {

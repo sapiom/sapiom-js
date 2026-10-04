@@ -68,7 +68,7 @@ describe("isWatched", () => {
     expect(isWatched(agentSlug("smoke-ingest"))).toBe(false);
     expect(isWatched(agentSlug("copilot", "other-desk"))).toBe(false);
     expect(isWatched("price-checker")).toBe(false);
-    expect(WATCHED_SLUGS).toHaveLength(7);
+    expect(WATCHED_SLUGS).toHaveLength(6);
   });
 });
 
@@ -107,7 +107,7 @@ describe("actionItems", () => {
     expect(has(items, /reply to the customer by hand/)).toBe(true);
   });
 
-  it.each(["escalation", "linear-sync"])("names Linear for %s", (key) => {
+  it.each(["escalation", "controller"])("names Linear for %s", (key) => {
     const items = actionItems(agentSlug(key), "run", null);
     expect(has(items, /reconnect Linear in Connectors/)).toBe(true);
   });
