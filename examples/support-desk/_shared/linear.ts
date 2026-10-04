@@ -21,6 +21,7 @@ export const LINEAR_RELAY_SLUG = "linear";
 export const LINEAR_TOOLS = {
   createIssue: "save_issue",
   getIssue: "get_issue",
+  comment: "save_comment",
 } as const;
 
 export interface LinearIssue {
@@ -157,4 +158,19 @@ export async function getIssue(
   return toLinearIssue(
     await callTool(LINEAR_TOOLS.getIssue, { id: idOrIdentifier }, ctx),
   );
+}
+
+/** Local traces must not write comments to Linear. */
+export async function commentIssue(
+  ctx: SlackCtx,
+  issueId: string,
+  body: string,
+): Promise<void> {
+  if (ctx.isLocalTrace) {
+    ctx.logger.info("linear save_comment (local trace, not sent)", {
+      issueId,
+    });
+    return;
+  }
+  await callTool(LINEAR_TOOLS.comment, { issueId, body }, ctx);
 }

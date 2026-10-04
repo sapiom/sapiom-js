@@ -3,10 +3,16 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { localFleetDb, setLocalDb, withDb, type Db } from "../../_shared/db";
+import {
+  localFleetDb,
+  resetSharedDb,
+  setLocalDb,
+  withDb,
+  type Db,
+} from "../../_shared/db";
 import { setConfig } from "../../_shared/config";
 import { upsertDesk } from "../../_shared/desks";
 import {
@@ -18,6 +24,9 @@ import {
   messageBySourceEventId,
   messagesForIssue,
   openIssue,
+  setStatus,
+  updateIssue,
+  type Issue,
 } from "../../_shared/issues";
 import { fakeCtx } from "../../_shared/test-ctx";
 import {
@@ -29,7 +38,13 @@ import {
   type Candidate,
   type IntakeJev,
 } from "./decide";
-import { TITLE_MAX, agent, stripClientFooter, titleOf } from "./index";
+import {
+  TITLE_MAX,
+  agent,
+  noteOpenLinear,
+  stripClientFooter,
+  titleOf,
+} from "./index";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const intakeFixture = (file: string) =>
@@ -368,6 +383,50 @@ describe("intake agent", () => {
       status: "closed",
       ownerSlackId: "U0TEAMMATE1",
     });
+  });
+
+  it("Close on an escalated issue notes its open Linear ticket once, in the triage thread and on Linear", async () => {
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      makeCtx("exec-bug", JEV.bug).ctx,
+    );
+    const issueId = output.issueId as string;
+    await updateIssue(db, issueId, {
+      linearIssueId: "uuid-SAP-9",
+      linearIdentifier: "SAP-9",
+      linearUrl: "https://linear.app/x/issue/SAP-9",
+    });
+    await setStatus(db, issueId, "on_hold");
+    const issue = await getIssue(db, issueId);
+
+    const close = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as { actions: { value: string }[] };
+    close.actions[0].value = issueId;
+    const c = makeCtx("exec-close-linked");
+    expect((await run(close, c.ctx)).output).toMatchObject({
+      outcome: "close",
+      changed: true,
+      status: "closed",
+    });
+    expect(c.slack("chat.postMessage")).toEqual([
+      expect.objectContaining({
+        threadTs: issue.triageRootTs,
+        text: "Closed by <@U0TEAMMATE1>",
+      }),
+      expect.objectContaining({
+        threadTs: issue.triageRootTs,
+        text: "<https://linear.app/x/issue/SAP-9|SAP-9> is still open in Linear. Cancel it there if it no longer needs work.",
+      }),
+    ]);
+    expect(c.logs.map((l) => l.msg)).toContain(
+      "linear save_comment (local trace, not sent)",
+    );
+
+    const c2 = makeCtx("exec-close-linked-2");
+    expect((await run(close, c2.ctx)).output).toMatchObject({ changed: false });
+    expect(c2.slack("chat.postMessage")).toHaveLength(0);
+    expect(c2.logs.some((l) => l.msg.startsWith("linear "))).toBe(false);
   });
 
   it("a follow-up on an On Hold issue stays On Hold", async () => {
@@ -1115,5 +1174,182 @@ describe("intake agent", () => {
         (await run(own, makeCtx("exec-note-own-desk").ctx)).output,
       ).toMatchObject({ outcome: "internal", issueId: issue.id });
     });
+  });
+});
+
+describe("noteOpenLinear against the relay (mocked fetch)", () => {
+  let state: { status: string; statusType: string } | null;
+  let failComment: boolean;
+  let failMethod: string | null;
+  let calls: { tool?: string; method: string; args: Record<string, unknown> }[];
+
+  const issue = {
+    id: "11111111-1111-4111-8111-111111111111",
+    number: 41,
+    linearIssueId: "uuid-SAP-9",
+    linearIdentifier: "SAP-9",
+    linearUrl: "https://linear.app/x/issue/SAP-9",
+    triageRootTs: "1790889356.001",
+  } as Issue;
+
+  const rpc = (id: unknown, result: unknown) =>
+    new Response(JSON.stringify({ jsonrpc: "2.0", id, result }));
+
+  beforeEach(() => {
+    vi.stubEnv("SAPIOM_API_KEY", "sat_test");
+    state = { status: "In Progress", statusType: "started" };
+    failComment = false;
+    failMethod = null;
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(init.body as string);
+        if (url.includes("/connectors/v1/linear/mcp")) {
+          const name = body.params.name as string;
+          calls.push({
+            tool: name,
+            method: "mcp",
+            args: body.params.arguments,
+          });
+          const fail =
+            (name === "get_issue" && !state) ||
+            (name === "save_comment" && failComment);
+          if (fail)
+            return rpc(body.id, {
+              isError: true,
+              content: [{ type: "text", text: "Entity not found" }],
+            });
+          const out =
+            name === "get_issue"
+              ? {
+                  id: "SAP-9",
+                  uuid: "uuid-SAP-9",
+                  url: "https://linear.app/x/issue/SAP-9",
+                  ...state,
+                }
+              : { id: "comment-1" };
+          return rpc(body.id, {
+            content: [{ type: "text", text: JSON.stringify(out) }],
+          });
+        }
+        const method = url.split("/methods/")[1];
+        calls.push({ method, args: body });
+        if (method === failMethod)
+          return new Response(JSON.stringify({ ok: false, error: "boom" }), {
+            status: 500,
+          });
+        return new Response(
+          JSON.stringify({ channel: body.channel, ts: "1790900000.001" }),
+        );
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const posts = () => calls.filter((c) => c.method === "chat.postMessage");
+  const comments = () => calls.filter((c) => c.tool === "save_comment");
+  const note = async (target: Issue = issue) => {
+    const made = fakeCtx({ isLocalTrace: false });
+    await noteOpenLinear(made.ctx as never, "C0TRIAGE001", target);
+    return made.logs.filter((l) => l.level === "warn").map((l) => l.msg);
+  };
+
+  it.each(["completed", "canceled"])(
+    "a %s ticket gets no note and no comment",
+    async (statusType) => {
+      state = { status: statusType, statusType };
+      expect(await note()).toEqual([]);
+      expect(calls.find((c) => c.tool)).toMatchObject({
+        tool: "get_issue",
+        args: { id: "uuid-SAP-9" },
+      });
+      expect(posts()).toHaveLength(0);
+      expect(comments()).toHaveLength(0);
+    },
+  );
+
+  it("an open ticket gets one triage note and one Linear comment on its uuid", async () => {
+    expect(await note()).toEqual([]);
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].args).toMatchObject({
+      channel: "C0TRIAGE001",
+      threadTs: "1790889356.001",
+      text: "<https://linear.app/x/issue/SAP-9|SAP-9> is still open in Linear. Cancel it there if it no longer needs work.",
+    });
+    expect(comments()).toEqual([
+      expect.objectContaining({
+        args: {
+          issueId: "uuid-SAP-9",
+          body: "Support issue #41 was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.",
+        },
+      }),
+    ]);
+  });
+
+  it("a failed Linear read warns and does nothing else", async () => {
+    state = null;
+    expect(await note()).toEqual(["linear state not read on close"]);
+    expect(posts()).toHaveLength(0);
+    expect(comments()).toHaveLength(0);
+  });
+
+  it("a failed comment still posts the note", async () => {
+    failComment = true;
+    expect(await note()).toEqual(["open Linear comment not added"]);
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("a failed Slack post still sends the comment", async () => {
+    failMethod = "chat.postMessage";
+    expect(await note()).toEqual(["open Linear note not posted"]);
+    expect(comments()).toHaveLength(1);
+  });
+
+  it('a failed "Closed by" post still comments on the open ticket', async () => {
+    // A live ctx reaches the database through the shared pool; point it at a local one.
+    const db = await localFleetDb();
+    await resetSharedDb(async () => ({ db, close: async () => {} }));
+    const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
+    const opened = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "high",
+      title: "Export fails",
+      customer: { channel: "C0CUSTOMER1", ts: "1790889355.981" },
+      triageRootTs: "1790889356.001",
+    });
+    await updateIssue(db, opened.id, {
+      linearIssueId: "uuid-SAP-9",
+      linearIdentifier: "SAP-9",
+      linearUrl: "https://linear.app/x/issue/SAP-9",
+    });
+    await setStatus(db, opened.id, "on_hold");
+    const close = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as { actions: { value: string }[] };
+    close.actions[0].value = opened.id;
+    failMethod = "chat.postMessage";
+
+    const made = fakeCtx({ isLocalTrace: false });
+    (made.ctx.sapiom as Record<string, unknown>).database = {
+      get: async () => ({
+        connection: { connectionString: "postgres://local" },
+      }),
+    };
+    await expect(run(close, made.ctx)).rejects.toThrow();
+    expect((await getIssue(db, opened.id)).status).toBe("closed");
+    expect(comments()).toHaveLength(1);
+    await resetSharedDb();
+  });
+
+  it("no triage thread: no note, the comment still goes", async () => {
+    expect(await note({ ...issue, triageRootTs: null })).toEqual([]);
+    expect(posts()).toHaveLength(0);
+    expect(comments()).toHaveLength(1);
   });
 });

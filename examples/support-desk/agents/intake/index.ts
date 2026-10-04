@@ -63,6 +63,8 @@ import {
   type Account,
   type Issue,
 } from "../../_shared/issues";
+import { commentIssue, getIssue as getLinearIssue } from "../../_shared/linear";
+import { resolution } from "../linear-sync/rules";
 import {
   type SlackCtx,
   permalink,
@@ -972,6 +974,60 @@ async function settleClicked(
   }
 }
 
+/**
+ * Closed issues leave linear-sync's On Hold scan, so an unresolved Linear ticket is flagged here.
+ * Never throws: the close is already committed and a retried step would see it as already closed.
+ */
+export async function noteOpenLinear(
+  ctx: SlackCtx,
+  triageChannel: string,
+  issue: Issue,
+): Promise<void> {
+  const identifier = issue.linearIdentifier;
+  if (!identifier) return;
+  let linear;
+  try {
+    linear = await getLinearIssue(ctx, issue.linearIssueId ?? identifier);
+  } catch (err) {
+    ctx.logger.warn("linear state not read on close", {
+      issueId: issue.id,
+      linear: identifier,
+      err: String(err),
+    });
+    return;
+  }
+  if (resolution(linear)) return;
+  const url = issue.linearUrl ?? linear.url;
+  const name = escapeMrkdwn(identifier);
+  if (issue.triageRootTs) {
+    try {
+      await post(ctx, {
+        channel: triageChannel,
+        threadTs: issue.triageRootTs,
+        text: `${url ? mrkdwnLink(url, name) : name} is still open in Linear. Cancel it there if it no longer needs work.`,
+      });
+    } catch (err) {
+      ctx.logger.warn("open Linear note not posted", {
+        issueId: issue.id,
+        err: String(err),
+      });
+    }
+  }
+  try {
+    await commentIssue(
+      ctx,
+      linear.id,
+      `Support issue #${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
+    );
+  } catch (err) {
+    ctx.logger.warn("open Linear comment not added", {
+      issueId: issue.id,
+      linear: identifier,
+      err: String(err),
+    });
+  }
+}
+
 const button = defineStep({
   name: "button",
   terminal: true,
@@ -1056,28 +1112,34 @@ const button = defineStep({
         };
       });
 
-      // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
-      const account = await getAccount(db, issue.accountId);
-      await refreshCard(ctx, triageChannel, issue, account);
-      if (input.container?.message_ts !== issue.triageRootTs) {
-        const line =
-          verb === "take"
-            ? changed
-              ? `Taken by <@${clicker}>`
-              : issue.status === "closed"
-                ? "Issue is closed"
-                : `Owned by <@${issue.ownerSlackId}>`
-            : changed
-              ? `Closed by <@${clicker}>`
-              : "Already closed";
-        await settleClicked(ctx, input, line);
-      }
-      if (verb === "close" && changed && issue.triageRootTs) {
-        await post(ctx, {
-          channel: triageChannel,
-          threadTs: issue.triageRootTs,
-          text: `Closed by <@${clicker}>`,
-        });
+      try {
+        // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
+        const account = await getAccount(db, issue.accountId);
+        await refreshCard(ctx, triageChannel, issue, account);
+        if (input.container?.message_ts !== issue.triageRootTs) {
+          const line =
+            verb === "take"
+              ? changed
+                ? `Taken by <@${clicker}>`
+                : issue.status === "closed"
+                  ? "Issue is closed"
+                  : `Owned by <@${issue.ownerSlackId}>`
+              : changed
+                ? `Closed by <@${clicker}>`
+                : "Already closed";
+          await settleClicked(ctx, input, line);
+        }
+        if (verb === "close" && changed && issue.triageRootTs) {
+          await post(ctx, {
+            channel: triageChannel,
+            threadTs: issue.triageRootTs,
+            text: `Closed by <@${clicker}>`,
+          });
+        }
+      } finally {
+        // A Slack failure above must not skip it: the retry sees the issue as already closed.
+        if (verb === "close" && changed)
+          await noteOpenLinear(ctx, triageChannel, issue);
       }
       return terminate({
         outcome: verb,
