@@ -3,6 +3,7 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { spawn } from "node:child_process";
@@ -20,7 +21,12 @@ for (const specifier of config.plugin ?? []) {
   for (const key of keys) delete process.env[key];
   writeFileSync(readyPath, "ready\n", { flag: "wx", mode: 0o600 });
 }
-writeFileSync("runtime.pid", String(process.pid));
+// Write then rename, so a polling reader never sees the file created but still empty.
+function publishPid(path, pid) {
+  writeFileSync(`${path}.tmp`, String(pid));
+  renameSync(`${path}.tmp`, path);
+}
+publishPid("runtime.pid", process.pid);
 if (config.resistant) {
   const resistantSource =
     'process.on("SIGTERM",()=>{' +
@@ -32,7 +38,7 @@ if (config.resistant) {
     detached: true,
     stdio: "ignore",
   });
-  writeFileSync("runtime.tool.pid", String(resistant.pid));
+  publishPid("runtime.tool.pid", resistant.pid);
 }
 if (config.spawnOnTermMarker) {
   process.on("SIGTERM", () => {
@@ -57,7 +63,7 @@ if (config.startupExitWriter) {
     stdio: "ignore",
   });
   writer.unref();
-  writeFileSync("runtime.tool.pid", String(writer.pid));
+  publishPid("runtime.tool.pid", writer.pid);
   const deadline = Date.now() + 2_000;
   const observeWriter = setInterval(() => {
     if (existsSync(config.startupExitWriter)) process.exit(3);
