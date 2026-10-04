@@ -13,7 +13,11 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * pre-gate doesn't enforce.
  */
 
-const ajv = new Ajv2020({ strict: false, allErrors: true });
+// `validateFormats: false`: no format is registered, so this only drops Ajv's "unknown format" warning.
+const AJV_OPTIONS = { strict: false, allErrors: true, validateFormats: false } as const;
+
+// Long-lived only to check schemas against the meta-schema, which stores nothing per user schema (SAP-3671).
+const schemaMetaValidator = new Ajv2020(AJV_OPTIONS);
 
 /**
  * Validate `input` against `schema`. Throws `StepInputValidationError` when
@@ -41,7 +45,12 @@ export function validateManifestStepInput(
     return;
   }
 
-  const validate = ajv.compile(normalizeInputJsonSchema(schema));
+  const normalized = normalizeInputJsonSchema(schema);
+  // Validate separately to preserve schema checks when per-call compilation disables them.
+  void schemaMetaValidator.validateSchema(normalized, true);
+  // Fresh normalized schema identities would accumulate in a shared Ajv cache.
+  // Scope compiled validators to each call to avoid retaining them (SAP-3671).
+  const validate = new Ajv2020({ ...AJV_OPTIONS, validateSchema: false }).compile(normalized);
   const valid = validate(input);
   if (!valid) {
     const issues = mapAjvErrors(validate.errors ?? []);
