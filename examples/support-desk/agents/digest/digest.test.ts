@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { setConfig } from "../../_shared/config";
+import { deleteConfig, setConfig } from "../../_shared/config";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
 import { deskBySlug, upsertDesk, type Desk } from "../../_shared/desks";
 import { agentSlug } from "../../_shared/fleet-id";
@@ -9,13 +9,15 @@ import {
   accountByChannel,
   assign,
   ensureAccount,
+  linkMessage,
   openIssue,
   recordDigest,
   setStatus,
   setTriageRoot,
   type IssueStatus,
 } from "../../_shared/issues";
-import { fakeCtx } from "../../_shared/test-ctx";
+import type { Sla, SlaMessage } from "../../_shared/sla";
+import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import { WATCHED_SLUGS } from "../watchdog/logic";
 import { agent, digest, TIME_ZONE } from "./index";
 import {
@@ -30,6 +32,41 @@ import {
 const HOUR = 3600_000;
 const NOW = new Date("2026-10-05T16:00:00Z");
 const DESK = { name: "Support", triageChannel: "C0TRIAGE001" };
+const MIN = 60_000;
+// Wall-clock targets keep the deadlines independent of the day of the week.
+const WALL: Sla = {
+  ...EXAMPLE_SLA,
+  targets: {
+    urgent: {
+      firstResponseMinutes: 480,
+      nextResponseMinutes: 60,
+      businessHours: false,
+    },
+    high: {
+      firstResponseMinutes: 120,
+      nextResponseMinutes: 60,
+      businessHours: false,
+    },
+    normal: {
+      firstResponseMinutes: 120,
+      nextResponseMinutes: 60,
+      businessHours: false,
+    },
+    low: {
+      firstResponseMinutes: 120,
+      nextResponseMinutes: 60,
+      businessHours: false,
+    },
+  },
+};
+const said = (
+  direction: SlaMessage["direction"],
+  minutesAgo: number,
+): SlaMessage => ({
+  direction,
+  ts: null,
+  createdAt: new Date(NOW.getTime() - minutesAgo * MIN),
+});
 
 let n = 0;
 const issue = (over: Partial<DigestIssue> & { ageHours?: number } = {}) => {
@@ -51,6 +88,7 @@ const issue = (over: Partial<DigestIssue> & { ageHours?: number } = {}) => {
 const message = (
   issues: DigestIssue[],
   owners: Map<string, string> = new Map(),
+  sla: Sla | null = null,
 ) =>
   digestMessage({
     desk: DESK,
@@ -58,7 +96,8 @@ const message = (
     owners,
     now: NOW,
     day: "2026-10-05",
-    sla: DEFAULT_SLA_HOURS,
+    ageHours: DEFAULT_SLA_HOURS,
+    sla,
   });
 const texts = (blocks: Record<string, unknown>[]) =>
   blocks.map((b) => (b.text as { text: string }).text);
@@ -93,6 +132,64 @@ describe("sla and age", () => {
     expect(localDay(new Date("2026-01-15T07:59:00Z"), TIME_ZONE)).toBe(
       "2026-01-14",
     );
+  });
+});
+
+describe("digest message with sla set", () => {
+  const flagged = (i: DigestIssue) =>
+    body(message([i], new Map(), WALL).blocks).includes("*past SLA*");
+
+  it("flags a breached first response and counts it in the header", () => {
+    const late = issue({ ageHours: 3 });
+    const out = message([late], new Map(), WALL);
+    expect(texts(out.blocks)[0]).toContain("1 open, 1 past SLA");
+    expect(body(out.blocks)).toContain("*past SLA*");
+  });
+
+  it("does not flag an issue older than its age limit whose first response is still ahead", () => {
+    // Urgent: 4 h age limit, 8 h first-response target.
+    const i = issue({ priority: "urgent", ageHours: 5 });
+    expect(body(message([i]).blocks)).toContain("*past SLA*");
+    expect(flagged(i)).toBe(false);
+  });
+
+  it("does not flag an issue where the team spoke last, whatever its age", () => {
+    const i = issue({
+      ageHours: 500,
+      messages: [said("customer", 500 * 60), said("agent", 400 * 60)],
+    });
+    expect(flagged(i)).toBe(false);
+  });
+
+  it("flags a customer reply left past its next-response target, not one minute before", () => {
+    const thread = [said("customer", 300), said("agent", 200)];
+    expect(
+      flagged(
+        issue({ ageHours: 5, messages: [...thread, said("customer", 60)] }),
+      ),
+    ).toBe(true);
+    expect(
+      flagged(
+        issue({ ageHours: 5, messages: [...thread, said("customer", 59)] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("never flags On Hold, which the age rule does flag", () => {
+    const held = issue({ status: "on_hold", ageHours: 500 });
+    expect(body(message([held]).blocks)).toContain("*past SLA*");
+    expect(flagged(held)).toBe(false);
+  });
+
+  it("ignores internal notes, which do not stop the first-response clock", () => {
+    expect(
+      flagged(issue({ ageHours: 3, messages: [said("internal", 30)] })),
+    ).toBe(true);
+  });
+
+  it("flags at the exact due time, as the board shows breached", () => {
+    expect(flagged(issue({ ageHours: 2 }))).toBe(true);
+    expect(flagged(issue({ ageHours: 2 - 1 / 60 }))).toBe(false);
   });
 });
 
@@ -418,6 +515,94 @@ describe("digest run", () => {
     await expect(digest(bad.ctx as never, fresh)).rejects.toThrow();
     expect(bad.posts()).toHaveLength(0);
     expect(await fresh.query("select * from digests")).toEqual([]);
+  });
+
+  const teamReplies = async (issueId: string) =>
+    linkMessage(db, {
+      issueId,
+      source: "slack",
+      sourceEventId: `Ev${++n}`,
+      direction: "agent",
+      slack: { channel: "C0CUSTOMER1", ts: `17902${n}.000100` },
+      userId: "U0ADA",
+      text: "on it",
+    });
+  const openIds = async (deskId: string) =>
+    (
+      await db.query<{ id: string }>(
+        "select id from issues where status <> 'closed' and (desk_id = $1 or desk_id is null)",
+        [deskId],
+      )
+    ).map((r) => r.id);
+  // The run reads through each transaction's `tx`, so the spy wraps it there.
+  const spyQueries = () => {
+    const seen: { text: string; params?: unknown[] }[] = [];
+    const transaction = db.transaction.bind(db);
+    db.transaction = (fn) =>
+      transaction((tx) =>
+        fn({
+          ...tx,
+          query: (text, params) => {
+            seen.push({ text, params });
+            return tx.query(text, params);
+          },
+        }),
+      );
+    return () => seen.filter((q) => /from messages/.test(q.text));
+  };
+
+  it("with sla set, skips issues where the team spoke last, and flags by age again once it is removed", async () => {
+    await db.query("update issues set created_at = now() - interval '2 hours'");
+    await setConfig(db, "digest.sla_hours", { normal: 1 }, "test");
+    await setConfig(db, "sla", WALL, "test");
+    for (const id of await openIds(support.id)) await teamReplies(id);
+    const first = slackCtx();
+    await digest(first.ctx as never, db);
+    expect(textOf(first.posts()[0])).toContain("2 open, 0 past SLA");
+
+    await deleteConfig(db, "sla");
+    const next = slackCtx();
+    await digest(next.ctx as never, db, new Date(Date.now() + 24 * HOUR));
+    expect(textOf(next.posts()[0])).toContain("2 open, 2 past SLA");
+  });
+
+  it("with sla set, flags a breached first response in its own desk, loading each desk's messages in one query", async () => {
+    await db.query("update issues set created_at = now() - interval '3 hours'");
+    await setConfig(db, "sla", WALL, "test");
+    const supportIds = await openIds(support.id);
+    for (const id of supportIds) await teamReplies(id);
+    const billingIds = (
+      await db.query<{ id: string }>(
+        "select id from issues where desk_id = $1",
+        [billing.id],
+      )
+    ).map((r) => r.id);
+    const messageQueries = spyQueries();
+    const { ctx, posts } = slackCtx();
+    await digest(ctx as never, db);
+    const [s, b] = posts().map(textOf);
+    expect(s).toContain("2 open, 0 past SLA");
+    expect(b).toContain("1 open, 1 past SLA");
+    expect(b).toMatch(/billing one .*\*past SLA\*/);
+    expect(
+      messageQueries().map((q) => (q.params![0] as string[]).sort()),
+    ).toEqual([supportIds.sort(), billingIds]);
+    expect(messageQueries()[0].text).toMatch(/direction <> 'internal'/);
+
+    await deleteConfig(db, "sla");
+    const before = messageQueries().length;
+    await digest(slackCtx().ctx as never, db, new Date(Date.now() + 24 * HOUR));
+    expect(messageQueries()).toHaveLength(before);
+  });
+
+  it("refuses an invalid stored sla before posting", async () => {
+    await db.query(
+      "insert into config (key, value, set_by) values ('sla', '{\"targets\": {}}'::jsonb, 'test')",
+    );
+    const bad = slackCtx();
+    await expect(digest(bad.ctx as never, db)).rejects.toThrow();
+    expect(bad.posts()).toHaveLength(0);
+    expect(await db.query("select * from digests")).toEqual([]);
   });
 
   it("claims a desk and day once", async () => {

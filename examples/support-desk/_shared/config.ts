@@ -119,7 +119,11 @@ export const ConfigSchemas = {
   "linear_sync.notify_customer": z.boolean(),
   /** Per desk slug; a desk without an entry never escalates to a person. */
   escalation: z.record(z.string().min(1), DeskEscalationSchema),
-  /** Hours an open issue may age, by priority, before the daily digest flags it; unset keys keep the default. */
+  /**
+   * The daily digest's age threshold: hours an open issue may age, by priority, before it is flagged.
+   * Read only while `sla` is unset (with `sla`, the digest flags the breached response clock);
+   * unset keys keep the default.
+   */
   "digest.sla_hours": z
     .object({
       urgent: z.number().positive(),

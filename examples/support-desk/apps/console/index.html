@@ -903,7 +903,11 @@
               >
               <div>
                 <div style="font-size: 13px; margin-bottom: 4px">
-                  Digest flags open tickets older than (hours)
+                  Digest age threshold (hours), used only while SLA is unset
+                </div>
+                <div class="hint" style="margin-bottom: 4px">
+                  With SLA set, the digest flags breached response targets
+                  instead.
                 </div>
                 <div class="sla-grid">
                   <label class="hint"
@@ -940,7 +944,8 @@
               First- and next-response targets per priority, in minutes; with
               <code>businessHours: true</code> a target counts only minutes
               inside the business window. Set, they replace the desks' nudge
-              minutes.
+              minutes, and the daily digest flags issues whose target is
+              breached.
             </p>
             <textarea id="sla-json" spellcheck="false"></textarea>
             <div class="row">
@@ -1814,7 +1819,7 @@
       $("sla-clear").onclick = () =>
         slaWrite(
           () => post("/api/sla", undefined, "DELETE"),
-          "SLA removed: the desks' nudge minutes apply",
+          "SLA removed: the desks' nudge minutes and the digest's age threshold apply",
         );
       async function loadSettings() {
         const forDesk = desk;

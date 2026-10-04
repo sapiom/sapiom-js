@@ -65,4 +65,16 @@ describe("console page SLA", () => {
     expect(page).toContain('slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved")');
     expect(page).toContain('() => post("/api/sla", undefined, "DELETE")');
   });
+
+  it("names the digest's age table apart from the SLA, and says the SLA drives the digest", () => {
+    expect(page).toContain(
+      "Digest age threshold (hours), used only while SLA is unset",
+    );
+    expect(page).not.toContain("Digest flags open tickets older than");
+    const sla = page.slice(
+      page.indexOf('<section class="card" id="sla">'),
+      page.indexOf('id="sla-json"'),
+    );
+    expect(sla).toContain("the daily digest flags issues whose target is");
+  });
 });

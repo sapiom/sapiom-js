@@ -12,9 +12,11 @@ import { agentSlug } from "../../_shared/fleet-id";
 import {
   recordDigest,
   recordRun,
+  type Direction,
   type IssueStatus,
 } from "../../_shared/issues";
 import { post, userInfo, type SlackCtx } from "../../_shared/slack";
+import type { SlaMessage } from "../../_shared/sla";
 
 import {
   DEFAULT_SLA_HOURS,
@@ -33,14 +35,39 @@ export const TIME_ZONE =
 
 type Ctx = SlackCtx & { executionId: string };
 
-/** A desk's open issues; an issue with no desk belongs to the default desk, as `deskForIssue` says. */
-async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
+/**
+ * A desk's open issues; an issue with no desk belongs to the default desk, as `deskForIssue` says.
+ * `withMessages` attaches each one's customer-thread messages, which only the `sla` clocks read.
+ */
+async function openIssues(
+  db: Db,
+  desk: Desk,
+  withMessages: boolean,
+): Promise<DigestIssue[]> {
   const rows = await db.query(
-    `select i.number, i.status, i.priority, i.title, i.owner_slack_id, i.triage_root_ts, i.triage_channel, i.created_at, a.name as account_name
+    `select i.id, i.number, i.status, i.priority, i.title, i.owner_slack_id, i.triage_root_ts, i.triage_channel, i.created_at, a.name as account_name
      from issues i join accounts a on a.id = i.account_id
      where i.status <> 'closed' and (i.desk_id = $1${desk.isDefault ? " or i.desk_id is null" : ""})`,
     [desk.id],
   );
+  const messages = new Map<string, SlaMessage[]>();
+  if (withMessages && rows.length) {
+    // Same filter as the board's `issueMessages`, served by the `messages_issue` index.
+    const msgs = await db.query(
+      `select issue_id, direction, ts, created_at from messages
+        where issue_id = any($1) and direction <> 'internal'`,
+      [rows.map((r: Row) => r.id as string)],
+    );
+    for (const m of msgs) {
+      const id = m.issue_id as string;
+      if (!messages.has(id)) messages.set(id, []);
+      messages.get(id)!.push({
+        direction: m.direction as Direction,
+        ts: (m.ts as string | null) ?? null,
+        createdAt: new Date(m.created_at as Date),
+      });
+    }
+  }
   return rows.map((r: Row) => ({
     number: Number(r.number),
     status: r.status as IssueStatus,
@@ -51,6 +78,7 @@ async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
     triageRootTs: (r.triage_root_ts as string | null) ?? null,
     triageChannel: (r.triage_channel as string | null) ?? null,
     createdAt: new Date(r.created_at as Date),
+    messages: messages.get(r.id as string) ?? [],
   }));
 }
 
@@ -64,10 +92,11 @@ export async function digest(ctx: Ctx, db: Db, now?: Date) {
     now ??
     new Date((await db.query<{ now: Date }>("select now() as now"))[0].now);
   const day = localDay(clock, TIME_ZONE);
-  const sla = {
+  const ageHours = {
     ...DEFAULT_SLA_HOURS,
     ...(await getConfigOr(db, "digest.sla_hours", {})),
   };
+  const sla = await getConfigOr(db, "sla", null);
 
   const names = new Map<string, string>();
   const ownerName = async (id: string) => {
@@ -89,13 +118,21 @@ export async function digest(ctx: Ctx, db: Db, now?: Date) {
     try {
       const sent = await db.transaction(async (tx) => {
         if (!(await recordDigest(tx, desk.id, day))) return false;
-        const issues = await openIssues(tx, desk);
+        const issues = await openIssues(tx, desk, sla !== null);
         const owners = new Map<string, string>();
         for (const id of new Set(issues.map((i) => i.ownerSlackId)))
           if (id) owners.set(id, await ownerName(id));
         await post(ctx, {
           channel: desk.triageChannel,
-          ...digestMessage({ desk, issues, owners, now: clock, day, sla }),
+          ...digestMessage({
+            desk,
+            issues,
+            owners,
+            now: clock,
+            day,
+            ageHours,
+            sla,
+          }),
         });
         return true;
       });

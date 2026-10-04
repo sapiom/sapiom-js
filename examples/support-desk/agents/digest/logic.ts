@@ -1,11 +1,13 @@
 /**
- * The pure half of the digest: SLA per priority, issue age, and the Slack message for one desk.
+ * The pure half of the digest: which issues are past SLA, issue age, and the Slack message for one desk.
  * No I/O, so the grouping, ordering and size limits are unit-tested (`digest.test.ts`).
  */
 import { escapeMrkdwn, mrkdwnLink, statusLabel } from "../../_shared/blocks";
 import { OPEN_STATUSES, type IssueStatus } from "../../_shared/issues";
 import { permalink, type Block } from "../../_shared/slack";
+import { slaDue, type Sla, type SlaMessage } from "../../_shared/sla";
 
+/** Age limits per priority, read only while the `sla` response targets are unset. */
 export const DEFAULT_SLA_HOURS = { urgent: 4, high: 24, normal: 72, low: 168 };
 export type SlaHours = typeof DEFAULT_SLA_HOURS;
 
@@ -27,6 +29,8 @@ export interface DigestIssue {
   /** Where the card was posted; null falls back to the desk's channel. */
   triageChannel: string | null;
   createdAt: Date;
+  /** Customer-thread messages; only read when `sla` is set. */
+  messages?: readonly SlaMessage[];
 }
 
 /** A priority the table does not know (or none) counts as `normal`, as intake defaults it. */
@@ -75,21 +79,27 @@ export function digestMessage(input: {
   owners: ReadonlyMap<string, string>;
   now: Date;
   day: string;
-  sla: SlaHours;
+  ageHours: SlaHours;
+  /** When set, flag the breached response clock, as the Console board does, instead of the age. */
+  sla?: Sla | null;
   maxChars?: number;
   maxBlocks?: number;
 }): { text: string; blocks: Block[] } {
-  const { desk, owners, now, sla } = input;
+  const { desk, owners, now, ageHours, sla } = input;
+  const pastSla = (i: DigestIssue) => {
+    if (!sla) {
+      const age = now.getTime() - i.createdAt.getTime();
+      return age >= slaHoursFor(i.priority, ageHours) * 3600_000;
+    }
+    // `>=` matches the board, which shows `breached` once no time is left.
+    const due = slaDue({ ...i, messages: i.messages ?? [] }, sla);
+    return due !== null && now >= due.dueAt;
+  };
   const maxChars = input.maxChars ?? MAX_SECTION_CHARS;
   const maxBlocks = input.maxBlocks ?? MAX_BLOCKS;
   const ranked: Ranked[] = input.issues
     .filter((i) => OPEN_STATUSES.includes(i.status))
-    .map((i) => ({
-      ...i,
-      pastSla:
-        now.getTime() - i.createdAt.getTime() >=
-        slaHoursFor(i.priority, sla) * 3600_000,
-    }))
+    .map((i) => ({ ...i, pastSla: pastSla(i) }))
     .sort(byUrgency);
   const past = ranked.filter((i) => i.pastSla).length;
   const deskName = escapeMrkdwn(desk.name);
