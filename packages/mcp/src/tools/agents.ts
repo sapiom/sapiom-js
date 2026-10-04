@@ -114,8 +114,11 @@ function scheduleHint(schedule: ScheduleDetail): string | undefined {
     return `Active — next fire at ${schedule.nextFireAt}.`;
   if (schedule.status === "active" && schedule.kind === "webhook")
     return `Armed — fires on every signed POST to the hook URL (publicId ${schedule.publicId}, secret v${schedule.secretVersion}). The secret was shown once at create/rotate time; rotate with sapiom_dev_agents_schedule_secret if it is lost.`;
-  if (schedule.status === "active" && schedule.kind === "event")
+  if (schedule.status === "active" && schedule.kind === "event") {
+    if (schedule.eventType?.startsWith("sapiom."))
+      return `Armed: fires on every '${schedule.eventType}' platform event. The platform emits it; it cannot be emitted by hand (see the server instructions, section 'Triggers').`;
     return `Armed — fires on every '${schedule.eventType}' event this tenant emits (sapiom_dev_agents_emit_event, or POST /v1/workflows/events with { type, payload }).`;
+  }
   if (schedule.status === "completed") return "Completed — no further fires.";
   if (schedule.status === "disabled")
     return schedule.revokedAt
@@ -714,7 +717,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_schedule",
-    "Create a trigger for a deployed agent — one of four kinds. 'schedule_cron' (+ cron, optional timezone) runs it on a recurring schedule; 'schedule_once' (+ at) runs it once at a future time; 'event' (+ eventType) runs it every time this tenant emits that event type via POST /v1/workflows/events; 'webhook' runs it every time an external system POSTs to a public hook URL — the result returns that URL plus a shown-once signing secret and the HMAC-SHA256 scheme the sender must use. Use 'webhook' when an external system should start the agent (\"run when X POSTs to us\") instead of hand-building an HTTP server; third-party senders with their own signature scheme (Slack, Meta, Stripe, GitHub) cannot produce our HMAC, so route those through an App Link /hook/* receiver or a translator. Returns the trigger with its next fire time where it has one. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
+    "Create a trigger for a deployed agent — one of four kinds. 'schedule_cron' (+ cron, optional timezone) runs it on a recurring schedule; 'schedule_once' (+ at) runs it once at a future time; 'event' (+ eventType) runs it every time this tenant emits that event type via POST /v1/workflows/events, or the platform emits a 'sapiom.*' event (list in the server instructions, section 'Triggers'); 'webhook' runs it every time an external system POSTs to a public hook URL — the result returns that URL plus a shown-once signing secret and the HMAC-SHA256 scheme the sender must use. Use 'webhook' when an external system should start the agent (\"run when X POSTs to us\") instead of hand-building an HTTP server; third-party senders with their own signature scheme (Slack, Meta, Stripe, GitHub) cannot produce our HMAC, so route those through an App Link /hook/* receiver or a translator. Returns the trigger with its next fire time where it has one. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
     {
       definition: z
         .string()
@@ -724,7 +727,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       kind: z
         .enum(["schedule_cron", "schedule_once", "event", "webhook"])
         .describe(
-          "'schedule_cron' = recurring; 'schedule_once' = a single delayed run; 'event' = fires on a tenant-emitted event type; 'webhook' = fires on a signed POST to a public URL minted for this trigger.",
+          "'schedule_cron' = recurring; 'schedule_once' = a single delayed run; 'event' = fires on an event type the tenant emits, or on a platform 'sapiom.*' event; 'webhook' = fires on a signed POST to a public URL minted for this trigger.",
         ),
       cron: z
         .string()
@@ -748,7 +751,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .optional()
         .describe(
-          "Event type to match — required for 'event'. Lowercase dot-separated segments, e.g. 'lead.created'; the 'sapiom.*' namespace is reserved. Emit it with sapiom_dev_agents_emit_event, or POST /v1/workflows/events { type, payload }.",
+          "Event type to match — required for 'event'. Lowercase dot-separated segments, e.g. 'lead.created'. Emit your own types with sapiom_dev_agents_emit_event, or POST /v1/workflows/events { type, payload }. 'sapiom.*' types are platform events: subscribe to one, never emit it; which ones exist and what they carry is in the server instructions, section 'Triggers'.",
         ),
       input: z
         .unknown()

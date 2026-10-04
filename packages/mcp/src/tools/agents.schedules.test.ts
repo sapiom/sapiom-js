@@ -199,6 +199,91 @@ describe("agent schedule MCP tools", () => {
     expect(out.hint).toContain("/v1/workflows/events");
   });
 
+  // SAP-3864: platform events are subscribable but never emitted, so the hint must not send
+  // the agent to the emit route. The rule is the 'sapiom.' prefix, not a list of types.
+  function platformEventTrigger(eventType: string) {
+    return {
+      id: "trig-4",
+      kind: "event",
+      status: "active",
+      definitionSlug: "watchdog",
+      cron: null,
+      timezone: null,
+      eventType,
+      publicId: null,
+      secretVersion: null,
+      graceUntil: null,
+      revokedAt: null,
+      nextFireAt: null,
+      createdAt: "x",
+      input: {},
+      startAt: null,
+      endAt: null,
+      policy: null,
+      recentFires: [],
+    } as never;
+  }
+
+  function expectPlatformEventHint(hint: string) {
+    expect(hint).toContain("platform");
+    expect(hint).toContain("Triggers");
+    expect(hint).not.toContain("sapiom_dev_agents_emit_event");
+    expect(hint).not.toContain("/v1/workflows/events");
+  }
+
+  it("event trigger on sapiom.run.failed hints that the platform emits it", async () => {
+    vi.mocked(createSchedule).mockResolvedValue(
+      platformEventTrigger("sapiom.run.failed"),
+    );
+    const { server, handlers } = createMockServer();
+    register(server, env);
+
+    const res = await handlers.get("sapiom_dev_agents_schedule")!({
+      definition: "watchdog",
+      kind: "event",
+      eventType: "sapiom.run.failed",
+    });
+
+    const out = parse(res);
+    expect(out.hint).toContain("sapiom.run.failed");
+    expectPlatformEventHint(out.hint);
+  });
+
+  it("any sapiom.* event trigger gets the platform hint (prefix rule)", async () => {
+    vi.mocked(getSchedule).mockResolvedValue(
+      platformEventTrigger("sapiom.run.succeeded"),
+    );
+    const { server, handlers } = createMockServer();
+    register(server, env);
+
+    const res = await handlers.get("sapiom_dev_agents_schedule_inspect")!({
+      scheduleId: "trig-4",
+    });
+
+    expectPlatformEventHint(parse(res).hint);
+  });
+
+  it("schedule tool text says sapiom.* is a subscribable platform namespace", () => {
+    const { server } = createMockServer();
+    register(server, env);
+    const call = vi
+      .mocked(server.tool)
+      .mock.calls.find((c) => c[0] === "sapiom_dev_agents_schedule")!;
+    const schema = call[2] as unknown as {
+      kind: { description: string };
+      eventType: { description: string };
+    };
+    const eventTypeDoc = schema.eventType.description;
+    expect(eventTypeDoc).toContain("'sapiom.*' types are platform events");
+    expect(eventTypeDoc).toContain("never emit");
+    expect(eventTypeDoc).toContain("'Triggers'");
+    // The list lives in the served primer, so the tool names no platform type.
+    expect(eventTypeDoc).not.toContain("sapiom.run.failed");
+    expect(call[1]).toContain("platform emits a 'sapiom.*' event");
+    expect(call[1]).toContain("'Triggers'");
+    expect(schema.kind.description).toContain("platform 'sapiom.*' event");
+  });
+
   it("webhook trigger create returns the hook URL, the shown-once secret, and the signing scheme", async () => {
     vi.mocked(createSchedule).mockResolvedValue({
       id: "trig-3",
