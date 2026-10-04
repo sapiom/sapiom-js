@@ -27,11 +27,30 @@ describe("console page SLA", () => {
     // Loaded apart from the desk settings, and never over unsaved edits.
     expect(page).toContain('if (name === "settings") loadSla();');
     expect(page).toContain("if (slaDirty && !force) return;");
-    expect(page).toContain('post("/api/sla", body, "PUT")');
-    expect(page).toContain('post("/api/sla", undefined, "DELETE")');
     // Keep validation errors beside the editor so the operator can correct the submitted settings.
     expect(page).toMatch(
-      /post\("\/api\/sla", body, "PUT"\);\s*\} catch \(e\) \{\s*\$\("sla-error"\)\.textContent = e\.message;/,
+      /await request\(\);\s*\} catch \(e\) \{\s*\$\("sla-error"\)\.textContent = e\.message;/,
     );
+  });
+
+  it("allows one SLA write at a time and keeps text typed during a save", () => {
+    const write = page.slice(
+      page.indexOf("async function slaWrite("),
+      page.indexOf('$("sla-save").onclick'),
+    );
+    // Both buttons stay disabled until the request and its reload finish.
+    expect(write).toMatch(
+      /for \(const b of buttons\) b\.dataset\.busy = "1";\s*syncButtons\(\);/,
+    );
+    expect(write).toMatch(
+      /\} finally \{\s*for \(const b of buttons\) b\.dataset\.busy = "0";\s*syncButtons\(\);/,
+    );
+    expect(page).toContain('const buttons = [$("sla-save"), $("sla-clear")];');
+    // The reload after a write is skipped when the operator typed meanwhile.
+    expect(page).toContain("slaRev++;");
+    expect(write).toContain("const rev = slaRev;");
+    expect(write).toContain("if (slaRev === rev) await loadSla(true);");
+    expect(page).toContain('slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved")');
+    expect(page).toContain('() => post("/api/sla", undefined, "DELETE")');
   });
 });

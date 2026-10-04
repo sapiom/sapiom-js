@@ -209,7 +209,7 @@ export async function resolveIssue(
   });
 }
 
-/** Redraw the triage card from the row; the card is a pure function of the issue and its account. */
+/** Recompute the SLA clock before redrawing so the card reflects current targets and thread history. */
 async function redrawCard(
   ctx: Ctx,
   db: Db,

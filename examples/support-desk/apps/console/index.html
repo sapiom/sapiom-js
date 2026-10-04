@@ -1729,7 +1729,12 @@
       // A tab switch must not replace edits not yet saved, nor an older response a newer one.
       let slaDirty = false;
       let slaSeq = 0;
-      $("sla-json").oninput = () => (slaDirty = true);
+      // Bumped on every keystroke, so a save reloads the editor only if nothing was typed meanwhile.
+      let slaRev = 0;
+      $("sla-json").oninput = () => {
+        slaDirty = true;
+        slaRev++;
+      };
       async function loadSla(force = false) {
         if (slaDirty && !force) return;
         const seq = ++slaSeq;
@@ -1746,8 +1751,32 @@
           $("sla-error").textContent = e.message;
         }
       }
-      $("sla-save").onclick = async () => {
+      /**
+       * One SLA write at a time: a PUT and a DELETE in flight together could land in either order and
+       * bring back a cleared SLA. Uses the page's busy flag, which syncButtons would otherwise undo.
+       */
+      async function slaWrite(request, done) {
+        const buttons = [$("sla-save"), $("sla-clear")];
+        for (const b of buttons) b.dataset.busy = "1";
+        syncButtons();
+        const rev = slaRev;
         $("sla-error").textContent = "";
+        try {
+          try {
+            await request();
+          } catch (e) {
+            $("sla-error").textContent = e.message;
+            return;
+          }
+          log(done);
+          if (slaRev === rev) await loadSla(true);
+          refreshBoard();
+        } finally {
+          for (const b of buttons) b.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("sla-save").onclick = () => {
         let body;
         try {
           body = JSON.parse($("sla-json").value);
@@ -1755,28 +1784,13 @@
           $("sla-error").textContent = "not valid JSON";
           return;
         }
-        try {
-          await post("/api/sla", body, "PUT");
-        } catch (e) {
-          $("sla-error").textContent = e.message;
-          return;
-        }
-        log("SLA saved");
-        await loadSla(true);
-        refreshBoard();
+        return slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved");
       };
-      $("sla-clear").onclick = async () => {
-        $("sla-error").textContent = "";
-        try {
-          await post("/api/sla", undefined, "DELETE");
-        } catch (e) {
-          $("sla-error").textContent = e.message;
-          return;
-        }
-        log("SLA removed: the desks' nudge minutes apply");
-        await loadSla(true);
-        refreshBoard();
-      };
+      $("sla-clear").onclick = () =>
+        slaWrite(
+          () => post("/api/sla", undefined, "DELETE"),
+          "SLA removed: the desks' nudge minutes apply",
+        );
       async function loadSettings() {
         const forDesk = desk;
         try {
