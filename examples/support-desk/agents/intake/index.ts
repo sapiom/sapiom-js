@@ -324,7 +324,7 @@ const internal = defineStep({
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
       const root = e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null;
-      // A thread attaches only under a card held in this channel, so never to another desk's issue.
+      // A note counts only under a card held in this channel, the rule Take and Close follow.
       const issue = root ? await cardIssue(db, e.channel, root) : null;
       const { message, duplicate } = await linkMessage(db, {
         issueId: issue?.id,
@@ -521,7 +521,6 @@ async function threadIssueFor(
   return (await messageBySlackTs(db, channel, rootTs))?.issueId ?? null;
 }
 
-/** The issue whose triage card is the thread root `rootTs` in `channel`. */
 async function cardIssue(
   db: Db,
   channel: string,

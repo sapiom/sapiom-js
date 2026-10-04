@@ -1345,6 +1345,26 @@ describe("intake agent", () => {
         expect(await notesFor("Ev0OLDNOTE3")).toHaveLength(0);
       });
 
+      it("a reply under the card still attaches after another desk takes the old channel", async () => {
+        const issue = await cardedThenMoved();
+        await upsertDesk(db, {
+          slug: "test",
+          name: "Test",
+          triageChannel: "C0TRIAGE001",
+        });
+        expect(
+          (
+            await run(
+              replyIn("C0TRIAGE001", "Ev0OLDNOTE5", issue.triageRootTs),
+              makeCtx("exec-note-adopted").ctx,
+            )
+          ).output,
+        ).toMatchObject({ outcome: "internal", issueId: issue.id });
+        expect(await notesFor("Ev0OLDNOTE5")).toEqual([
+          { direction: "internal", issue_id: issue.id },
+        ]);
+      });
+
       it("a reply in the new channel under the old card's ts is stored unattached", async () => {
         const issue = await cardedThenMoved();
         expect(
