@@ -88,6 +88,49 @@ export function preferredProjectRoot(roots: readonly string[]): string | null {
   );
 }
 
+export function projectRootConflict(
+  requested: string,
+  roots: readonly { cwd: string; label: string }[],
+): { kind: "inside" | "contains"; root: string; label: string } | null {
+  const requestedKey = canonical(requested);
+  if (roots.some(({ cwd }) => canonical(cwd) === requestedKey)) return null;
+
+  const containing = roots
+    .filter(
+      ({ cwd }) =>
+        canonical(cwd) !== requestedKey && isUnder(requested, cwd),
+    )
+    .sort(
+      (left, right) =>
+        pathSegmentDepth(right.cwd) - pathSegmentDepth(left.cwd),
+    );
+  if (containing[0]) {
+    return {
+      kind: "inside",
+      root: containing[0].cwd,
+      label: containing[0].label,
+    };
+  }
+
+  const contained = roots
+    .filter(
+      ({ cwd }) =>
+        canonical(cwd) !== requestedKey && isUnder(cwd, requested),
+    )
+    .sort(
+      (left, right) =>
+        pathSegmentDepth(left.cwd) - pathSegmentDepth(right.cwd),
+    );
+  if (contained[0]) {
+    return {
+      kind: "contains",
+      root: contained[0].cwd,
+      label: contained[0].label,
+    };
+  }
+  return null;
+}
+
 /**
  * Resolve a neutral project session back to its trusted durable root.
  *
@@ -246,18 +289,15 @@ export function holdingProjectFor(
  * collapse into that one clause. A visited folder with no agent is not a
  * project, while an empty project you OPENED keeps its row, because opening a
  * folder in order to build the first agent in it is the whole point of that
- * row. And a visited folder INSIDE a project you already opened is not a second
- * context: `~/polsia` and `~/polsia/services/workers` are two useful views of
- * one agent when you opened both, and the same agent printed twice when the
- * inner row is merely where a session happened to start.
+ * row. An inner folder is shown by its outer project's row, and a folder that
+ * contains a project is not itself a project. Only pre-existing durable
+ * (pinned) nested roots survive.
  *
  * NOTHING IS DELETED. Both rules are derivational: `recentDirs` on disk is
- * untouched and any folder is one "Add a project" away from coming back. That
- * is what makes this safe to apply to an install nobody audited, and why it
- * needs no migration, no first-run flow and no undo. The design's original "no
- * migration, every entry becomes a project" rule is kept in spirit and dropped
- * in letter: nothing a user had disappears, but residue of a fixed bug stops
- * being rendered as a choice they made.
+ * untouched, but a nested new root is represented by its outer project instead
+ * of becoming a second choice. Existing durable nested roots remain visible.
+ * This is safe to apply to an install nobody audited and needs no migration,
+ * first-run flow, or undo.
  */
 export function projectRoots({
   recentDirs,
@@ -323,9 +363,8 @@ export function projectRoots({
   const holds = (root: string): boolean =>
     kept.some((held) => canonical(held) === canonical(root));
 
-  // The folders the user CHOSE, unconditionally and in order. `recentDirs` is a
-  // list of deliberate acts; second-guessing it is how a rail starts hiding a
-  // project somebody opened on purpose.
+  // The folders the user CHOSE, in order. A final containment pass removes a
+  // nested choice unless it is already a durable project root.
   for (const dir of candidates) {
     if (
       // A durable binding preserves the identity of a root that is otherwise
@@ -380,6 +419,29 @@ export function projectRoots({
     kept.push(root);
     from.set(canonical(root), dir);
   }
+
+  const surviving = kept.filter((root) => {
+    if (isPinned(root)) return true;
+    const rootKey = canonical(root);
+    if (
+      kept.some(
+        (other) => canonical(other) !== rootKey && isUnder(root, other),
+      )
+    ) {
+      return false;
+    }
+    return !kept.some(
+      (pinnedRoot) =>
+        isPinned(pinnedRoot) &&
+        canonical(pinnedRoot) !== rootKey &&
+        isUnder(pinnedRoot, root),
+    );
+  });
+  const survivingKeys = new Set(surviving.map(canonical));
+  for (const root of kept) {
+    if (!survivingKeys.has(canonical(root))) from.delete(canonical(root));
+  }
+  kept.splice(0, kept.length, ...surviving);
 
   const pendingRank = new Map(
     pendingCwds.map((cwd, index) => [canonical(cwd), index]),

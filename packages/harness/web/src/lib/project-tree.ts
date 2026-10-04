@@ -44,6 +44,7 @@ export type {
 } from "../../../src/shared/project-roots.js";
 export {
   holdingProjectFor,
+  projectRootConflict,
   projectRoots,
   projectSessionRoot,
   projectToOpen,

@@ -501,13 +501,28 @@ describe("Agent Studio MCP authentication wiring", () => {
     await server!.sessionManager.flush();
     const persistedIdentity = structuredClone(session.agentMapIdentity);
 
-    const catalog = new StudioProjectCatalog(
-      resolveStatePaths(root).studioProjects,
-    );
+    const catalogPath = resolveStatePaths(root).studioProjects;
+    const catalog = new StudioProjectCatalog(catalogPath);
     const nestedProject = await catalog.create("Nested resume project");
-    await catalog.addRootBinding(nestedProject.projectId, nestedRoot);
+    await catalog.addRootBinding(
+      nestedProject.projectId,
+      join(root, "provisional-nested-project"),
+    );
+    const persisted = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+      projects: Array<{
+        projectId: string;
+        rootBindings: Array<{ localRootRef: string }>;
+      }>;
+    };
+    const nestedRecord = persisted.projects.find(
+      (candidate) => candidate.projectId === nestedProject.projectId,
+    );
+    expect(nestedRecord?.rootBindings).toHaveLength(1);
+    nestedRecord!.rootBindings[0]!.localRootRef = nestedRoot;
+    writeFileSync(catalogPath, JSON.stringify(persisted));
+    const legacyCatalog = new StudioProjectCatalog(catalogPath);
     expect(
-      (await catalog.resolveIdentityForPath(nestedRoot))?.projectId,
+      (await legacyCatalog.resolveIdentityForPath(nestedRoot))?.projectId,
     ).toBe(nestedProject.projectId);
 
     const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
