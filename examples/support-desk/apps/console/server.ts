@@ -29,7 +29,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { createClient } from "@sapiom/tools";
 
-import { deskEscalation, getConfigOr, setConfig } from "../../_shared/config";
+import {
+  deskEscalation,
+  getConfigFresh,
+  getConfigOr,
+  setConfig,
+} from "../../_shared/config";
 import {
   DB_HANDLE,
   connectPostgres,
@@ -279,16 +284,19 @@ async function setAgent(key: string, on: boolean) {
   if (key === CONTROLLER) {
     // Off: no ticket gets a timer and a tick that still fires sends nothing. Either way one run
     // resets every open ticket's timer: off clears them, on arms them again.
-    await withConsoleDb((d) =>
-      setConfig(d, "controller.paused", !on, "console"),
-    );
+    const wasPaused = await withConsoleDb(async (d) => {
+      const was = await getConfigFresh(d, "controller.paused", false);
+      await setConfig(d, "controller.paused", !on, "console");
+      return was;
+    });
     let run: { id?: string };
     try {
       run = await rearmTimers();
     } catch (err) {
       // Off stands without the run: a tick that still fires sees the switch and clears itself.
-      // On without the run would leave every ticket with no timer, so the switch goes back off.
-      if (on)
+      // Turning on from off without the run would leave every ticket with no timer, so the
+      // switch goes back to off; an On for a controller already on changes nothing.
+      if (on && wasPaused)
         await withConsoleDb((d) =>
           setConfig(d, "controller.paused", true, "console"),
         );
