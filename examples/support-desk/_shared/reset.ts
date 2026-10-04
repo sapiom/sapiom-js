@@ -24,11 +24,7 @@ export interface ResetOutcome {
   card: string;
 }
 
-/**
- * Close every open issue and redraw its card in its stored channel, else its desk's triage
- * channel. With `deskId`, only that desk's issues. `dryRun` lists what would close and writes
- * nothing.
- */
+/** SAP-3722: retain stored card channels during reset so desk channel changes do not redirect redraws. */
 export async function resetBoard(
   db: Db,
   ctx: SlackCtx,
