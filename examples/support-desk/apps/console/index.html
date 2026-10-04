@@ -626,6 +626,49 @@
             <div id="receipts" class="muted">loading…</div>
           </section>
 
+          <section class="card">
+            <h2>Escalation</h2>
+            <div class="beats">
+              <div class="row">
+                <span class="label">Levels</span>
+                <input
+                  id="esc-levels"
+                  type="text"
+                  placeholder="30, 120"
+                  size="12"
+                  aria-label="Escalation levels in minutes"
+                />
+                <span class="muted">minutes</span>
+              </div>
+              <div class="row">
+                <span class="label">Group</span>
+                <input
+                  id="esc-group"
+                  type="text"
+                  placeholder="S0123ABCD"
+                  size="12"
+                  aria-label="Slack user group id"
+                />
+              </div>
+              <div class="row">
+                <span class="label">On-call</span>
+                <input
+                  id="esc-oncall"
+                  type="text"
+                  size="12"
+                  aria-label="On-call override"
+                />
+              </div>
+              <div class="row">
+                <button id="esc-save" class="mut primary">Save</button>
+                <button id="esc-off" class="mut">Turn off</button>
+              </div>
+              <div id="esc-state" class="muted" style="font-size: 12px">
+                loading…
+              </div>
+            </div>
+          </section>
+
           <section class="card" id="log-card" hidden>
             <h2>Action log</h2>
             <pre id="log"></pre>
@@ -880,6 +923,7 @@
         refreshTimeline();
         refreshReceipts();
         refreshMetrics();
+        refreshEscalation();
         if (!$("kb-tab").hidden) loadKb();
         closeKbForm();
       };
@@ -1187,6 +1231,64 @@
         }
       }
       $("rcpt-refresh").onclick = refreshReceipts;
+
+      function showEscalation({ entry, oncallFallback }) {
+        $("esc-levels").value = entry ? entry.levels.join(", ") : "";
+        $("esc-group").value = entry?.groupId || "";
+        $("esc-oncall").value = entry?.oncallSlackId || "";
+        $("esc-oncall").placeholder = oncallFallback || "desk on-call";
+        $("esc-state").className = "muted";
+        $("esc-state").textContent = entry
+          ? `On: level ${entry.levels.map((m, i) => `${i + 1} at ${m} min`).join(", ")}.`
+          : "Off: this desk never escalates to a person.";
+      }
+      // `busy` rather than `disabled`, which syncButtons resets on every `.mut` button.
+      function escalationLocked(on) {
+        for (const id of ["esc-save", "esc-off"])
+          $(id).dataset.busy = on ? "1" : "0";
+        syncButtons();
+      }
+      // Only the newest call may touch the form: a slug check alone misses a switch away and back.
+      let escalationSeq = 0;
+      // One request at a time, so the server applies saves in click order and a load sees them.
+      let escalationQueue = Promise.resolve();
+      async function escalationCall(body) {
+        const seq = ++escalationSeq;
+        const path = scoped("/api/escalation");
+        escalationLocked(true);
+        const request = escalationQueue.then(() =>
+          body ? post(path, body, "PUT") : get(path),
+        );
+        escalationQueue = request.catch(() => {});
+        try {
+          const out = await request;
+          if (seq !== escalationSeq) return;
+          showEscalation(out);
+          escalationLocked(false);
+        } catch (e) {
+          if (seq !== escalationSeq) return;
+          $("esc-state").className = "bad";
+          $("esc-state").textContent = e.message;
+          // A failed save leaves the loaded form valid; a failed load leaves nothing to save.
+          escalationLocked(!body);
+        }
+      }
+      const refreshEscalation = () => escalationCall(null);
+      $("esc-save").onclick = () => {
+        const body = {
+          levels: $("esc-levels")
+            .value.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map(Number),
+        };
+        const group = $("esc-group").value.trim();
+        const oncall = $("esc-oncall").value.trim();
+        if (group) body.groupId = group;
+        if (oncall) body.oncallSlackId = oncall;
+        escalationCall(body);
+      };
+      $("esc-off").onclick = () => escalationCall({ off: true });
 
       // --- metrics -------------------------------------------------------------------------
       async function refreshMetrics() {
@@ -1499,6 +1601,7 @@
         refreshTimeline();
         refreshReceipts();
         refreshMetrics();
+        refreshEscalation();
         if (!$("kb-tab").hidden) loadKb();
       });
       loadCues().catch((e) => ($("cues").textContent = e.message));

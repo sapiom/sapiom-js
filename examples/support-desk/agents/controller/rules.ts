@@ -177,13 +177,109 @@ export function dueNudges(input: RuleInput): Nudge[] {
     if (!onHold && pending && old(pending.createdAt))
       add("draft_pending", pending.id);
 
-    // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
-    const last = (messages.get(issue.id) ?? [])
-      .filter((m) => m.direction !== "internal")
-      .sort(byThreadOrder)
-      .at(-1);
-    if (!onHold && last?.direction === "customer" && old(last.createdAt))
+    const last = lastCustomerMessage(messages.get(issue.id) ?? []);
+    if (!onHold && last && old(last.createdAt))
       add("customer_waiting", last.id);
+  }
+  return due;
+}
+
+function lastCustomerMessage(messages: MessageRow[]): MessageRow | undefined {
+  // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
+  const last = messages
+    .filter((m) => m.direction !== "internal")
+    .sort(byThreadOrder)
+    .at(-1);
+  return last?.direction === "customer" ? last : undefined;
+}
+
+/** SAP-3788 requires paging for missing ownership or a waiting customer. */
+export const ESCALATION_KINDS = ["no_owner", "customer_waiting"] as const;
+export type EscalationKind = (typeof ESCALATION_KINDS)[number];
+
+/** Recorded in `nudges.kind`: one escalation per issue per level. */
+export const escalationKey = (level: number): string => `escalate:${level}`;
+
+export interface Escalation {
+  issueId: string;
+  deskId: string;
+  /** 1-based index into the desk's levels. */
+  level: number;
+  /** Every escalating condition that holds now, with how long it has held. */
+  reasons: { kind: EscalationKind; refId: string; minutes: number }[];
+  key: string;
+}
+
+export interface EscalationInput {
+  issues: IssueRow[];
+  messages: MessageRow[];
+  /** Escalation reads only which keys were sent, never when. */
+  sent: Pick<SentRow, "issueId" | "kind">[];
+  now: Date;
+  /** Minutes per level, by desk id; a desk not listed never escalates. */
+  levels: Readonly<Record<string, readonly number[]>>;
+  defaultDeskId?: string | null;
+  /** Reuse no-reply verdicts to avoid paging for customer acknowledgements. */
+  jevCheck?: boolean;
+}
+
+/** Select only the highest due level and suppress previously reached levels to avoid catch-up paging. */
+export function dueEscalations(input: EscalationInput): Escalation[] {
+  const messages = groupBy(input.messages);
+  const sent = groupBy(input.sent);
+  const jevCheck = input.jevCheck ?? true;
+  const now = input.now.getTime();
+  const due: Escalation[] = [];
+
+  for (const issue of input.issues) {
+    if (issue.status === "closed" || !issue.triageRootTs) continue;
+    const deskId = issue.deskId ?? input.defaultDeskId ?? "";
+    const levels = input.levels[deskId];
+    if (!levels?.length) continue;
+    const issueSent = new Set((sent.get(issue.id) ?? []).map((s) => s.kind));
+
+    const holding: { kind: EscalationKind; refId: string; since: Date }[] = [];
+    if (!issue.ownerSlackId)
+      holding.push({
+        kind: "no_owner",
+        refId: issue.id,
+        since: issue.createdAt,
+      });
+    const last = lastCustomerMessage(messages.get(issue.id) ?? []);
+    if (
+      issue.status !== "on_hold" &&
+      last &&
+      !(jevCheck && issueSent.has(skipKey("customer_waiting", last.id)))
+    )
+      holding.push({
+        kind: "customer_waiting",
+        refId: last.id,
+        since: last.createdAt,
+      });
+    if (holding.length === 0) continue;
+
+    const ageMs = now - Math.min(...holding.map((h) => h.since.getTime()));
+    let level = 0;
+    levels.forEach((m, i) => {
+      if (ageMs >= m * 60_000) level = i + 1;
+    });
+    if (level === 0) continue;
+    const sentLevels = [...issueSent]
+      .filter((k) => k.startsWith("escalate:"))
+      .map((k) => Number(k.slice("escalate:".length)));
+    if (sentLevels.some((l) => l >= level)) continue;
+
+    due.push({
+      issueId: issue.id,
+      deskId,
+      level,
+      reasons: holding.map((h) => ({
+        kind: h.kind,
+        refId: h.refId,
+        minutes: Math.floor((now - h.since.getTime()) / 60_000),
+      })),
+      key: escalationKey(level),
+    });
   }
   return due;
 }

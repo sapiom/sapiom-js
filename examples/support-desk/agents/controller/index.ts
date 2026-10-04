@@ -1,4 +1,7 @@
-/** SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge. */
+/**
+ * SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge.
+ * SAP-3788: opt-in escalation so stalled issues can reach a person beyond triage.
+ */
 import {
   defineAgent,
   defineStep,
@@ -9,10 +12,14 @@ import {
 import { z } from "zod/v4";
 
 import { agentSlug } from "../../_shared/fleet-id";
-import { nudge, slackToPlain } from "../../_shared/blocks";
-import { getConfigOr } from "../../_shared/config";
+import { escapeMrkdwn, nudge, slackToPlain } from "../../_shared/blocks";
+import {
+  escalations,
+  getConfigOr,
+  type DeskEscalation,
+} from "../../_shared/config";
 import { withDb, type Db, type Row } from "../../_shared/db";
-import { listDesks } from "../../_shared/desks";
+import { listDesks, oncallFor, type Desk } from "../../_shared/desks";
 import { emit } from "../../_shared/emit";
 import {
   getIssue,
@@ -22,13 +29,18 @@ import {
   type DraftStatus,
   type IssueStatus,
 } from "../../_shared/issues";
-import { post } from "../../_shared/slack";
+import { permalink, post } from "../../_shared/slack";
 
 import {
   byThreadOrder,
+  dueEscalations,
   dueNudges,
+  ESCALATION_KINDS,
   NUDGE_KINDS,
+  nudgeKey,
   skipKey,
+  type Escalation,
+  type EscalationInput,
   type DraftRow,
   type IssueRow,
   type MessageRow,
@@ -60,7 +72,23 @@ const NudgeSchema = z.object({
   n: z.number().int().positive(),
   key: z.string(),
 });
-const SendInput = z.object({ nudges: z.array(NudgeSchema) });
+const EscalationSchema = z.object({
+  issueId: z.string(),
+  deskId: z.string(),
+  level: z.number().int().positive(),
+  reasons: z.array(
+    z.object({
+      kind: z.enum(ESCALATION_KINDS),
+      refId: z.string(),
+      minutes: z.number(),
+    }),
+  ),
+  key: z.string(),
+});
+const SendInput = z.object({
+  nudges: z.array(NudgeSchema),
+  escalations: z.array(EscalationSchema).optional(),
+});
 
 // --- reads (plain SQL; every write goes through _shared/issues.ts) ----------------------------
 
@@ -83,6 +111,39 @@ async function thresholds(db: Db) {
     ),
   };
 }
+
+/** Config entries use desk slugs, while issue rows identify desks by ID. */
+async function escalationConfig(db: Db, desks: Desk[]) {
+  const bySlug = await escalations(db);
+  const entries: Record<string, DeskEscalation> = {};
+  const unnotifiable = new Set<string>();
+  for (const d of desks) {
+    const entry = bySlug[d.slug];
+    if (!entry) continue;
+    entries[d.id] = entry;
+    // Never recorded, so it would be due again every run: keep it away from Jev and send.
+    if (!entry.groupId && !entry.oncallSlackId && !(await oncallFor(db, d)))
+      unnotifiable.add(d.id);
+  }
+  return {
+    entries,
+    unnotifiable,
+    levels: Object.fromEntries(
+      Object.entries(entries).map(([id, e]) => [id, e.levels]),
+    ),
+    defaultDeskId: desks.find((d) => d.isDefault)?.id ?? null,
+  };
+}
+
+const REASON_TEXT: Record<Escalation["reasons"][number]["kind"], string> = {
+  no_owner: "no owner",
+  customer_waiting: "customer waiting for a reply",
+};
+
+const reasonsText = (e: Escalation) =>
+  e.reasons
+    .map((r) => `${REASON_TEXT[r.kind]} for ${r.minutes} min`)
+    .join(", ");
 
 /**
  * Everything the rules need for the open issues (or for one, inside `send`), plus the database's
@@ -192,22 +253,36 @@ const scan = defineStep({
         ...(await thresholds(db)),
         jevCheck,
       });
+      const esc = await escalationConfig(db, await listDesks(db));
+      const escalate = (sent: EscalationInput["sent"]) =>
+        dueEscalations({ ...snap, sent, ...esc, jevCheck });
+      const notifiable = (e: Escalation) => !esc.unnotifiable.has(e.deskId);
 
-      const nudges: Nudge[] = [];
+      // The customer messages to ask Jev about: one question per message, shared by a nudge and
+      // an escalation that wait on the same message.
+      const waiting = new Map<string, string>();
+      // A message Jev already said expects a reply is not asked about again.
+      const answered = (issueId: string, msgId: string) =>
+        snap.sent.some(
+          (s) =>
+            s.issueId === issueId &&
+            s.kind === replyKey("customer_waiting", msgId),
+        );
+      if (jevCheck) {
+        for (const n of candidates)
+          if (n.kind === "customer_waiting" && !answered(n.issueId, n.refId))
+            waiting.set(n.refId, n.issueId);
+        for (const e of escalate(snap.sent).filter(notifiable))
+          for (const r of e.reasons)
+            if (r.kind === "customer_waiting" && !answered(e.issueId, r.refId))
+              waiting.set(r.refId, e.issueId);
+      }
+      const noReply = new Set<string>();
       const skipped: { issueId: string; key: string; expectsReply: number }[] =
         [];
-      for (const n of candidates) {
-        const reply = replyKey(n.kind, n.refId);
-        if (
-          n.kind !== "customer_waiting" ||
-          !jevCheck ||
-          snap.sent.some((s) => s.issueId === n.issueId && s.kind === reply)
-        ) {
-          nudges.push(n);
-          continue;
-        }
+      for (const [msgId, issueId] of waiting) {
         const thread = snap.messages
-          .filter((m) => m.issueId === n.issueId && m.direction !== "internal")
+          .filter((m) => m.issueId === issueId && m.direction !== "internal")
           .sort(byThreadOrder);
         let p: number;
         try {
@@ -215,30 +290,62 @@ const scan = defineStep({
         } catch (err) {
           // A spare nudge costs less than a forgotten customer, so a Jev failure nudges.
           ctx.logger.warn("jev check failed; nudging", {
-            issueId: n.issueId,
+            issueId,
             err: String(err),
           });
-          nudges.push(n);
           continue;
         }
         if (p >= EXPECTS_REPLY_MIN) {
-          await recordNudge(db, n.issueId, reply);
-          nudges.push(n);
+          // Remember the yes, so later rounds of this nudge do not ask Jev again.
+          await recordNudge(db, issueId, replyKey("customer_waiting", msgId));
         } else {
           // Remember the verdict for this message, so the next run neither nudges nor asks again.
-          await recordNudge(db, n.issueId, skipKey(n.kind, n.refId));
-          skipped.push({ issueId: n.issueId, key: n.key, expectsReply: p });
+          await recordNudge(db, issueId, skipKey("customer_waiting", msgId));
+          noReply.add(msgId);
+          skipped.push({
+            issueId,
+            key: skipKey("customer_waiting", msgId),
+            expectsReply: p,
+          });
         }
       }
+      const nudges = candidates.filter(
+        (n) => !(n.kind === "customer_waiting" && noReply.has(n.refId)),
+      );
+      // Rerun with the new verdicts, so a rejected message drops its reason and the escalation
+      // stands only on a condition that still holds long enough.
+      const all = escalate([
+        ...snap.sent,
+        ...skipped.map((s) => ({
+          issueId: s.issueId,
+          kind: s.key,
+        })),
+      ]);
+      const due = all.filter(notifiable);
+      const unnotified = all.filter((e) => !notifiable(e)).map((e) => e.key);
       ctx.logger.info("controller scan", {
         openIssues: snap.issues.length,
         due: candidates.length,
         nudges: nudges.length,
+        escalations: due.length,
+        unnotified,
         skipped,
       });
-      if (nudges.length === 0)
-        return terminate({ nudged: [], skipped, jevCheck });
-      return goto("send", { nudges, skipped, jevCheck });
+      if (nudges.length === 0 && due.length === 0)
+        return terminate({
+          nudged: [],
+          escalated: [],
+          unnotified,
+          skipped,
+          jevCheck,
+        });
+      return goto("send", {
+        nudges,
+        escalations: due,
+        unnotified,
+        skipped,
+        jevCheck,
+      });
     });
   },
 });
@@ -256,6 +363,7 @@ const send = defineStep({
   terminal: true,
   inputSchema: SendInput.extend({
     skipped: z.array(z.unknown()).optional(),
+    unnotified: z.array(z.string()).optional(),
     jevCheck: z.boolean().optional(),
   }),
   async run(input, ctx) {
@@ -307,8 +415,67 @@ const send = defineStep({
           nudged.push({ issueId: n.issueId, key: n.key, ts: sent });
         else notSent.push(n.key);
       }
+
+      const esc = await escalationConfig(db, desks);
+      const escalated: {
+        issueId: string;
+        key: string;
+        dmTs: string | null;
+        threadTs: string;
+      }[] = [];
+      const unnotified = [...(input.unnotified ?? [])];
+      for (const e of input.escalations ?? []) {
+        const out = await db.transaction(async (tx) => {
+          // Recheck under the issue lock to prevent stale conditions or racing higher levels from paging.
+          // Honor Jev skip verdicts unless jevCheck is disabled.
+          const fresh = await snapshot(tx, e.issueId);
+          const due = dueEscalations({
+            ...fresh,
+            ...esc,
+            jevCheck: input.jevCheck ?? true,
+          }).find((d) => d.key === e.key);
+          const issue = await getIssue(tx, e.issueId);
+          if (!due || !issue.triageRootTs) return "resolved" as const;
+          const desk = desks.find((d) => d.id === issue.deskId) ?? fallbackDesk;
+          const entry = desk && esc.entries[desk.id];
+          if (!desk || !entry) return "resolved" as const;
+          const oncall = entry.oncallSlackId ?? (await oncallFor(tx, desk));
+          if (!oncall && !entry.groupId) return "unnotified" as const;
+          if (!(await recordNudge(tx, e.issueId, e.key))) return null;
+          const why = reasonsText(due);
+          const link = permalink(desk.triageChannel, issue.triageRootTs);
+          const title = escapeMrkdwn(issue.title ?? "(untitled)");
+          const dm = oncall
+            ? await post(ctx, {
+                channel: oncall,
+                text: `Escalation (level ${due.level}) on #${issue.number} ${title}: ${why}. <${link}|Open the triage thread>`,
+              })
+            : null;
+          const who = entry.groupId
+            ? `<!subteam^${entry.groupId}>`
+            : `<@${oncall}>`;
+          const thread = await post(ctx, {
+            channel: desk.triageChannel,
+            threadTs: issue.triageRootTs,
+            text: `${who} escalation (level ${due.level}) on #${issue.number}: ${why}.`,
+          });
+          return { dmTs: dm?.ts ?? null, threadTs: thread.ts };
+        });
+        if (out === "unnotified") {
+          ctx.logger.warn("escalation has nobody to notify", {
+            issueId: e.issueId,
+            key: e.key,
+          });
+          unnotified.push(e.key);
+        } else if (out === "resolved") resolved.push(e.key);
+        else if (out)
+          escalated.push({ issueId: e.issueId, key: e.key, ...out });
+        else notSent.push(e.key);
+      }
       return terminate({
         nudged,
+        escalated,
+        unnotified,
         notSent,
         resolved,
         skipped: input.skipped ?? [],
@@ -321,7 +488,7 @@ const send = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk controller: a cron that pings the triage thread on a backoff while a condition stays stale (no owner, no draft, draft pending, customer waiting).",
+    "Support desk controller: a cron that pings the triage thread on a backoff while a condition stays stale (no owner, no draft, draft pending, customer waiting), and escalates to on-call and a support group when an issue stays unowned or a customer keeps waiting past a desk's escalation levels.",
   entry: "scan",
   steps: { scan, send },
 });

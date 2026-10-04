@@ -38,7 +38,9 @@ export interface AttachedTrigger {
 }
 
 /** The agents the Console operates: every fleet.json project except the smoke pair. */
-export const AGENTS: FleetProject[] = (fleet.projects as Omit<FleetProject, "slug">[])
+export const AGENTS: FleetProject[] = (
+  fleet.projects as Omit<FleetProject, "slug">[]
+)
   .map((p) => ({ ...p, slug: agentSlug(p.key) }))
   .filter((p) => !p.smoke);
 /** `triggers` only. `smokeTriggers` are never attached from the Console. */
@@ -155,8 +157,7 @@ export function fleetWideKeys(): string[] {
 // --- desks -----------------------------------------------------------------------------------
 
 export type DeskPick<D> =
-  | { ok: true; desk: D }
-  | { ok: false; status: 404 | 409; reason: string };
+  { ok: true; desk: D } | { ok: false; status: 404 | 409; reason: string };
 
 /**
  * The desk a request is about: the one named by `?desk=<slug>`, else the default desk. A page
@@ -224,7 +225,8 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
   },
   controller: {
     emits: ["issue.nudged"],
-    writes: "nudges, runs, events_log; posts nudges in triage threads",
+    writes:
+      "nudges, runs, events_log; posts nudges in triage threads, DMs on-call and mentions the support group when an issue escalates",
   },
   "linear-sync": {
     emits: ["issue.engineering_resolved"],
@@ -270,7 +272,7 @@ export const TABLES: [string, string][] = [
   ["drafts", "AI reply drafts and their Approve / Escalate / Dismiss outcome"],
   [
     "nudges",
-    "follow-ups the controller already sent, one per issue, condition and round",
+    "follow-ups and escalations the controller already sent, one per issue, condition and round, or level",
   ],
   ["digests", "daily digests already posted, one per desk and day"],
   ["runs", "each agent execution and the issue it worked on"],
@@ -285,7 +287,7 @@ export const TABLES: [string, string][] = [
   ],
   [
     "config",
-    "runtime config: customer channels, alerts channel, switches (desk settings live in desks)",
+    "runtime config: customer channels, alerts channel, switches, escalation per desk (other desk settings live in desks)",
   ],
   ["schema_migrations", "applied migrations"],
 ];
@@ -673,10 +675,7 @@ export type KbParse =
  * subset but at least one field. Strings are trimmed and may not be empty. Other keys are ignored,
  * so a request can never set `updated_by` or an id.
  */
-export function parseKbInput(
-  raw: unknown,
-  mode: "create" | "update",
-): KbParse {
+export function parseKbInput(raw: unknown, mode: "create" | "update"): KbParse {
   // A JSON body can be null, an array or a scalar; only an object has fields to read.
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
     return { ok: false, error: "body must be a JSON object" };

@@ -291,6 +291,8 @@ describe("controller", () => {
       openIssues: 1,
       due: 3,
       nudges: 3,
+      escalations: 0,
+      unnotified: [],
       skipped: [],
     });
     expect(second.done.output).toMatchObject({
@@ -418,5 +420,232 @@ describe("controller", () => {
       expect(channels).toContainEqual([onQuick.triageRootTs, "C0VIPTRI01"]);
       expect(r.posts.some((p) => p.channel === "C0TESTTRI01")).toBe(false);
     });
+  });
+
+  describe("escalation", () => {
+    const escalate = (entry: Record<string, unknown>) =>
+      setConfig(
+        db,
+        "escalation",
+        { support: { levels: [5, 60], ...entry } } as never,
+        "test",
+      );
+    const ageTo = (interval: string) =>
+      Promise.all(
+        ["issues", "messages", "drafts"].map((t) =>
+          db.query(
+            `update ${t} set created_at = now() - interval '${interval}'`,
+          ),
+        ),
+      );
+    const dms = (r: { posts: Record<string, unknown>[] }) =>
+      r.posts.filter((p) => String(p.channel).startsWith("U"));
+    const threadPosts = (r: { posts: Record<string, unknown>[] }) =>
+      r.posts.filter(
+        (p) => /escalation \(level/.test(String(p.text)) && p.threadTs,
+      );
+    const escalated = (r: { done: Directive }) =>
+      ((r.done.output?.escalated ?? []) as { key: string }[]).map((e) => e.key);
+    const recorded = async (issueId: string) =>
+      (
+        await db.query<{ kind: string }>(
+          "select kind from nudges where issue_id = $1 and kind like 'escalate:%' order by kind",
+          [issueId],
+        )
+      ).map((r) => r.kind);
+
+    it("DMs on-call and mentions the group in the triage thread, once per level", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      const issue = await seedIssue(db, { title: "stuck" });
+      await backdate(db);
+
+      const first = await runController("exec-1");
+      expect(escalated(first)).toEqual(["escalate:1"]);
+      expect(dms(first)).toHaveLength(1);
+      const [dm] = dms(first);
+      expect(dm.channel).toBe("U0ONCALL001");
+      expect(dm.text).toContain("stuck");
+      expect(dm.text).toContain("no owner for 10 min");
+      expect(dm.text).toContain(
+        `https://slack.com/archives/C0TRIAGE001/p${issue.triageRootTs!.replace(".", "")}`,
+      );
+      expect(threadPosts(first)).toHaveLength(1);
+      const [thread] = threadPosts(first);
+      expect(thread.channel).toBe("C0TRIAGE001");
+      expect(thread.threadTs).toBe(issue.triageRootTs);
+      expect(thread.text).toContain("<!subteam^S0SUPPORT1>");
+
+      const second = await runController("exec-2");
+      expect(dms(second)).toHaveLength(0);
+      expect(threadPosts(second)).toHaveLength(0);
+
+      await ageTo("2 hours");
+      const third = await runController("exec-3");
+      expect(escalated(third)).toEqual(["escalate:2"]);
+      expect(dms(third)).toHaveLength(1);
+      expect(threadPosts(third)).toHaveLength(1);
+      const fourth = await runController("exec-4");
+      expect(dms(fourth)).toHaveLength(0);
+      expect(await recorded(issue.id)).toEqual(["escalate:1", "escalate:2"]);
+    });
+
+    it("sends one escalation naming both conditions, aged from the oldest", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      const issue = await seedIssue(db, {
+        title: "both",
+        customerText: "it is still broken",
+      });
+      await backdate(db);
+      await db.query(
+        "update messages set created_at = now() - interval '2 minutes'",
+      );
+      const r = await runController("exec-1");
+      expect(escalated(r)).toEqual(["escalate:1"]);
+      expect(dms(r)).toHaveLength(1);
+      expect(dms(r)[0].text).toContain(
+        "no owner for 10 min, customer waiting for a reply for 2 min",
+      );
+      expect(threadPosts(r)).toHaveLength(1);
+      expect(await recorded(issue.id)).toEqual(["escalate:1"]);
+    });
+
+    it("asks Jev once per message and drops a thank-you", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      const thanked = await seedIssue(db, {
+        title: "thanked",
+        customerText: "thanks, that fixed it!",
+      });
+      await seedIssue(db, { title: "waiting", customerText: "still broken" });
+      await db.query("update issues set owner_slack_id = 'U0OWNER0001'");
+      await backdate(db);
+      const r = await runController("exec-1");
+      // "still broken" is both a nudge and an escalation reason: one question.
+      expect(r.asked.sort()).toEqual([
+        "still broken",
+        "thanks, that fixed it!",
+      ]);
+      expect(r.done.output?.escalated).toHaveLength(1);
+      expect(await recorded(thanked.id)).toEqual([]);
+      const [msg] = await db.query<{ id: string }>(
+        "select id from messages where issue_id = $1",
+        [thanked.id],
+      );
+      const skips = await db.query<{ kind: string }>(
+        "select kind from nudges where issue_id = $1",
+        [thanked.id],
+      );
+      expect(skips.map((k) => k.kind)).toContain(
+        `skip:customer_waiting:${msg.id}`,
+      );
+    });
+
+    it("without a group mentions on-call; an entry's on-call overrides the desk's", async () => {
+      await escalate({ oncallSlackId: "U0OVERRIDE1" });
+      await seedIssue(db, { title: "solo" });
+      await backdate(db);
+      const r = await runController("exec-1");
+      expect(dms(r).map((p) => p.channel)).toEqual(["U0OVERRIDE1"]);
+      expect(threadPosts(r)[0].text).toContain("<@U0OVERRIDE1>");
+    });
+
+    it("records nothing and never asks Jev again when there is nobody to notify", async () => {
+      await escalate({});
+      await db.query("update desks set oncall_slack_id = null");
+      const issue = await seedIssue(db, {
+        title: "nobody",
+        customerText: "still broken",
+      });
+      await backdate(db);
+      const first = await runController("exec-1");
+      expect(dms(first)).toHaveLength(0);
+      expect(threadPosts(first)).toHaveLength(0);
+      expect(first.done.output?.unnotified).toEqual(["escalate:1"]);
+      expect(await recorded(issue.id)).toEqual([]);
+      // Unnotifiable escalations must not re-query Jev on every scan.
+      expect(first.asked).toEqual(["still broken"]);
+      const second = await runController("exec-2");
+      expect(second.asked).toEqual([]);
+      expect(second.done.output?.unnotified).toEqual(["escalate:1"]);
+    });
+
+    it("a delayed send never posts a lower level after a racing run sent a higher one", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      const issue = await seedIssue(db, {
+        title: "race",
+        customerText: "still broken",
+      });
+      await db.query(
+        "update issues set created_at = now() - interval '59 minutes'",
+      );
+      await db.query(
+        "update messages set created_at = now() - interval '8 minutes'",
+      );
+      const c = ctxWithJev("exec-1");
+      const scanned = await step("scan").run({}, c.ctx);
+      expect(
+        (scanned.input as { escalations: { key: string }[] }).escalations.map(
+          (e) => e.key,
+        ),
+      ).toEqual(["escalate:1"]);
+      // A higher sent level must suppress a delayed lower-level send even when another condition still holds.
+      await db.query(
+        "insert into nudges (issue_id, kind) values ($1, 'escalate:2')",
+        [issue.id],
+      );
+      await db.query("update issues set owner_slack_id = 'U0OWNER0001'");
+      const out = await step("send").run(scanned.input, c.ctx);
+      expect(out.output!.escalated).toEqual([]);
+      expect(await recorded(issue.id)).toEqual(["escalate:2"]);
+    });
+
+    it("jevCheck off overrides an earlier Jev skip for escalations too", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      await seedIssue(db, {
+        title: "thanked",
+        customerText: "thanks, that fixed it!",
+      });
+      await db.query("update issues set owner_slack_id = 'U0OWNER0001'");
+      await backdate(db);
+      expect(escalated(await runController("exec-1"))).toEqual([]);
+      expect(
+        escalated(await runController("exec-2", { jevCheck: false })),
+      ).toEqual(["escalate:1"]);
+    });
+
+    it("a desk without an entry never escalates", async () => {
+      await setConfig(db, "escalation", { vip: { levels: [1] } }, "test");
+      await seedIssue(db, { title: "other desk" });
+      await backdate(db);
+      const r = await runController("exec-1");
+      expect(dms(r)).toHaveLength(0);
+      expect(escalated(r)).toEqual([]);
+    });
+
+    it.each([
+      ["unowned", undefined],
+      [
+        "with a rejected thank-you as old as the level",
+        "thanks, that fixed it!",
+      ],
+    ])(
+      "drops an escalation when the issue is taken between scan and send (%s)",
+      async (_, customerText) => {
+        await escalate({ groupId: "S0SUPPORT1" });
+        const issue = await seedIssue(db, { title: "taken", customerText });
+        await backdate(db);
+        const c = ctxWithJev("exec-1");
+        const scanned = await step("scan").run({}, c.ctx);
+        expect(
+          (scanned.input as { escalations: { key: string }[] }).escalations.map(
+            (e) => e.key,
+          ),
+        ).toEqual(["escalate:1"]);
+        await db.query("update issues set owner_slack_id = 'U0OWNER0001'");
+        const out = await step("send").run(scanned.input, c.ctx);
+        expect(out.output!.escalated).toEqual([]);
+        expect(out.output!.resolved).toContain("escalate:1");
+        expect(await recorded(issue.id)).toEqual([]);
+      },
+    );
   });
 });
