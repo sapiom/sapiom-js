@@ -195,6 +195,7 @@ describe("draft path", () => {
       citations: [DEPLOY_PAGE],
       causationId: "Ev0EXAMPLE01",
       confidence: 0.8,
+      summary: DRAFTED.summary,
     });
     const [posted] = t.slack("chat.postMessage");
     expect(posted).toMatchObject({
@@ -549,6 +550,7 @@ describe("draft path", () => {
       issueId: FIXTURE_ISSUE,
       text: "Reply to the newer follow-up.",
       causationId: "Ev0NEWER0002",
+      summary: "The newer follow-up's summary.",
     });
     const t = ctxFor("e");
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
@@ -561,6 +563,25 @@ describe("draft path", () => {
     expect(actionable.map((d) => d.id)).toEqual([out.draftId]);
     // The newer draft is left for its own run's retry, which will supersede this one.
     expect((await getDraft(db, newer.draft.id)).status).toBe("pending");
+
+    // The older run rewrote issues.summary; the newer run's retry still shows its own summary.
+    expect((await getIssue(db, FIXTURE_ISSUE)).summary).toBe(DRAFTED.summary);
+    const retry = ctxFor("e-retry");
+    const created = fixture("issue/created.json").payload;
+    await runAgent(
+      {
+        ...created,
+        causationId: "Ev0NEWER0002",
+        slack: { channel: "C0CUSTOMER1", ts: "1790889999.000200" },
+      },
+      retry.ctx,
+    );
+    expect(retry.llmCalls).toHaveLength(0);
+    const [card] = retry.slack("chat.postMessage");
+    expect(JSON.stringify(card.blocks)).toContain(
+      "The newer follow-up's summary.",
+    );
+    expect(JSON.stringify(card.blocks)).not.toContain(DRAFTED.summary);
   });
 
   it("internal notes never reach the model", async () => {
@@ -829,6 +850,42 @@ describe("click path", () => {
     expect(t.slack("chat.postMessage")).toHaveLength(0);
   });
 
+  it.each([
+    [
+      "the draft's own summary",
+      "Draft summary A",
+      "Issue summary B",
+      "Draft summary A",
+    ],
+    [
+      "the issue's summary for a draft without one",
+      null,
+      "Issue summary B",
+      "Issue summary B",
+    ],
+    ["the draft text when neither has a summary", null, null, undefined],
+  ])("Escalate sends %s", async (_, draftSummary, issueSummary, expected) => {
+    await db.query("update drafts set summary = $2 where id = $1", [
+      FIXTURE_DRAFT,
+      draftSummary,
+    ]);
+    await db.query("update issues set summary = $2 where id = $1", [
+      FIXTURE_ISSUE,
+      issueSummary,
+    ]);
+    const t = ctxFor("e");
+    await runAgent(
+      fixture("slack/block-actions.draft-escalate.json").payload,
+      t.ctx,
+    );
+    expect(t.emitted).toHaveLength(1);
+    expect(t.emitted[0]).toMatchObject({
+      payload: {
+        summary: expected ?? (await getDraft(db, FIXTURE_DRAFT)).text,
+      },
+    });
+  });
+
   it("Dismiss only records the decision and updates the card", async () => {
     const t = ctxFor("e");
     const ds = await runAgent(
@@ -1020,6 +1077,23 @@ describe("desks", () => {
 });
 
 describe("draft helpers", () => {
+  it("copilotCard shows the draft's summary, else the issue's, else none", async () => {
+    const draft = await getDraft(db, FIXTURE_DRAFT);
+    const issue = await getIssue(db, FIXTURE_ISSUE);
+    const meta = (d: typeof draft, i: typeof issue) =>
+      JSON.stringify(
+        copilotCard(d, i, new Map()).find((b) => b.block_id === "draft.meta"),
+      );
+    const withIssue = { ...issue, summary: "Issue summary B" };
+    const withDraft = { ...draft, summary: "Draft summary A" };
+    expect(meta(withDraft, withIssue)).toContain("*Summary:* Draft summary A");
+    expect(meta(withDraft, withIssue)).not.toContain("Issue summary B");
+    expect(meta(draft, withIssue)).toContain("*Summary:* Issue summary B");
+    expect(meta(draft, { ...issue, summary: null })).not.toContain(
+      "*Summary:*",
+    );
+  });
+
   it("normalizeOutput drops citations the prompt did not provide and clamps confidence", () => {
     expect(
       normalizeOutput(

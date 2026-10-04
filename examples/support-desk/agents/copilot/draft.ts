@@ -238,7 +238,9 @@ export function copilotCard(
       : draft;
   const blocks = draftCard(shown, issue);
   const facts: string[] = [];
-  if (issue.summary) facts.push(`*Summary:* ${escapeMrkdwn(issue.summary)}`);
+  // The draft's own summary: issues.summary may have been rewritten since by an older event's run.
+  const summary = draft.summary ?? issue.summary;
+  if (summary) facts.push(`*Summary:* ${escapeMrkdwn(summary)}`);
   if (draft.confidence !== null)
     facts.push(`*Confidence:* ${Math.round(draft.confidence * 100)}%`);
   const sources = citedSources(draft).map((s) => sourceLabel(s, titles));

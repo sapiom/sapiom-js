@@ -368,6 +368,7 @@ async function draftReply(
             citations: output.citations,
             causationId: trigger.causationId,
             confidence: output.confidence,
+            summary: output.summary,
           })
         ).draft;
       }
@@ -629,7 +630,7 @@ const apply = defineStep({
             channel: issue.customerChannel ?? "",
             ts: issue.customerRootTs ?? "",
           },
-          summary: issue.summary ?? draft.text,
+          summary: draft.summary ?? issue.summary ?? draft.text,
           requestedBy: clicker,
         });
         out.receiptId = receipt.receiptId;

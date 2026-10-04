@@ -110,3 +110,31 @@ describe("081_desk_triage_unique", () => {
     await expect(insert("c", "C0X")).rejects.toThrow();
   });
 });
+
+describe("091_draft_summary", () => {
+  it("keeps an existing draft and gives it a null summary", async () => {
+    const db = await memoryDb({ through: "090_digests" });
+    const [account] = await db.query<{ id: string }>(
+      "insert into accounts (name, slack_channel_id) values ('Acme', 'C0ACME') returning id",
+    );
+    const [issue] = await db.query<{ id: string }>(
+      "insert into issues (account_id, source, customer_channel, customer_root_ts) values ($1, 'slack', 'C0ACME', '1.1') returning id",
+      [account.id],
+    );
+    await db.query(
+      "insert into drafts (issue_id, text, causation_id, confidence, status) values ($1, 'Hello', 'Ev1', 0.5, 'pending')",
+      [issue.id],
+    );
+    const sql = MIGRATIONS.find((m) => m.id === "091_draft_summary")!.sql;
+    for (const stmt of splitStatements(sql)) await db.query(stmt);
+
+    const [draft] = await db.query("select * from drafts");
+    expect(draft).toMatchObject({
+      issue_id: issue.id,
+      text: "Hello",
+      causation_id: "Ev1",
+      status: "pending",
+      summary: null,
+    });
+  });
+});
