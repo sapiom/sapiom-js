@@ -1,7 +1,7 @@
 /** Per-ticket timers against pg-mem, with a fake schedules client in place of the Sapiom API. */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { setConfig } from "./config";
+import { getConfigOr, setConfig } from "./config";
 import { localFleetDb, type Db } from "./db";
 import { agentSlug } from "./fleet-id";
 import {
@@ -13,7 +13,8 @@ import {
   setStatus,
   updateIssue,
 } from "./issues";
-import { fakeCtx } from "./test-ctx";
+import { issueSla } from "./sla";
+import { EXAMPLE_SLA, fakeCtx } from "./test-ctx";
 import {
   MIN_LEAD_MS,
   STUCK_RETRY_MINUTES,
@@ -166,6 +167,31 @@ describe("rescheduleIssue", () => {
     ]);
     expect(await nextDue(db, await getIssue(db, issue.id))).toMatchObject({
       reason: "card_redraw",
+    });
+  });
+
+  it("reads timing settings fresh, so a Console edit reaches a warm worker's Db", async () => {
+    const issue = await seed();
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    await setConfig(db, "controller.paused", false, "test");
+    // Warm this Db's config cache, as an earlier step in the same worker would.
+    expect(await getConfigOr(db, "sla", null)).not.toBeNull();
+    expect(await getConfigOr(db, "controller.paused", null)).toBe(false);
+    // The Console writes from another process, straight to the rows: SLA removed ("Use nudge
+    // minutes") and the controller switched off.
+    await db.query("delete from config where key = 'sla'");
+    await db.query(
+      "update config set value = 'true'::jsonb where key = 'controller.paused'",
+    );
+    expect(await issueSla(db, await getIssue(db, issue.id))).toBeNull();
+    // Back on the desk's 5 minutes, not the example SLA's 480 business minutes.
+    expect((await nextDue(db, await getIssue(db, issue.id)))!.dueAt).toEqual(
+      new Date(issue.createdAt.getTime() + 5 * 60_000),
+    );
+    const { ctx } = fakeCtx();
+    expect(await rescheduleIssue(db, ctx as never, issue.id)).toMatchObject({
+      paused: true,
+      tickId: null,
     });
   });
 

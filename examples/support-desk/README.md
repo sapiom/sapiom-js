@@ -277,7 +277,7 @@ the relay slug `linear`), and the Slack bot is in the triage channel and every c
 9. **Optional: the pager.** Deploy `agents/urgent-pager` as `support-desk-urgent-pager` and attach
    the event `issue.created`. It DMs the desk's on-call user for every urgent issue.
 
-### Upgrading an install that ran the cron controller
+### Upgrading an older install
 
 1. Cancel the controller's `*/2 * * * *` cron and every trigger of `support-desk-linear-sync`
    (`sapiom_dev_agents_schedule_cancel`). The agent `linear-sync` is gone; its work moved into the
@@ -286,6 +286,9 @@ the relay slug `linear`), and the Slack bot is in the triage channel and every c
 3. Run the controller once with input `{}` (`sapiom_dev_agents_run`), or press **Reset ticket
    timers** in the Console. It sets every open ticket's timer.
 4. Republish the Console (step 7). That also removes a `CONSOLE_API_KEY` an older version stored.
+5. Delete what the old keys left behind: the watchdog no longer reads a key, so a
+   `WATCHDOG_API_KEY` (or `<PREFIX>_WATCHDOG_API_KEY`) secret on it can be deleted, and so can the
+   API keys created for that secret and for `CONSOLE_API_KEY`.
 
 ### Verify the install
 
@@ -542,9 +545,7 @@ names the Console's App Link and heads its page; the slugs keep the id.
 Changing `fleetId` on an install that is already deployed creates a second fleet (new agents, a
 new database, new triggers) and leaves the old one running. An install deployed under another id
 keeps working when its `fleet.local.json` sets that id (`{ "fleetId": "helpdesk" }`); then
-redeploy the agents and republish the Console under that prefix. The watchdog reads no key any more: a
-`WATCHDOG_API_KEY` or `<PREFIX>_WATCHDOG_API_KEY` secret on it, and the `org.read` API key behind
-it, can be deleted.
+redeploy the agents and republish the Console under that prefix.
 
 ## Troubleshooting
 

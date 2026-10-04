@@ -30,7 +30,7 @@ import {
   type MessageRow,
   type SentRow,
 } from "../agents/controller/rules";
-import { escalations, getConfigOr, type DeskEscalation } from "./config";
+import { escalations, getConfigFresh, type DeskEscalation } from "./config";
 import type { Db, Row } from "./db";
 import { listDesks, oncallFor, type Desk } from "./desks";
 import { agentSlug } from "./fleet-id";
@@ -192,9 +192,9 @@ export async function snapshot(
 /** Share threshold loading so the tick, its send and the timer apply the same configuration precedence. */
 export async function thresholds(db: Db) {
   return {
-    sla: await getConfigOr(db, "sla", null),
-    minutes: await getConfigOr(db, "nudge.minutes", 30),
-    repeatMinutes: await getConfigOr(db, "nudge.repeat_minutes", [60, 240]),
+    sla: await getConfigFresh(db, "sla", null),
+    minutes: await getConfigFresh(db, "nudge.minutes", 30),
+    repeatMinutes: await getConfigFresh(db, "nudge.repeat_minutes", [60, 240]),
     deskMinutes: Object.fromEntries(
       (await listDesks(db)).map((d) => [d.id, d.nudgeMinutes]),
     ),
@@ -306,7 +306,7 @@ export async function rescheduleIssue(
   issueId: string,
   opts: { tick?: boolean; at?: Date } = {},
 ): Promise<Reschedule> {
-  const paused = await getConfigOr(db, "controller.paused", false);
+  const paused = await getConfigFresh(db, "controller.paused", false);
   const { result, cancel } = await db.transaction(async (tx) => {
     const rows = await tx.query(
       "select id from issues where id = $1 for update",

@@ -23,7 +23,7 @@
  *   retries a failed one.
  */
 import { escapeMrkdwn, issueCard, issueCardText, mrkdwnLink } from "./blocks";
-import { getConfigOr } from "./config";
+import { getConfigFresh } from "./config";
 import type { Db, DbCtx } from "./db";
 import { deskForIssue } from "./desks";
 import { emit, type EmitCtx } from "./emit";
@@ -192,7 +192,7 @@ export async function resolveIssue(
 ): Promise<Issue | null> {
   const notifyCustomer =
     input.resolution === "done" &&
-    (await getConfigOr(db, "linear_sync.notify_customer", false));
+    (await getConfigFresh(db, "linear_sync.notify_customer", false));
   const clicker = input.resolution === "resolved" ? input.by : null;
 
   // 1. Each post is its own committed write, so a later failed post or move never rolls back the

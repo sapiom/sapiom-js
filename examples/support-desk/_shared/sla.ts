@@ -1,5 +1,5 @@
 /** On-hold issues have no response clock because engineering owns the next move. */
-import { getConfigOr, minuteOfDay, type ConfigValue } from "./config";
+import { getConfigFresh, minuteOfDay, type ConfigValue } from "./config";
 import type { Db } from "./db";
 import {
   messagesForIssue,
@@ -180,7 +180,7 @@ export function slaDue(
 }
 
 export async function issueSla(db: Db, issue: Issue): Promise<SlaDue | null> {
-  const sla = await getConfigOr(db, "sla", null);
+  const sla = await getConfigFresh(db, "sla", null);
   if (!sla) return null;
   return slaDue(
     { ...issue, messages: await messagesForIssue(db, issue.id) },

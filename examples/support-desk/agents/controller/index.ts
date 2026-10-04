@@ -27,7 +27,7 @@ import { z } from "zod/v4";
 
 import { agentSlug } from "../../_shared/fleet-id";
 import { escapeMrkdwn, nudge, slackToPlain } from "../../_shared/blocks";
-import { getConfigOr } from "../../_shared/config";
+import { getConfigFresh } from "../../_shared/config";
 import { withDb } from "../../_shared/db";
 import { listDesks, oncallFor } from "../../_shared/desks";
 import { emit } from "../../_shared/emit";
@@ -190,7 +190,7 @@ const scan = defineStep({
       // A paused controller, or a closed ticket: clear the timer and send nothing.
       if (
         issue.status === "closed" ||
-        (await getConfigOr(db, "controller.paused", false))
+        (await getConfigFresh(db, "controller.paused", false))
       ) {
         const timer = await rescheduleIssue(db, ctx, issueId);
         return terminate({
@@ -339,7 +339,7 @@ const send = defineStep({
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
       // Switched off since the scan: send nothing, and clear the timer as a paused scan would.
-      if (await getConfigOr(db, "controller.paused", false)) {
+      if (await getConfigFresh(db, "controller.paused", false)) {
         const timer = input.issueId
           ? timerOut(await rescheduleIssue(db, ctx, input.issueId))
           : undefined;
