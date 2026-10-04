@@ -564,7 +564,7 @@ describe("draft path", () => {
     // The newer draft is left for its own run's retry, which will supersede this one.
     expect((await getDraft(db, newer.draft.id)).status).toBe("pending");
 
-    // The older run rewrote issues.summary; the newer run's retry still shows its own summary.
+    // A retried draft card must not inherit an older event's issue summary.
     expect((await getIssue(db, FIXTURE_ISSUE)).summary).toBe(DRAFTED.summary);
     const retry = ctxFor("e-retry");
     const created = fixture("issue/created.json").payload;
