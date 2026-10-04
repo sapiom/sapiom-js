@@ -61,10 +61,14 @@ export async function resetBoard(
     let card = "no card";
     if (issue.triageRootTs) {
       const account = await getAccount(db, issue.accountId);
-      const triage = (
-        desks.find((d) => d.id === row.desk_id) ??
-        desks.find((d) => d.isDefault)
-      )?.triageChannel;
+      // From the returned row, not the select above: reset-demo runs this without migrating, and a
+      // database before 082_issue_triage_channel has no column to name.
+      const triage =
+        issue.triageChannel ??
+        (
+          desks.find((d) => d.id === row.desk_id) ??
+          desks.find((d) => d.isDefault)
+        )?.triageChannel;
       // A card that cannot be redrawn (no desk, deleted message) does not block the reset.
       card = triage
         ? await update(ctx, {

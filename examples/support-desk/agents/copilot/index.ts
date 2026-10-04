@@ -34,7 +34,7 @@ import {
   statusLabel,
   workingCard,
 } from "../../_shared/blocks";
-import { deskForIssue } from "../../_shared/desks";
+import { cardChannel } from "../../_shared/desks";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import { Envelope, SlackBlockActions } from "../../_shared/events";
@@ -262,7 +262,7 @@ async function postDraftFailedNote(
 ): Promise<void> {
   try {
     await post(ctx, {
-      channel: (await deskForIssue(db, issue)).triageChannel,
+      channel: await cardChannel(db, issue),
       threadTs: triageRootTs,
       text: DRAFT_FAILED_NOTE,
     });
@@ -373,7 +373,7 @@ async function draftReply(
       }
     }
 
-    const triage = (await deskForIssue(db, issue)).triageChannel;
+    const triage = await cardChannel(db, issue);
     const ours = Number(trigger.slack.ts);
     const current = issue;
     const mine = draft;
@@ -653,7 +653,7 @@ async function refreshIssueCard(
 ): Promise<void> {
   if (!issue.triageRootTs) return;
   try {
-    const triage = (await deskForIssue(db, issue)).triageChannel;
+    const triage = await cardChannel(db, issue);
     const account = await getAccount(db, issue.accountId);
     await update(ctx, {
       channel: triage,

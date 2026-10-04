@@ -106,7 +106,7 @@ const ingest = defineStep({
           text: issueCardText(issue, account),
           blocks: issueCard(issue, account),
         });
-        issue = await setTriageRoot(db, issue.id, card.ts);
+        issue = await setTriageRoot(db, issue.id, triageChannel, card.ts);
         await post(ctx, {
           channel: triageChannel,
           threadTs: card.ts,

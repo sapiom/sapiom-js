@@ -197,3 +197,14 @@ export async function deskForIssue(
 ): Promise<Desk> {
   return issue.deskId ? getDesk(db, issue.deskId) : requireDefaultDesk(db);
 }
+
+/**
+ * The channel holding an issue's triage card: the one stored when it was posted, else (no card yet,
+ * or a card posted by a bundle older than 082_issue_triage_channel) its desk's current channel.
+ */
+export async function cardChannel(
+  db: Db,
+  issue: { deskId: string | null; triageChannel: string | null },
+): Promise<string> {
+  return issue.triageChannel ?? (await deskForIssue(db, issue)).triageChannel;
+}

@@ -67,6 +67,7 @@ import {
   agentByKey,
   METRIC_WINDOWS,
   agentPageUrl,
+  cardChannelOf,
   costOf,
   costSummary,
   cuesFromReplay,
@@ -313,16 +314,19 @@ async function board(d: Db, desk: Desk) {
         r.linear_identifier as string | null,
       ),
       createdAt: r.created_at,
-      cardUrl: triageLink(triage, r.triage_root_ts as string | null),
+      cardUrl: triageLink(
+        cardChannelOf(r, triage),
+        r.triage_root_ts as string | null,
+      ),
     })),
   };
 }
 
 /** The desk's newest issue (or its issue `number`), with its latency legs, runs and event receipts. */
 async function timeline(d: Db, desk: Desk, number?: number) {
-  const triage = desk.triageChannel;
   const issue = await deskIssue(d, desk.id, number);
   if (!issue) return { issue: null };
+  const triage = cardChannelOf(issue, desk.triageChannel);
   const id = issue.id as string;
   const [firstMessage] = await d.query<Record<string, unknown>>(
     "select ts, channel, created_at from messages where issue_id = $1 and direction = 'customer' order by created_at asc limit 1",

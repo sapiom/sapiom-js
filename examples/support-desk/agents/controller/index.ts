@@ -272,7 +272,8 @@ const send = defineStep({
           if (!stillDue || !issue.triageRootTs) return "resolved" as const;
           const desk = desks.find((d) => d.id === issue.deskId) ?? fallbackDesk;
           if (!desk) return "resolved" as const;
-          const triage = desk.triageChannel;
+          // The nudge threads under the card, wherever it was posted.
+          const triage = issue.triageChannel ?? desk.triageChannel;
           if (!(await recordNudge(tx, n.issueId, n.key))) return null;
           const card = await post(ctx, {
             channel: triage,

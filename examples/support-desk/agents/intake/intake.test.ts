@@ -1085,6 +1085,124 @@ describe("intake agent", () => {
       });
     });
 
+    describe("after the desk's triage channel moves", () => {
+      const moveSupport = () =>
+        upsertDesk(
+          db,
+          {
+            slug: "support",
+            name: "Support",
+            triageChannel: "C0NEW",
+            isDefault: true,
+          },
+          { overwrite: true },
+        );
+      async function cardedThenMoved() {
+        const { output } = await run(
+          intakeFixture("message-created.bug.json").payload,
+          makeCtx("exec-bug", JEV.bug).ctx,
+        );
+        const issue = await getIssue(db, output.issueId as string);
+        expect(issue.triageChannel).toBe("C0TRIAGE001");
+        await moveSupport();
+        return issue;
+      }
+      const channels = (c: ReturnType<typeof makeCtx>) => [
+        ...c.slack("chat.postMessage").map((p) => p.channel),
+        ...c.slack("chat.update").map((p) => p.channel),
+      ];
+      const closeIn = (issueId: string, channel: string) => {
+        const close = structuredClone(
+          fixture("slack/block-actions.issue-close.json").payload,
+        ) as {
+          actions: { value: string }[];
+          container: { channel_id: string };
+          channel: { id: string };
+        };
+        close.actions[0].value = issueId;
+        close.container.channel_id = channel;
+        close.channel.id = channel;
+        return close;
+      };
+
+      it("a follow-up refreshes the card and mirrors in the card's channel", async () => {
+        const issue = await cardedThenMoved();
+        const fup = makeCtx("exec-fup-moved");
+        expect(
+          (
+            await run(
+              intakeFixture("message-created.follow-up.json").payload,
+              fup.ctx,
+            )
+          ).output,
+        ).toMatchObject({ outcome: "linked", issueId: issue.id });
+        expect(fup.slack("chat.update")).toEqual([
+          expect.objectContaining({ ts: issue.triageRootTs }),
+        ]);
+        expect(fup.slack("chat.postMessage")).toHaveLength(1);
+        expect(channels(fup)).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+      });
+
+      it("a team reply refreshes the card and mirrors in the card's channel", async () => {
+        const issue = await cardedThenMoved();
+        const t = makeCtx("exec-team-moved");
+        expect(
+          (
+            await run(
+              intakeFixture("message-created.team-reply.json").payload,
+              t.ctx,
+            )
+          ).output,
+        ).toMatchObject({ outcome: "team_reply", issueId: issue.id });
+        expect(t.slack("chat.postMessage")).toHaveLength(1);
+        expect(channels(t)).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+      });
+
+      it("Close clicked on the card closes the issue and posts Closed by under it", async () => {
+        const issue = await cardedThenMoved();
+        await addTestDesk();
+        const other = makeCtx("exec-close-moved-other");
+        expect(
+          (await run(closeIn(issue.id, "C0TESTTRI01"), other.ctx)).output,
+        ).toEqual({
+          skipped: `issue ${issue.id} belongs to desk support, not test`,
+        });
+
+        const c = makeCtx("exec-close-moved");
+        expect(
+          (await run(closeIn(issue.id, "C0TRIAGE001"), c.ctx)).output,
+        ).toMatchObject({ outcome: "close", changed: true });
+        expect((await getIssue(db, issue.id)).status).toBe("closed");
+        expect(c.slack("chat.postMessage")).toEqual([
+          expect.objectContaining({
+            channel: "C0TRIAGE001",
+            threadTs: issue.triageRootTs,
+            text: expect.stringMatching(/^Closed by/),
+          }),
+        ]);
+        expect(channels(c)).not.toContain("C0NEW");
+      });
+
+      it("a card without a stored channel is addressed in its desk's current channel", async () => {
+        const issue = await cardedThenMoved();
+        await db.query(
+          "update issues set triage_channel = null where id = $1",
+          [issue.id],
+        );
+        const fup = makeCtx("exec-fup-fallback");
+        await run(
+          intakeFixture("message-created.follow-up.json").payload,
+          fup.ctx,
+        );
+        expect(fup.slack("chat.update")).toEqual([
+          expect.objectContaining({
+            channel: "C0NEW",
+            ts: issue.triageRootTs,
+          }),
+        ]);
+      });
+    });
+
     it("stores a message from another desk's triage channel without attaching it to the issue", async () => {
       await addTestDesk();
       const bug = makeCtx("exec-bug", JEV.bug);

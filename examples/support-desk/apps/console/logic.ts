@@ -285,6 +285,15 @@ export function linearIssueUrl(
   return m ? `https://linear.app/${m[1]}/issue/${identifier}` : null;
 }
 
+/**
+ * The channel holding an issue row's triage card: the one stored with it, else its desk's. The
+ * console does not migrate, so the column is absent from rows of a database before 082.
+ */
+export const cardChannelOf = (
+  row: Record<string, unknown>,
+  deskChannel: string,
+): string => (row.triage_channel as string | null | undefined) ?? deskChannel;
+
 export const agentPageUrl = (definitionId: string) =>
   `https://app.sapiom.ai/agents/${definitionId}`;
 

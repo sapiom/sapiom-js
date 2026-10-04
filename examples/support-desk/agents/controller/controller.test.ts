@@ -10,6 +10,7 @@ import {
   linkMessage,
   openIssue,
   setStatus,
+  setTriageRoot,
 } from "../../_shared/issues";
 import { fakeCtx } from "../../_shared/test-ctx";
 import { agent } from "./index";
@@ -310,6 +311,28 @@ describe("controller", () => {
       expect(channels).toContainEqual([onSupport.triageRootTs, "C0TRIAGE001"]);
       expect(channels).toContainEqual([onQuick.triageRootTs, "C0VIPTRI01"]);
       expect(r.posts.some((p) => p.channel === "C0TESTTRI01")).toBe(false);
+    });
+
+    it("nudges under the card in the channel it was posted in after the desk's channel moves", async () => {
+      const support = (await defaultDesk(db))!;
+      const issue = await aged(support.id, "C0SUPCUST01", 4);
+      await setTriageRoot(db, issue.id, "C0TRIAGE001", issue.triageRootTs!);
+      await upsertDesk(
+        db,
+        { ...support, triageChannel: "C0NEW" },
+        { overwrite: true },
+      );
+
+      const r = await runController("exec-moved", { jevCheck: false });
+      expect(r.posts.length).toBeGreaterThan(0);
+      for (const p of r.posts) {
+        expect(p).toMatchObject({
+          channel: "C0TRIAGE001",
+          threadTs: issue.triageRootTs,
+        });
+        expect(JSON.stringify(p.blocks)).toContain("archives/C0TRIAGE001/");
+        expect(JSON.stringify(p.blocks)).not.toContain("C0NEW");
+      }
     });
   });
 });

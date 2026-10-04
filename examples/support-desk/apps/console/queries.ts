@@ -18,8 +18,8 @@ export async function statusCounts(
 
 export function recentIssues(d: Db, deskId: string, limit = 20) {
   return d.query<Record<string, unknown>>(
-    `select i.id, i.number, a.name as account, i.title, i.status, i.priority, i.owner_slack_id,
-            i.linear_identifier, i.triage_root_ts, i.created_at
+    // i.*, not a column list: the console does not migrate, and triage_channel is absent before 082.
+    `select i.*, a.name as account
        from issues i join accounts a on a.id = i.account_id
       where i.desk_id = $1
       order by i.number desc limit ${Math.trunc(limit)}`,
