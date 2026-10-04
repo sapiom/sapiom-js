@@ -265,14 +265,14 @@ async function rearmTimers() {
   const definitionId = (await definitionIds()).get(slug);
   if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
   // The public API starts a run by definition id; the by-slug route is engine-internal. It answers
-  // `{ status, executionId }`.
-  const started = await sapiom<{ executionId?: string; status?: string }>(
-    "POST",
-    "/v1/workflows/executions",
-    { definitionId, input: {} },
-  );
+  // `{ status, executionId }`; an older engine answered with `id`.
+  const started = await sapiom<{
+    executionId?: string;
+    id?: string;
+    status?: string;
+  }>("POST", "/v1/workflows/executions", { definitionId, input: {} });
   return {
-    executionId: started.executionId ?? null,
+    executionId: started.executionId ?? started.id ?? null,
     status: started.status ?? null,
   };
 }
