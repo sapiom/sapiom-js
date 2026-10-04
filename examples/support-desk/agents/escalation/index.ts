@@ -18,7 +18,7 @@
  * - A Closed issue gets no Linear issue and no replies: one triage line says it was not escalated.
  * - The move to On Hold and the `issue.on_hold` emit share a second locked transaction: a failed
  *   emit rolls the move back, and a closed or already On Hold issue emits nothing.
- * - Every run that ends with the issue linked redraws the triage card from the row.
+ * - Every run on an open issue that ends with it linked redraws the triage card from the row.
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
@@ -290,7 +290,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   const requester = await userInfo(ctx, input.requestedBy);
 
   // 1. Link and reply, under the row lock: a concurrent run waits here, then finds the link and
-  // the stored reply keys, so it neither creates nor posts.
+  // the stored reply keys, so it creates no second Linear issue and repeats no reply.
   const linked = await db.transaction(async (tx) => {
     let issue = await lockIssue(tx, issueId);
     // A Closed issue leaves linear-sync's On Hold scan, so a Linear issue opened now would never
@@ -433,8 +433,8 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
 
   await redrawCard(ctx, db, triageChannel, parked.issue);
   if (parked.issue.status === "closed") {
-    // Reached only when a Close lands between the two transactions. That Close saw the link, so its
-    // open-ticket note (SAP-3794) flags the Linear issue; closed → on_hold is not a legal move.
+    // Reached only when a Close lands between the two transactions: closed → on_hold is not a
+    // legal move, so the link and replies stand. Flagging that open Linear issue at Close is SAP-3794.
     return {
       ...linked.base,
       ...replies,
