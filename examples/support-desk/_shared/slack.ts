@@ -149,7 +149,11 @@ async function findPosted(
       (m) => m.bot_id && m.blocks?.some((b) => b.block_id === marker),
     );
     if (hit) return hit.ts;
-    cursor = out.has_more ? out.response_metadata?.next_cursor : undefined;
+    const next = out.has_more ? out.response_metadata?.next_cursor : undefined;
+    // A repeated cursor would loop forever while the caller holds its issue row lock.
+    if (next && next === cursor)
+      throw new Error("conversations.replies returned an unchanged cursor");
+    cursor = next;
   } while (cursor);
   return undefined;
 }

@@ -287,6 +287,26 @@ describe("slack.ts", () => {
       ]);
     });
 
+    it("stops paging on a repeated cursor and posts", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: {
+          ok: true,
+          messages: [{ ts: "1.0" }],
+          has_more: true,
+          response_metadata: { next_cursor: "p2" },
+        },
+        postMessage: { ok: true, channel: "C1", ts: "1.6" },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(calls.map((c) => c.method)).toEqual([
+        "replies",
+        "replies",
+        "postMessage",
+      ]);
+    });
+
     it("ignores a marker on a message no bot posted", async () => {
       const { ctx, calls } = ctxWithSlack({
         replies: { ok: true, messages: [marked("1.5", { bot_id: undefined })] },
