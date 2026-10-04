@@ -339,5 +339,25 @@ describe("gatherKnowledge", () => {
       expect(fetched).toEqual([]);
       expect(k.docsConfigured).toBe(false);
     });
+
+    it("a warm worker sees the Console remove the key through another handle", async () => {
+      const db = await docsDb();
+      // The Console writes on its own handle, so the worker's per-Db config cache is not cleared.
+      const consoleDb = { ...db, query: db.query.bind(db) } as typeof db;
+      const fetched: string[] = [];
+      const draft = () =>
+        gatherKnowledge(
+          baseCtx({ docs: [] }).ctx as never,
+          db,
+          input,
+          deps(async (u) => (fetched.push(u), llms)),
+        );
+      expect((await draft()).docsConfigured).toBe(true);
+      await deleteConfig(consoleDb, "knowledge.docs_url");
+      fetched.length = 0;
+      const k = await draft();
+      expect(fetched).toEqual([]);
+      expect(k.docsConfigured).toBe(false);
+    });
   });
 });

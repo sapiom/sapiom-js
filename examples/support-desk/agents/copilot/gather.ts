@@ -10,7 +10,7 @@
  */
 import type { AgentExecutionContext } from "@sapiom/agent";
 
-import { getConfigOr } from "../../_shared/config";
+import { getConfigFresh } from "../../_shared/config";
 import type { Db } from "../../_shared/db";
 import {
   docsDeps,
@@ -85,9 +85,12 @@ function recentAnswers(answers: readonly KbArticle[]): KbArticle[] {
   return kept;
 }
 
-/** The configured docs site, or null when `knowledge.docs_url` is unset. */
+/**
+ * The configured docs site, or null when `knowledge.docs_url` is unset. Read fresh: the Console
+ * edits it, and a warm worker must stop fetching a site the operator removed.
+ */
 export async function configuredDocsSource(db: Db): Promise<DocsSource | null> {
-  const url = await getConfigOr(db, "knowledge.docs_url", null);
+  const url = await getConfigFresh(db, "knowledge.docs_url", null);
   return url ? parseDocsSource(url) : null;
 }
 

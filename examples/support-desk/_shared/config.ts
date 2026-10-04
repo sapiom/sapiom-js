@@ -211,6 +211,24 @@ export async function getConfigOr<K extends ConfigKey, F>(
   }
 }
 
+/**
+ * Like {@link getConfigOr}, but always reads the row: for keys the Console edits from another
+ * process while a step process stays warm on one shared `Db`.
+ */
+export async function getConfigFresh<K extends ConfigKey, F>(
+  db: Db,
+  key: K,
+  fallback: F,
+): Promise<ConfigValue<K> | F> {
+  const rows = await db.query<{ value: unknown }>(
+    "select value from config where key = $1",
+    [key],
+  );
+  return rows[0]
+    ? (ConfigSchemas[key].parse(rows[0].value) as ConfigValue<K>)
+    : fallback;
+}
+
 export async function setConfig<K extends ConfigKey>(
   db: Db,
   key: K,
