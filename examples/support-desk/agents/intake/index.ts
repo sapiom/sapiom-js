@@ -324,7 +324,7 @@ const internal = defineStep({
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
       const root = e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null;
-      // A note counts only under a card held in this channel, the rule Take and Close follow.
+      // Matching on the card's channel, not the desk's, keeps notes on old cards after a desk moves.
       const issue = root ? await cardIssue(db, e.channel, root) : null;
       const { message, duplicate } = await linkMessage(db, {
         issueId: issue?.id,
