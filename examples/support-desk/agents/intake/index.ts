@@ -268,6 +268,13 @@ const guard = defineStep({
       // we cannot ask Slack whether a channel is shared; the poster's workspace decides instead.
       const route = await withDb(ctx, async (db) => {
         if (await deskByTriageChannel(db, e.channel)) return "triage";
+        // A card left in an old triage channel still takes notes in its thread.
+        if (
+          e.thread_ts &&
+          e.thread_ts !== e.ts &&
+          (await cardIssue(db, e.channel, e.thread_ts))
+        )
+          return "triage";
         const poster = classifyPoster({
           user: e.user,
           userTeam: e.user_team,
@@ -317,10 +324,8 @@ const internal = defineStep({
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
       const root = e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null;
-      // A thread in one desk's triage channel never attaches to another desk's issue.
-      const desk = await deskByTriageChannel(db, e.channel);
-      const found = root ? await issueByTriageRoot(db, root) : null;
-      const issue = found && found.deskId === desk?.id ? found : null;
+      // A thread attaches only under a card held in this channel, so never to another desk's issue.
+      const issue = root ? await cardIssue(db, e.channel, root) : null;
       const { message, duplicate } = await linkMessage(db, {
         issueId: issue?.id,
         source: "slack",
@@ -514,6 +519,16 @@ async function threadIssueFor(
   const opened = await issueByCustomerThread(db, channel, rootTs);
   if (opened) return opened.id;
   return (await messageBySlackTs(db, channel, rootTs))?.issueId ?? null;
+}
+
+/** The issue whose triage card is the thread root `rootTs` in `channel`. */
+async function cardIssue(
+  db: Db,
+  channel: string,
+  rootTs: string,
+): Promise<Issue | null> {
+  const issue = await issueByTriageRoot(db, rootTs);
+  return issue && (await cardChannel(db, issue)) === channel ? issue : null;
 }
 
 async function candidatesFor(db: Db, accountId: string): Promise<Candidate[]> {

@@ -1277,6 +1277,106 @@ describe("intake agent", () => {
           }),
         ]);
       });
+
+      const replyIn = (
+        channel: string,
+        eventId: string,
+        threadTs: string | null,
+      ) => {
+        const p = bugIn(channel, eventId);
+        p.event.user = "U0TEAMMATE1";
+        p.event.user_team = "T0EXAMPLE01";
+        p.event.ts = "1790890500.000500";
+        if (threadTs) p.event.thread_ts = threadTs;
+        else delete p.event.thread_ts;
+        return p;
+      };
+      const notesFor = (eventId: string) =>
+        db.query<{ direction: string; issue_id: string | null }>(
+          "select direction, issue_id from messages where source_event_id = $1",
+          [eventId],
+        );
+
+      it("a reply under the card in the old channel is stored as a note on its issue", async () => {
+        const issue = await cardedThenMoved();
+        const reply = replyIn("C0TRIAGE001", "Ev0OLDNOTE1", issue.triageRootTs);
+        const n = makeCtx("exec-note-moved");
+        expect((await run(reply, n.ctx)).output).toMatchObject({
+          outcome: "internal",
+          issueId: issue.id,
+          duplicate: false,
+        });
+        expect(n.emitted).toHaveLength(0);
+        expect(n.slack("chat.postMessage")).toHaveLength(0);
+        expect(n.slack("chat.update")).toHaveLength(0);
+        expect(await notesFor("Ev0OLDNOTE1")).toEqual([
+          { direction: "internal", issue_id: issue.id },
+        ]);
+
+        const again = makeCtx("exec-note-moved-again");
+        expect((await run(reply, again.ctx)).output).toMatchObject({
+          outcome: "internal",
+          issueId: issue.id,
+          duplicate: true,
+        });
+        expect(await notesFor("Ev0OLDNOTE1")).toHaveLength(1);
+      });
+
+      it("the old channel still ignores a reply under no card and a top-level message", async () => {
+        await cardedThenMoved();
+        const skipped = { skipped: "team message outside a customer channel" };
+        expect(
+          (
+            await run(
+              replyIn("C0TRIAGE001", "Ev0OLDNOTE2", "1790880000.000100"),
+              makeCtx("exec-note-no-card").ctx,
+            )
+          ).output,
+        ).toEqual(skipped);
+        expect(
+          (
+            await run(
+              replyIn("C0TRIAGE001", "Ev0OLDNOTE3", null),
+              makeCtx("exec-note-top-level").ctx,
+            )
+          ).output,
+        ).toEqual(skipped);
+        expect(await notesFor("Ev0OLDNOTE2")).toHaveLength(0);
+        expect(await notesFor("Ev0OLDNOTE3")).toHaveLength(0);
+      });
+
+      it("a reply in the new channel under the old card's ts is stored unattached", async () => {
+        const issue = await cardedThenMoved();
+        expect(
+          (
+            await run(
+              replyIn("C0NEW", "Ev0OLDNOTE4", issue.triageRootTs),
+              makeCtx("exec-note-new-channel").ctx,
+            )
+          ).output,
+        ).toMatchObject({ outcome: "internal", issueId: null });
+        expect(await notesFor("Ev0OLDNOTE4")).toEqual([
+          { direction: "internal", issue_id: null },
+        ]);
+      });
+    });
+
+    it("a reply under a card without a stored channel is a note in its desk's channel", async () => {
+      const { output } = await run(
+        intakeFixture("message-created.bug.json").payload,
+        makeCtx("exec-bug", JEV.bug).ctx,
+      );
+      const issue = await getIssue(db, output.issueId as string);
+      await db.query("update issues set triage_channel = null where id = $1", [
+        issue.id,
+      ]);
+      const note = bugIn("C0TRIAGE001", "Ev0NULLNOTE1");
+      note.event.user = "U0TEAMMATE1";
+      note.event.ts = "1790890500.000500";
+      note.event.thread_ts = issue.triageRootTs;
+      expect(
+        (await run(note, makeCtx("exec-note-null-channel").ctx)).output,
+      ).toMatchObject({ outcome: "internal", issueId: issue.id });
     });
 
     it("stores a message from another desk's triage channel without attaching it to the issue", async () => {
