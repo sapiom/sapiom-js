@@ -455,6 +455,7 @@ const send = defineStep({
             channel: triage,
             threadTs: issue.triageRootTs,
             text: `${who} escalation (level ${due.level}) on #${issue.number}: ${why}.`,
+            key: `nudge:${e.issueId}:${e.key}`,
           });
           return { dmTs: dm?.ts ?? null, threadTs: thread.ts };
         });

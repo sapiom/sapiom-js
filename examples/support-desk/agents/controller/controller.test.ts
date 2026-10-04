@@ -506,6 +506,9 @@ describe("controller", () => {
       expect(thread.channel).toBe("C0TRIAGE001");
       expect(thread.threadTs).toBe(issue.triageRootTs);
       expect(thread.text).toContain("<!subteam^S0SUPPORT1>");
+      expect((thread.blocks as { block_id: string }[])[0].block_id).toBe(
+        `sylon:nudge:${issue.id}:escalate:1`,
+      );
 
       const second = await runController("exec-2");
       expect(dms(second)).toHaveLength(0);
