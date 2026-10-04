@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import fleet from "../fleet.json";
-import { assertFleetId } from "../_shared/fleet-id";
+import { assertFleetId, fleetTitle } from "../_shared/fleet-id";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const LOCAL_FILE = path.join(ROOT, "fleet.local.json");
@@ -18,7 +18,26 @@ export function resolveFleetId(local?: { fleetId?: unknown }): string {
   return assertFleetId(local?.fleetId ?? fleet.fleetId);
 }
 
-export function readLocalFleetFile(): { fleetId?: unknown } | undefined {
+/**
+ * The fleet's display name: fleet.local.json's `title`, else fleet.json's, else the name derived
+ * from the fleet id. It names the Console's App Link and heads its page; the slugs keep the id.
+ */
+export function resolveFleetTitle(local?: {
+  fleetId?: unknown;
+  title?: unknown;
+}): string {
+  const title = local?.title ?? (fleet as { title?: unknown }).title;
+  if (title === undefined) return fleetTitle(resolveFleetId(local));
+  if (typeof title !== "string" || !title.trim() || title.length > 80)
+    throw new Error(
+      `title must be a non-empty string of at most 80 characters (got ${JSON.stringify(title)})`,
+    );
+  return title.trim();
+}
+
+export function readLocalFleetFile():
+  | { fleetId?: unknown; title?: unknown }
+  | undefined {
   return existsSync(LOCAL_FILE)
     ? JSON.parse(readFileSync(LOCAL_FILE, "utf8"))
     : undefined;

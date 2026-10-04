@@ -14,6 +14,7 @@ import {
   assertFleetIdSynced,
   generatedSource,
   resolveFleetId,
+  resolveFleetTitle,
 } from "../scripts/fleet-id";
 import fleet from "../fleet.json";
 
@@ -41,7 +42,17 @@ describe("fleet identity derivation", () => {
 
   it("accepts lowercase hyphenated ids and rejects the rest", () => {
     expect(assertFleetId("acme-help-desk")).toBe("acme-help-desk");
-    for (const bad of ["", "Helpdesk", "a_b", "-a", "a-", "a--b", "1a", 7, null])
+    for (const bad of [
+      "",
+      "Helpdesk",
+      "a_b",
+      "-a",
+      "a-",
+      "a--b",
+      "1a",
+      7,
+      null,
+    ])
       expect(() => assertFleetId(bad)).toThrow(/fleetId/);
   });
 
@@ -50,6 +61,16 @@ describe("fleet identity derivation", () => {
     expect(resolveFleetId({})).toBe("support-desk");
     expect(resolveFleetId({ fleetId: "helpdesk" })).toBe("helpdesk");
     expect(() => resolveFleetId({ fleetId: "Not Valid" })).toThrow();
+  });
+
+  it("names the fleet by its title, else by its id", () => {
+    expect(resolveFleetTitle()).toBe("Support Desk");
+    expect(resolveFleetTitle({ fleetId: "helpdesk" })).toBe("Helpdesk");
+    expect(
+      resolveFleetTitle({ fleetId: "helpdesk", title: " Customer Care " }),
+    ).toBe("Customer Care");
+    expect(() => resolveFleetTitle({ title: "" })).toThrow(/title/);
+    expect(() => resolveFleetTitle({ title: 7 })).toThrow(/title/);
   });
 
   it("writes the id into the generated module and checks it is current", () => {

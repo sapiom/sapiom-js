@@ -110,7 +110,12 @@ function button(
   return b;
 }
 
-const mention = (slackId: string) => `<@${slackId}>`;
+/** Who acts from the Console, which has no per-user identity: a Take makes it the owner. */
+export const CONSOLE_ACTOR = "console";
+
+/** A Slack mention, or "the Console" for {@link CONSOLE_ACTOR}, which is no Slack user. */
+export const mention = (slackId: string) =>
+  slackId === CONSOLE_ACTOR ? "the Console" : `<@${slackId}>`;
 
 /** One-line fallback for notifications and clients that cannot render blocks. */
 export function issueCardText(issue: Issue, account: Account): string {
@@ -308,6 +313,6 @@ export function workingCard(
   return replaceActions(
     blocks,
     actionBlockId,
-    `:hourglass_flowing_sand: ${WORKING[verb] ?? "Working"}… (<@${userId}>)`,
+    `:hourglass_flowing_sand: ${WORKING[verb] ?? "Working"}… (${mention(userId)})`,
   );
 }

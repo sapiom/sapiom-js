@@ -16,8 +16,12 @@
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
  *
- * Desks: the board, timeline, metrics, failed events and Knowledge tab are scoped to one desk,
- * named by `?desk=<slug>` (default: the default desk). Reset board closes only that desk's issues.
+ * Ticket actions (`/api/tickets/<id>/actions/<verb>`) emit the event the Slack button would, and
+ * the agents handle it (see `actions.ts`); the Console writes no issue or draft itself.
+ *
+ * Desks: the board, ticket and account drawers, metrics, failed events, Knowledge and Settings are
+ * scoped to one desk, named by `?desk=<slug>` (default: the default desk). Reset board closes only
+ * that desk's issues.
  */
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -33,6 +37,7 @@ import {
 } from "../../_shared/db";
 import { FLEET_ID, fleetTitle, issueMarker } from "../../_shared/fleet-id";
 import {
+  deskBySlug,
   getDesk,
   linearTarget,
   listDesks,
@@ -51,14 +56,19 @@ import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
 import replay from "../../scripts/replay.json";
 import page from "./index.html";
+import { CONSOLE_ACTOR, planAction } from "./actions";
 import { getEscalation, putEscalation } from "./escalation";
 import {
-  deskIssue,
+  boardIssues,
+  deskAccount,
+  deskTicket,
   metricIssues,
+  parseBoardFilter,
   receiptDesks,
-  recentIssues,
   statusCounts,
+  type BoardRow,
 } from "./queries";
+import { getSettings, putDeskSettings, putFleetSettings } from "./settings";
 import {
   AGENTS,
   AGENT_ROLES,
@@ -71,7 +81,6 @@ import {
   costOf,
   costSummary,
   cuesFromReplay,
-  dispatchDelays,
   failedFleetReceipts,
   fleetWideKeys,
   isFinalSpend,
@@ -88,9 +97,8 @@ import {
   redact,
   scopeReceipts,
   slackChannelUrl,
-  spread,
   summarizeLatencies,
-  toMs,
+  ticketsPerDay,
   triggerBody,
   triggerStates,
   type AttachedTrigger,
@@ -98,18 +106,25 @@ import {
   type ExecutionSpend,
   type IssueCost,
   type Latencies,
-  type TimedFire,
   type ReceiptFire,
   draftTimes,
   pageReceipts,
   type ReceiptSummary,
 } from "./logic";
 
+/**
+ * The fleet's display name: fleet.local.json's or fleet.json's `title`, which `console:build` bakes
+ * in, else the name derived from the fleet id.
+ */
+const TITLE = process.env.CONSOLE_TITLE || fleetTitle(FLEET_ID);
+
+const htmlText = (s: string) =>
+  s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
+
 /** The page with this fleet's name in its title and heading (the file ships the default name). */
-const pageHtml = page.replaceAll(
-  "Support Desk Console",
-  `${fleetTitle(FLEET_ID)} Console`,
-);
+const pageHtml = page
+  .replace("<title>Support Desk</title>", `<title>${htmlText(TITLE)}</title>`)
+  .replace("<h1>Support Desk</h1>", `<h1>${htmlText(TITLE)}</h1>`);
 
 const PORT = Number(process.env.PORT) || 3000;
 const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
@@ -117,8 +132,7 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
   "",
 );
 /** The operator's key from publish; the platform's own read-only runtime key is the fallback. */
-const API_KEY =
-  process.env.CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
+const API_KEY = process.env.CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
 
 /** The operator-keyed client for calls that go through `@sapiom/tools` rather than `sapiom()`. */
 const operatorClient = () => createClient({ apiKey: API_KEY });
@@ -294,98 +308,148 @@ function linearProject(d: Db, desk: Desk) {
   return project;
 }
 
-async function board(d: Db, desk: Desk) {
-  const triage = desk.triageChannel;
-  const project = await linearProject(d, desk);
-  const recent = await recentIssues(d, desk.id);
+const names = new Map<string, { at: number; name: Promise<string> }>();
+const NAME_TTL_MS = 60 * 60_000;
+
+/** A Slack user's display name, looked up at most hourly; the id itself when the lookup fails. */
+function slackName(id: string): Promise<string> {
+  if (id === CONSOLE_ACTOR) return Promise.resolve("Console");
+  const cached = names.get(id);
+  if (cached && Date.now() - cached.at <= NAME_TTL_MS) return cached.name;
+  const name = operatorClient()
+    .connectors.slack.userInfo({ user: id })
+    .then((r) => {
+      const u = r.user as
+        | {
+            real_name?: string;
+            name?: string;
+            profile?: { display_name?: string };
+          }
+        | undefined;
+      return u?.profile?.display_name || u?.real_name || u?.name || id;
+    })
+    .catch(() => {
+      names.delete(id);
+      return id;
+    });
+  names.set(id, { at: Date.now(), name });
+  return name;
+}
+
+async function ownerNames(
+  ids: (string | null)[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter((x): x is string => !!x))];
+  const resolved = await Promise.all(unique.map(slackName));
+  return new Map(unique.map((id, n) => [id, resolved[n]!]));
+}
+
+/** What the board and the drawer show of an issue. */
+function ticketRow(
+  r: BoardRow,
+  desk: Desk,
+  projectUrl: string | null,
+  owners: Map<string, string>,
+) {
   return {
-    desk: desk.slug,
-    counts: await statusCounts(d, desk.id),
-    issues: recent.map((r) => ({
-      number: Number(r.number),
-      account: r.account,
-      title: r.title,
-      status: r.status,
-      priority: r.priority,
-      owner: r.owner_slack_id,
-      linear: r.linear_identifier,
-      linearUrl: linearIssueUrl(
-        project.url,
-        r.linear_identifier as string | null,
-      ),
-      createdAt: r.created_at,
-      cardUrl: triageLink(triage, r.triage_root_ts as string | null),
-    })),
+    id: r.id,
+    number: r.number,
+    accountId: r.accountId,
+    account: r.account,
+    title: r.title,
+    status: r.status,
+    priority: r.priority,
+    owner: r.ownerSlackId
+      ? (owners.get(r.ownerSlackId) ?? r.ownerSlackId)
+      : null,
+    draft: r.draftStatus,
+    linear: r.linearIdentifier,
+    linearState: r.linearState,
+    linearUrl: r.linearUrl ?? linearIssueUrl(projectUrl, r.linearIdentifier),
+    createdAt: r.createdAt,
+    slackUrl: triageLink(desk.triageChannel, r.triageRootTs),
   };
 }
 
-/** The desk's newest issue (or its issue `number`), with its latency legs, runs and event receipts. */
-async function timeline(d: Db, desk: Desk, number?: number) {
-  const triage = desk.triageChannel;
-  const issue = await deskIssue(d, desk.id, number);
-  if (!issue) return { issue: null };
-  const id = issue.id as string;
-  const [firstMessage] = await d.query<Record<string, unknown>>(
-    "select ts, channel, created_at from messages where issue_id = $1 and direction = 'customer' order by created_at asc limit 1",
-    [id],
-  );
-  const drafts = await d.query<Record<string, unknown>>(
-    "select id, status, card_ts, created_at, confidence from drafts where issue_id = $1 order by created_at asc",
-    [id],
-  );
-  const runs = await d.query<Record<string, unknown>>(
-    "select execution_id, agent, started_at from runs where issue_id = $1 order by started_at asc",
-    [id],
-  );
-  const events = await d.query<Record<string, unknown>>(
-    "select type, emitted_by, receipt_id, created_at from events_log where payload->>'issueId' = $1 order by created_at asc",
-    [id],
-  );
+async function board(d: Db, desk: Desk, url: URL) {
+  const filter = parseBoardFilter(url.searchParams.get("status"));
+  if (!filter) throw new HttpError(400, "unknown status filter");
+  const [project, rows, counts] = await Promise.all([
+    linearProject(d, desk),
+    boardIssues(d, desk.id, filter),
+    statusCounts(d, desk.id),
+  ]);
+  const owners = await ownerNames(rows.map((r) => r.ownerSlackId));
   return {
-    issue: {
-      id,
-      number: Number(issue.number),
-      title: issue.title,
-      status: issue.status,
-      priority: issue.priority,
-      createdAt: issue.created_at,
-      customerTs: firstMessage?.ts ?? null,
-      triageRootTs: issue.triage_root_ts,
-      cardUrl: triageLink(triage, issue.triage_root_ts as string | null),
-    },
-    latency: latencies({
-      customerTs: (firstMessage?.ts as string | undefined) ?? null,
-      triageRootTs: (issue.triage_root_ts as string | null) ?? null,
-      issueCreatedAt: issue.created_at as Date,
-      ...draftTimes(drafts),
-    }),
-    drafts: drafts.map((r) => ({
-      id: r.id,
-      status: r.status,
-      cardTs: r.card_ts,
-      createdAt: r.created_at,
-      confidence: r.confidence == null ? null : Number(r.confidence),
-      cardUrl:
-        r.card_ts && issue.triage_root_ts
-          ? permalink(
-              triage,
-              r.card_ts as string,
-              issue.triage_root_ts as string,
-            )
-          : null,
-    })),
-    runs: runs.map((r) => ({
-      executionId: r.execution_id,
-      agent: r.agent,
-      startedAt: r.started_at,
-    })),
-    events: events.map((r) => ({
-      type: r.type,
-      emittedBy: r.emitted_by,
-      receiptId: r.receipt_id,
-      createdAt: r.created_at,
-    })),
+    desk: desk.slug,
+    filter,
+    counts,
+    issues: rows.map((r) => ticketRow(r, desk, project.url, owners)),
   };
+}
+
+/** One ticket for the drawer: the board's facts plus the pending draft's text. */
+async function ticket(d: Db, desk: Desk, id: string) {
+  if (!UUID.test(id)) throw new HttpError(404, "ticket not found");
+  const t = await deskTicket(d, desk.id, id);
+  if (!t) throw new HttpError(404, "ticket not found");
+  const [project, owners] = await Promise.all([
+    linearProject(d, desk),
+    ownerNames([t.ownerSlackId]),
+  ]);
+  return {
+    ...ticketRow(t, desk, project.url, owners),
+    ownerSlackId: t.ownerSlackId,
+    pendingDraft: t.pendingDraft
+      ? { id: t.pendingDraft.id, text: t.pendingDraft.text }
+      : null,
+  };
+}
+
+/**
+ * Emit the click the Slack button would send, so intake or the copilot handles it on its own path
+ * (`actions.ts`). Returns once the event is accepted; the agent's run then updates the database and
+ * redraws the Slack card, and the board picks the change up on its next poll.
+ */
+async function ticketAction(d: Db, desk: Desk, id: string, verb: string) {
+  if (!UUID.test(id)) throw new HttpError(404, "ticket not found");
+  const t = await deskTicket(d, desk.id, id);
+  if (!t) throw new HttpError(404, "ticket not found");
+  const plan = planAction(verb, {
+    issue: {
+      id: t.id,
+      status: t.status,
+      ownerSlackId: t.ownerSlackId,
+      triageRootTs: t.triageRootTs,
+    },
+    triageChannel: desk.triageChannel,
+    draft: t.pendingDraft,
+  });
+  if (!plan.ok) throw new HttpError(plan.status, plan.reason);
+  const result = await sapiom<{
+    receiptId: string;
+    outcome: string;
+    duplicate: boolean;
+    fireIds: string[];
+  }>("POST", "/v1/workflows/events", {
+    type: plan.type,
+    payload: plan.payload,
+    id: plan.id,
+  });
+  // No agent subscribed: the fleet is paused, so nothing would happen; say so instead of "sent".
+  if (result.outcome !== "matched")
+    throw new HttpError(
+      409,
+      `no agent listens for ${plan.type}; is the fleet paused? (receipt ${result.receiptId})`,
+    );
+  return { verb, issueId: t.id, number: t.number, ...result };
+}
+
+async function account(d: Db, desk: Desk, id: string) {
+  if (!UUID.test(id)) throw new HttpError(404, "account not found");
+  const a = await deskAccount(d, desk.id, id);
+  if (!a) throw new HttpError(404, "account not found");
+  return a;
 }
 
 async function failedReceipts(d: Db, desk: Desk) {
@@ -416,13 +480,10 @@ async function failedReceipts(d: Db, desk: Desk) {
 const METRIC_ISSUES = 50;
 /** Spend reads not already cached, per request; the rest are counted as missing and fill in on later loads. */
 const SPEND_CALLS = 150;
-const DETAIL_CALLS = 50;
 const CONCURRENCY = 8;
 
 /** Final spend by execution id: an execution that has settled never changes. */
 const spendCache = new Map<string, Cost>();
-/** Dispatch delays by receipt id, kept once every fleet fire of the receipt has a start time. */
-const dispatchCache = new Map<string, number[]>();
 
 /** `fn` over `items`, `CONCURRENCY` at a time; a failed item yields null rather than failing the page. */
 async function pooled<T, R>(
@@ -465,85 +526,43 @@ async function executionCosts(ids: string[]): Promise<Map<string, Cost>> {
   return out;
 }
 
-/** Receipt arrival → run start for each fleet fire of the receipts received since `since`. */
-async function dispatchSeconds(
-  since: number,
-): Promise<{ delays: number[]; truncated: boolean }> {
-  const slugs = new Set(AGENTS.map((a) => a.slug));
-  const { receipts: list, truncated } = await pageReceipts(
-    (offset, limit) =>
-      sapiom<ReceiptSummary[]>(
-        "GET",
-        `/v1/workflows/receipts?from=${encodeURIComponent(new Date(since).toISOString())}&limit=${limit}&offset=${offset}`,
-      ),
-    { since },
-  );
-  const mine = list.filter(
-    (r) =>
-      (toMs(r.receivedAt) ?? 0) >= since &&
-      r.triggerSlugs.some((slug) => slugs.has(slug)),
-  );
-  const seen = new Map<string, number[]>();
-  const fresh = mine
-    .filter((r) => !dispatchCache.has(r.id))
-    .slice(0, DETAIL_CALLS);
-  const details = await pooled(fresh, (r) =>
-    sapiom<{ fires?: TimedFire[] }>("GET", `/v1/workflows/receipts/${r.id}`),
-  );
-  fresh.forEach((r, n) => {
-    const fires = details[n]?.fires;
-    if (!fires) return;
-    const delays = dispatchDelays(r.receivedAt, fires);
-    const ours = fires.filter(
-      (f) => f.trigger && slugs.has(f.trigger.definitionSlug),
-    );
-    seen.set(r.id, delays);
-    // Cached only once every fleet fire has started; an earlier read would freeze a partial list.
-    if (ours.length > 0 && delays.length === ours.length)
-      dispatchCache.set(r.id, delays);
-  });
-  return {
-    delays: mine.flatMap(
-      (r) => dispatchCache.get(r.id) ?? seen.get(r.id) ?? [],
-    ),
-    truncated,
-  };
-}
-
 async function metrics(d: Db, desk: Desk, window: keyof typeof METRIC_WINDOWS) {
-  const since = Date.now() - METRIC_WINDOWS[window];
+  const now = Date.now();
+  const since = now - METRIC_WINDOWS[window];
   const issues = await metricIssues(d, desk.id, since, METRIC_ISSUES);
   const ids = issues.map((i) => i.id as string);
-  const [firstMessages, draftRows, runs] = ids.length
-    ? await Promise.all([
-        d.query<Record<string, unknown>>(
+  const [firstMessages, draftRows, runs, opened] = await Promise.all([
+    ids.length
+      ? d.query<Record<string, unknown>>(
           `select distinct on (issue_id) issue_id, ts from messages
             where issue_id = any($1) and direction = 'customer' order by issue_id, created_at asc`,
           [ids],
-        ),
-        d.query<Record<string, unknown>>(
+        )
+      : [],
+    ids.length
+      ? d.query<Record<string, unknown>>(
           "select issue_id, card_ts, created_at from drafts where issue_id = any($1) order by issue_id, created_at asc",
           [ids],
-        ),
-        d.query<Record<string, unknown>>(
+        )
+      : [],
+    ids.length
+      ? d.query<Record<string, unknown>>(
           "select execution_id, issue_id from runs where issue_id = any($1)",
           [ids],
-        ),
-      ])
-    : [[], [], []];
+        )
+      : [],
+    // Uncapped: tickets per day counts every ticket in the window, not only the priced ones.
+    d.query<{ created_at: Date }>(
+      "select created_at from issues where desk_id = $1 and created_at >= $2",
+      [desk.id, new Date(since).toISOString()],
+    ),
+  ]);
   const messageOf = new Map(firstMessages.map((m) => [m.issue_id, m]));
   const draftsOf = new Map<unknown, Record<string, unknown>[]>();
   for (const row of draftRows)
     draftsOf.set(row.issue_id, [...(draftsOf.get(row.issue_id) ?? []), row]);
   const executions = [...new Set(runs.map((r) => r.execution_id as string))];
-
-  const [costs, dispatch] = await Promise.all([
-    executionCosts(executions),
-    dispatchSeconds(since).catch(() => ({
-      delays: [] as number[],
-      truncated: false,
-    })),
-  ]);
+  const costs = await executionCosts(executions);
 
   const rows = issues.map((i) => {
     const mine = runs
@@ -573,30 +592,23 @@ async function metrics(d: Db, desk: Desk, window: keyof typeof METRIC_WINDOWS) {
       runsCounted: counted.length,
       runsMissing: mine.length - counted.length,
     };
-    return { number: Number(i.number), latency, cost };
+    return { latency, cost };
   });
 
   return {
     desk: desk.slug,
     window,
-    issues: rows.length,
+    issues: opened.length,
+    priced: rows.length,
     capped: rows.length === METRIC_ISSUES,
     latency: summarizeLatencies(rows.map((r) => r.latency)),
-    // Receipts name no desk, so dispatch timing covers the whole fleet.
-    dispatch: spread(dispatch.delays),
-    dispatchScope: "fleet" as const,
-    dispatchTruncated: dispatch.truncated,
     cost: costSummary(rows.map((r) => r.cost)),
     runsMissing: rows.reduce((n, r) => n + r.cost.runsMissing, 0),
-    perIssue: rows.map((r) => ({
-      number: r.number,
-      ...r.latency,
-      usd: r.cost.runsCounted ? r.cost.usd : null,
-      llmUsd: r.cost.llmUsd,
-      capabilityUsd: r.cost.capabilityUsd,
-      sandboxSeconds: r.cost.sandboxSeconds,
-      runsMissing: r.cost.runsMissing,
-    })),
+    perDay: ticketsPerDay(
+      opened.map((r) => r.created_at),
+      now,
+      window === "7d" ? 7 : 1,
+    ),
   };
 }
 
@@ -730,16 +742,26 @@ const GET: [RegExp, Handler][] = [
   ],
   [
     /^\/api\/board$/,
-    (_, __, url) => withConsoleDb(async (d) => board(d, await deskOf(d, url))),
+    (_, __, url) =>
+      withConsoleDb(async (d) => board(d, await deskOf(d, url), url)),
   ],
   [
-    /^\/api\/timeline$/,
-    (_, __, url) => {
-      const n = url.searchParams.get("issue");
-      return withConsoleDb(async (d) =>
-        timeline(d, await deskOf(d, url), n ? Number(n) : undefined),
-      );
-    },
+    /^\/api\/tickets\/([^/]+)$/,
+    ([id], __, url) =>
+      withConsoleDb(async (d) => ticket(d, await deskOf(d, url), id!)),
+  ],
+  [
+    /^\/api\/accounts\/([^/]+)$/,
+    ([id], __, url) =>
+      withConsoleDb(async (d) => account(d, await deskOf(d, url), id!)),
+  ],
+  [
+    /^\/api\/settings$/,
+    (_, __, url) =>
+      withConsoleDb(async (d) => {
+        const desk = await deskOf(d, url);
+        return settingsView(d, desk, await getSettings(d, desk));
+      }),
   ],
   [
     /^\/api\/receipts\/failed$/,
@@ -828,6 +850,13 @@ const POST: [RegExp, Handler][] = [
     },
   ],
   [/^\/api\/receipts\/(\d+)\/replay$/, ([id]) => replayReceipt(id!)],
+  [
+    /^\/api\/tickets\/([^/]+)\/actions\/([a-z]+)$/,
+    ([id, verb], __, url) =>
+      withConsoleDb(async (d) =>
+        ticketAction(d, await deskOf(d, url), id!, verb!),
+      ),
+  ],
   [/^\/api\/kb$/, (_, body) => createKbArticle(body)],
 ];
 
@@ -874,6 +903,21 @@ async function deleteKbArticle(id: string) {
   return { deleted: id };
 }
 
+/** A Settings response, plus the names the form shows beside the desk's Linear and on-call ids. */
+async function settingsView(
+  d: Db,
+  desk: Desk,
+  res: { status: number; body: unknown },
+) {
+  const body = httpBody(res) as Record<string, unknown>;
+  const saved = (await deskBySlug(d, desk.slug)) ?? desk;
+  const [linearProjectView, oncallName] = await Promise.all([
+    linearProject(d, saved),
+    saved.oncallSlackId ? slackName(saved.oncallSlackId) : null,
+  ]);
+  return { ...body, linearProject: linearProjectView, oncallName };
+}
+
 function httpBody(res: { status: number; body: unknown }) {
   if (res.status !== 200)
     throw new HttpError(
@@ -891,6 +935,25 @@ const PUT: [RegExp, Handler][] = [
       withConsoleDb(async (d) =>
         httpBody(await putEscalation(d, await deskOf(d, url), body)),
       ),
+  ],
+  [
+    /^\/api\/settings\/desk$/,
+    (_, body, url) =>
+      withConsoleDb(async (d) => {
+        const desk = await deskOf(d, url);
+        const res = await putDeskSettings(d, desk, body);
+        // The Linear project may have changed; drop its cached name.
+        projects.delete(desk.id);
+        return settingsView(d, desk, res);
+      }),
+  ],
+  [
+    /^\/api\/settings\/fleet$/,
+    (_, body, url) =>
+      withConsoleDb(async (d) => {
+        const desk = await deskOf(d, url);
+        return settingsView(d, desk, await putFleetSettings(d, desk, body));
+      }),
   ],
 ];
 

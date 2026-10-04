@@ -6,12 +6,12 @@ import {
   costOf,
   costSummary,
   cuesFromReplay,
-  dispatchDelays,
   draftTimes,
   pageReceipts,
   parseWindow,
   percentile,
   summarizeLatencies,
+  ticketsPerDay,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
@@ -199,7 +199,7 @@ describe("latency", () => {
     expect(secondsBetween(null, 5)).toBeNull();
   });
 
-  it("computes each leg of the timeline", () => {
+  it("computes each latency leg", () => {
     const created = new Date(1_790_889_360_000);
     expect(
       latencies({
@@ -227,6 +227,22 @@ describe("latency", () => {
       messageToCard: null,
       issueToDraft: null,
       issueToDraftCard: null,
+      messageToDraftCard: null,
+    });
+  });
+
+  it("drops a leg that ends before it starts", () => {
+    expect(
+      latencies({
+        customerTs: "1790889400.000100",
+        triageRootTs: "1790889362.100200",
+        issueCreatedAt: new Date(1_790_889_360_000),
+        draftCreatedAt: null,
+        draftCardTs: "1790889372.400100",
+      }),
+    ).toMatchObject({
+      messageToCard: null,
+      issueToDraftCard: 12.4,
       messageToDraftCard: null,
     });
   });
@@ -327,7 +343,9 @@ describe("scoping", () => {
   });
 
   it("has nothing to do when every fleet fire succeeded", () => {
-    expect(replayPlan([fire("3", agentSlug("intake"), "succeeded")])).toMatchObject({
+    expect(
+      replayPlan([fire("3", agentSlug("intake"), "succeeded")]),
+    ).toMatchObject({
       ok: false,
       status: 409,
     });
@@ -398,26 +416,21 @@ describe("metrics", () => {
     expect(s.messageToDraftCard.n).toBe(2);
   });
 
-  it("times dispatch for fleet fires that have started", () => {
-    const fire = (
-      slug: string,
-      startedAt: string | null,
-      where = "execution",
-    ) =>
-      ({
-        trigger: { definitionSlug: slug },
-        [where]: startedAt ? { startedAt } : null,
-      }) as never;
-    const slug = AGENTS[0]!.slug;
+  it("counts tickets per 24-hour bucket back from now, oldest first", () => {
+    const now = Date.parse("2026-10-07T12:00:00Z");
     expect(
-      dispatchDelays("2026-10-01T10:00:00Z", [
-        fire(slug, "2026-10-01T10:00:02.5Z"),
-        fire(slug, "2026-10-01T10:00:04Z", "run"),
-        fire(slug, null),
-        fire("someone-elses-agent", "2026-10-01T10:00:09Z"),
-        fire(slug, "2026-10-01T09:59:00Z"),
-      ]),
-    ).toEqual([2.5, 4]);
+      ticketsPerDay(
+        [
+          "2026-10-07T11:00:00Z",
+          "2026-10-07T01:00:00Z",
+          "2026-10-05T12:30:00Z",
+          "2026-09-20T00:00:00Z",
+          "2026-10-08T00:00:00Z",
+        ],
+        now,
+        3,
+      ),
+    ).toEqual([0, 1, 2]);
   });
 
   it("reads spend as numbers whether the API sends strings or numbers", () => {

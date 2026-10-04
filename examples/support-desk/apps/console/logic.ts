@@ -1,7 +1,7 @@
 /**
  * The pure half of the Console: what "on" means for an agent, which triggers a switch
- * creates, resumes or deletes, the latency arithmetic of the timeline, which receipts count as
- * failed, and the scoping that keeps every mutating route on the fleet's own definitions (the
+ * creates, resumes or deletes, the latency and cost arithmetic of the metrics, which receipts count
+ * as failed, and the scoping that keeps every mutating route on the fleet's own definitions (the
  * server holds an org key). No I/O, so all of it is unit-tested.
  */
 import fleet from "../../fleet.json";
@@ -157,7 +157,8 @@ export function fleetWideKeys(): string[] {
 // --- desks -----------------------------------------------------------------------------------
 
 export type DeskPick<D> =
-  { ok: true; desk: D } | { ok: false; status: 404 | 409; reason: string };
+  | { ok: true; desk: D }
+  | { ok: false; status: 404 | 409; reason: string };
 
 /**
  * The desk a request is about: the one named by `?desk=<slug>`, else the default desk. A page
@@ -355,11 +356,17 @@ export function latencies(t: TimelineInput): Latencies {
   const customer = slackTsToMs(t.customerTs);
   const issue = toMs(t.issueCreatedAt);
   const card = slackTsToMs(t.draftCardTs);
+  // A leg that ends before it starts is not a latency: a seeded test message can carry a later ts
+  // than the card it opened. Leaving it in would drag the percentiles below zero.
+  const leg = (from: number | null, to: number | null) => {
+    const s = secondsBetween(from, to);
+    return s !== null && s < 0 ? null : s;
+  };
   return {
-    messageToCard: secondsBetween(customer, slackTsToMs(t.triageRootTs)),
-    issueToDraft: secondsBetween(issue, toMs(t.draftCreatedAt)),
-    issueToDraftCard: secondsBetween(issue, card),
-    messageToDraftCard: secondsBetween(customer, card),
+    messageToCard: leg(customer, slackTsToMs(t.triageRootTs)),
+    issueToDraft: leg(issue, toMs(t.draftCreatedAt)),
+    issueToDraftCard: leg(issue, card),
+    messageToDraftCard: leg(customer, card),
   };
 }
 
@@ -563,31 +570,19 @@ export function summarizeLatencies(all: Latencies[]) {
   };
 }
 
-/** A fire of `GET /v1/workflows/receipts/<id>`, as far as dispatch timing reads it. */
-export interface TimedFire {
-  trigger: { definitionSlug: string } | null;
-  execution?: { startedAt?: string | null } | null;
-  run?: { startedAt?: string | null } | null;
-  startedAt?: string | null;
-}
-
-/** When the fire's run started; the API has put this on `execution`, `run` or the fire itself. */
-export function fireStartedAt(f: TimedFire): string | null {
-  return f.execution?.startedAt ?? f.run?.startedAt ?? f.startedAt ?? null;
-}
-
-/** Seconds from the receipt's arrival to each fleet fire's run start; fires not yet started are skipped. */
-export function dispatchDelays(
-  receivedAt: string,
-  fires: TimedFire[],
-  slugs: string[] = AGENTS.map((a) => a.slug),
+/** Tickets opened in each 24-hour bucket back from `now`, oldest first; the last covers the past day. */
+export function ticketsPerDay(
+  createdAt: (Date | string)[],
+  now: number,
+  days: number,
 ): number[] {
-  const ours = new Set(slugs);
-  const out: number[] = [];
-  for (const f of fires) {
-    if (!f.trigger || !ours.has(f.trigger.definitionSlug)) continue;
-    const s = secondsBetween(toMs(receivedAt), toMs(fireStartedAt(f)));
-    if (s !== null && s >= 0) out.push(s);
+  const DAY = 24 * 3600_000;
+  const out = new Array<number>(days).fill(0);
+  for (const t of createdAt) {
+    const ms = toMs(t);
+    if (ms == null) continue;
+    const back = Math.floor((now - ms) / DAY);
+    if (back >= 0 && back < days) out[days - 1 - back]! += 1;
   }
   return out;
 }
@@ -668,7 +663,8 @@ export const KB_TITLE_MAX = 200;
 export const KB_BODY_MAX = 8000;
 
 export type KbParse =
-  { ok: true; value: Partial<KbInput> } | { ok: false; error: string };
+  | { ok: true; value: Partial<KbInput> }
+  | { ok: false; error: string };
 
 /**
  * Validate a Knowledge tab request body. Create needs kind, title and body; update takes any

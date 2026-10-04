@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import { FLEET_ID } from "../../_shared/fleet-id";
-import { assertFleetIdSynced } from "../../scripts/fleet-id";
+import {
+  assertFleetIdSynced,
+  readLocalFleetFile,
+  resolveFleetTitle,
+} from "../../scripts/fleet-id";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const OUT_FILE = path.join(HERE, "dist", "server.mjs");
@@ -24,6 +28,12 @@ export async function buildConsole(): Promise<string> {
     target: "node20",
     format: "esm",
     loader: { ".html": "text" },
+    // The page heading; the server falls back to the id-derived name when run unbundled.
+    define: {
+      "process.env.CONSOLE_TITLE": JSON.stringify(
+        resolveFleetTitle(readLocalFleetFile()),
+      ),
+    },
     // pg-mem is only reached by local traces and unit tests (a lazy import in db.ts), never here.
     external: ["pg-mem"],
     // CommonJS dependencies call `require` for node builtins; an ESM bundle has none of its own.

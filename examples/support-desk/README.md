@@ -157,7 +157,7 @@ unset (so a live fleet needs no re-seed):
 | Agent slug `<id>-<key>`  | `support-desk-intake`, ... | `helpdesk-intake`, ... |
 | Postgres handle (the id) | `support-desk`             | `helpdesk`             |
 | Console App Link slug    | `support-desk-console`     | `helpdesk-console`     |
-| Console App Link name    | `Support Desk Console`     | `Helpdesk Console`     |
+| Console App Link name    | `Support Desk`             | `Helpdesk`             |
 | Linear issue marker      | `support-desk:<issueId>`   | `helpdesk:<issueId>`   |
 
 The id is 3-55 characters of lowercase words joined by hyphens, starting with a letter. There is no
@@ -170,6 +170,10 @@ run `scripts/sync-fleet-id.ts`, which writes the resolved id to `_shared/fleet-i
 that file is bundled into every agent and the Console. It is committed with the default, so it
 shows as modified in git when your `fleet.local.json` sets another id. Run the setup and Console
 scripts through `pnpm run` so the file is current; they stop if it is not.
+
+`title` (optional, in `fleet.local.json` or `fleet.json`) replaces the name derived from the id. It
+names the Console's App Link and heads its page; the slugs keep the id, so renaming a deployed
+fleet keeps the Console's link and URL.
 
 Changing `fleetId` on an install that is already deployed creates a second fleet (new agents, a
 new database, new triggers) and leaves the old one running.
@@ -272,7 +276,7 @@ for a desk without an entry (so existing installs change nothing until you turn 
   nor an on-call the escalation is logged and not recorded.
 - A customer message Jev reads as needing no reply (a thank-you) does not count, as for nudges.
 
-Edit it from the Console's Escalation card (per selected desk: Save, Turn off). Per-priority
+Edit it on the Console's Settings tab (Escalation to a person, per selected desk: Save, Turn off). Per-priority
 thresholds from SLAs come later (SAP-3790); until then levels are explicit minutes.
 
 ### Failure alerts (watchdog)
@@ -335,14 +339,22 @@ the Console. To load more at once, insert rows into `kb_articles` with `kind` `p
 
 ## Console
 
-The Console is an App Link (`support-desk-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, each desk's escalation levels and recipients, and cue cards. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes the board, timeline, metrics, failed events, Escalation card and Knowledge tab to one desk; Reset board closes only that desk's open tickets. Dispatch timing in the metrics is fleet-wide, and a failed event that carries no issue (a raw Slack event) shows on every desk. The System tab lists the desks with their triage channel and Linear project. Its state lives in the fleet database and the Sapiom API.
+The Console is an App Link (`support-desk-console`) for running the desk. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes every tab to one desk.
+
+- **Tickets**: the open tickets, with the status counts above them as filters. A row opens a drawer with the ticket's facts, its pending draft, links to the Slack triage thread and the Linear issue, and the Slack card's buttons: Approve, Escalate and Dismiss on a pending draft, Take and Close. An account opens its own drawer: channel, open tickets, tickets closed in the last 30 days, last contact and its tickets. Below the board: metrics (cost per ticket, message → draft and message → card latency, tickets per day) and failed events with Replay.
+- **Knowledge**: the team's policies and answers (see above).
+- **Settings**: the desk's name, triage channel, Linear team and project, on-call, first nudge and default flag; its escalation to a person; and the fleet-wide repeat nudges, digest age limits and `linear_sync.notify_customer`. Values are validated before they are written, and the agents read them on their next run. The digest schedule is shown; it changes through `fleet.json` and setup.
+- **System**: the fleet's switches with Pause and Resume, the channels, how events come in, the agents, the tables and each desk's Linear project.
+- **Testing**: Run controller now, Reset board (closes only the selected desk's open tickets) and the cue cards.
+
+A ticket action does what the Slack button does, through the same code: the Console emits the `slack.block_actions` event a click on the Slack card would produce (`POST /v1/workflows/events` with the Console's org key), and intake (Take, Close) or the copilot (Approve, Escalate, Dismiss) handles it and redraws the card. The App Link has no per-user identity, so the actor is `console`: a Take makes the Console the owner, and the cards say "by the Console". A failed event that carries no issue (a raw Slack event) shows on every desk. Its state lives in the fleet database and the Sapiom API.
 
 ```bash
 pnpm run console:build     # bundle apps/console into apps/console/dist/server.mjs
 pnpm run console:publish   # build, then create or update the org-only App Link and publish it
 ```
 
-`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, replays receipts and redraws Slack cards). The key is stored in the link's env as `CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
+`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, emits ticket actions, replays receipts, writes settings and redraws Slack cards). The key is stored in the link's env as `CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
 
 ## Add your own agent
 

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Support Desk Console</title>
+    <title>Support Desk</title>
     <style>
       :root {
         --bg: #f5f5f3;
@@ -13,6 +13,7 @@
         --line: #e3e3de;
         --soft: #f0f0ec;
         --accent: #2f5bd3;
+        --on-accent: #ffffff;
         --ok: #1f7a43;
         --warn: #a15c00;
         --bad: #b42318;
@@ -21,6 +22,8 @@
         --s-on_customer: #6b46c1;
         --s-on_hold: #6b6b66;
         --s-closed: #1f7a43;
+        --sel: #eef2fc;
+        --shadow: 0 8px 28px rgba(28, 28, 26, 0.08);
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -31,6 +34,7 @@
           --line: #33332f;
           --soft: #262623;
           --accent: #7d9bff;
+          --on-accent: #10131c;
           --ok: #5cc98a;
           --warn: #e0a24a;
           --bad: #f07a6e;
@@ -39,6 +43,9 @@
           --s-on_customer: #b39bf0;
           --s-on_hold: #9a9a92;
           --s-closed: #5cc98a;
+          --sel: #222a3d;
+          --shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+          color-scheme: dark;
         }
       }
       * {
@@ -105,7 +112,7 @@
       button.primary {
         background: var(--accent);
         border-color: var(--accent);
-        color: #fff;
+        color: var(--on-accent);
       }
       button.danger {
         border-color: var(--bad);
@@ -116,10 +123,18 @@
         opacity: 0.45;
         cursor: not-allowed;
       }
-      input[type="password"],
+      button:focus-visible,
+      select:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      tr:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
       select,
       textarea,
-      input[type="text"] {
+      input[type="text"],
+      input[type="number"] {
         font: inherit;
         font-size: 13px;
         padding: 4px 8px;
@@ -172,6 +187,7 @@
         border-radius: 999px;
         padding: 0 8px;
         font-size: 12px;
+        line-height: 18px;
         white-space: nowrap;
         border: 1px solid currentColor;
       }
@@ -184,43 +200,66 @@
         overflow-wrap: anywhere;
       }
 
-      /* summary strip */
+      /* summary strip: the status counts are the board's filters */
       .summary {
         display: flex;
         flex-wrap: wrap;
         gap: 6px 18px;
         align-items: center;
-        padding: 10px 0;
+        padding: 12px 0 4px;
       }
-      .summary .item {
-        display: flex;
+      .stat {
+        display: inline-flex;
         gap: 6px;
         align-items: baseline;
         white-space: nowrap;
       }
-      .summary .sep {
-        width: 1px;
-        align-self: stretch;
-        background: var(--line);
-      }
-      .summary strong {
+      .stat strong {
         font-variant-numeric: tabular-nums;
       }
+      button.stat {
+        background: none;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 2px 0;
+        font-size: 14px;
+      }
+      button.stat[aria-pressed="true"] {
+        border-bottom-color: currentColor;
+      }
+      .stat .dot {
+        align-self: center;
+      }
+      .summary .sep {
+        width: 1px;
+        height: 16px;
+        background: var(--line);
+      }
 
-      /* tabs */
+      /* tabs: daily work on the left, the README and test tools on the right */
+      /* One row that scrolls on a phone, so System and Testing stay on the right. */
       .tabs {
         display: flex;
         gap: 2px;
+        overflow-x: auto;
         border-bottom: 1px solid var(--line);
-        margin-bottom: 12px;
+        margin: 8px 0 16px;
+      }
+      .tabs .spacer {
+        flex: 1;
+        min-width: 12px;
       }
       .tabs button {
         border: 0;
         border-bottom: 2px solid transparent;
         border-radius: 0;
         background: transparent;
-        padding: 6px 12px;
+        padding: 8px 12px;
         color: var(--muted);
+      }
+      .tabs button.secondary {
+        font-size: 12px;
       }
       .tabs button[aria-selected="true"] {
         border-bottom-color: var(--accent);
@@ -232,15 +271,15 @@
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 8px;
-        padding: 12px 14px;
+        padding: 14px 16px;
         min-width: 0;
       }
       .card h2 {
-        font-size: 12px;
+        font-size: 11px;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.08em;
         color: var(--muted);
-        margin: 0 0 8px;
+        margin: 0 0 10px;
         font-weight: 600;
         display: flex;
         flex-wrap: wrap;
@@ -248,35 +287,32 @@
         justify-content: space-between;
         align-items: center;
       }
-      .card h2 .row {
+      .card h2 .row,
+      .card h2 .note {
         text-transform: none;
         letter-spacing: 0;
-      }
-
-      /* console grid */
-      .console {
-        display: grid;
-        grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
-        gap: 12px;
-        align-items: start;
-        padding-bottom: 32px;
-      }
-      @media (max-width: 1000px) {
-        .console {
-          grid-template-columns: minmax(0, 1fr);
-        }
-        /* On a phone the operator needs the switches before a 20-row board. */
-        .console > .stack:last-child {
-          order: -1;
-        }
+        font-weight: 400;
       }
       .stack {
         display: grid;
-        gap: 12px;
+        gap: 16px;
         min-width: 0;
+        align-content: start;
+      }
+      .view {
+        padding-bottom: 32px;
       }
 
-      /* board */
+      /* tickets: the board, with the drawer on the right */
+      .tickets {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 16px;
+        align-items: start;
+      }
+      .tickets.solo {
+        grid-template-columns: minmax(0, 1fr);
+      }
       .scroll {
         overflow-x: auto;
       }
@@ -287,9 +323,9 @@
       th,
       td {
         text-align: left;
-        padding: 6px 10px 6px 0;
+        padding: 8px 10px 8px 0;
         border-top: 1px solid var(--line);
-        vertical-align: top;
+        vertical-align: middle;
         white-space: nowrap;
       }
       th {
@@ -302,13 +338,165 @@
       td.title {
         white-space: normal;
         width: 100%;
-        min-width: 180px;
+        min-width: 200px;
       }
       .clamp {
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
+      }
+      #board tbody tr {
+        cursor: pointer;
+      }
+      #board tbody tr:hover {
+        background: var(--soft);
+      }
+      #board tbody tr[aria-selected="true"] {
+        background: var(--sel);
+      }
+      .prio-urgent {
+        color: var(--bad);
+        font-weight: 600;
+      }
+      .prio-high {
+        color: var(--warn);
+      }
+      .linear-state {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .drawer {
+        position: sticky;
+        top: 8px;
+        box-shadow: var(--shadow);
+        display: grid;
+        gap: 14px;
+      }
+      .drawer .head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: start;
+      }
+      .drawer h3 {
+        margin: 2px 0 0;
+        font-size: 16px;
+        line-height: 1.35;
+        text-wrap: balance;
+      }
+      .drawer .close-x {
+        background: none;
+        border: 0;
+        font-size: 18px;
+        line-height: 1;
+        color: var(--muted);
+        padding: 2px 4px;
+      }
+      dl.facts,
+      dl.kv {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 6px 14px;
+        margin: 0;
+      }
+      dl.kv {
+        gap: 2px 10px;
+        margin-top: 4px;
+      }
+      dl.facts dt,
+      dl.kv dt {
+        color: var(--muted);
+      }
+      dl.facts dd,
+      dl.kv dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+      }
+      .actions {
+        display: grid;
+        gap: 8px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+      .actions .label {
+        font-size: 12px;
+        color: var(--muted);
+        width: 100%;
+      }
+      .draft-text {
+        background: var(--soft);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 13px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 240px;
+        overflow: auto;
+      }
+      .acct-ticket {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        padding: 4px 0;
+      }
+      .acct-ticket span:nth-child(2) {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .below {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+      }
+      .metric .v {
+        font-size: 22px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric .k {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 34px;
+        margin-top: 6px;
+      }
+      .bars i {
+        flex: 1;
+        background: var(--accent);
+        opacity: 0.35;
+        border-radius: 2px 2px 0 0;
+        min-height: 1px;
+      }
+      .bars i:last-child {
+        opacity: 1;
+      }
+      @media (max-width: 1000px) {
+        .tickets,
+        .below {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .drawer {
+          position: static;
+          order: -1;
+        }
       }
 
       /* fleet */
@@ -366,19 +554,36 @@
         left: 16px;
         background: #fff;
       }
-      .beats {
-        display: grid;
-        gap: 8px;
-      }
-      .beats .label {
-        font-size: 12px;
-        color: var(--muted);
-        margin-right: 4px;
-      }
       textarea {
         width: 100%;
         min-height: 140px;
         resize: vertical;
+      }
+      .form {
+        display: grid;
+        gap: 10px;
+      }
+      .form label {
+        display: grid;
+        gap: 4px;
+        font-size: 13px;
+      }
+      .form label.check {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .sla-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px 10px;
+      }
+      .sla-grid input {
+        width: 100%;
       }
       .kb-form {
         display: grid;
@@ -400,51 +605,15 @@
         padding: 8px;
       }
 
-      /* last ticket */
-      .legs {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 8px;
-        margin: 8px 0;
-      }
-      .leg {
-        background: var(--soft);
-        border-radius: 6px;
-        padding: 6px 10px;
-      }
-      .leg .v {
-        font-size: 20px;
-        font-weight: 600;
-        font-variant-numeric: tabular-nums;
-      }
-      .sub {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 12px;
-      }
-      .sub h3 {
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--muted);
-        margin: 4px 0;
-      }
-      #log {
-        font:
-          12px/1.4 ui-monospace,
-          monospace;
-        white-space: pre-wrap;
-        max-height: 160px;
-        overflow: auto;
-        margin: 0;
-      }
-
-      /* system */
-      .system {
+      /* system, settings and testing */
+      .grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
-        gap: 12px;
+        gap: 16px;
         align-items: start;
-        padding-bottom: 32px;
+      }
+      .settings {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
       }
       .flow {
         display: flex;
@@ -470,19 +639,6 @@
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
         gap: 6px;
       }
-      dl.kv {
-        margin: 4px 0 0;
-        display: grid;
-        grid-template-columns: max-content minmax(0, 1fr);
-        gap: 2px 10px;
-      }
-      dl.kv dt {
-        color: var(--muted);
-      }
-      dl.kv dd {
-        margin: 0;
-        overflow-wrap: anywhere;
-      }
       .sysagent {
         padding: 8px 0;
         border-top: 1px solid var(--line);
@@ -490,68 +646,84 @@
       .sysagent:first-child {
         border-top: 0;
       }
-
-      /* cues */
       .cues {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
         gap: 12px;
-        padding-bottom: 32px;
       }
       .cue .text {
         margin: 6px 0;
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        #board tbody tr {
+          transition: background 120ms;
+        }
       }
     </style>
   </head>
   <body>
     <header>
       <div class="wrap">
-        <h1>Support Desk Console</h1>
-        <label class="row"
+        <h1>Support Desk</h1>
+        <div id="toast" class="toast" hidden role="status"></div>
+        <label class="row muted"
           >Desk<select id="desk" aria-label="Desk"></select
         ></label>
-        <div id="toast" class="toast" hidden role="status"></div>
       </div>
     </header>
 
-    <div class="wrap">
-      <div class="summary" id="summary">
+    <main class="wrap">
+      <div class="summary" id="summary" aria-label="Summary">
         <span class="muted">loading…</span>
       </div>
 
       <nav class="tabs" role="tablist">
-        <button role="tab" id="tab-console" aria-selected="true">
-          Console
+        <button role="tab" id="tab-tickets" aria-selected="true">
+          Tickets
         </button>
-        <button role="tab" id="tab-system" aria-selected="false">System</button>
         <button role="tab" id="tab-kb" aria-selected="false">Knowledge</button>
-        <button role="tab" id="tab-cues" aria-selected="false">
-          Cue cards
+        <button role="tab" id="tab-settings" aria-selected="false">
+          Settings
+        </button>
+        <span class="spacer"></span>
+        <button
+          role="tab"
+          id="tab-system"
+          class="secondary"
+          aria-selected="false"
+        >
+          System
+        </button>
+        <button
+          role="tab"
+          id="tab-testing"
+          class="secondary"
+          aria-selected="false"
+        >
+          Testing
         </button>
       </nav>
 
-      <!-- Console -->
-      <div id="console" class="console">
-        <div class="stack">
-          <section class="card">
-            <h2>Board <span class="muted" id="board-note"></span></h2>
-            <div class="scroll"><table id="board"></table></div>
-          </section>
-          <section class="card">
+      <!-- Tickets -->
+      <section id="view-tickets" class="view">
+        <div class="tickets solo" id="tickets">
+          <div class="card">
             <h2>
-              Last ticket
-              <span class="row"
-                ><input
-                  id="tl-issue"
-                  type="text"
-                  inputmode="numeric"
-                  placeholder="newest"
-                  size="6"
-                  aria-label="Issue number"
-              /></span>
+              <span
+                >Tickets <span class="note muted" id="board-note"></span
+              ></span>
             </h2>
-            <div id="timeline" class="muted">loading…</div>
-          </section>
+            <div class="scroll"><table id="board"></table></div>
+          </div>
+          <aside
+            class="card drawer"
+            id="drawer"
+            aria-label="Ticket"
+            hidden
+          ></aside>
+        </div>
+
+        <div class="below">
           <section class="card">
             <h2>
               Metrics
@@ -564,60 +736,6 @@
             </h2>
             <div id="metrics" class="muted">loading…</div>
           </section>
-        </div>
-
-        <div class="stack">
-          <section class="card">
-            <h2>
-              Fleet
-              <span class="row">
-                <button id="pause" class="mut">Pause</button>
-                <button id="resume" class="mut">Resume</button>
-              </span>
-            </h2>
-            <div id="fleet" class="muted">loading…</div>
-            <div class="muted" style="font-size: 12px; margin-top: 6px">
-              Pause and Resume leave urgent-pager alone.
-            </div>
-          </section>
-
-          <section class="card">
-            <h2>Demo beats</h2>
-            <div class="beats">
-              <div class="row">
-                <button id="add-pager" class="mut primary">
-                  Add urgent-pager live
-                </button>
-                <span id="pager-state" class="muted"></span>
-              </div>
-              <div class="row">
-                <span class="label">Controller</span>
-                <span id="ctl-state" class="muted"></span>
-                <button id="ctl-start" class="mut">Start cron</button>
-                <button id="ctl-stop" class="mut">Stop cron</button>
-                <button id="ctl-run" class="mut">Run now</button>
-              </div>
-              <div class="row">
-                <button id="reset" class="mut danger">Reset board</button>
-                <span class="muted" style="font-size: 12px"
-                  >closes every open ticket on this desk</span
-                >
-              </div>
-              <div id="reset-confirm" hidden class="confirm">
-                <div style="margin-bottom: 6px">
-                  Close <strong id="open-count">every open</strong> ticket on
-                  desk <strong id="reset-desk"></strong> and redraw its card?
-                </div>
-                <div class="row">
-                  <button id="reset-yes" class="mut danger">
-                    Yes, close them
-                  </button>
-                  <button id="reset-no">Cancel</button>
-                </div>
-              </div>
-            </div>
-          </section>
-
           <section class="card">
             <h2>
               Failed events
@@ -625,132 +743,12 @@
             </h2>
             <div id="receipts" class="muted">loading…</div>
           </section>
-
-          <section class="card">
-            <h2>Escalation</h2>
-            <div class="beats">
-              <div class="row">
-                <span class="label">Levels</span>
-                <input
-                  id="esc-levels"
-                  type="text"
-                  placeholder="30, 120"
-                  size="12"
-                  aria-label="Escalation levels in minutes"
-                />
-                <span class="muted">minutes</span>
-              </div>
-              <div class="row">
-                <span class="label">Group</span>
-                <input
-                  id="esc-group"
-                  type="text"
-                  placeholder="S0123ABCD"
-                  size="12"
-                  aria-label="Slack user group id"
-                />
-              </div>
-              <div class="row">
-                <span class="label">On-call</span>
-                <input
-                  id="esc-oncall"
-                  type="text"
-                  size="12"
-                  aria-label="On-call override"
-                />
-              </div>
-              <div class="row">
-                <button id="esc-save" class="mut primary">Save</button>
-                <button id="esc-off" class="mut">Turn off</button>
-              </div>
-              <div id="esc-state" class="muted" style="font-size: 12px">
-                loading…
-              </div>
-            </div>
-          </section>
-
-          <section class="card" id="log-card" hidden>
-            <h2>Action log</h2>
-            <pre id="log"></pre>
-          </section>
         </div>
-      </div>
-
-      <!-- System -->
-      <div id="system" class="system" hidden>
-        <div class="stack">
-          <section class="card">
-            <h2>Channels</h2>
-            <div id="sys-channels" class="muted">loading…</div>
-          </section>
-          <section class="card">
-            <h2>How events come in</h2>
-            <div class="flow">
-              <div class="side">
-                <div class="box">
-                  <strong>Slack</strong>Events API (messages, reactions) and
-                  interactivity (button clicks)
-                </div>
-                <div class="box">
-                  <strong>Agents</strong
-                  ><code>ctx.sapiom.events.emit</code> (<code>issue.*</code>),
-                  id <code>&lt;type&gt;:&lt;causationId&gt;</code>
-                </div>
-              </div>
-              <div class="arrow">↓ Slack only</div>
-              <div class="box">
-                <strong>Sapiom Slack connector</strong>checks the Slack
-                signature, drops bot posts and edits, emits
-                <code>slack.message.created</code> /
-                <code>slack.reaction_added</code> /
-                <code>slack.block_actions</code>
-              </div>
-              <div class="arrow">↓ both</div>
-              <div class="box">
-                <strong>Engine receipt</strong>one per event, deduped on the
-                Slack event id, trigger id or emit id
-              </div>
-              <div class="arrow">↓</div>
-              <div class="box">
-                <strong>Trigger match</strong>by exact event type, one fire per
-                matching agent
-              </div>
-              <div class="arrow">↓</div>
-              <div class="box">
-                <strong>Dispatch</strong>a matched event starts its run
-                within about 100 ms
-              </div>
-              <div class="arrow">↓</div>
-              <div class="box">
-                <strong>Run</strong>the agent's steps, in a sandbox
-              </div>
-              <div class="arrow" style="margin-top: 6px">separately</div>
-              <div class="box">
-                <strong>Controller cron</strong><code>*/2 * * * *</code> starts
-                a run directly, no event involved
-              </div>
-            </div>
-          </section>
-        </div>
-        <div class="stack">
-          <section class="card">
-            <h2>Agents</h2>
-            <div id="sys-agents" class="muted">loading…</div>
-          </section>
-          <section class="card">
-            <h2>Shared database</h2>
-            <div id="sys-tables" class="muted">loading…</div>
-          </section>
-          <section class="card">
-            <h2>Linear</h2>
-            <div id="sys-linear" class="muted">loading…</div>
-          </section>
-        </div>
-      </div>
+      </section>
 
       <!-- Knowledge -->
-      <div id="kb-tab" hidden>
-        <section class="card">
+      <section id="view-kb" class="view" hidden>
+        <div class="card">
           <h2>
             Team knowledge
             <span class="row"
@@ -790,15 +788,259 @@
           <div class="scroll">
             <div id="kb-list" class="muted">loading…</div>
           </div>
-        </section>
-      </div>
+        </div>
+      </section>
 
-      <!-- Cue cards -->
-      <div id="cues-tab" hidden>
+      <!-- Settings -->
+      <section id="view-settings" class="view" hidden>
+        <div class="grid settings">
+          <section class="card">
+            <h2>Desk <span class="note muted" id="set-desk-name"></span></h2>
+            <div class="form">
+              <label
+                >Name<input id="set-name" type="text" maxlength="80"
+              /></label>
+              <label
+                >Triage channel<input
+                  id="set-triage"
+                  type="text"
+                  placeholder="C0123ABCD"
+                /><span class="hint"
+                  >Slack channel id for ticket cards and drafts.</span
+                ></label
+              >
+              <label
+                >Linear team<input id="set-linear-team" type="text"
+              /></label>
+              <label
+                >Linear project<input
+                  id="set-linear-project"
+                  type="text" /><span class="hint" id="set-linear-name"></span
+              ></label>
+              <label
+                >On-call<input
+                  id="set-oncall"
+                  type="text"
+                  placeholder="U0123ABCD" /><span
+                  class="hint"
+                  id="set-oncall-name"
+                ></span
+              ></label>
+              <label
+                >First nudge after (minutes)<input
+                  id="set-nudge"
+                  type="number"
+                  min="1"
+                  step="1"
+              /></label>
+              <label class="check"
+                ><input id="set-default" type="checkbox" /> Default desk for
+                channels without one</label
+              >
+              <div class="row">
+                <button id="set-desk-save" class="mut primary">
+                  Save desk
+                </button>
+                <span id="set-desk-state" class="hint"></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Escalation to a person</h2>
+            <div class="form">
+              <label
+                >Levels (minutes)<input
+                  id="esc-levels"
+                  type="text"
+                  placeholder="30, 120"
+                  aria-label="Escalation levels in minutes"
+              /></label>
+              <label
+                >Group to mention<input
+                  id="esc-group"
+                  type="text"
+                  placeholder="S0123ABCD"
+                  aria-label="Slack user group id"
+              /></label>
+              <label
+                >On-call override<input
+                  id="esc-oncall"
+                  type="text"
+                  aria-label="On-call override"
+              /></label>
+              <div class="row">
+                <button id="esc-save" class="mut primary">Save</button>
+                <button id="esc-off" class="mut">Turn off</button>
+              </div>
+              <div id="esc-state" class="hint">loading…</div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>
+              Nudges, digest and customer messages
+              <span class="note muted">every desk</span>
+            </h2>
+            <div class="form">
+              <label
+                >Repeat nudges every (minutes)<input
+                  id="set-repeat"
+                  type="text"
+                /><span class="hint"
+                  >While the reason holds; the last gap repeats. Empty: the
+                  default. <code>0</code>: nudge once.</span
+                ></label
+              >
+              <div>
+                <div style="font-size: 13px; margin-bottom: 4px">
+                  Digest flags open tickets older than (hours)
+                </div>
+                <div class="sla-grid">
+                  <label class="hint"
+                    >urgent<input id="sla-urgent" type="number" min="1"
+                  /></label>
+                  <label class="hint"
+                    >high<input id="sla-high" type="number" min="1"
+                  /></label>
+                  <label class="hint"
+                    >normal<input id="sla-normal" type="number" min="1"
+                  /></label>
+                  <label class="hint"
+                    >low<input id="sla-low" type="number" min="1"
+                  /></label>
+                </div>
+                <div class="hint" id="set-digest" style="margin-top: 4px"></div>
+              </div>
+              <label class="check"
+                ><input id="set-notify" type="checkbox" /> Tell the customer
+                when Linear marks the fix Done</label
+              >
+              <div class="row">
+                <button id="set-fleet-save" class="mut primary">Save</button>
+                <span id="set-fleet-state" class="hint"
+                  >Applies on the next run. No redeploy.</span
+                >
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- System -->
+      <section id="view-system" class="view grid" hidden>
+        <div class="stack">
+          <section class="card">
+            <h2>
+              Fleet
+              <span class="row">
+                <button id="pause" class="mut">Pause</button>
+                <button id="resume" class="mut">Resume</button>
+              </span>
+            </h2>
+            <div id="fleet" class="muted">loading…</div>
+            <div class="hint" style="margin-top: 6px">
+              Pause and Resume leave urgent-pager alone.
+            </div>
+          </section>
+          <section class="card">
+            <h2>Channels</h2>
+            <div id="sys-channels" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>How events come in</h2>
+            <div class="flow">
+              <div class="side">
+                <div class="box">
+                  <strong>Slack</strong>Events API (messages, reactions) and
+                  interactivity (button clicks)
+                </div>
+                <div class="box">
+                  <strong>Agents and the Console</strong
+                  ><code>ctx.sapiom.events.emit</code> (<code>issue.*</code>); a
+                  Console ticket action emits
+                  <code>slack.block_actions</code>
+                </div>
+              </div>
+              <div class="arrow">↓ Slack only</div>
+              <div class="box">
+                <strong>Sapiom Slack connector</strong>checks the Slack
+                signature, drops bot posts and edits, emits
+                <code>slack.message.created</code> /
+                <code>slack.reaction_added</code> /
+                <code>slack.block_actions</code>
+              </div>
+              <div class="arrow">↓ all</div>
+              <div class="box">
+                <strong>Engine receipt</strong>one per event, deduped on the
+                Slack event id, trigger id or emit id
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Trigger match</strong>by exact event type, one fire per
+                matching agent
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Run</strong>the agent's steps, in a sandbox
+              </div>
+              <div class="arrow" style="margin-top: 6px">separately</div>
+              <div class="box">
+                <strong>Cron agents</strong>controller, linear-sync, watchdog
+                and digest start runs on a schedule, no event involved
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="stack">
+          <section class="card">
+            <h2>Agents</h2>
+            <div id="sys-agents" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>Shared database</h2>
+            <div id="sys-tables" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>Linear</h2>
+            <div id="sys-linear" class="muted">loading…</div>
+          </section>
+        </div>
+      </section>
+
+      <!-- Testing -->
+      <section id="view-testing" class="view" hidden>
+        <section class="card" style="margin-bottom: 16px">
+          <h2>Testing</h2>
+          <div class="form">
+            <div class="row">
+              <button id="ctl-run" class="mut">Run controller now</button>
+              <span class="hint"
+                >One controller pass: nudges and escalations due now.</span
+              >
+            </div>
+            <div class="row">
+              <button id="reset" class="mut danger">Reset board</button>
+              <span class="hint">Closes every open ticket on this desk.</span>
+            </div>
+            <div id="reset-confirm" hidden class="confirm">
+              <div style="margin-bottom: 6px">
+                Close <strong id="open-count">every open</strong> ticket on desk
+                <strong id="reset-desk"></strong> and redraw its card?
+              </div>
+              <div class="row">
+                <button id="reset-yes" class="mut danger">
+                  Yes, close them
+                </button>
+                <button id="reset-no">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </section>
         <div class="row" style="margin-bottom: 10px">
           <span class="muted"
-            >Type these in the customer channel as a person: the connector drops
-            bot posts.</span
+            >Cue cards: type these in the customer channel as a person; the
+            connector drops bot posts.</span
           >
           <label class="row"
             ><input type="checkbox" id="cue-prefix" checked /> include the
@@ -806,8 +1048,8 @@
           >
         </div>
         <div id="cues" class="cues"></div>
-      </div>
-    </div>
+      </section>
+    </main>
 
     <script>
       const TAB_KEY = "console-tab";
@@ -828,6 +1070,7 @@
         url
           ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`
           : esc(text);
+      const none = '<span class="muted">—</span>';
       const store = {
         get(k) {
           try {
@@ -852,6 +1095,8 @@
       };
       const statusPill = (s) =>
         `<span class="pill" style="color:var(--s-${esc(s)})">${esc(STATUS[s] || s)}</span>`;
+      const prio = (p) =>
+        `<span class="prio-${esc(p || "none")}">${esc(p || "—")}</span>`;
 
       // --- mutating buttons ----------------------------------------------------------------
       /** Mutating buttons carry .mut and are disabled only by state (data-off) or while running. */
@@ -863,7 +1108,7 @@
         el.dataset.off = off ? "1" : "0";
       }
 
-      /** Every result also shows in the header for a few seconds, beside the controls. */
+      /** Every result shows in the header for a few seconds, beside the controls. */
       let toastTimer;
       function log(line) {
         const t = $("toast");
@@ -872,9 +1117,6 @@
         t.hidden = false;
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => (t.hidden = true), 8000);
-        $("log-card").hidden = false;
-        const stamp = new Date().toLocaleTimeString();
-        $("log").textContent = `${stamp}  ${line}\n` + $("log").textContent;
       }
 
       // --- desks ---------------------------------------------------------------------------
@@ -912,19 +1154,15 @@
         history.replaceState(null, "", `?desk=${encodeURIComponent(desk)}`);
         $("reset-desk").textContent = deskName(desk);
         $("reset-confirm").hidden = true;
-        $("tl-issue").value = "";
-        Object.assign(S, {
-          counts: null,
-          latency: null,
-          failed: null,
-          metrics: null,
-        });
+        Object.assign(S, { counts: null, failed: null, metrics: null });
+        filter = null;
+        closeDrawer();
         refreshBoard();
-        refreshTimeline();
         refreshReceipts();
         refreshMetrics();
         refreshEscalation();
-        if (!$("kb-tab").hidden) loadKb();
+        if (!$("view-kb").hidden) loadKb();
+        if (!$("view-settings").hidden) loadSettings();
         closeKbForm();
       };
 
@@ -957,7 +1195,7 @@
         return JSON.stringify(out).slice(0, 300);
       }
 
-      /** Run a mutating action: disable its button while it runs, log the ids, refresh. */
+      /** Run a mutating action: disable its button while it runs, show the ids, refresh. */
       async function act(btn, label, path, body) {
         btn.dataset.busy = "1";
         btn.disabled = true;
@@ -966,24 +1204,16 @@
         } catch (e) {
           log(`${label} FAILED: ${e.message}`);
         } finally {
-          await Promise.all([
-            refreshFleet(),
-            refreshBoard(),
-            refreshTimeline(),
-          ]);
+          await Promise.all([refreshFleet(), refreshBoard()]);
           btn.dataset.busy = "0";
           syncButtons();
         }
       }
 
       // --- summary strip -------------------------------------------------------------------
-      const S = {
-        counts: null,
-        fleet: null,
-        latency: null,
-        failed: null,
-        metrics: null,
-      };
+      const S = { counts: null, failed: null, metrics: null };
+      /** The board's status filter; null is every open ticket. */
+      let filter = null;
       const usd = (v) => (v == null ? "—" : `$${v.toFixed(v < 1 ? 3 : 2)}`);
       const secs = (v) => (v == null ? "—" : `${v.toFixed(1)} s`);
       function renderSummary() {
@@ -993,43 +1223,36 @@
             Object.keys(STATUS)
               .map(
                 (k) =>
-                  `<span class="item"><span class="dot" style="background:var(--s-${k})"></span>${STATUS[k]} <strong>${S.counts[k] || 0}</strong></span>`,
+                  `<button class="stat" data-filter="${k}" aria-pressed="${filter === k}"><span class="dot" style="background:var(--s-${k})"></span>${STATUS[k]} <strong>${S.counts[k] || 0}</strong></button>`,
               )
               .join(""),
           );
-        if (S.fleet) {
-          const deployed = S.fleet.filter((a) => a.deployed);
-          const on = deployed.filter((a) => a.on).length;
-          const cls = on === deployed.length ? "ok" : on === 0 ? "bad" : "warn";
+        if (S.failed)
           parts.push(
-            `<span class="item"><span class="dot ${cls}"></span><strong>${on}</strong> of ${deployed.length} agents on</span>`,
-          );
-        }
-        if (S.latency)
-          parts.push(
-            `<span class="item muted">last ticket</span><span class="item">message → card <strong>${secs(S.latency.messageToCard)}</strong></span><span class="item">issue → draft card <strong>${secs(S.latency.issueToDraftCard)}</strong></span>`,
+            `<span class="stat"><span class="dot ${S.failed.length ? "bad" : "ok"}"></span><strong>${S.failed.length}</strong> failed events</span>`,
           );
         if (S.metrics && S.metrics.cost.meanUsd != null)
           parts.push(
-            `<span class="item muted">${S.metrics.window}</span><span class="item">cost / ticket <strong>${usd(S.metrics.cost.meanUsd)}</strong></span><span class="item">message → draft p50 <strong>${secs(S.metrics.latency.messageToDraftCard.p50)}</strong></span>`,
-          );
-        if (S.failed)
-          parts.push(
-            `<span class="item"><span class="dot ${S.failed.length ? "bad" : "ok"}"></span><strong>${S.failed.length}</strong> failed events</span>`,
+            `<span class="stat"><span class="muted">${S.metrics.window} cost / ticket</span> <strong>${usd(S.metrics.cost.meanUsd)}</strong></span>`,
           );
         if (parts.length)
           $("summary").innerHTML = parts.join('<span class="sep"></span>');
       }
+      $("summary").onclick = (e) => {
+        const b = e.target.closest("button[data-filter]");
+        if (!b) return;
+        filter = filter === b.dataset.filter ? null : b.dataset.filter;
+        renderSummary();
+        refreshBoard();
+      };
 
       // --- fleet ---------------------------------------------------------------------------
       let fleet = [];
       async function refreshFleet() {
         try {
           fleet = await get("/api/fleet");
-          S.fleet = fleet;
           renderFleet();
           renderSystemAgents();
-          renderSummary();
         } catch (e) {
           $("fleet").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
         }
@@ -1068,21 +1291,7 @@
               `/api/agents/${b.dataset.agent}/${on ? "on" : "off"}`,
             );
         }
-        const pager = fleet.find((a) => a.key === "urgent-pager");
-        setOff($("add-pager"), !pager?.deployed || pager.on);
-        $("pager-state").textContent = !pager?.deployed
-          ? "not deployed"
-          : pager.on
-            ? "attached"
-            : "not attached";
         const ctl = fleet.find((a) => a.key === "controller");
-        $("ctl-state").textContent = !ctl?.deployed
-          ? "not deployed"
-          : ctl.on
-            ? "cron on"
-            : "cron off";
-        setOff($("ctl-start"), !ctl?.deployed || ctl.on);
-        setOff($("ctl-stop"), !ctl?.deployed || !ctl.on);
         setOff($("ctl-run"), !ctl?.deployed);
         syncButtons();
       }
@@ -1090,17 +1299,12 @@
         act(e.target, "pause fleet", "/api/fleet/pause");
       $("resume").onclick = (e) =>
         act(e.target, "resume fleet", "/api/fleet/resume");
-      $("add-pager").onclick = (e) =>
-        act(e.target, "add urgent-pager", "/api/agents/urgent-pager/on");
-      $("ctl-start").onclick = (e) =>
-        act(e.target, "controller cron start", "/api/agents/controller/on");
-      $("ctl-stop").onclick = (e) =>
-        act(e.target, "controller cron stop", "/api/agents/controller/off");
       $("ctl-run").onclick = (e) =>
         act(e.target, "controller run now", "/api/controller/run");
 
       // --- board ---------------------------------------------------------------------------
       let openCount = 0;
+      let rows = [];
       function age(t) {
         const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
         if (s < 90) return `${Math.round(s)}s`;
@@ -1108,9 +1312,18 @@
         if (s < 129600) return `${Math.round(s / 3600)}h`;
         return `${Math.round(s / 86400)}d`;
       }
+      const linearCell = (i) =>
+        i.linear
+          ? `${link(i.linearUrl, i.linear)}${i.linearState ? ` <span class="linear-state">${esc(i.linearState)}</span>` : ""}`
+          : none;
       async function refreshBoard() {
+        const forDesk = desk;
+        const forFilter = filter;
         try {
-          const b = await get(scoped("/api/board"));
+          const b = await get(
+            scoped(`/api/board${filter ? `?status=${filter}` : ""}`),
+          );
+          if (desk !== forDesk || filter !== forFilter) return;
           S.counts = b.counts;
           openCount = ["new", "on_you", "on_customer", "on_hold"].reduce(
             (n, s) => n + (b.counts[s] || 0),
@@ -1119,85 +1332,182 @@
           setOff($("reset"), openCount === 0);
           syncButtons();
           renderSummary();
-          $("board-note").textContent = `newest ${b.issues.length}`;
-          $("board").innerHTML =
-            `<tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>Owner</th><th>Linear</th><th>Age</th></tr>` +
-            (b.issues.length
-              ? b.issues
-                  .map(
-                    (i) =>
-                      `<tr><td class="num">${link(i.cardUrl, `#${i.number}`)}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td>${esc(i.account)}</td><td>${statusPill(i.status)}</td><td class="${i.priority === "urgent" ? "bad" : "muted"}">${esc(i.priority || "")}</td><td class="muted">${esc(i.owner || "—")}</td><td>${i.linear ? link(i.linearUrl, i.linear) : '<span class="muted">—</span>'}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
-                  )
-                  .join("")
-              : `<tr><td colspan="8" class="muted">no tickets yet</td></tr>`);
+          rows = b.issues;
+          renderBoard();
         } catch (e) {
           $("board").innerHTML =
-            `<tr><td class="bad">${esc(e.message)}</td></tr>`;
+            `<tbody><tr><td class="bad">${esc(e.message)}</td></tr></tbody>`;
         }
       }
-      $("reset").onclick = () => {
-        $("open-count").textContent = `${openCount} open`;
-        $("reset-confirm").hidden = false;
+      function renderBoard() {
+        $("board-note").textContent = filter
+          ? `${STATUS[filter]}, ${rows.length}`
+          : `open, ${rows.length}`;
+        const selectedId = drawer?.kind === "ticket" ? drawer.id : null;
+        $("board").innerHTML =
+          `<thead><tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>Owner</th><th>Draft</th><th>Linear</th><th>Age</th></tr></thead><tbody>` +
+          (rows.length
+            ? rows
+                .map(
+                  (i) =>
+                    `<tr tabindex="0" data-ticket="${esc(i.id)}" aria-selected="${i.id === selectedId}"><td class="num">#${i.number}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td><a href="#" data-account="${esc(i.accountId)}">${esc(i.account)}</a></td><td>${statusPill(i.status)}</td><td>${prio(i.priority)}</td><td>${i.owner ? esc(i.owner) : none}</td><td>${i.draft ? esc(i.draft) : none}</td><td>${linearCell(i)}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
+                )
+                .join("")
+            : `<tr><td colspan="9" class="muted">${filter ? "No tickets with this status." : "No open tickets."}</td></tr>`) +
+          "</tbody>";
+      }
+      $("board").onclick = (e) => {
+        const acct = e.target.closest("a[data-account]");
+        if (acct) {
+          e.preventDefault();
+          return openDrawer("account", acct.dataset.account);
+        }
+        if (e.target.closest("a")) return;
+        const row = e.target.closest("tr[data-ticket]");
+        if (row) openDrawer("ticket", row.dataset.ticket);
       };
-      $("reset-no").onclick = () => ($("reset-confirm").hidden = true);
-      $("reset-yes").onclick = async (e) => {
-        $("reset-confirm").hidden = true;
-        await act(
-          e.target,
-          `reset board (${deskName(desk)})`,
-          scoped("/api/board/reset"),
-          {
-            confirm: "reset",
-          },
-        );
+      $("board").onkeydown = (e) => {
+        const row = e.target.closest?.("tr[data-ticket]");
+        if (row && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          openDrawer("ticket", row.dataset.ticket);
+        }
       };
 
-      // --- last ticket ---------------------------------------------------------------------
-      const clock = (t) => (t ? new Date(t).toLocaleTimeString() : "—");
-      const tsClock = (ts) =>
-        ts ? new Date(Number(ts) * 1000).toLocaleTimeString() : "—";
-      async function refreshTimeline() {
-        const n = $("tl-issue").value.trim();
+      // --- drawer: one ticket, or one account ----------------------------------------------
+      /** What the drawer shows: { kind: "ticket" | "account", id }, or null. */
+      let drawer = null;
+      let drawerSeq = 0;
+      function openDrawer(kind, id) {
+        drawer = { kind, id };
+        $("tickets").classList.remove("solo");
+        $("drawer").hidden = false;
+        $("drawer").innerHTML = '<span class="muted">loading…</span>';
+        renderBoard();
+        refreshDrawer();
+      }
+      function closeDrawer() {
+        drawer = null;
+        $("drawer").hidden = true;
+        $("tickets").classList.add("solo");
+        renderBoard();
+      }
+      async function refreshDrawer() {
+        if (!drawer) return;
+        const seq = ++drawerSeq;
+        const { kind, id } = drawer;
         try {
-          const t = await get(
-            scoped(`/api/timeline${/^\d+$/.test(n) ? `?issue=${n}` : ""}`),
+          const data = await get(
+            scoped(`/api/${kind === "ticket" ? "tickets" : "accounts"}/${id}`),
           );
-          $("timeline").className = "";
-          if (!t.issue) {
-            $("timeline").innerHTML =
-              `<span class="muted">no tickets yet</span>`;
-            return;
-          }
-          if (!n) {
-            S.latency = t.latency;
-            renderSummary();
-          }
-          const i = t.issue;
-          const L = t.latency;
-          const rows = (list, f) =>
-            list.length
-              ? `<table>${list.map(f).join("")}</table>`
-              : `<span class="muted">none</span>`;
-          $("timeline").innerHTML = `
-            <div class="row"><strong>${link(i.cardUrl, `#${i.number}`)}</strong> <span class="clamp" style="flex:1;min-width:0" title="${esc(i.title)}">${esc(i.title)}</span> ${statusPill(i.status)}</div>
-            <div class="legs">
-              <div class="leg"><div class="muted">message → issue card</div><div class="v">${secs(L.messageToCard)}</div><div class="muted num">${tsClock(i.customerTs)} → ${tsClock(i.triageRootTs)}</div></div>
-              <div class="leg"><div class="muted">issue → first draft card</div><div class="v">${secs(L.issueToDraftCard)}</div><div class="muted">draft row ${secs(L.issueToDraft)}</div></div>
-              <div class="leg"><div class="muted">message → first draft card</div><div class="v">${secs(L.messageToDraftCard)}</div></div>
-            </div>
-            <div class="sub">
-              <div><h3>Drafts</h3>${rows(t.drafts, (d) => `<tr><td class="num">${clock(d.createdAt)}</td><td>${link(d.cardUrl, d.cardUrl ? "card" : "no card")}</td><td>${esc(d.status)}</td><td class="num muted">${d.confidence == null ? "" : d.confidence.toFixed(2)}</td></tr>`)}</div>
-              <div><h3>Runs</h3>${rows(t.runs, (r) => `<tr><td class="num">${clock(r.startedAt)}</td><td>${esc(r.agent)}</td><td><code>${esc(r.executionId)}</code></td></tr>`)}</div>
-              <div><h3>Events</h3>${rows(t.events, (ev) => `<tr><td class="num">${clock(ev.createdAt)}</td><td>${esc(ev.type)}</td><td class="muted">${ev.receiptId ? `receipt ${esc(ev.receiptId)}` : ""}</td></tr>`)}</div>
-            </div>`;
+          if (seq !== drawerSeq || !drawer) return;
+          // Keep the focus on a button the redraw replaces, so a keyboard user stays in place.
+          const focused = document.activeElement?.dataset?.act;
+          $("drawer").innerHTML =
+            kind === "ticket" ? ticketHtml(data) : accountHtml(data);
+          if (focused)
+            $("drawer").querySelector(`[data-act="${focused}"]`)?.focus();
+          syncButtons();
         } catch (e) {
-          $("timeline").innerHTML =
-            `<span class="bad">${esc(e.message)}</span>`;
+          if (seq !== drawerSeq) return;
+          $("drawer").innerHTML =
+            `<div class="head"><span class="bad">${esc(e.message)}</span><button class="close-x" data-close aria-label="Close panel">×</button></div>`;
         }
       }
-      $("tl-issue").onchange = refreshTimeline;
+      const head = (over, title) =>
+        `<div class="head"><div><span class="muted num">${over}</span><h3>${esc(title)}</h3></div><button class="close-x" data-close aria-label="Close panel">×</button></div>`;
+      /** Button state survives a redraw: a click in flight keeps its button disabled. */
+      const busy = new Set();
+      const actButton = (t, verb, label, cls = "") =>
+        `<button class="mut ${cls}" data-act="${verb}" data-busy="${busy.has(`${t.id}:${verb}`) ? "1" : "0"}">${label}</button>`;
+      function ticketHtml(t) {
+        const closed = t.status === "closed";
+        const draftActions = t.pendingDraft
+          ? `<div class="row"><span class="label">Draft</span>${actButton(t, "approve", "Approve and send", "primary")}${actButton(t, "escalate", "Escalate")}${actButton(t, "dismiss", "Dismiss")}</div>`
+          : "";
+        const ticketActions = [
+          !t.owner && !closed ? actButton(t, "take", "Take") : "",
+          !closed ? actButton(t, "close", "Close", "danger") : "",
+        ].join("");
+        return `${head(`#${t.number} · ${esc(t.account)}`, t.title || "(untitled)")}
+          <dl class="facts">
+            <dt>Status</dt><dd>${statusPill(t.status)}</dd>
+            <dt>Priority</dt><dd>${prio(t.priority)}</dd>
+            <dt>Owner</dt><dd>${t.owner ? esc(t.owner) : '<span class="muted">nobody</span>'}</dd>
+            <dt>Draft</dt><dd>${t.draft ? esc(t.draft) : '<span class="muted">none yet</span>'}</dd>
+            <dt>Linear</dt><dd>${linearCell(t)}</dd>
+            <dt>Account</dt><dd><a href="#" data-account="${esc(t.accountId)}">${esc(t.account)}</a></dd>
+            <dt>Age</dt><dd>${age(t.createdAt)}</dd>
+          </dl>
+          <div class="links">
+            ${t.slackUrl ? link(t.slackUrl, "Slack thread ↗") : '<span class="muted">No triage card yet</span>'}
+            ${t.linear && t.linearUrl ? link(t.linearUrl, `${t.linear} ↗`) : ""}
+          </div>
+          ${t.pendingDraft ? `<div class="draft-text">${esc(t.pendingDraft.text)}</div>` : ""}
+          ${
+            draftActions || ticketActions
+              ? `<div class="actions">${draftActions}${ticketActions ? `<div class="row"><span class="label">Ticket</span>${ticketActions}</div>` : ""}
+                <div class="hint">The agents handle these as if clicked in Slack, and the Slack card redraws. Recorded as <code>console</code>.</div></div>`
+              : ""
+          }`;
+      }
+      function accountHtml(a) {
+        return `${head("Account", a.name)}
+          <dl class="facts">
+            <dt>Channel</dt><dd>${link(`https://slack.com/archives/${a.channelId}`, a.channelId)}</dd>
+            <dt>Open</dt><dd class="num">${a.open}</dd>
+            <dt>Closed (30 d)</dt><dd class="num">${a.closedLast30Days}</dd>
+            <dt>Last contact</dt><dd>${a.lastContactAt ? `${age(a.lastContactAt)} ago` : '<span class="muted">none</span>'}</dd>
+          </dl>
+          <div><div class="hint" style="margin-bottom:4px">Tickets</div>
+            ${
+              a.tickets
+                .map(
+                  (t) =>
+                    `<div class="acct-ticket"><a href="#" data-open="${esc(t.id)}">#${t.number}</a><span>${esc(t.title || "(untitled)")}</span>${statusPill(t.status)}</div>`,
+                )
+                .join("") || '<span class="muted">none</span>'
+            }
+          </div>`;
+      }
+      $("drawer").onclick = async (e) => {
+        if (e.target.closest("[data-close]")) return closeDrawer();
+        const acct = e.target.closest("a[data-account]");
+        if (acct) {
+          e.preventDefault();
+          return openDrawer("account", acct.dataset.account);
+        }
+        const openT = e.target.closest("a[data-open]");
+        if (openT) {
+          e.preventDefault();
+          return openDrawer("ticket", openT.dataset.open);
+        }
+        const b = e.target.closest("button[data-act]");
+        if (!b || drawer?.kind !== "ticket") return;
+        const id = drawer.id;
+        const verb = b.dataset.act;
+        const key = `${id}:${verb}`;
+        busy.add(key);
+        b.dataset.busy = "1";
+        syncButtons();
+        try {
+          const out = await post(scoped(`/api/tickets/${id}/actions/${verb}`));
+          log(
+            `${verb} #${out.number}: sent (receipt ${out.receiptId}${out.duplicate ? ", already sent" : ""}); the Slack card redraws when the agent finishes`,
+          );
+        } catch (err) {
+          log(`${verb} FAILED: ${err.message}`);
+        }
+        // The agent's run takes a few seconds; the button stays disabled until the drawer catches up.
+        setTimeout(() => {
+          busy.delete(key);
+          refreshBoard();
+          refreshDrawer();
+        }, 4000);
+      };
 
       // --- failed events -------------------------------------------------------------------
+      const clock = (t) => (t ? new Date(t).toLocaleTimeString() : "—");
       async function refreshReceipts() {
         try {
           const { receipts: list, truncated } = await get(
@@ -1232,12 +1542,165 @@
       }
       $("rcpt-refresh").onclick = refreshReceipts;
 
+      // --- metrics -------------------------------------------------------------------------
+      async function refreshMetrics() {
+        try {
+          const m = await get(
+            scoped(`/api/metrics?window=${$("mt-window").value}`),
+          );
+          S.metrics = m;
+          renderSummary();
+          const c = m.cost;
+          const versus =
+            c.meanUsd == null
+              ? ""
+              : c.meanUsd <= c.targetUsdPerTicket
+                ? "ok"
+                : "bad";
+          const L = m.latency;
+          const top = Math.max(1, ...m.perDay);
+          const bars =
+            m.perDay.length > 1
+              ? `<div class="bars" aria-hidden="true">${m.perDay.map((n) => `<i style="height:${Math.round((n / top) * 100)}%" title="${n}"></i>`).join("")}</div>`
+              : "";
+          $("metrics").className = "";
+          $("metrics").innerHTML = `
+            <div class="metrics">
+              <div class="metric"><div class="v ${versus}">${usd(c.meanUsd)}</div><div class="k">cost per ticket (mean) · p90 ${usd(c.p90Usd)}</div></div>
+              <div class="metric"><div class="v">${secs(L.messageToDraftCard.p50)}</div><div class="k">message → draft, p50 · p90 ${secs(L.messageToDraftCard.p90)}</div></div>
+              <div class="metric"><div class="v">${secs(L.messageToCard.p50)}</div><div class="k">message → ticket card, p50 · p90 ${secs(L.messageToCard.p90)}</div></div>
+              <div class="metric"><div class="v">${m.issues}</div><div class="k">tickets opened${m.perDay.length > 1 ? `, per day` : ""}</div>${bars}</div>
+            </div>
+            <div class="hint" style="margin-top:8px">Target ${usd(c.targetUsdPerTicket)} / ticket. Total ${usd(c.totalUsd)} (LLM ${usd(c.llmUsd)} · capability ${usd(c.capabilityUsd)}).${m.capped ? ` Cost and timing cover the newest ${m.priced} tickets.` : ""}${m.runsMissing ? ` ${m.runsMissing} run${m.runsMissing === 1 ? "" : "s"} not priced yet; reload to fill in.` : ""}${c.unpriced ? ` ${c.unpriced} ticket${c.unpriced === 1 ? "" : "s"} with no priced run are left out of the mean.` : ""} Sandbox compute may show $0 on internal orgs.</div>`;
+        } catch (e) {
+          $("metrics").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("mt-window").onchange = refreshMetrics;
+
+      // --- settings ------------------------------------------------------------------------
+      let settings = null;
+      const SLA = ["urgent", "high", "normal", "low"];
+      const minutesList = (v) =>
+        v
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map(Number);
+      function cronText(d) {
+        if (!d) return "No digest trigger in fleet.json.";
+        const m = /^(\d+) (\d+) \* \* \*$/.exec(d.cron);
+        const when = m
+          ? `daily at ${m[2].padStart(2, "0")}:${m[1].padStart(2, "0")}`
+          : `on cron ${d.cron}`;
+        return `Digest posts ${when} ${d.timezone || "UTC"}; the schedule is set by setup (fleet.json).`;
+      }
+      function showSettings(s) {
+        settings = s;
+        const d = s.desk;
+        $("set-desk-name").textContent = d.name;
+        $("set-name").value = d.name;
+        $("set-triage").value = d.triageChannel;
+        $("set-linear-team").value = d.linearTeamId || "";
+        $("set-linear-project").value = d.linearProjectId || "";
+        $("set-linear-name").innerHTML = s.linearProject?.url
+          ? link(s.linearProject.url, s.linearProject.name)
+          : "";
+        $("set-oncall").value = d.oncallSlackId || "";
+        $("set-oncall-name").textContent = s.oncallName || "";
+        $("set-nudge").value = d.nudgeMinutes;
+        $("set-default").checked = d.isDefault;
+        // A default desk stops being one only when another desk becomes the default.
+        $("set-default").disabled = d.isDefault;
+        const f = s.fleet;
+        const repeat = f["nudge.repeat_minutes"];
+        $("set-repeat").value = repeat
+          ? repeat.length
+            ? repeat.join(", ")
+            : "0"
+          : "";
+        $("set-repeat").placeholder =
+          `default ${s.defaults["nudge.repeat_minutes"].join(", ")}`;
+        for (const k of SLA) {
+          $(`sla-${k}`).value = f["digest.sla_hours"]?.[k] ?? "";
+          $(`sla-${k}`).placeholder = s.defaults["digest.sla_hours"][k];
+        }
+        $("set-digest").textContent = cronText(s.digest);
+        $("set-notify").checked = f["linear_sync.notify_customer"];
+      }
+      async function loadSettings() {
+        const forDesk = desk;
+        try {
+          const s = await get(scoped("/api/settings"));
+          if (desk === forDesk) showSettings(s);
+        } catch (e) {
+          $("set-desk-state").className = "hint bad";
+          $("set-desk-state").textContent = e.message;
+        }
+      }
+      async function saveSettings(btn, path, body, state) {
+        btn.dataset.busy = "1";
+        syncButtons();
+        $(state).className = "hint";
+        try {
+          showSettings(await post(scoped(path), body, "PUT"));
+          $(state).textContent = "Saved. Applies on the next run.";
+          if (path.endsWith("/desk")) await loadDesks();
+        } catch (e) {
+          $(state).className = "hint bad";
+          $(state).textContent = e.message;
+        } finally {
+          btn.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("set-desk-save").onclick = (e) => {
+        if (!settings) return;
+        const d = settings.desk;
+        const text = (id) => $(id).value.trim();
+        const body = {};
+        if (text("set-name") !== d.name) body.name = text("set-name");
+        if (text("set-triage") !== d.triageChannel)
+          body.triageChannel = text("set-triage");
+        if (text("set-linear-team") !== (d.linearTeamId || ""))
+          body.linearTeamId = text("set-linear-team") || null;
+        if (text("set-linear-project") !== (d.linearProjectId || ""))
+          body.linearProjectId = text("set-linear-project") || null;
+        if (text("set-oncall") !== (d.oncallSlackId || ""))
+          body.oncallSlackId = text("set-oncall") || null;
+        if (Number($("set-nudge").value) !== d.nudgeMinutes)
+          body.nudgeMinutes = Number($("set-nudge").value);
+        if ($("set-default").checked && !d.isDefault) body.isDefault = true;
+        if (!Object.keys(body).length) {
+          $("set-desk-state").textContent = "Nothing changed.";
+          return;
+        }
+        saveSettings(e.target, "/api/settings/desk", body, "set-desk-state");
+      };
+      $("set-fleet-save").onclick = (e) => {
+        const repeat = $("set-repeat").value.trim();
+        const sla = {};
+        for (const k of SLA)
+          if ($(`sla-${k}`).value !== "") sla[k] = Number($(`sla-${k}`).value);
+        saveSettings(
+          e.target,
+          "/api/settings/fleet",
+          {
+            "nudge.repeat_minutes":
+              repeat === "" ? null : repeat === "0" ? [] : minutesList(repeat),
+            "digest.sla_hours": Object.keys(sla).length ? sla : null,
+            "linear_sync.notify_customer": $("set-notify").checked,
+          },
+          "set-fleet-state",
+        );
+      };
+
       function showEscalation({ entry, oncallFallback }) {
         $("esc-levels").value = entry ? entry.levels.join(", ") : "";
         $("esc-group").value = entry?.groupId || "";
         $("esc-oncall").value = entry?.oncallSlackId || "";
         $("esc-oncall").placeholder = oncallFallback || "desk on-call";
-        $("esc-state").className = "muted";
+        $("esc-state").className = "hint";
         $("esc-state").textContent = entry
           ? `On: level ${entry.levels.map((m, i) => `${i + 1} at ${m} min`).join(", ")}.`
           : "Off: this desk never escalates to a person.";
@@ -1267,7 +1730,7 @@
           escalationLocked(false);
         } catch (e) {
           if (seq !== escalationSeq) return;
-          $("esc-state").className = "bad";
+          $("esc-state").className = "hint bad";
           $("esc-state").textContent = e.message;
           // A failed save leaves the loaded form valid; a failed load leaves nothing to save.
           escalationLocked(!body);
@@ -1275,13 +1738,7 @@
       }
       const refreshEscalation = () => escalationCall(null);
       $("esc-save").onclick = () => {
-        const body = {
-          levels: $("esc-levels")
-            .value.split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-            .map(Number),
-        };
+        const body = { levels: minutesList($("esc-levels").value) };
         const group = $("esc-group").value.trim();
         const oncall = $("esc-oncall").value.trim();
         if (group) body.groupId = group;
@@ -1290,59 +1747,55 @@
       };
       $("esc-off").onclick = () => escalationCall({ off: true });
 
-      // --- metrics -------------------------------------------------------------------------
-      async function refreshMetrics() {
-        try {
-          const m = await get(
-            scoped(`/api/metrics?window=${$("mt-window").value}`),
-          );
-          S.metrics = m;
-          renderSummary();
-          const spreadRow = (label, sp) =>
-            `<tr><td>${label}</td><td class="num">${secs(sp.p50)}</td><td class="num">${secs(sp.p90)}</td><td class="num muted">${sp.n}</td></tr>`;
-          const c = m.cost;
-          const versus =
-            c.meanUsd == null
-              ? ""
-              : c.meanUsd <= c.targetUsdPerTicket
-                ? "ok"
-                : "bad";
-          $("metrics").className = "";
-          $("metrics").innerHTML = `
-            <div class="muted" style="margin-bottom:6px">${m.issues} ticket${m.issues === 1 ? "" : "s"} in the window${m.capped ? " (newest 50)" : ""}${m.dispatchTruncated ? "; event → run start covers only the newest receipts (truncated)" : ""}</div>
-            <table>
-              <tr><th></th><th class="num">p50</th><th class="num">p90</th><th class="num">tickets</th></tr>
-              ${spreadRow("Message → issue card", m.latency.messageToCard)}
-              ${spreadRow("Issue → first draft card", m.latency.issueToDraftCard)}
-              ${spreadRow("Message → first draft card", m.latency.messageToDraftCard)}
-              ${spreadRow("Event → run start (fleet-wide)", m.dispatch)}
-            </table>
-            <table style="margin-top:10px">
-              <tr><td>Cost per ticket</td><td class="num ${versus}">mean <strong>${usd(c.meanUsd)}</strong></td><td class="num">p90 <strong>${usd(c.p90Usd)}</strong></td></tr>
-              <tr><td>Total</td><td class="num"><strong>${usd(c.totalUsd)}</strong></td><td class="num muted">LLM ${usd(c.llmUsd)} · capability ${usd(c.capabilityUsd)}</td></tr>
-              <tr><td>Sandbox per ticket</td><td class="num">${c.meanSandboxSeconds == null ? "—" : `${c.meanSandboxSeconds.toFixed(0)} s`}</td><td></td></tr>
-              <tr><td>Target</td><td class="num muted">${usd(c.targetUsdPerTicket)} / ticket</td><td></td></tr>
-            </table>
-            <div class="muted" style="font-size:12px;margin-top:6px">Sandbox compute may show $0 on internal orgs.${m.runsMissing ? ` ${m.runsMissing} run${m.runsMissing === 1 ? "" : "s"} not priced yet; reload to fill in.` : ""}${c.unpriced ? ` ${c.unpriced} ticket${c.unpriced === 1 ? "" : "s"} with no priced run are left out of the mean.` : ""}</div>
-            ${
-              m.perIssue.length
-                ? `<div class="scroll" style="margin-top:8px"><table>
-              <tr><th>#</th><th class="num">msg → card</th><th class="num">msg → draft</th><th class="num">cost</th></tr>
-              ${m.perIssue
-                .slice(0, 10)
-                .map(
-                  (i) =>
-                    `<tr><td class="num">#${i.number}</td><td class="num">${secs(i.messageToCard)}</td><td class="num">${secs(i.messageToDraftCard)}</td><td class="num">${usd(i.usd)}</td></tr>`,
-                )
-                .join("")}
-            </table></div>`
-                : ""
-            }`;
-        } catch (e) {
-          $("metrics").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+      // --- testing -------------------------------------------------------------------------
+      $("reset").onclick = () => {
+        $("open-count").textContent = `${openCount} open`;
+        $("reset-confirm").hidden = false;
+      };
+      $("reset-no").onclick = () => ($("reset-confirm").hidden = true);
+      $("reset-yes").onclick = async (e) => {
+        $("reset-confirm").hidden = true;
+        await act(
+          e.target,
+          `reset board (${deskName(desk)})`,
+          scoped("/api/board/reset"),
+          { confirm: "reset" },
+        );
+      };
+
+      let cues = { prefix: "", steps: [] };
+      const cueText = (c) =>
+        $("cue-prefix").checked && cues.prefix
+          ? `${cues.prefix} ${c.text}`
+          : c.text;
+      async function loadCues() {
+        cues = await get("/api/cues");
+        $("cue-prefix-text").textContent = cues.prefix;
+        $("cues").innerHTML = cues.steps
+          .map(
+            (c, n) =>
+              `<section class="card cue"><h2>${n + 1}. ${esc(c.label)} <button data-cue="${n}">Copy</button></h2><div class="text">${esc(c.text)}</div><div class="muted">${esc(c.expect)}</div></section>`,
+          )
+          .join("");
+        for (const b of $("cues").querySelectorAll("button[data-cue]")) {
+          b.onclick = async () => {
+            const text = cueText(cues.steps[Number(b.dataset.cue)]);
+            try {
+              await navigator.clipboard.writeText(text);
+            } catch {
+              // Clipboard blocked (insecure context, iframe): fall back to a selected textarea.
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+            }
+            b.textContent = "Copied";
+            setTimeout(() => (b.textContent = "Copy"), 1500);
+          };
         }
       }
-      $("mt-window").onchange = refreshMetrics;
 
       // --- system --------------------------------------------------------------------------
       let systemLoaded = false;
@@ -1412,41 +1865,6 @@
               </dl></div>`;
           })
           .join("");
-      }
-
-      // --- cue cards -----------------------------------------------------------------------
-      let cues = { prefix: "", steps: [] };
-      const cueText = (c) =>
-        $("cue-prefix").checked && cues.prefix
-          ? `${cues.prefix} ${c.text}`
-          : c.text;
-      async function loadCues() {
-        cues = await get("/api/cues");
-        $("cue-prefix-text").textContent = cues.prefix;
-        $("cues").innerHTML = cues.steps
-          .map(
-            (c, n) =>
-              `<section class="card cue"><h2>${n + 1}. ${esc(c.label)} <button data-cue="${n}">Copy</button></h2><div class="text">${esc(c.text)}</div><div class="muted">${esc(c.expect)}</div></section>`,
-          )
-          .join("");
-        for (const b of $("cues").querySelectorAll("button[data-cue]")) {
-          b.onclick = async () => {
-            const text = cueText(cues.steps[Number(b.dataset.cue)]);
-            try {
-              await navigator.clipboard.writeText(text);
-            } catch {
-              // Clipboard blocked (insecure context, iframe): fall back to a selected textarea.
-              const ta = document.createElement("textarea");
-              ta.value = text;
-              document.body.appendChild(ta);
-              ta.select();
-              document.execCommand("copy");
-              ta.remove();
-            }
-            b.textContent = "Copied";
-            setTimeout(() => (b.textContent = "Copy"), 1500);
-          };
-        }
       }
 
       // --- knowledge -----------------------------------------------------------------------
@@ -1571,43 +1989,38 @@
       };
 
       // --- tabs ----------------------------------------------------------------------------
-      const TABS = {
-        console: "console",
-        system: "system",
-        kb: "kb-tab",
-        cues: "cues-tab",
-      };
+      const TABS = ["tickets", "kb", "settings", "system", "testing"];
       function showTab(name) {
-        if (!TABS[name]) name = "console";
-        for (const [t, panel] of Object.entries(TABS)) {
-          $(panel).hidden = t !== name;
+        if (!TABS.includes(name)) name = "tickets";
+        for (const t of TABS) {
+          $(`view-${t}`).hidden = t !== name;
           $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
         }
         store.set(TAB_KEY, name);
         if (name === "system" && !systemLoaded) loadSystem();
-        // Before loadDesks resolves no desk is selected; its continuation loads the list.
+        // Before loadDesks resolves no desk is selected; its continuation loads these.
         if (name === "kb" && desksReady) loadKb();
+        if (name === "settings" && desksReady) loadSettings();
       }
-      for (const t of Object.keys(TABS))
-        $(`tab-${t}`).onclick = () => showTab(t);
+      for (const t of TABS) $(`tab-${t}`).onclick = () => showTab(t);
 
       syncButtons();
-      showTab(location.hash.slice(1) || store.get(TAB_KEY) || "console");
+      showTab(location.hash.slice(1) || store.get(TAB_KEY) || "tickets");
       refreshFleet();
       // The desk is known before the first scoped request, so nothing renders the wrong desk.
       loadDesks().then(() => {
         desksReady = true;
         refreshBoard();
-        refreshTimeline();
         refreshReceipts();
         refreshMetrics();
         refreshEscalation();
-        if (!$("kb-tab").hidden) loadKb();
+        if (!$("view-kb").hidden) loadKb();
+        if (!$("view-settings").hidden) loadSettings();
       });
       loadCues().catch((e) => ($("cues").textContent = e.message));
       setInterval(() => {
         refreshBoard();
-        refreshTimeline();
+        refreshDrawer();
       }, 3000);
       setInterval(refreshFleet, 10000);
       setInterval(refreshReceipts, 20000);
