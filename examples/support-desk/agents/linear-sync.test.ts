@@ -15,7 +15,7 @@ import {
   setStatus,
   updateIssue,
 } from "../_shared/issues";
-import { fakeCtx } from "../_shared/test-ctx";
+import { EXAMPLE_SLA, fakeCtx } from "../_shared/test-ctx";
 import { agent, sync } from "./linear-sync/index";
 import { resolution, syncKey } from "./linear-sync/rules";
 
@@ -163,6 +163,17 @@ describe("linear-sync against the relay (mocked fetch)", () => {
   };
   const live = () => fakeCtx({ isLocalTrace: false });
   const posts = () => calls.filter((c) => c.method === "chat.postMessage");
+
+  it("with sla set, the redrawn card shows the first-response clock", async () => {
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    await newOnHold(1);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    await sync(live().ctx as never, db);
+    const card = calls.find((c) => c.method === "chat.update")!;
+    expect(JSON.stringify(card.args.blocks)).toContain(
+      "*First response due:* <!date^",
+    );
+  });
 
   it("moves a Done issue to On You with one triage post, a card redraw and one emit; a second tick does nothing", async () => {
     const id = await newOnHold(1);

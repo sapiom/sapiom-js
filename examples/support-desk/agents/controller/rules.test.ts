@@ -12,6 +12,7 @@ import {
   type MessageRow,
   type RuleInput,
 } from "./rules";
+import { EXAMPLE_SLA } from "../../_shared/test-ctx";
 
 const NOW = new Date("2026-10-01T12:00:00.000Z");
 const MINUTES = 5;
@@ -620,5 +621,87 @@ describe("dueEscalations", () => {
         defaultDeskId: "desk-1",
       }).map((e) => e.key),
     ).toEqual(["escalate:1"]);
+  });
+});
+
+describe("with sla", () => {
+  const min = 60_000;
+  const owned = { ownerSlackId: "U0OWNER01" };
+  const at = (now: Date, over: Partial<RuleInput>) =>
+    keys({ now, sla: EXAMPLE_SLA, ...over });
+
+  it("nudges an unowned urgent issue at its 15-minute target, not before", () => {
+    const opened = new Date(NOW.getTime() - 14 * min);
+    const input = {
+      issues: [issue({ priority: "urgent", createdAt: opened })],
+      drafts: [draft({ status: "approved" })],
+    };
+    expect(at(NOW, input)).toEqual([]);
+    expect(at(new Date(opened.getTime() + 15 * min), input)).toEqual([
+      "no_owner:issue-1:1",
+    ]);
+  });
+
+  it("counts business minutes for a normal issue opened Friday afternoon", () => {
+    // Fri 2026-10-02 16:30 New York (EDT); 480 business minutes end Mon 16:30.
+    const input = {
+      issues: [
+        issue({
+          ...owned,
+          priority: "normal",
+          createdAt: new Date("2026-10-02T20:30:00Z"),
+        }),
+      ],
+    };
+    expect(at(new Date("2026-10-05T20:29:00Z"), input)).toEqual([]);
+    expect(at(new Date("2026-10-05T20:30:00Z"), input)).toEqual([
+      "no_draft:issue-1:1",
+    ]);
+  });
+
+  it("uses the next-response target once the team has replied", () => {
+    const sla = {
+      ...EXAMPLE_SLA,
+      targets: {
+        ...EXAMPLE_SLA.targets,
+        urgent: {
+          firstResponseMinutes: 15,
+          nextResponseMinutes: 60,
+          businessHours: false,
+        },
+      },
+    };
+    const asked = new Date(NOW.getTime() - 30 * min);
+    const input = {
+      sla,
+      issues: [issue({ ...owned, priority: "urgent" })],
+      drafts: [draft({ status: "approved" })],
+      messages: [
+        message({ id: "reply", direction: "agent", ts: "1.0" }),
+        message({ id: "again", ts: "2.0", createdAt: asked }),
+      ],
+    };
+    expect(at(NOW, input)).toEqual([]);
+    expect(at(new Date(asked.getTime() + 60 * min), input)).toEqual([
+      "customer_waiting:again:1",
+    ]);
+  });
+
+  it("starts draft_pending at the draft, not at the issue", () => {
+    const drafted = new Date(NOW.getTime() - 10 * min);
+    const input = {
+      issues: [
+        issue({
+          ...owned,
+          priority: "urgent",
+          createdAt: new Date(NOW.getTime() - 86_400_000),
+        }),
+      ],
+      drafts: [draft({ createdAt: drafted })],
+    };
+    expect(at(NOW, input)).toEqual([]);
+    expect(at(new Date(drafted.getTime() + 15 * min), input)).toEqual([
+      "draft_pending:draft-1:1",
+    ]);
   });
 });

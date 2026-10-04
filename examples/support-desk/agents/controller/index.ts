@@ -102,8 +102,10 @@ interface Snapshot {
   now: Date;
 }
 
+/** Share threshold loading so scan and send apply the same configuration precedence. */
 async function thresholds(db: Db) {
   return {
+    sla: await getConfigOr(db, "sla", null),
     minutes: await getConfigOr(db, "nudge.minutes", 30),
     repeatMinutes: await getConfigOr(db, "nudge.repeat_minutes", [60, 240]),
     deskMinutes: Object.fromEntries(
@@ -154,7 +156,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
   const params = issueId ? [issueId] : [];
   const [issues, drafts, messages, sent, clock] = [
     await db.query(
-      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.desk_id, i.created_at from issues i where ${where}${issueId ? " for update" : ""}`,
+      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.desk_id, i.priority, i.created_at from issues i where ${where}${issueId ? " for update" : ""}`,
       params,
     ),
     await db.query(
@@ -178,6 +180,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
       ownerSlackId: (r.owner_slack_id as string | null) ?? null,
       triageRootTs: (r.triage_root_ts as string | null) ?? null,
       deskId: (r.desk_id as string | null) ?? null,
+      priority: (r.priority as string | null) ?? null,
       createdAt: new Date(r.created_at as Date),
     })),
     drafts: drafts.map((r: Row) => ({

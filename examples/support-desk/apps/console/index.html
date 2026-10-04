@@ -683,6 +683,22 @@
             <h2>Channels</h2>
             <div id="sys-channels" class="muted">loading…</div>
           </section>
+          <section class="card" id="sla">
+            <h2>SLA</h2>
+            <p class="muted">
+              First- and next-response targets per priority, in minutes; with
+              <code>businessHours: true</code> a target counts only minutes
+              inside the business window. Set, they replace the desks' nudge
+              minutes.
+            </p>
+            <textarea id="sla-json" spellcheck="false"></textarea>
+            <div class="row">
+              <button id="sla-save" class="mut primary">Save</button>
+              <button id="sla-clear" class="mut">Use nudge minutes</button>
+              <span id="sla-state" class="muted"></span>
+            </div>
+            <div id="sla-error" class="bad" style="white-space: pre-wrap"></div>
+          </section>
           <section class="card">
             <h2>How events come in</h2>
             <div class="flow">
@@ -1121,15 +1137,15 @@
           renderSummary();
           $("board-note").textContent = `newest ${b.issues.length}`;
           $("board").innerHTML =
-            `<tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>Owner</th><th>Linear</th><th>Age</th></tr>` +
+            `<tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>SLA</th><th>Owner</th><th>Linear</th><th>Age</th></tr>` +
             (b.issues.length
               ? b.issues
                   .map(
                     (i) =>
-                      `<tr><td class="num">${link(i.cardUrl, `#${i.number}`)}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td>${esc(i.account)}</td><td>${statusPill(i.status)}</td><td class="${i.priority === "urgent" ? "bad" : "muted"}">${esc(i.priority || "")}</td><td class="muted">${esc(i.owner || "—")}</td><td>${i.linear ? link(i.linearUrl, i.linear) : '<span class="muted">—</span>'}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
+                      `<tr><td class="num">${link(i.cardUrl, `#${i.number}`)}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td>${esc(i.account)}</td><td>${statusPill(i.status)}</td><td class="${i.priority === "urgent" ? "bad" : "muted"}">${esc(i.priority || "")}</td><td class="${i.slaLabel && i.slaLabel.includes("breached") ? "bad" : "muted"}">${esc(i.slaLabel || "—")}</td><td class="muted">${esc(i.owner || "—")}</td><td>${i.linear ? link(i.linearUrl, i.linear) : '<span class="muted">—</span>'}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
                   )
                   .join("")
-              : `<tr><td colspan="8" class="muted">no tickets yet</td></tr>`);
+              : `<tr><td colspan="9" class="muted">no tickets yet</td></tr>`);
         } catch (e) {
           $("board").innerHTML =
             `<tr><td class="bad">${esc(e.message)}</td></tr>`;
@@ -1351,6 +1367,7 @@
         try {
           const s = await get("/api/system");
           systemLoaded = true;
+          loadSla();
           const ch = (c, name) => link(c.url, `${name} (${c.channelId})`);
           $("sys-channels").className = "";
           $("sys-channels").innerHTML = `
@@ -1388,6 +1405,80 @@
             `<span class="bad">${esc(e.message)}</span>`;
         }
       }
+      /** Prefilled when `sla` is unset: the README example. */
+      const SLA_EXAMPLE = {
+        businessHours: {
+          timeZone: "America/New_York",
+          days: [1, 2, 3, 4, 5],
+          start: "09:00",
+          end: "17:00",
+        },
+        targets: {
+          urgent: {
+            firstResponseMinutes: 15,
+            nextResponseMinutes: 15,
+            businessHours: false,
+          },
+          high: {
+            firstResponseMinutes: 60,
+            nextResponseMinutes: 60,
+            businessHours: false,
+          },
+          normal: {
+            firstResponseMinutes: 480,
+            nextResponseMinutes: 480,
+            businessHours: true,
+          },
+          low: {
+            firstResponseMinutes: 480,
+            nextResponseMinutes: 480,
+            businessHours: true,
+          },
+        },
+      };
+      async function loadSla() {
+        $("sla-error").textContent = "";
+        try {
+          const { sla } = await get("/api/sla");
+          $("sla-json").value = JSON.stringify(sla || SLA_EXAMPLE, null, 2);
+          $("sla-state").textContent = sla
+            ? "in use"
+            : "not set: the desks' nudge minutes apply (example shown)";
+        } catch (e) {
+          $("sla-error").textContent = e.message;
+        }
+      }
+      $("sla-save").onclick = async () => {
+        $("sla-error").textContent = "";
+        let body;
+        try {
+          body = JSON.parse($("sla-json").value);
+        } catch {
+          $("sla-error").textContent = "not valid JSON";
+          return;
+        }
+        try {
+          await post("/api/sla", body, "PUT");
+        } catch (e) {
+          $("sla-error").textContent = e.message;
+          return;
+        }
+        log("SLA saved");
+        await loadSla();
+        refreshBoard();
+      };
+      $("sla-clear").onclick = async () => {
+        $("sla-error").textContent = "";
+        try {
+          await post("/api/sla", undefined, "DELETE");
+        } catch (e) {
+          $("sla-error").textContent = e.message;
+          return;
+        }
+        log("SLA removed: the desks' nudge minutes apply");
+        await loadSla();
+        refreshBoard();
+      };
       function renderSystemAgents() {
         if (!systemAgents.length) return;
         $("sys-agents").className = "";
