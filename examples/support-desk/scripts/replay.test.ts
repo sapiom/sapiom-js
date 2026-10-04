@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fireOutcome,
@@ -7,8 +7,12 @@ import {
   receiptsSince,
   tsGap,
   verdict,
+  Watcher,
   type ReceiptRow,
 } from "./replay";
+import { localFleetDb } from "../_shared/db";
+import { defaultDesk, upsertDesk } from "../_shared/desks";
+import { accountByChannel, openIssue, setTriageRoot } from "../_shared/issues";
 import { agentSlug } from "../_shared/fleet-id";
 
 describe("replay.json", () => {
@@ -97,5 +101,40 @@ describe("replay watcher", () => {
       fireOutcome({ state: "succeeded", execution: { status: "failed" } })
         .failed,
     ).toBe(true);
+  });
+});
+
+describe("Watcher", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("links a card in the channel it was posted in after its desk's channel moves", async () => {
+    const db = await localFleetDb();
+    const since = new Date(Date.now() - 60_000);
+    const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
+    const issue = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "high",
+      title: "moved",
+      customer: { channel: "C0CUSTOMER1", ts: "1790889355.981329" },
+    });
+    await setTriageRoot(db, issue.id, "C0TRIAGE001", "1790889360.000100");
+    const support = (await defaultDesk(db))!;
+    await upsertDesk(
+      db,
+      { ...support, triageChannel: "C0NEW" },
+      { overwrite: true },
+    );
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((l: string) => {
+      lines.push(l);
+    });
+    const client = { get: async () => [] } as never;
+    await new Watcher(client, db, since, 0, "C0NEW").poll();
+    const card = lines.find((l) => l.includes(`issue #${issue.number}`));
+    expect(card).toContain(
+      "https://slack.com/archives/C0TRIAGE001/p1790889360000100",
+    );
   });
 });

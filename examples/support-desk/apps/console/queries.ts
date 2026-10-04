@@ -54,6 +54,8 @@ export interface BoardRow {
   /** The newest draft's status; null when the copilot has drafted nothing. */
   draftStatus: string | null;
   triageRootTs: string | null;
+  /** The channel holding the card: the one stored with it (082), else the desk's. */
+  triageChannel: string;
   createdAt: Date;
 }
 
@@ -71,11 +73,12 @@ const toBoardRow = (r: Record<string, unknown>): BoardRow => ({
   linearState: (r.linear_state as string | null) ?? null,
   draftStatus: null,
   triageRootTs: (r.triage_root_ts as string | null) ?? null,
+  triageChannel: r.triage_channel as string,
   createdAt: r.created_at as Date,
 });
 
 const ISSUE_COLUMNS = `i.id, i.number, i.account_id, a.name as account, i.title, i.status, i.priority,
-  i.owner_slack_id, i.linear_identifier, i.linear_url, i.linear_state, i.triage_root_ts, i.created_at`;
+  i.owner_slack_id, i.linear_identifier, i.linear_url, i.linear_state, i.triage_root_ts, coalesce(i.triage_channel, d.triage_channel) as triage_channel, i.created_at`;
 
 /** Each row's newest draft status, read in one query rather than per row. */
 async function withDraftStatus(d: Db, rows: BoardRow[]): Promise<BoardRow[]> {
@@ -99,7 +102,7 @@ export async function boardIssues(
 ): Promise<BoardRow[]> {
   const rows = await d.query<Record<string, unknown>>(
     `select ${ISSUE_COLUMNS}
-       from issues i join accounts a on a.id = i.account_id
+       from issues i join accounts a on a.id = i.account_id join desks d on d.id = i.desk_id
       where i.desk_id = $1 and ${filter === "open" ? "i.status <> 'closed'" : "i.status = $2"}
       order by i.number desc limit ${Math.trunc(limit)}`,
     filter === "open" ? [deskId] : [deskId, filter],
@@ -125,7 +128,7 @@ export async function deskTicket(
 ): Promise<TicketView | null> {
   const rows = await d.query<Record<string, unknown>>(
     `select ${ISSUE_COLUMNS}
-       from issues i join accounts a on a.id = i.account_id
+       from issues i join accounts a on a.id = i.account_id join desks d on d.id = i.desk_id
       where i.desk_id = $1 and i.id = $2`,
     [deskId, issueId],
   );

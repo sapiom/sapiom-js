@@ -18,6 +18,7 @@ import {
   messagesForIssue,
   openIssue,
   setStatus,
+  setTriageRoot,
   updateIssue,
 } from "../_shared/issues";
 import { LinearRelayError } from "../_shared/linear";
@@ -348,6 +349,43 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(calls.find((c) => c.method === "chat.update")?.args).toMatchObject({
       channel: "C0TESTTRI01",
     });
+  });
+
+  it("after the desk's triage channel moves, replies under the card and redraws it in its channel", async () => {
+    const issue = await issueOnDesk({
+      team: "test-team",
+      project: "test-proj",
+    });
+    await setTriageRoot(db, issue.id, "C0TESTTRI01", issue.triageRootTs!);
+    await upsertDesk(
+      db,
+      {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C0NEW",
+        linearTeamId: "test-team",
+        linearProjectId: "test-proj",
+      },
+      { overwrite: true },
+    );
+    await escalate(liveCtx().ctx as never, db, {
+      ...input(),
+      issueId: issue.id,
+    });
+    const triage = calls.filter(
+      (c) =>
+        (c.method === "chat.postMessage" || c.method === "chat.update") &&
+        c.args.channel !== "C0TESTCUST1",
+    );
+    expect(triage.length).toBeGreaterThanOrEqual(2);
+    expect(triage.every((c) => c.args.channel === "C0TESTTRI01")).toBe(true);
+    expect(
+      triage.find((c) => c.method === "chat.postMessage")?.args,
+    ).toMatchObject({
+      threadTs: "1790889366.000100",
+      text: expect.stringContaining("Tracked as"),
+    });
+    expect(triage.some((c) => c.method === "chat.update")).toBe(true);
   });
 
   it("falls back to the global Linear keys only when the desk names none", async () => {

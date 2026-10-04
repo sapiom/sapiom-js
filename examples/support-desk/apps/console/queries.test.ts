@@ -11,6 +11,7 @@ import {
   markLinearChecked,
   openIssue,
   setStatus,
+  setTriageRoot,
 } from "../../_shared/issues";
 import { createArticle, listArticles } from "../../_shared/kb";
 import { resetBoard } from "../../_shared/reset";
@@ -213,6 +214,27 @@ describe("desk-scoped reads", () => {
       "11",
       "13",
     ]);
+  });
+});
+
+describe("card channel", () => {
+  it("is the channel a card was posted in after its desk's channel moves, else the desk's", async () => {
+    const posted = await issueOn(test, "posted");
+    await setTriageRoot(db, posted.id, "C0TESTTRI", posted.triageRootTs!);
+    const legacy = await issueOn(test, "legacy");
+    await upsertDesk(
+      db,
+      { ...test, triageChannel: "C0NEWTRI" },
+      { overwrite: true },
+    );
+    const rows = await boardIssues(db, test.id);
+    const channelOf = (id: string) =>
+      rows.find((r) => r.id === id)?.triageChannel;
+    expect(channelOf(posted.id)).toBe("C0TESTTRI");
+    expect(channelOf(legacy.id)).toBe("C0NEWTRI");
+    expect((await deskTicket(db, test.id, posted.id))?.triageChannel).toBe(
+      "C0TESTTRI",
+    );
   });
 });
 

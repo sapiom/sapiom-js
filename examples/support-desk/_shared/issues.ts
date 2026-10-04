@@ -57,6 +57,8 @@ export interface Issue {
   customerChannel: string | null;
   customerRootTs: string | null;
   triageRootTs: string | null;
+  /** 082_issue_triage_channel: the channel the triage card was posted in; null before a card. */
+  triageChannel: string | null;
   ownerSlackId: string | null;
   linearIssueId: string | null;
   linearIdentifier: string | null;
@@ -162,6 +164,7 @@ const toIssue = (r: Row): Issue => ({
   customerChannel: (r.customer_channel as string | null) ?? null,
   customerRootTs: (r.customer_root_ts as string | null) ?? null,
   triageRootTs: (r.triage_root_ts as string | null) ?? null,
+  triageChannel: (r.triage_channel as string | null) ?? null,
   ownerSlackId: (r.owner_slack_id as string | null) ?? null,
   linearIssueId: (r.linear_issue_id as string | null) ?? null,
   linearIdentifier: (r.linear_identifier as string | null) ?? null,
@@ -462,11 +465,12 @@ export async function assign(
 export async function setTriageRoot(
   db: Db,
   issueId: string,
+  triageChannel: string,
   triageRootTs: string,
 ): Promise<Issue> {
   const rows = await db.query(
-    "update issues set triage_root_ts = $2, updated_at = now() where id = $1 returning *",
-    [issueId, triageRootTs],
+    "update issues set triage_channel = $2, triage_root_ts = $3, updated_at = now() where id = $1 returning *",
+    [issueId, triageChannel, triageRootTs],
   );
   return toIssue(one(rows, `issue ${issueId}`));
 }

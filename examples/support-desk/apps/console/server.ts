@@ -463,7 +463,7 @@ function ticketRow(
     linearState: r.linearState,
     linearUrl: r.linearUrl ?? linearIssueUrl(projectUrl, r.linearIdentifier),
     createdAt: r.createdAt,
-    slackUrl: triageLink(desk.triageChannel, r.triageRootTs),
+    slackUrl: triageLink(r.triageChannel, r.triageRootTs),
   };
 }
 
@@ -530,7 +530,8 @@ async function ticketAction(
         ownerSlackId: t.ownerSlackId,
         triageRootTs: t.triageRootTs,
       },
-      triageChannel: desk.triageChannel,
+      // The click must come from the channel holding the card, which intake checks.
+      triageChannel: t.triageChannel,
       draft: t.pendingDraft,
     },
     actor,
