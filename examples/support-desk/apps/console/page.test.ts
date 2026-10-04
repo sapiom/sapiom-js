@@ -29,7 +29,7 @@ describe("console page SLA", () => {
     expect(page).toContain("if (slaDirty && !force) return;");
     // Keep validation errors beside the editor so the operator can correct the submitted settings.
     expect(page).toMatch(
-      /await request\(\);\s*\} catch \(e\) \{\s*\$\("sla-error"\)\.textContent = e\.message;/,
+      /showSlaState\(\(await request\(\)\)\.sla\);\s*\} catch \(e\) \{\s*\$\("sla-error"\)\.textContent = e\.message;/,
     );
   });
 
