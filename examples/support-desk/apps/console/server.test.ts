@@ -195,3 +195,28 @@ describe("console server controller switch", () => {
     });
   });
 });
+
+describe("console server metrics", () => {
+  it("takes the card time of the lower-id draft when two drafts share a created_at", async () => {
+    const [issue] = await db.query<{ id: string }>("select id from issues");
+    const opened = Math.floor(Date.now() / 1000) - 600;
+    await db.query("update issues set created_at = $1 where id = $2", [
+      new Date(opened * 1000).toISOString(),
+      issue.id,
+    ]);
+    // Inserted first with the greater id, so the tie cannot resolve by insertion.
+    for (const [id, after] of [
+      ["00000000-0000-4000-8000-000000000002", 120],
+      ["00000000-0000-4000-8000-000000000001", 60],
+    ] as const)
+      await db.query(
+        "insert into drafts (id, issue_id, text, card_ts, created_at, status) values ($1, $2, 'x', $3, '2026-01-01T00:00:00Z', 'pending')",
+        [id, issue.id, `${opened + after}.000100`],
+      );
+    const res = await call("GET", "/api/metrics?window=24h");
+    expect(res.status).toBe(200);
+    expect(res.body.latency).toMatchObject({
+      issueToDraftCard: { n: 1, p50: 60 },
+    });
+  });
+});
