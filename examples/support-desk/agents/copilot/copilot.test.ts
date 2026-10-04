@@ -3,10 +3,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
+import {
+  localFleetDb,
+  resetSharedDb,
+  setLocalDb,
+  type Db,
+} from "../../_shared/db";
 import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
   createDraft,
@@ -20,7 +25,7 @@ import {
   setStatus,
   setTriageRoot,
 } from "../../_shared/issues";
-import { setDocsFetcher } from "../../_shared/docs";
+import { localFetcher, setDocsFetcher } from "../../_shared/docs";
 import { createArticle } from "../../_shared/kb";
 import { fakeCtx } from "../../_shared/test-ctx";
 import {
@@ -43,6 +48,32 @@ import {
   FIXTURE_ISSUE,
   seedLocalFixtures,
 } from "./local";
+
+/** Arm one failure of a record write after its Slack post went out (SAP-3721 retry tests). */
+const failOnce = vi.hoisted(() => ({
+  linkMessage: false,
+  setDraftCard: false,
+}));
+vi.mock("../../_shared/issues", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../_shared/issues")>();
+  const once =
+    <A extends unknown[], R>(
+      name: keyof typeof failOnce,
+      fn: (...a: A) => Promise<R>,
+    ) =>
+    async (...a: A): Promise<R> => {
+      if (failOnce[name]) {
+        failOnce[name] = false;
+        throw new Error(`${name} failed`);
+      }
+      return fn(...a);
+    };
+  return {
+    ...real,
+    linkMessage: once("linkMessage", real.linkMessage),
+    setDraftCard: once("setDraftCard", real.setDraftCard),
+  };
+});
 
 type Directive = {
   kind: string;
@@ -203,9 +234,15 @@ describe("draft path", () => {
       channel: "C0TRIAGE001",
       threadTs: "1790889400.000200",
     });
-    expect(posted.blocks).toEqual(
-      copilotCard(draft, await getIssue(db, FIXTURE_ISSUE), new Map()),
+    const [header, ...rest] = copilotCard(
+      draft,
+      await getIssue(db, FIXTURE_ISSUE),
+      new Map(),
     );
+    expect(posted.blocks).toEqual([
+      { ...header, block_id: `sylon:draft-card:${draft.id}` },
+      ...rest,
+    ]);
     expect((await getIssue(db, FIXTURE_ISSUE)).summary).toBe(DRAFTED.summary);
   });
 
@@ -1246,5 +1283,131 @@ describe("draft helpers", () => {
       (outputSchema([DEPLOY_PAGE]) as typeof schema).properties.citations
         .maxItems,
     ).toBeUndefined();
+  });
+});
+
+describe("a retry after Slack accepted the post (SAP-3721)", () => {
+  type Sent = { method: string; args: Record<string, unknown> };
+
+  /**
+   * A deployed-run ctx: the shared pool is the test database, and Slack keeps every post in its
+   * thread so `conversations.replies` returns it, as the gateway does.
+   */
+  function liveCtx() {
+    const t = ctxFor("exec-live");
+    const sent: Sent[] = [];
+    const threads = new Map<string, Record<string, unknown>[]>();
+    let n = 0;
+    const slack = {
+      async postMessage(args: Record<string, unknown>) {
+        sent.push({ method: "chat.postMessage", args });
+        const ts = `1790990000.${String(++n).padStart(6, "0")}`;
+        const root = `${args.channel}/${args.threadTs ?? ts}`;
+        threads.set(root, [
+          ...(threads.get(root) ?? []),
+          { ts, bot_id: "B0SYLON", text: args.text, blocks: args.blocks },
+        ]);
+        return { ok: true, channel: args.channel, ts };
+      },
+      async replies(args: Record<string, unknown>) {
+        sent.push({ method: "conversations.replies", args });
+        return {
+          ok: true,
+          messages: threads.get(`${args.channel}/${args.ts}`) ?? [],
+        };
+      },
+      async update(args: Record<string, unknown>) {
+        sent.push({ method: "chat.update", args });
+        return { ok: true, channel: args.channel, ts: args.ts };
+      },
+      async postEphemeral() {
+        return { ok: true };
+      },
+      async addReaction() {
+        return { ok: true };
+      },
+      async removeReaction() {
+        return { ok: true };
+      },
+      async userInfo(args: { user: string }) {
+        return { ok: true, user: { id: args.user, name: args.user } };
+      },
+    };
+    (t.ctx as { isLocalTrace: boolean }).isLocalTrace = false;
+    Object.assign(t.ctx.sapiom as Record<string, unknown>, {
+      connectors: { slack },
+      database: {
+        get: async () => ({ connection: { connectionString: "pg-mem" } }),
+      },
+    });
+    const posts = (channel: string) =>
+      sent
+        .filter((c) => c.method === "chat.postMessage")
+        .filter((c) => c.args.channel === channel)
+        .map((c) => c.args);
+    return { ...t, sent, posts };
+  }
+
+  beforeEach(async () => {
+    await resetSharedDb(async () => ({ db, close: async () => {} }));
+    setDocsFetcher(localFetcher);
+  });
+  afterEach(async () => {
+    failOnce.linkMessage = false;
+    failOnce.setDraftCard = false;
+    setDocsFetcher(undefined);
+    await resetSharedDb();
+  });
+
+  it("apply finds the customer reply it already posted instead of posting it again", async () => {
+    const local = ctxFor("exec-decide");
+    const received = await step("receive").run(
+      fixture("slack/block-actions.draft-approve.json").payload,
+      local.ctx,
+    );
+    const decided = await step(received.stepName!).run(
+      received.input,
+      local.ctx,
+    );
+    expect(decided.stepName).toBe("apply");
+
+    const live = liveCtx();
+    failOnce.linkMessage = true;
+    await expect(step("apply").run(decided.input, live.ctx)).rejects.toThrow(
+      "linkMessage failed",
+    );
+    expect(
+      await messageBySourceEventId(db, `draft:${FIXTURE_DRAFT}`),
+    ).toBeNull();
+
+    await step("apply").run(decided.input, live.ctx);
+    const replies = live.posts("C0CUSTOMER1");
+    expect(replies).toHaveLength(1);
+    expect((replies[0].blocks as { block_id: string }[])[0].block_id).toBe(
+      `sylon:draft:${FIXTURE_DRAFT}`,
+    );
+    expect(
+      await messageBySourceEventId(db, `draft:${FIXTURE_DRAFT}`),
+    ).toMatchObject({ ts: "1790990000.000001" });
+  });
+
+  it("receive finds the draft card it already posted instead of posting it again", async () => {
+    const live = liveCtx();
+    const created = fixture("issue/created.json").payload;
+    failOnce.setDraftCard = true;
+    await expect(step("receive").run(created, live.ctx)).rejects.toThrow(
+      "setDraftCard failed",
+    );
+
+    const done = await step("receive").run(created, live.ctx);
+    const cards = live.posts("C0TRIAGE001");
+    expect(cards).toHaveLength(1);
+    const draftId = done.output!.draftId as string;
+    expect((cards[0].blocks as { block_id: string }[])[0].block_id).toBe(
+      `sylon:draft-card:${draftId}`,
+    );
+    expect(await getDraft(db, draftId)).toMatchObject({
+      cardTs: "1790990000.000001",
+    });
   });
 });

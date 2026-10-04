@@ -123,6 +123,42 @@ export async function callSlack<T = Record<string, unknown>>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+/** The ts of the bot message in the thread whose blocks carry `marker`, if any (SAP-3721). */
+async function findPosted(
+  ctx: SlackCtx,
+  channel: string,
+  threadTs: string,
+  marker: string,
+): Promise<string | undefined> {
+  let cursor: string | undefined;
+  do {
+    const args = {
+      channel,
+      ts: threadTs,
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    };
+    const out = await call<Awaited<ReturnType<SlackApi["replies"]>>>(
+      ctx,
+      "conversations.replies",
+      args,
+      (s) => s.replies(args),
+      () => ({ ok: true as const, messages: [] }),
+    );
+    const hit = (out.messages ?? []).find(
+      (m) => m.bot_id && m.blocks?.some((b) => b.block_id === marker),
+    );
+    if (hit) return hit.ts;
+    cursor = out.has_more ? out.response_metadata?.next_cursor : undefined;
+  } while (cursor);
+  return undefined;
+}
+
+/**
+ * With `key` and `threadTs`, the post is idempotent: a retry finds the earlier post by the
+ * `sylon:<key>` block_id it was stamped with and returns its ts instead of posting again. The
+ * gateway drops Slack `metadata`, so the marker rides on the first block.
+ */
 export async function post(
   ctx: SlackCtx,
   input: {
@@ -130,14 +166,30 @@ export async function post(
     text?: string;
     blocks?: Block[];
     threadTs?: string;
+    key?: string;
   },
 ): Promise<{ channel: string; ts: string }> {
+  const { key, ...args } = input;
+  if (key && args.threadTs) {
+    const marker = `sylon:${key}`;
+    const earlier = await findPosted(ctx, args.channel, args.threadTs, marker);
+    if (earlier) return { channel: args.channel, ts: earlier };
+    args.blocks = args.blocks?.length
+      ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
+      : [
+          {
+            type: "section",
+            block_id: marker,
+            text: { type: "mrkdwn", text: args.text ?? "" },
+          },
+        ];
+  }
   const out = await call(
     ctx,
     "chat.postMessage",
-    input,
-    (s) => s.postMessage(input),
-    () => ({ ok: true as const, channel: input.channel, ts: stubTs() }),
+    args,
+    (s) => s.postMessage(args),
+    () => ({ ok: true as const, channel: args.channel, ts: stubTs() }),
   );
   if (!out.ts)
     throw new SlackMethodError("chat.postMessage", 200, "no ts in response");

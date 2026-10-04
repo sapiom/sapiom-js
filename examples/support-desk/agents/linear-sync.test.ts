@@ -190,6 +190,9 @@ describe("linear-sync against the relay (mocked fetch)", () => {
       threadTs: "1790889356.001",
       text: "Engineering marked <https://linear.app/x/issue/SAP-1|SAP-1> Done. Reply to the customer.",
     });
+    expect((posts()[0].args.blocks as { block_id: string }[])[0].block_id).toBe(
+      `sylon:${await keyOf(id, "SAP-1", "done")}`,
+    );
     expect(calls.filter((c) => c.method === "chat.update")).toHaveLength(1);
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({
