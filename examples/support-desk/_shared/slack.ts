@@ -154,6 +154,27 @@ async function findPosted(
   return undefined;
 }
 
+/**
+ * A section's mrkdwn text caps at 3000 characters, where a plain text post does not. Cut at a line
+ * break, else a space, so an entity, link or emoji is not split across sections.
+ */
+function sections(text: string): string[] {
+  const out: string[] = [];
+  let rest = text;
+  while (rest.length > 3000) {
+    const head = rest.slice(0, 3001);
+    let cut = head.lastIndexOf("\n");
+    if (cut <= 0) cut = head.lastIndexOf(" ");
+    const sep = cut > 0 ? 1 : 0;
+    // ponytail: hard cut for 3000 characters without a space; such a reply is not prose.
+    if (cut <= 0) cut = 3000;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut + sep);
+  }
+  out.push(rest);
+  return out;
+}
+
 // SAP-3721: retries must recover posts whose database record failed.
 // The connector omits Slack metadata, so reconciliation requires a block marker.
 export async function post(
@@ -173,8 +194,7 @@ export async function post(
     if (earlier) return { channel: args.channel, ts: earlier };
     args.blocks = args.blocks?.length
       ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
-      : // A section's mrkdwn text caps at 3000 characters; a plain text post does not.
-        (args.text?.match(/[\s\S]{1,3000}/g) ?? [""]).map((text, i) => ({
+      : sections(args.text ?? "").map((text, i) => ({
           type: "section",
           ...(i === 0 ? { block_id: marker } : {}),
           text: { type: "mrkdwn", text },
