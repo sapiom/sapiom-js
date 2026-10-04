@@ -526,7 +526,7 @@ const decide = defineStep({
       }
       await recordRun(db, ctx, AGENT, found.issueId);
       // A closed issue must not get a reply to the customer (Approve) nor open work for the
-      // escalation agent (Escalate): either click dismisses the draft instead.
+      // escalation agent (Escalate): either click dismisses a pending draft instead.
       const issueNow = await getIssue(db, found.issueId);
       const closedNote = CLOSED_ISSUE_NOTE[verb];
       if (closedNote && issueNow.status === "closed") {
