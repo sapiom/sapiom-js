@@ -149,7 +149,9 @@ export interface LlmRunSpec {
    * Because the tool call is forced, the model has to reach it — and finish it — inside
    * `request.max_tokens`, thinking included. When the cap cuts it off, {@link run} throws
    * {@link LlmStructuredOutputTruncatedError} instead of handing back a response whose
-   * `tool_use` block never arrived or stopped mid-input.
+   * `tool_use` block never arrived or stopped mid-input. When the turn ends for any other
+   * reason without calling the tool (e.g. `end_turn` with only text), {@link run} throws
+   * {@link LlmStructuredOutputMissingError}, so a returned response always carries the call.
    */
   output?: LlmStructuredOutputSpec;
 }
@@ -521,6 +523,56 @@ export class LlmStructuredOutputTruncatedError extends Error {
   }
 }
 
+/**
+ * {@link run} asked for structured output, and the turn ended without the model calling the
+ * forced tool at all, for a reason other than `max_tokens` (that case is
+ * {@link LlmStructuredOutputTruncatedError}). The usual shape is `stop_reason: "end_turn"`
+ * with blocks like `[thinking, text]`: the model answered in prose instead of calling
+ * `output.name`. {@link structuredOf} returns `undefined` for such a response, and a step that
+ * carried on with it proceeded with nothing (SAP-3782).
+ *
+ * Unlike truncation, a retry can succeed, since the model's choice not to call the tool is not
+ * deterministic. It is not guaranteed to, so cap retries; the fields below say which
+ * deployment skipped the call and what it returned instead.
+ */
+export class LlmStructuredOutputMissingError extends Error {
+  /** The tool name the request forced (`output.name`). */
+  readonly outputName: string;
+  /** The response's `stop_reason`, or `undefined` when it carried none. */
+  readonly stopReason: string | undefined;
+  /** The class that served the call, from the response disclosure, or `null` when absent. */
+  readonly servedClass: string | null;
+  /** The model the response reports, or `undefined` when it carried none. */
+  readonly model: string | undefined;
+  /** `type` of each content block returned, in order (e.g. `["thinking", "text"]`). */
+  readonly blockTypes: string[];
+  /** The verbatim response, for programmatic inspection. */
+  readonly response: unknown;
+
+  constructor(outputName: string, response: unknown) {
+    const body = (response ?? {}) as { stop_reason?: unknown; model?: unknown };
+    const stopReason = typeof body.stop_reason === "string" ? body.stop_reason : undefined;
+    const model = typeof body.model === "string" ? body.model : undefined;
+    const servedClass = readDisclosure(response).servedClass;
+    const blockTypes = contentBlocksOf(response).map((block) => block.type);
+    const served = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
+    super(
+      `Structured output "${outputName}" was not produced: the model did not call the "${outputName}" tool ` +
+        `(stop_reason: ${stopReason ?? "none"}; content blocks: ${blockTypes.length ? blockTypes.join(", ") : "none"}` +
+        `${served ? `; served by ${served}` : ""}). ` +
+        `The request forced the tool call, but this deployment answered without it. ` +
+        `Catch this and retry a bounded number of times, or fail() the step; do not carry on with an empty result.`,
+    );
+    this.name = "LlmStructuredOutputMissingError";
+    this.outputName = outputName;
+    this.stopReason = stopReason;
+    this.servedClass = servedClass;
+    this.model = model;
+    this.blockTypes = blockTypes;
+    this.response = response;
+  }
+}
+
 /** `max_tokens` off a caller's verbatim request body, when it declared a numeric one. */
 function declaredMaxTokens(request: Record<string, unknown>): number | undefined {
   const value = request.max_tokens;
@@ -721,6 +773,9 @@ function withStructuredOutput(request: Record<string, unknown>, output: LlmStruc
  * turn hit `max_tokens` before the forced tool call was emitted, or partway through
  * its input — the cap has to cover thinking as well as output.
  *
+ * @throws {LlmStructuredOutputMissingError} when `spec.output` was set and the turn ended
+ * (any other `stop_reason`) without a `tool_use` block for `spec.output.name`.
+ *
  * This one is not worth retrying, and the engine does not know that: it is not a member
  * of the platform's non-retryable set, so left to escape a step it is re-run with the
  * identical under-capped request (up to the runner's per-step attempt limit), billing the
@@ -757,6 +812,10 @@ export async function run<T = Record<string, unknown>>(
       response,
       truncation.missingPath,
     );
+  }
+  // A forced tool call that never arrived, on a turn that did not hit the cap: an error, not an empty result.
+  if (spec.output && structuredOf(response, spec.output.name) === undefined) {
+    throw new LlmStructuredOutputMissingError(spec.output.name, response);
   }
   return response;
 }

@@ -4,7 +4,12 @@
  * tool-calling pattern for a single routed call.
  */
 import { createClient } from "../index.js";
-import { LlmStructuredOutputTruncatedError, structuredOf, textOf } from "./index.js";
+import {
+  LlmStructuredOutputMissingError,
+  LlmStructuredOutputTruncatedError,
+  structuredOf,
+  textOf,
+} from "./index.js";
 
 interface Captured {
   url?: string;
@@ -25,6 +30,10 @@ function fakeDirectFetch(cap: Captured, response: Record<string, unknown>): type
     } as unknown as Response;
   }) as unknown as typeof globalThis.fetch;
 }
+
+const TOOL_CALL_RESPONSE = {
+  content: [{ type: "tool_use", name: "record_person", input: { name: "Priya", age: 34 } }],
+};
 
 describe("textOf", () => {
   it("extracts the text block", () => {
@@ -89,7 +98,7 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
 
   it("injects the tool + forces tool_choice, appended to any caller-declared tools", async () => {
     const cap: Captured = {};
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, { ok: true }) });
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, TOOL_CALL_RESPONSE) });
     await sapiom.llm.run({
       request: {
         messages: [{ role: "user", content: "extract the person" }],
@@ -108,7 +117,7 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
 
   it("does not mutate the caller's original request object", async () => {
     const cap: Captured = {};
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, { ok: true }) });
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, TOOL_CALL_RESPONSE) });
     const request = { messages: [{ role: "user", content: "extract" }], max_tokens: 256 };
     await sapiom.llm.run({ request, output: { name: "record_person", schema: SCHEMA } });
     expect(request).not.toHaveProperty("tools");
@@ -566,16 +575,18 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     expect(structuredOf(res, "classify_ticket")).toEqual({ priority: "high" });
   });
 
-  it("does not throw for an empty structured result that was not truncated", async () => {
-    // The other half of the distinction the error draws: a turn that ended for any
-    // other reason is the caller's to judge, exactly as before.
+  it("does not throw the truncation error for a turn that ended without the tool call", async () => {
+    // Not truncated, so this is the missing-call error's case, not the cap's.
     const completion = { stop_reason: "end_turn", content: [{ type: "text", text: "I could not classify it" }] };
     const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
-    const res = await sapiom.llm.run({
-      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
-      output: { name: "classify_ticket", schema: SCHEMA },
-    });
-    expect(structuredOf(res, "classify_ticket")).toBeUndefined();
+    const error = await sapiom.llm
+      .run({
+        request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+        output: { name: "classify_ticket", schema: SCHEMA },
+      })
+      .catch((err: unknown) => err);
+    expect(error).not.toBeInstanceOf(LlmStructuredOutputTruncatedError);
+    expect(error).toBeInstanceOf(LlmStructuredOutputMissingError);
   });
 
   it("leaves a truncated PLAIN-TEXT call alone — no `output`, nothing forced", async () => {
@@ -587,5 +598,94 @@ describe("llm.run — a structured call truncated before its tool call", () => {
       request: { messages: [{ role: "user", content: "write" }], max_tokens: 64 },
     });
     expect(textOf(res)).toBe("partial…");
+  });
+});
+
+/**
+ * SAP-3782: a forced tool call the model skipped on a turn that was NOT cut off by the cap
+ * (Sylon copilot execution 848839). `structuredOf` returned `undefined` and the step carried on
+ * with nothing.
+ */
+describe("llm.run — a structured call whose turn ended without the tool call", () => {
+  const SCHEMA = {
+    type: "object",
+    properties: { priority: { type: "string" } },
+    required: ["priority"],
+  };
+  const skipped = {
+    id: "msg_1",
+    type: "message",
+    model: "medium",
+    stop_reason: "end_turn",
+    served_class: "medium",
+    lane: "run_now",
+    content: [
+      { type: "thinking", thinking: "weighing an ambiguous ticket…" },
+      { type: "text", text: "Here is my classification." },
+    ],
+  };
+
+  const runWith = (response: Record<string, unknown>) =>
+    createClient({ apiKey: "k", fetch: fakeDirectFetch({}, response) }).llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+      output: { name: "classify_ticket", schema: SCHEMA },
+    });
+
+  it("throws LlmStructuredOutputMissingError for end_turn with only thinking and text blocks", async () => {
+    await expect(runWith(skipped)).rejects.toBeInstanceOf(LlmStructuredOutputMissingError);
+  });
+
+  it("carries the stop reason, served class, model, tool name, block types and raw response", async () => {
+    const error = await runWith(skipped).catch((err: unknown) => err as LlmStructuredOutputMissingError);
+    expect(error.name).toBe("LlmStructuredOutputMissingError");
+    expect(error.outputName).toBe("classify_ticket");
+    expect(error.stopReason).toBe("end_turn");
+    expect(error.servedClass).toBe("medium");
+    expect(error.model).toBe("medium");
+    expect(error.blockTypes).toEqual(["thinking", "text"]);
+    expect(error.response).toEqual(skipped);
+    expect(error.message).toContain('the model did not call the "classify_ticket" tool');
+    expect(error.message).toContain("stop_reason: end_turn");
+    expect(error.message).toContain("content blocks: thinking, text");
+  });
+
+  it("throws when the only tool_use block is for a different tool", async () => {
+    const error = await runWith({
+      stop_reason: "tool_use",
+      content: [{ type: "tool_use", name: "other_tool", input: { x: 1 } }],
+    }).catch((err: unknown) => err as LlmStructuredOutputMissingError);
+    expect(error).toBeInstanceOf(LlmStructuredOutputMissingError);
+    expect(error.blockTypes).toEqual(["tool_use"]);
+  });
+
+  it("tolerates a response with no content, stop_reason or disclosure", async () => {
+    const error = await runWith({}).catch((err: unknown) => err as LlmStructuredOutputMissingError);
+    expect(error).toBeInstanceOf(LlmStructuredOutputMissingError);
+    expect(error.stopReason).toBeUndefined();
+    expect(error.servedClass).toBeNull();
+    expect(error.blockTypes).toEqual([]);
+  });
+
+  it("still throws the truncation error, not this one, for max_tokens with no tool call", async () => {
+    const error = await runWith({ ...skipped, stop_reason: "max_tokens" }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+    expect(error).not.toBeInstanceOf(LlmStructuredOutputMissingError);
+  });
+
+  it("returns the response when the tool call arrived", async () => {
+    const completion = {
+      stop_reason: "tool_use",
+      content: [
+        { type: "thinking", thinking: "…" },
+        { type: "tool_use", name: "classify_ticket", input: { priority: "high" } },
+      ],
+    };
+    expect(structuredOf(await runWith(completion), "classify_ticket")).toEqual({ priority: "high" });
+  });
+
+  it("does not apply to a call without `output`", async () => {
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, skipped) });
+    const res = await sapiom.llm.run({ request: { messages: [{ role: "user", content: "hi" }], max_tokens: 64 } });
+    expect(textOf(res)).toBe("Here is my classification.");
   });
 });

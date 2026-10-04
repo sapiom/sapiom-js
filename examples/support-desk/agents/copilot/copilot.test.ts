@@ -306,13 +306,17 @@ describe("draft path", () => {
       const name = (spec as { output: { name: string } }).output.name;
       if (name !== "draft_reply" || calls++ >= misses) return run(spec);
       t.llmCalls.push(spec as Record<string, unknown>);
-      return {
-        stop_reason: "end_turn",
-        content: [
-          { type: "thinking", thinking: "..." },
-          { type: "text", text: "Here is a draft." },
-        ],
-      };
+      // What `llm.run` does with a forced tool call the model skipped (SAP-3782).
+      throw Object.assign(new Error("model did not call the tool"), {
+        name: "LlmStructuredOutputMissingError",
+        response: {
+          stop_reason: "end_turn",
+          content: [
+            { type: "thinking", thinking: "..." },
+            { type: "text", text: "Here is a draft." },
+          ],
+        },
+      });
     };
   }
   const systemOf = (spec: Record<string, unknown>) =>
@@ -386,16 +390,18 @@ describe("draft path", () => {
     ).llm;
     const run = llm.run.bind(llm);
     llm.run = async (spec) => {
-      const response = await run(spec);
-      if (t.llmCalls.length === 2)
-        await createDraftOnce(db, {
-          issueId: FIXTURE_ISSUE,
-          text: "drafted by the other delivery",
-          citations: [],
-          causationId: "Ev0EXAMPLE01",
-          confidence: 0.7,
-        });
-      return response;
+      try {
+        return await run(spec);
+      } finally {
+        if (t.llmCalls.length === 2)
+          await createDraftOnce(db, {
+            issueId: FIXTURE_ISSUE,
+            text: "drafted by the other delivery",
+            citations: [],
+            causationId: "Ev0EXAMPLE01",
+            confidence: 0.7,
+          });
+      }
     };
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
     // The other delivery's row has no card yet (its post failed or is in flight): ours posts it.

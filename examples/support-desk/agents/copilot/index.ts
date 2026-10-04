@@ -223,20 +223,34 @@ async function requestDraft(
   allowedCitations: readonly string[],
 ): Promise<DraftOutput | null> {
   for (let attempt = 1; attempt <= DRAFT_ATTEMPTS; attempt++) {
-    const response = await ctx.sapiom.llm.run({
-      // A routing label, not a model id. With no model the gateway routes to `smart`, whose
-      // self-hosted model ignored the forced tool call on both attempts (execution 848839).
-      model: DRAFT_MODEL,
-      request: {
-        system:
-          attempt === 1
-            ? SYSTEM_PROMPT
-            : `${SYSTEM_PROMPT}\n\n${TOOL_REMINDER}`,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: DRAFT_MAX_TOKENS,
-      },
-      output: { name: OUTPUT_NAME, schema: outputSchema(allowedCitations) },
-    });
+    let response: unknown;
+    try {
+      response = await ctx.sapiom.llm.run({
+        // A routing label, not a model id. With no model the gateway routes to `smart`, whose
+        // self-hosted model ignored the forced tool call on both attempts (execution 848839).
+        model: DRAFT_MODEL,
+        request: {
+          system:
+            attempt === 1
+              ? SYSTEM_PROMPT
+              : `${SYSTEM_PROMPT}\n\n${TOOL_REMINDER}`,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: DRAFT_MAX_TOKENS,
+        },
+        output: { name: OUTPUT_NAME, schema: outputSchema(allowedCitations) },
+      });
+    } catch (err) {
+      // `run` throws when the model skips the forced tool call (SAP-3782). That is a missed
+      // attempt like an invalid one, not a failed step: a throw here would retry the step and
+      // pay for both LLM attempts again. Matched by name so this runs on SDKs that predate it.
+      if (!isMissingToolCall(err)) throw err;
+      ctx.logger.warn("draft response has no structured output", {
+        attempt,
+        toolCall: "missing",
+        ...responseShape(err.response),
+      });
+      continue;
+    }
     const structured = ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME);
     const parsed = DraftOutput.safeParse(structured);
     if (parsed.success) return parsed.data;
@@ -248,6 +262,12 @@ async function requestDraft(
     });
   }
   return null;
+}
+
+function isMissingToolCall(err: unknown): err is { response: unknown } {
+  return (
+    err instanceof Error && err.name === "LlmStructuredOutputMissingError"
+  );
 }
 
 /**

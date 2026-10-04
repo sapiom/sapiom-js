@@ -725,7 +725,11 @@ const review = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
 
 `output` appends that tool to the request and forces `tool_choice` onto it, so the
 reply comes back as a typed `tool_use` block. `structuredOf` reads it, and returns
-`undefined` rather than guessing when there is no such block. For a plain text reply,
+`undefined` rather than guessing when there is no such block. `llm.run` itself throws
+`LlmStructuredOutputMissingError` when the model ends a turn without calling the tool, and
+`LlmStructuredOutputTruncatedError` when it hit `max_tokens` first, so a response `run` returns
+always carries the call; catch the missing-call error to retry a bounded number of times or
+`fail()` the step. For a plain text reply,
 `textOf` — never `content[0]`, which can be a `thinking` block. When the answer is one of
 a fixed set you can name up front — a yes/no gate, a pick-one label, a rubric level — call
 `ctx.sapiom.decisions.evaluate` instead of an `output` schema: it returns calibrated probabilities
