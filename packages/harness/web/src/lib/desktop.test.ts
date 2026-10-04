@@ -12,9 +12,15 @@
  * message at all — especially "downloaded", where the user has to restart and
  * nothing else will tell them.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { describeUpdateOutcome, getDesktopBridge } from "./desktop";
+import {
+  describeUpdateOutcome,
+  getDesktopBridge,
+  revealAgentFolder,
+  revealLabel,
+  revealPlatform,
+} from "./desktop";
 
 const noop = (): Promise<never> => Promise.reject(new Error("not called"));
 
@@ -179,5 +185,104 @@ describe("describeUpdateOutcome", () => {
     ]) {
       expect(describeUpdateOutcome(o).text.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("revealAgentFolder", () => {
+  const agent = "/Users/me/agents/price-watch";
+  const refuse = (): Promise<Response> => Promise.reject(new Error("fetch not expected"));
+
+  // The route path reads the boot token off `window.__HARNESS__`; the Node
+  // runner has no window.
+  beforeEach(() => {
+    vi.stubGlobal("window", { __HARNESS__: { token: "boot-token" } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the desktop bridge when it has revealPath, and never the server", async () => {
+    const calls: string[] = [];
+    const host = {
+      sapiomDesktop: {
+        checkForUpdates: noop,
+        revealPath: async (p: string) => {
+          calls.push(p);
+          return true;
+        },
+      },
+    };
+    await expect(revealAgentFolder(agent, { host, fetch: refuse, mock: false })).resolves.toBe(true);
+    expect(calls).toEqual([agent]);
+  });
+
+  it("reports a bridge refusal or rejection as false rather than throwing", async () => {
+    const refusing = { sapiomDesktop: { checkForUpdates: noop, revealPath: async () => false } };
+    const throwing = { sapiomDesktop: { checkForUpdates: noop, revealPath: noop } };
+    await expect(revealAgentFolder(agent, { host: refusing, fetch: refuse, mock: false })).resolves.toBe(false);
+    await expect(revealAgentFolder(agent, { host: throwing, fetch: refuse, mock: false })).resolves.toBe(false);
+  });
+
+  it("falls back to POST /api/fs/reveal in a browser and on an older desktop build", async () => {
+    for (const host of [{}, { sapiomDesktop: { checkForUpdates: noop } }]) {
+      const requests: Array<{ url: string; init?: RequestInit }> = [];
+      const fetchStub = (async (url: string, init?: RequestInit) => {
+        requests.push({ url, init });
+        return new Response(null, { status: 204 });
+      }) as typeof fetch;
+      await expect(revealAgentFolder(agent, { host, fetch: fetchStub, mock: false })).resolves.toBe(true);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe("/api/fs/reveal");
+      expect(requests[0]?.init?.method).toBe("POST");
+      expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({ path: agent });
+      expect((requests[0]?.init?.headers as Record<string, string>)["X-Harness-Token"]).toBe("boot-token");
+    }
+  });
+
+  it("reports a 403 from the server, or a network failure, as false", async () => {
+    const forbidden = (async () => new Response(null, { status: 403 })) as typeof fetch;
+    const offline = (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+    await expect(revealAgentFolder(agent, { host: {}, fetch: forbidden, mock: false })).resolves.toBe(false);
+    await expect(revealAgentFolder(agent, { host: {}, fetch: offline, mock: false })).resolves.toBe(false);
+  });
+
+  it("touches neither the network nor the bridge in mock mode", async () => {
+    let bridgeCalls = 0;
+    const host = {
+      sapiomDesktop: {
+        checkForUpdates: noop,
+        revealPath: async () => {
+          bridgeCalls += 1;
+          return false;
+        },
+      },
+    };
+    await expect(revealAgentFolder(agent, { host: {}, fetch: refuse, mock: true })).resolves.toBe(true);
+    await expect(revealAgentFolder(agent, { host, fetch: refuse, mock: true })).resolves.toBe(true);
+    expect(bridgeCalls).toBe(0);
+  });
+});
+
+describe("revealPlatform and revealLabel", () => {
+  it("names each OS's file manager in its own words", () => {
+    expect(revealLabel("mac")).toBe("Open in Finder");
+    expect(revealLabel("windows")).toBe("Show in Explorer");
+    expect(revealLabel("linux")).toBe("Open folder");
+  });
+
+  it("reads the platform from userAgentData first, then navigator.platform", () => {
+    expect(revealPlatform({ navigator: { platform: "MacIntel" } })).toBe("mac");
+    expect(revealPlatform({ navigator: { platform: "Win32" } })).toBe("windows");
+    expect(revealPlatform({ navigator: { platform: "Linux x86_64" } })).toBe("linux");
+    expect(revealPlatform({ navigator: { platform: "Linux", userAgentData: { platform: "Windows" } } })).toBe(
+      "windows",
+    );
+  });
+
+  it("reads an unknown or missing platform as Linux, the least specific label", () => {
+    expect(revealPlatform({})).toBe("linux");
+    expect(revealPlatform({ navigator: {} })).toBe("linux");
   });
 });

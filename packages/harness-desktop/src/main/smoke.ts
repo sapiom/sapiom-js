@@ -883,6 +883,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       " deep: typeof window.sapiomDesktop?.onDeepLink," +
       " updateState: typeof window.sapiomDesktop?.onUpdateState," +
       " pathForFile: typeof window.sapiomDesktop?.pathForFile," +
+      " revealPath: typeof window.sapiomDesktop?.revealPath," +
       " version: window.sapiomDesktop?.appVersion })",
   )) as {
     bridge: string;
@@ -891,6 +892,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
     deep: string;
     updateState: string;
     pathForFile: string;
+    revealPath: string;
     version: unknown;
   };
 
@@ -936,17 +938,25 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       `bridge incomplete — pathForFile missing: ${JSON.stringify(shape)}`,
     );
   }
+  // Shape-only, like chooseDirectory: invoking revealPath would open a real
+  // file-manager window. Its handler is registered beside chooseDirectory's.
+  if (shape.revealPath !== "function") {
+    throw new Error(
+      `bridge incomplete — revealPath missing: ${JSON.stringify(shape)}`,
+    );
+  }
   // The bridge must stay MINIMAL as well as present. Beyond appVersion the only
   // members allowed are checkForUpdates (no destructive counterpart — applying
   // an update is a native dialog, see ipc.ts), chooseDirectory (returns only a
   // user-picked path, opens no file, and is itself gated by isTrustedSender),
   // the two receive-only subscriptions (onDeepLink, onUpdateState), and
   // pathForFile (read-only resolution of a dropped File's path — no IPC, opens
-  // nothing). A restart method, by contrast, would let same-origin
+  // nothing), and revealPath (shows a folder in the file manager, runs nothing,
+  // gated by isTrustedSender). A restart method, by contrast, would let same-origin
   // agent-authored content end every running session — so anything new here has
   // to be a deliberate addition.
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState' && k !== 'pathForFile')",
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState' && k !== 'pathForFile' && k !== 'revealPath')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(
@@ -1002,7 +1012,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState + pathForFile (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState + pathForFile + revealPath (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }
