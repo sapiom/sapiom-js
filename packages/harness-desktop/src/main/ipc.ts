@@ -72,6 +72,20 @@ export const UPDATE_CHECK = "update:check";
 export const CHOOSE_DIRECTORY = "dialog:choose-directory";
 
 /**
+ * SPA → main (invoke): show a folder in the OS file manager, selected inside its
+ * parent where the platform supports it (`shell.showItemInFolder`).
+ * Takes an absolute path; resolves `true` when handed to the OS, `false` when
+ * refused (untrusted sender, not an absolute path, nothing there).
+ *
+ * The browser build has the same affordance through `POST /api/fs/reveal`, which
+ * accepts only registered agent folders. Here the trusted-sender check is the
+ * gate: only the SPA at the top frame `/` may ask, so agent-authored content
+ * served at `/canvas/:sessionId/*` cannot make the OS open windows. Revealing
+ * opens and runs nothing — `shell.showItemInFolder` only shows the item.
+ */
+export const REVEAL_PATH = "shell:reveal-path";
+
+/**
  * main → renderer (push): a `sapiom://` deep link was received; navigate the SPA
  * to the target (an agent or a template). A main→renderer SEND, not an invoke, so
  * it is NOT subject to `isTrustedSender` (which guards renderer→main invokes) — it

@@ -17,6 +17,7 @@ import {
   APP_VERSION_ARG,
   CHOOSE_DIRECTORY,
   DEEP_LINK_NAVIGATE,
+  REVEAL_PATH,
   UPDATE_CHECK,
   UPDATE_STATE,
   type DeepLinkTarget,
@@ -54,6 +55,14 @@ const api = {
    */
   chooseDirectory(defaultPath?: string): Promise<string | null> {
     return ipcRenderer.invoke(CHOOSE_DIRECTORY, defaultPath) as Promise<string | null>;
+  },
+  /**
+   * Show `path` (absolute) in Finder / Explorer / the Linux file manager.
+   * Resolves true when the OS was asked, false when refused. Opens and runs
+   * nothing: the main process only reveals the item.
+   */
+  revealPath(path: string): Promise<boolean> {
+    return ipcRenderer.invoke(REVEAL_PATH, path) as Promise<boolean>;
   },
   /**
    * Subscribe to `sapiom://` deep links that arrive while the app is running.

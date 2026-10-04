@@ -1,13 +1,16 @@
 /**
- * Native OS dialogs the SPA can open.
+ * Native OS dialogs and file-manager windows the SPA can open.
  *
- * Currently just the "choose folder" picker behind the folder field's Browse
- * button. It is a desktop-only shortcut: the same SPA served by
- * `npx @sapiom/harness` has no bridge and keeps its in-app directory listing, so
- * this is never a dependency — `harness/web/src/lib/desktop.ts` feature-detects it.
+ * The "choose folder" picker behind the folder field's Browse button, and the
+ * node card's reveal-in-Finder/Explorer. Both are desktop-only shortcuts: the
+ * same SPA served by `npx @sapiom/harness` has no bridge (the picker keeps its
+ * in-app listing; reveal goes through `POST /api/fs/reveal`), so neither is a
+ * dependency — `harness/web/src/lib/desktop.ts` feature-detects them.
  */
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
-import { CHOOSE_DIRECTORY } from "./ipc.js";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { CHOOSE_DIRECTORY, REVEAL_PATH } from "./ipc.js";
 import { isTrustedSender } from "./trusted-sender.js";
 
 /** The window a dialog is parented to (a sheet on macOS). Set on every boot. */
@@ -32,6 +35,17 @@ export function initDialogs(deps: { mainWindow: BrowserWindow }): void {
   ipcMain.handle(CHOOSE_DIRECTORY, (event, defaultPath): Promise<string | null> =>
     chooseDirectory(event, defaultPath),
   );
+  ipcMain.handle(REVEAL_PATH, (event, target): boolean => revealPath(event, target));
+}
+
+/** Exported for the unit test; reached only through the REVEAL_PATH handler. */
+export function revealPath(event: IpcMainInvokeEvent, target: unknown): boolean {
+  // Same gate as the picker: page content served on this origin
+  // (`/canvas/:sessionId/*`) must not be able to pop file-manager windows.
+  if (!isTrustedSender(event)) return false;
+  if (typeof target !== "string" || !isAbsolute(target) || !existsSync(target)) return false;
+  shell.showItemInFolder(target);
+  return true;
 }
 
 async function chooseDirectory(event: IpcMainInvokeEvent, defaultPath: unknown): Promise<string | null> {
