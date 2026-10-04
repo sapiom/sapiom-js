@@ -1,25 +1,506 @@
 # Support desk
 
-A Slack support desk you can clone, built from a fleet of Sapiom agents.
-
-Hosted support desks charge about \$3 a ticket, often with a monthly minimum. The core of what a B2B
-support tool does is small: turn customer Slack messages into issues, triage them, draft replies,
-escalate bugs to Linear, and follow up on what has stalled. We didn't want to pay \$1,500 a month
-for that, so we built this on Sapiom. Clone it for free and pay only for your own agent runs.
+A Slack support desk for B2B teams that you install into your own Sapiom org and pay for per agent
+run. Customers write in Slack channels you share with them; your team works the issues from one
+triage channel.
 
 What it does:
 
-- A customer message in a Slack channel becomes an issue, classified by Jev (bug, question,
-  billing, ...; urgent to low), linked to the customer's account, and posted as a card in your
-  desk's triage channel.
-- A copilot drafts a reply grounded in the public docs and your team's own knowledge base (see Knowledge). A teammate clicks **Approve**
-  to send it to the customer, **Escalate** to open a Linear issue, or **Dismiss**.
-- A controller nudges the triage thread when an issue has no draft, a draft waits for a decision,
-  a customer waits for a reply, or nobody owns the issue.
+- A customer message becomes an **issue**: classified by Jev (bug, question, billing, ...; urgent
+  to low), linked to the customer's account, and posted as a card in your triage channel.
+- A **copilot** drafts a reply from your team's knowledge base (policies and answers you write in
+  the Console) and, if you configure one, your public docs site. A teammate clicks **Approve** to
+  send it, **Escalate** to open a Linear issue, or **Dismiss**.
+- A **controller** nudges the triage thread when an issue has no draft, a draft waits for a
+  decision, a customer waits for a reply, or nobody owns the issue. It can also page a person.
+- A **daily digest** lists open issues per desk, and a **watchdog** posts any failed agent run.
 - A thank-you or an acknowledgement opens nothing.
-- One deployed fleet serves several isolated **desks** (say `test` and `support`): each has its own
-  triage channel, board, Linear project, on-call user, nudge timing and, if you want, knowledge
-  base. See Desks.
+- One install serves several isolated **desks** (say `test` and `support`), each with its own
+  triage channel, Linear project, on-call user and nudge timing.
+
+It is a **fleet**, not one agent: seven agents that meet only through events and one shared
+Postgres, plus an optional pager, a run-by-hand setup agent and a Console web app. Installing it
+means: create the database, seed your Slack and Linear ids, deploy the agents, attach their
+triggers. The two quickstarts below do exactly that.
+
+## Prerequisites
+
+Check each item before you start. Setup probes the connectors and the channels for you, but it
+cannot fix them.
+
+| #   | What                                                                           | Why, and how to check                                                                                                                                                                                                                                                                           |
+| --- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The **Slack** connector, connected on the Sapiom Connectors page               | Every agent reads or posts through it. The bot token stays in Sapiom.                                                                                                                                                                                                                           |
+| 2   | The **Slack bot invited to your triage channel**                               | Cards, drafts and nudges post there. Without it the setup agent reports `not_in_channel`.                                                                                                                                                                                                       |
+| 3   | The **Slack bot invited to every customer channel**                            | The bot sees only channels it is in. **A customer message in a channel without the bot fails silently**: Slack sends Sapiom nothing, so there is no event, no run and no error anywhere. Invite the bot when you add a channel, and list the channel in `channels.customer` so setup probes it. |
+| 4   | The **Linear** connector, with write access, under the MCP relay slug `linear` | Escalation creates Linear issues; linear-sync reads their state. Optional if you never escalate.                                                                                                                                                                                                |
+| 5   | A Linear **team** (and, optionally, a project) for escalated issues            | The setup agent lists the teams and projects the connector can see, with their ids.                                                                                                                                                                                                             |
+| 6   | The ids you will need                                                          | Triage channel id (channel details, bottom of About: `C…`), on-call user id (profile, More, Copy member ID: `U…`), customer channel ids.                                                                                                                                                        |
+
+API keys. The Agent Studio / MCP install needs no API key except for the optional Console; the
+CLI install needs one for everything.
+
+| Used for                                                  | Key and scopes                                                                                                                                           |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm run setup` (CLI install)                            | An org key with write access, in `SAPIOM_API_KEY`.                                                                                                       |
+| The Console's `CONSOLE_API_KEY` (optional, both installs) | An org key with write access: the Console changes triggers, starts runs, emits ticket actions and writes settings. `pnpm run console:publish` stores it. |
+
+## Quickstart A: Agent Studio or the Sapiom MCP (recommended)
+
+You (or the coding agent in Agent Studio) drive this with the `sapiom_dev_agents_*` tools of the
+local authoring MCP, signed in to your org. No API key is needed except for the optional Console (step 9).
+
+1. **Get the code and test it.**
+
+   ```bash
+   git clone --depth 1 --filter=blob:none --sparse https://github.com/sapiom/sapiom-js
+   cd sapiom-js && git sparse-checkout set examples/support-desk && cd examples/support-desk
+   pnpm install --ignore-workspace   # this directory is outside the sapiom-js workspace
+   pnpm test && pnpm typecheck       # offline: pg-mem stands in for Postgres, no network
+   ```
+
+   Expected: every test passes and typecheck prints nothing. The deploy tool needs the project in
+   a git repository with at least one commit; a clone is one. If you copied the folder elsewhere,
+   run `git init && git add -A && git commit -m init` there.
+
+2. **Deploy the setup agent.** `sapiom_dev_agents_link` with `create: true` and the name
+   `support-desk-setup`, for the project `agents/setup`; then `sapiom_dev_agents_deploy` it.
+
+   Expected: a definition id, then a build that reaches `ready`. Agent names are always
+   `<fleetId>-<key>`; see [Fleet identity](#fleet-identity) to use another prefix.
+
+3. **Run it with no input.** `sapiom_dev_agents_run` on `support-desk-setup` with `{}`.
+
+   Expected output (abridged):
+
+   ```json
+   {
+     "database": {
+       "handle": "support-desk",
+       "created": true,
+       "migrationsApplied": ["001_init", "..."],
+       "seeded": null,
+       "desks": []
+     },
+     "checks": [
+       {
+         "target": "linear connector",
+         "ok": true,
+         "detail": "connected (76 tools)"
+       }
+     ],
+     "linear": {
+       "teams": [{ "id": "<team id>", "name": "Engineering", "key": "ENG" }],
+       "projects": [
+         { "id": "<project id>", "name": "Support", "teams": ["Engineering"] }
+       ]
+     },
+     "next": [
+       "Run this agent again with { \"desks\": [...] ... } to seed your first desk.",
+       "..."
+     ]
+   }
+   ```
+
+   If the Linear check fails, its `fix` says what to connect. Pick a team id (and a project id)
+   from `linear`. To create a new Linear project for support issues, create it in Linear and run
+   this step again.
+
+4. **Seed your desk.** Run `support-desk-setup` again, with your ids:
+
+   ```json
+   {
+     "desks": [
+       {
+         "slug": "support",
+         "name": "Support",
+         "triageChannel": "<triage channel id>",
+         "linearTeamId": "<team id from step 3>",
+         "linearProjectId": "<project id from step 3>",
+         "oncallSlackId": "<on-call user id>",
+         "default": true
+       }
+     ],
+     "config": {
+       "channels.customer": [
+         { "channelId": "<customer channel id>", "accountName": "Acme" }
+       ]
+     }
+   }
+   ```
+
+   Expected: `database.seeded` lists `desksSet: ["support"]`, the config keys it set and
+   `starterArticles: 3`; every entry in `checks` has `"ok": true`. A check with `not_in_channel`
+   means the bot is not in that channel: invite it and run again. Use `"channels.customer": []`
+   if you have no customer channel yet. Rerunning is safe: an existing desk is kept, and a config
+   key you name is written again.
+
+5. **Deploy the fleet agents.** For each key `intake`, `copilot`, `escalation`, `controller`,
+   `linear-sync`, `watchdog`, `digest`: `sapiom_dev_agents_link` with `create: true`, the name
+   `support-desk-<key>` and the project `agents/<key>`, then `sapiom_dev_agents_deploy`. They can
+   deploy in parallel.
+
+   Expected: seven builds at `ready`. Nothing runs yet: no agent has a trigger.
+
+6. **Attach the triggers** with `sapiom_dev_agents_schedule`, exactly as `fleet.json` lists them.
+
+   | Agent                      | Trigger                                                                       |
+   | -------------------------- | ----------------------------------------------------------------------------- |
+   | `support-desk-intake`      | events `slack.message.created`, `slack.reaction_added`, `slack.block_actions` |
+   | `support-desk-copilot`     | events `issue.created`, `issue.message_added`, `slack.block_actions`          |
+   | `support-desk-escalation`  | event `issue.escalate`                                                        |
+   | `support-desk-controller`  | cron `*/2 * * * *`                                                            |
+   | `support-desk-linear-sync` | cron `*/2 * * * *`                                                            |
+   | `support-desk-digest`      | cron `0 9 * * *`, timezone `America/Los_Angeles`                              |
+   | `support-desk-watchdog`    | event `sapiom.run.failed`                                                     |
+
+   Expected: eleven active triggers. Within two minutes `sapiom_dev_agents_schedule_inspect` shows a
+   controller and a linear-sync run that completed with nothing to do.
+
+7. **Verify** as in [Verify the install](#verify-the-install).
+
+8. **Optional: the pager.** Deploy `agents/urgent-pager` as `support-desk-urgent-pager` and attach
+   the event `issue.created`. It DMs the desk's on-call user for every urgent issue.
+
+9. **Console (optional), the one step that needs an org key.** No MCP tool sets an App Link's
+   environment, so run `SAPIOM_API_KEY=<org key with write access> pnpm run console:publish`.
+   Expected: an org-only App Link `support-desk-console` with the key stored as `CONSOLE_API_KEY`.
+
+## Quickstart B: CLI (`pnpm run setup`)
+
+One command does everything above with an org key. It needs no setup agent.
+
+1. **Get the code and test it** (step 1 above). Expected: every test passes.
+2. **Write `fleet.local.json`** (gitignored) with your ids; see [Desks](#desks) for every field:
+
+   ```json
+   {
+     "desks": [
+       {
+         "slug": "support",
+         "name": "Support",
+         "triageChannel": "<triage channel id>",
+         "linearTeamId": "<Linear team id>",
+         "oncallSlackId": "<on-call user id>",
+         "default": true
+       }
+     ],
+     "config": {
+       "channels.customer": [],
+       "knowledge.docs_url": "https://docs.example.com"
+     }
+   }
+   ```
+
+   To find Linear ids: `SAPIOM_API_KEY=<org key> pnpm run linear:list`. Expected: the teams and
+   projects with their ids, as JSON. `knowledge.docs_url` is optional; see [Knowledge](#knowledge).
+
+3. **Install.** `SAPIOM_API_KEY=<org key> pnpm run setup` (`pnpm run`, not `pnpm setup`, which is
+   pnpm's own command). Expected: one line per step and a list of changes: database created,
+   migrations applied, desks and config set, three starter policies, seven agents deployed,
+   eleven triggers attached. A second run prints
+   `no changes: the fleet is installed`. It stops early, with the fix, if a connector is missing,
+   the bot cannot read a triage channel, or an id is still one of `fleet.json`'s examples.
+4. **Console (optional).** `SAPIOM_API_KEY=<org key> pnpm run console:publish`.
+5. **Verify** as below.
+
+`setup.ts` runs each step check-then-create, so a rerun repairs a partial install:
+
+1. Probes the Slack and Linear connectors (every desk's triage channel; with urgent-pager, every
+   on-call user), and stops with what to connect if one is missing.
+2. Resolves or creates the fleet database (`support-desk` by default), applies migrations, seeds
+   missing desks, config and accounts.
+3. Adds three starter policy articles when the knowledge base is empty.
+4. Links and deploys each project, skipping one whose bundle is already the live build.
+5. Lists each agent's triggers and attaches only the missing ones (the server dedups event
+   triggers but not cron), detaches the triggers in `RETIRED_TRIGGERS` (`scripts/fleet.ts`), and
+   resumes paused ones.
+6. Writes `.sapiom/fleet-state.json`: definition, build and trigger ids, with no keys.
+
+`--skip <key>` leaves a project out, and `--only <key>` acts on exactly the named projects,
+including optional ones (`--only setup` deploys the setup agent). `--no-triggers` deploys without
+attaching triggers. `--overwrite` resets desks and config to `fleet.local.json` + `fleet.json`
+(normally a rerun keeps what the Console or an onboarding flow changed).
+
+## Verify the install
+
+The desk treats a message as a customer's when its author is outside your Slack workspace. So a
+message you post yourself is a **team** message and opens nothing. Test with one of:
+
+- **A customer account.** Someone in another workspace posts in a Slack Connect channel shared with
+  yours, with the bot in it.
+- **A test user.** Add your second Slack account's user id to `customers.test_user_ids` (setup
+  agent: `{ "config": { "customers.test_user_ids": ["U…"] } }`; CLI: `fleet.local.json`, then
+  `pnpm run setup`). That user counts as a customer everywhere.
+
+Then post a question in the customer channel. Expected, in order:
+
+1. About 30 s: an issue card in the triage channel (and 👀 on the message, unless
+   `intake.reactions` is `false`).
+2. About 20 s later: a draft card in the card's thread, with confidence and sources.
+3. **Approve** posts the reply in the customer's thread. **Escalate** opens a Linear issue and
+   replies "Tracked as ..." in the triage thread.
+
+Nothing at all after a minute: see [Troubleshooting](#troubleshooting).
+
+## Configuration
+
+### Desks
+
+A desk keeps test traffic and real traffic apart while they share agents and code. It owns a
+triage channel, a Linear team and project, an on-call user and the nudge threshold; its accounts
+and issues belong to it, and each knowledge article belongs to one desk or to all of them.
+
+| Desk field                        | Used by                                                                       |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| `triageChannel`                   | cards, drafts, notes and nudges for the desk's issues; where its clicks count |
+| `linearTeamId`, `linearProjectId` | escalation (falls back to the old `linear.*` config keys when unset)          |
+| `oncallSlackId`                   | urgent-pager (falls back to the old `oncall.slack_id` key)                    |
+| `nudgeMinutes` (default 30)       | controller, when the `sla` key is unset                                       |
+| `default`                         | the desk for any customer channel `channels.customer` does not assign         |
+
+How a message finds its desk: intake looks up the customer channel in `channels.customer`; its
+`desk` slug names the desk, and an entry without one (or an unlisted channel) gets the default desk.
+The account keeps that desk, and every issue it opens does too. A channel naming an unknown desk,
+or any channel when no default desk exists, is skipped with the outcome `no desk for channel`;
+nothing is filed. A Take or Close counts only from the channel holding the issue's card (its desk's
+triage channel, or the one the card was posted in before that desk's channel moved), and a
+triage-thread message only from the issue's desk's triage channel, so a click in the `test` triage
+channel cannot touch a `support` issue. The watchdog
+is fleet-wide: it alerts in `alerts.channel`, else the default desk's triage channel.
+
+Add a desk by passing it to the setup agent, or by adding it to `desks` in `fleet.local.json` and
+running `pnpm run setup` (`--overwrite`, or `"overwrite": true` for the agent, updates a desk that
+exists). Change an existing desk's fields in the Console's Settings tab. Each issue stores the
+channel its card was posted in, so moving a desk's triage channel leaves its existing cards working
+in the old channel (nudges, card updates and clicks), while new cards go to the new one. A database installed before
+desks gets a default desk `test` from its existing `channels.triage`, `linear.*`,
+`oncall.slack_id` and `nudge.minutes` config rows in migration 080.
+
+`channels.customer` is optional and names accounts and their desk: a listed channel gets its
+account at seeding under the given name and desk, and is probed by setup; any other channel the bot
+is in gets an account on its first outside message, named by its channel id and filed under the
+default desk. Setup refuses `fleet.json`'s example entry, so pass your own list or `[]`.
+
+### Knowledge
+
+The copilot drafts from up to two sources, and neither is compiled into the agent.
+
+- **Team knowledge, edited in the Console.** The **Knowledge** tab lists the `kb_articles` table:
+  create, edit, enable or disable, and delete. A _policy_ is a rule the copilot always follows
+  (refund wording, SLAs, tone). An _answer_ is a team-written Q&A; they are all included while
+  their text totals under 15,000 characters, and chosen by a small selection call beyond that.
+  Edits apply to the next draft with no redeploy. An article is for one desk or for all desks; a
+  draft reads its issue's desk articles plus the all-desks ones. Setup seeds three generic starter
+  policies (billing questions beyond the pricing page, never ask for credentials, tone) into an
+  empty table; edit or delete them.
+- **Your public docs, fetched live (optional).** Set the config key **`knowledge.docs_url`** to a
+  docs site that publishes [`llms.txt`](https://llmstxt.org) (`https://docs.example.com`, read as
+  `https://docs.example.com/llms.txt`) or to the `llms.txt` URL itself. It must be https. Set it
+  in the Knowledge tab (Public docs), with the setup agent's `config`, or in `fleet.local.json`.
+  Each draft then starts with one small model call that reads the issue and the index and picks up
+  to three pages; those are fetched as markdown (`<page url>.md`), cut to 12,000 characters each,
+  and cached in `doc_cache` for one hour. Only URLs on that site's origin are ever fetched. If the
+  docs cannot be read, the draft is written from the team's articles alone with confidence capped
+  at 50% (60% when only some pages failed). The run does not fail.
+
+**With `knowledge.docs_url` unset** (the default) the copilot fetches nothing, its prompt has no
+docs section, and a draft can cite only your articles. With no articles either, it answers from
+the thread alone, asks a clarifying question when it cannot answer, and keeps confidence low.
+
+Citations on a draft card are the docs pages (as links) and the team articles the reply used.
+
+### Nudges and escalation to a person
+
+`nudgeMinutes` (per desk) is how long a condition holds before its first nudge, unless the `sla`
+key is set (see [SLAs](#slas)). While it still
+holds, the controller nudges again after each gap in the fleet-wide `nudge.repeat_minutes`
+(default `[60, 240]`: +1 h, then every 4 h, the last gap repeating); `[]` nudges once. It stops as
+soon as the condition clears. Both are on the Console's Settings tab.
+
+When an issue stays unowned, or its customer keeps waiting for a reply, past a level, the
+controller also DMs on-call and mentions a Slack user group in the issue's triage thread. It is
+set per desk in the `escalation` config key, keyed by desk slug, and is off for a desk without an
+entry:
+
+```json
+{
+  "support": {
+    "levels": [30, 120],
+    "groupId": "S0123ABCD",
+    "oncallSlackId": "U0456EFGH"
+  }
+}
+```
+
+- `levels`: minutes, 1 to 5, strictly ascending. The issue's stall age is the age of its oldest
+  condition that holds (no owner since it opened, or the customer's unanswered last message, not
+  while On Hold). Only the highest level reached is sent, and each level at most once per issue
+  (recorded as `escalate:<n>` in `nudges`), so a condition coming back never repeats a level.
+- `groupId` (optional): the user group mentioned in the thread. User groups need a paid Slack plan,
+  and the controller cannot tell when the mention reaches nobody: on a free plan leave `groupId`
+  unset, and the thread post mentions on-call instead.
+- `oncallSlackId` (optional): who gets the DM; defaults to the desk's on-call. With neither a group
+  nor an on-call the escalation is logged and not recorded.
+- A customer message Jev reads as needing no reply (a thank-you) does not count, as for nudges.
+
+Edit it on the Console's Settings tab (Escalation to a person, per selected desk: Save, Turn off).
+
+### SLAs
+
+The `sla` key sets a first-response and a next-response target for each priority, in minutes.
+Edit it in the Console's Settings tab (a JSON editor, validated on save), or pass it as `sla` in the
+setup agent's `config` (or `config.sla` in `fleet.local.json`):
+
+```json
+{
+  "businessHours": {
+    "timeZone": "America/New_York",
+    "days": [1, 2, 3, 4, 5],
+    "start": "09:00",
+    "end": "17:00"
+  },
+  "targets": {
+    "urgent": {
+      "firstResponseMinutes": 15,
+      "nextResponseMinutes": 15,
+      "businessHours": false
+    },
+    "high": {
+      "firstResponseMinutes": 60,
+      "nextResponseMinutes": 60,
+      "businessHours": false
+    },
+    "normal": {
+      "firstResponseMinutes": 480,
+      "nextResponseMinutes": 480,
+      "businessHours": true
+    },
+    "low": {
+      "firstResponseMinutes": 480,
+      "nextResponseMinutes": 480,
+      "businessHours": true
+    }
+  }
+}
+```
+
+- The first-response clock runs from when the issue opened until the team's first reply in the
+  customer thread. The next-response clock runs from each later customer message until the team
+  answers it. No clock runs when the team spoke last, or while the issue is On Hold or Closed.
+- A target with `businessHours: true` counts only minutes inside the window: `days` are 0 (Sunday)
+  to 6 (Saturday), `start` and `end` are local `HH:MM` in `timeZone`, at least an hour apart. With
+  `false` it counts every minute. An issue without a priority uses `normal`.
+- Each target is 1 to 10080 minutes. All four priorities are required.
+- While `sla` is set, a nudge's first round fires when the issue's current target is reached
+  instead of after the desks' `nudgeMinutes`; later rounds follow `nudge.repeat_minutes`.
+  Escalation to a person keeps its own per-desk levels (`escalation`), and the daily digest its
+  own `digest.sla_hours`.
+- The issue card shows "First response due" or "Next response due" (or "breached") in each
+  reader's own time zone; the card is redrawn on each event, so the line is as of its last redraw.
+  The Console board's SLA column is computed on every refresh.
+- **Use nudge minutes** in the Console removes the key, and the desks' `nudgeMinutes` apply again.
+  So does `pnpm run setup --overwrite` when `fleet.json` has no `sla`.
+
+### Other config keys
+
+Optional keys are read with a default when unset, so a live fleet needs no re-seed. Set them with
+the setup agent's `config`, in `fleet.local.json` + `pnpm run setup`, or (where shown) in the
+Console.
+
+| Key                           | Default                                                 | Effect                                                                                                                                                                                                               |
+| ----------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `knowledge.docs_url`          | unset: no docs                                          | The docs site the copilot reads and cites. Console: Knowledge tab.                                                                                                                                                   |
+| `team.slack_team_ids`         | the workspace the connector is installed in             | Slack workspace ids whose members are our team. A customer-channel message from one of them is a team message: stored, never opened as an issue; a reply in an issue's thread moves it to On Customer.               |
+| `customers.test_user_ids`     | `[]`                                                    | Slack user ids always treated as the customer, even from our workspace. Lets one person test with two accounts in the same workspace.                                                                                |
+| `intake.reactions`            | `true`                                                  | `false` stops intake adding or removing 👀 and 🎫 on customer messages, so a shadow pilot leaves no visible footprint.                                                                                               |
+| `linear_sync.notify_customer` | `false`                                                 | `true` tells the customer in their thread when engineering marks the Linear issue Done. linear-sync always posts in the triage thread. Console: Settings tab.                                                        |
+| `alerts.channel`              | the default desk's triage channel                       | Where the watchdog posts failed runs.                                                                                                                                                                                |
+| `digest.sla_hours`            | `{ "urgent": 4, "high": 24, "normal": 72, "low": 168 }` | Hours an open issue may age, from its creation, before the daily digest flags it past SLA, by priority (a missing or other priority counts as `normal`; On Hold included). A partial object overrides only its keys. |
+| `sla`                         | unset: the desks' `nudgeMinutes`                        | Response targets per priority (see [SLAs](#slas)). Console: Settings tab.                                                                                                                                            |
+
+### Daily digest
+
+The digest's post time is its trigger (`0 9 * * *` in `America/Los_Angeles`, every day), not a
+config row. To change it, edit that trigger's `cron` or `timezone` in `fleet.json` (`0 9 * * 1-5`
+for weekdays only), cancel the old trigger (Console, or `sapiom_dev_agents_schedule_cancel`), then
+attach the new one (setup or the MCP). Setup detaches only retired triggers, never a changed one,
+so a skipped cancel leaves both schedules firing; the `digests` table still keeps it to one post per desk per day. Past about
+50 Slack blocks the message ends with `+k more open issues`.
+
+### Failure alerts (watchdog)
+
+The engine emits `sapiom.run.failed` when a run in the org ends failed, and the watchdog's event
+trigger starts one run per failure. It posts one message for a fleet agent's failure (itself, the
+setup agent and the smoke agents excluded). A trigger cannot filter on the payload, so another
+agent's failure in the same org also starts a watchdog run, which ends at once without a post. An
+org where nothing fails costs no watchdog runs.
+
+- **Message.** The agent, the failed step and attempt, the fault class (`infra`: Sapiom could not
+  run the step; `workload`: the step's code failed), the issue the run worked on, a link to the run
+  and action items. The event carries no error text, since a step's error can hold a secret; the
+  run page shows it.
+- **Channel.** `alerts.channel`, else the default desk's triage channel.
+- **Credential.** None. The event is the input, so the watchdog calls no Sapiom API.
+- **Dedup.** `watchdog_alerts` records each failure posted, keyed on the run and when it finished,
+  so a redelivered event posts nothing and a resumed run that fails again posts again.
+- **Silent cases.** The engine does not send the watchdog its own failure. A failed Slack post fails
+  the watchdog's run, which the Runs page shows.
+- **Upgrading.** Setup attaches the event trigger and detaches the watchdog's old `*/5 * * * *`
+  cron, which would otherwise fail every tick: the new entry step needs a `sapiom.run.failed`
+  payload. On the MCP path, cancel that cron with `sapiom_dev_agents_schedule_cancel`.
+
+### Fleet identity
+
+`fleetId` in `fleet.json` (default `support-desk`) names everything the fleet deploys. Set it in
+`fleet.local.json` to override it:
+
+| Derived from `fleetId`   | Default `support-desk`     | `fleetId: "helpdesk"`  |
+| ------------------------ | -------------------------- | ---------------------- |
+| Agent slug `<id>-<key>`  | `support-desk-intake`, ... | `helpdesk-intake`, ... |
+| Postgres handle (the id) | `support-desk`             | `helpdesk`             |
+| Console App Link slug    | `support-desk-console`     | `helpdesk-console`     |
+| Console App Link name    | `Support Desk`             | `Helpdesk`             |
+| Linear issue marker      | `support-desk:<issueId>`   | `helpdesk:<issueId>`   |
+
+The id is 3-55 characters of lowercase words joined by hyphens, starting with a letter.
+
+Deployed steps need the id at runtime, and a step has no config file, so the id is compiled in from
+`_shared/fleet-id.generated.ts`. `pnpm run setup` and `pnpm run console:build` regenerate it first
+and stop if it is stale. **On the MCP path, after changing `fleetId`, run
+`pnpm exec tsx scripts/sync-fleet-id.ts` before you deploy**, and use the new prefix in every
+agent name. The file is committed with the default, so it shows as modified in git when your id
+differs.
+
+`title` (optional, in `fleet.local.json` or `fleet.json`) replaces the name derived from the id. It
+names the Console's App Link and heads its page; the slugs keep the id.
+
+Changing `fleetId` on an install that is already deployed creates a second fleet (new agents, a
+new database, new triggers) and leaves the old one running. An install deployed under another id
+keeps working when its `fleet.local.json` sets that id (`{ "fleetId": "helpdesk" }`); then run
+`pnpm run setup` and `pnpm run console:publish`. The watchdog reads no key any more: a
+`WATCHDOG_API_KEY` or `<PREFIX>_WATCHDOG_API_KEY` secret on it, and the `org.read` API key behind
+it, can be deleted.
+
+## Troubleshooting
+
+| Symptom                                                                  | Cause and fix                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A customer posted and nothing happened: no card, no run, no failed event | The bot is not in that channel. Slack sends nothing for a channel the bot is not in, so there is no receipt on the Sapiom Events page and nothing for the watchdog to report. Invite the bot, then post again; earlier messages are not replayed. List the channel in `channels.customer` and run the setup agent to probe it. |
+| You posted and nothing happened, though the bot is in the channel        | You are on the team, so your message is a team message. Test as in [Verify the install](#verify-the-install).                                                                                                                                                                                                                  |
+| The setup agent reports `not_in_channel` for the triage channel          | Invite the bot to the triage channel and run the setup agent again.                                                                                                                                                                                                                                                            |
+| The Linear check fails, or `linear` is `null`                            | Connect Linear on the Connectors page with the MCP relay slug `linear`, then run the setup agent again.                                                                                                                                                                                                                        |
+| You need Linear team or project ids                                      | Run the setup agent with `{}` (its `linear` output), or `pnpm run linear:list` with an org key.                                                                                                                                                                                                                                |
+| The coding agent says it needs an org API key to deploy                  | It does not: link, deploy, run and triggers all work through the authoring MCP's sign-in, and the setup agent does the database and probes. Only the Console's key needs one (Quickstart A, step 9).                                                                                                                           |
+| The coding agent cannot read `~/.sapiom/credentials.json`                | That file is the MCP's sign-in, not a key for scripts. Use Quickstart A, or give the CLI an org key in `SAPIOM_API_KEY`.                                                                                                                                                                                                       |
+| `sapiom_dev_agents_deploy` refuses the project                           | It needs a git repository with at least one commit (Quickstart A, step 1).                                                                                                                                                                                                                                                     |
+| Seeding stops with "values still hold fleet.json's examples"             | Pass your own ids for every desk field and for `channels.customer` (`[]` is fine).                                                                                                                                                                                                                                             |
+| A run's output is cut off in `sapiom_dev_agents_inspect`                 | Inspect the step with `include: ["output"]` for the full value.                                                                                                                                                                                                                                                                |
+| The coding agent cannot see your Slack channel to diagnose               | Its own Slack integration (in Claude or another tool) may be a different workspace from the one the Sapiom connector is installed in. Diagnose with Sapiom: the Events page lists every Slack event received, and the setup agent reads channels through the connector.                                                        |
+| The watchdog never posts a failure                                       | Its `sapiom.run.failed` trigger is not attached (Quickstart A, step 6, or rerun `pnpm run setup`). It reports only the fleet agents, never its own failure; the Runs page shows that.                                                                                                                                          |
+| Console switches, Run now or Replay return 403                           | `CONSOLE_API_KEY` is missing or read-only. Republish with an org key with write access.                                                                                                                                                                                                                                        |
+| Drafts cite documentation you do not recognise                           | `knowledge.docs_url` points at someone else's docs. Change or remove it in the Knowledge tab.                                                                                                                                                                                                                                  |
+| A draft card says "Couldn't draft a reply for this one"                  | The model returned no structured draft twice. Reply by hand; the watchdog reports repeats.                                                                                                                                                                                                                                     |
 
 ## Architecture
 
@@ -51,360 +532,44 @@ flowchart LR
 
 | Layer         | What lives there                                                                                                                                                                                                      |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Adapters      | `intake` reads `slack.*` and is the only agent that knows Slack message shapes. A later adapter (Read.ai, email) emits the same `issue.*`.                                                                            |
+| Adapters      | `intake` reads `slack.*` and is the only agent that knows Slack message shapes. A later adapter (meeting notes, email) emits the same `issue.*`.                                                                      |
 | Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged`, `issue.engineering_resolved` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
 | Domain agents | copilot, escalation, controller, linear-sync, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                                    |
 | Shared state  | One Postgres (handle `support-desk`), written only through `_shared/issues.ts`; desks (`_shared/desks.ts`) and runtime config in its `desks` and `config` tables.                                                     |
 
-## Agents
+### Agents
 
 | Agent                 | Trigger                                                                | Does                                                                                                                                                                                                                                                                          |
 | --------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `intake`              | `slack.message.created`, `slack.reaction_added`, `slack.block_actions` | Classifies a customer message with Jev, opens an issue or links it to an open one, posts the triage card, emits `issue.*`. Owns Take and Close, and 🎫 (force an issue). Close on an issue whose Linear ticket is still open notes it in the triage thread and on the ticket. |
-| `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from the docs and the team's articles, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                                                                                                                                |
-| `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in the triage thread (the customer thread gets a neutral line, no link), moves the issue On Hold. A closed issue is not escalated; the run says so in the triage thread.                                                   |
-| `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, and repeats on a backoff while the reason holds. Escalates an issue left unowned or a customer left waiting to on-call and a support group, once per level (see Escalation to a person).                                        |
+| `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from the team's articles and, when configured, the docs site; posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                                                                                                         |
+| `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as ENG-n" in the triage thread (the customer thread gets a neutral line, no link), moves the issue On Hold. A closed issue is not escalated; the run says so in the triage thread.                                                   |
+| `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, and repeats on a backoff while the reason holds. Escalates an issue left unowned or a customer left waiting to on-call and a support group, once per level.                                                                     |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`.                                                                |
 | `watchdog`            | `sapiom.run.failed`                                                    | Posts one Slack message per failed run of the other fleet agents: agent, step, attempt, fault class, a link to the run and action items. Runs only when something fails.                                                                                                      |
-| `digest`              | cron, daily at 09:00 America/Los_Angeles                               | Posts one message per desk in its triage channel: open issues grouped by status, with age, owner, a link to the card, and the ones past their SLA (`digest.sla_hours`) flagged. Once per desk per day.                                                                        |
-| `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                                                                                                                                |
-
-### linear-sync and customer messages
-
-`linear-sync` always posts in the triage thread. It posts in the customer thread ("Our engineering
-team has shipped a fix for this. ...") only when the config key `linear_sync.notify_customer` is
-`true`. It is `false` in `fleet.json`, so a shadow install shows customers nothing. Turn it on with
-`setConfig(db, "linear_sync.notify_customer", true, "you")` or by editing the `config` row; a
-database seeded before this key existed behaves as `false`.
-
-## Quickstart
-
-Prerequisites in your Sapiom org:
-
-- A **Slack** connector, with the bot invited to the triage channel and to any customer channel. The invite is the control: the bot only sees channels it is in, and a message from anyone outside your Slack workspace in one of them is a customer's. No per-channel config is needed.
-- A **Linear** connector with write access, discovered under the MCP relay slug `linear`.
-- An org API key in `SAPIOM_API_KEY`.
-
-```bash
-pnpm install --ignore-workspace   # this directory is outside the sapiom-js workspace
-pnpm test && pnpm typecheck       # vitest; pg-mem stands in for Postgres, no network
-```
-
-`fleet.json` holds example ids (`C0CUSTOMER1`, `C0TRIAGE001`, `example-linear-team-id`, ...). Put
-your workspace's ids in `fleet.local.json` (gitignored). `config` keys you leave out keep the
-`fleet.json` value; a local `desks` list replaces fleet.json's whole. Setup stops if a Slack or
-Linear id is still an example:
-
-```json
-{
-  "desks": [
-    {
-      "slug": "test",
-      "name": "Test",
-      "triageChannel": "<test triage channel id>",
-      "linearTeamId": "<Linear team id or key>",
-      "linearProjectId": "<Linear project id for test tickets>",
-      "oncallSlackId": "<Slack user id>",
-      "nudgeMinutes": 5,
-      "default": true
-    },
-    {
-      "slug": "support",
-      "name": "Support",
-      "triageChannel": "<support triage channel id>",
-      "linearTeamId": "<Linear team id or key>",
-      "linearProjectId": "<Linear project id for real tickets>",
-      "oncallSlackId": "<Slack user id>",
-      "nudgeMinutes": 30
-    }
-  ],
-  "config": {
-    "channels.customer": [
-      {
-        "channelId": "<test customer channel>",
-        "accountName": "Test Customer",
-        "desk": "test"
-      },
-      {
-        "channelId": "<real customer channel>",
-        "accountName": "Acme",
-        "desk": "support"
-      }
-    ]
-  }
-}
-```
-
-A single-desk install lists one desk. `channels.customer` is optional and names accounts and their
-desk: a listed channel gets its account at setup under the given name and desk, any other channel
-gets one on the first outside message, named by its channel id and filed under the default desk.
-Leave the example entry out (`[]`) or setup stops. Other optional keys are read with a default when
-unset (so a live fleet needs no re-seed):
-
-| Key                       | Default                                                 | Effect                                                                                                                                                                                                               |
-| ------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `team.slack_team_ids`     | the workspace the connector is installed in             | Slack workspace ids whose members are our team. A customer-channel message from one of them is a team message: stored, never opened as an issue; a reply in an issue's thread moves it to On Customer.               |
-| `customers.test_user_ids` | `[]`                                                    | Slack user ids always treated as the customer, even from our workspace. Lets one person test with two accounts in the same workspace.                                                                                |
-| `intake.reactions`        | `true`                                                  | `false` stops intake adding or removing 👀 and 🎫 on customer messages, so a shadow pilot leaves no visible footprint.                                                                                               |
-| `digest.sla_hours`        | `{ "urgent": 4, "high": 24, "normal": 72, "low": 168 }` | Hours an open issue may age, from its creation, before the daily digest flags it past SLA, by priority (a missing or other priority counts as `normal`; On Hold included). A partial object overrides only its keys. |
-| `sla`                     | unset: the desks' `nudgeMinutes`                        | Response targets per priority (see [SLAs](#slas)).                                                                                                                                                                   |
-
-### SLAs
-
-The `sla` key sets a first-response and a next-response target for each priority, in minutes.
-Edit it in the Console's Settings tab (a JSON editor, validated on save), or set this value as
-`config.sla` in `fleet.local.json` (`"config": { "sla": { ... } }`):
-
-```json
-{
-  "businessHours": {
-    "timeZone": "America/New_York",
-    "days": [1, 2, 3, 4, 5],
-    "start": "09:00",
-    "end": "17:00"
-  },
-  "targets": {
-    "urgent": { "firstResponseMinutes": 15, "nextResponseMinutes": 15, "businessHours": false },
-    "high": { "firstResponseMinutes": 60, "nextResponseMinutes": 60, "businessHours": false },
-    "normal": { "firstResponseMinutes": 480, "nextResponseMinutes": 480, "businessHours": true },
-    "low": { "firstResponseMinutes": 480, "nextResponseMinutes": 480, "businessHours": true }
-  }
-}
-```
-
-- The first-response clock runs from when the issue opened until the team's first reply in the
-  customer thread. The next-response clock runs from each later customer message until the team
-  answers it. No clock runs when the team spoke last, or while the issue is On Hold or Closed.
-- A target with `businessHours: true` counts only minutes inside the window: `days` are 0 (Sunday)
-  to 6 (Saturday), `start` and `end` are local `HH:MM` in `timeZone`, at least an hour apart. With
-  `false` it counts every minute. An issue without a priority uses `normal`.
-- Each target is 1 to 10080 minutes. All four priorities are required.
-- While `sla` is set, a nudge's first round fires when the issue's current target is reached
-  instead of after the desks' `nudgeMinutes`; later rounds follow `nudge.repeat_minutes`.
-  Escalation to a person keeps its own per-desk levels (`escalation`), and the daily digest its
-  own `digest.sla_hours`.
-- The issue card shows "First response due" or "Next response due" (or "breached") in each
-  reader's own time zone; the card is redrawn on each event, so the line is as of its last redraw.
-  The Console board's SLA column is computed on every refresh.
-- **Use nudge minutes** in the Console removes the key, and the desks' `nudgeMinutes` apply again.
-  So does `pnpm run setup --overwrite` when `fleet.json` has no `sla`.
-
-## Fleet identity
-
-`fleetId` in `fleet.json` (default `support-desk`) names everything the fleet deploys. Set it in
-`fleet.local.json` to override it:
-
-| Derived from `fleetId`   | Default `support-desk`     | `fleetId: "helpdesk"`  |
-| ------------------------ | -------------------------- | ---------------------- |
-| Agent slug `<id>-<key>`  | `support-desk-intake`, ... | `helpdesk-intake`, ... |
-| Postgres handle (the id) | `support-desk`             | `helpdesk`             |
-| Console App Link slug    | `support-desk-console`     | `helpdesk-console`     |
-| Console App Link name    | `Support Desk`             | `Helpdesk`             |
-| Linear issue marker      | `support-desk:<issueId>`   | `helpdesk:<issueId>`   |
-
-The id is 3-55 characters of lowercase words joined by hyphens, starting with a letter. There is no
-separate database-handle setting: the handle is the id itself, so `acme-help-desk` uses
-`acme-help-desk`.
-
-Deployed steps need the id at runtime (for their run records, the watchdog's watched slugs and the
-Linear marker), and a step has no config file. `pnpm run setup` and `pnpm run console:build` first
-run `scripts/sync-fleet-id.ts`, which writes the resolved id to `_shared/fleet-id.generated.ts`;
-that file is bundled into every agent and the Console. It is committed with the default, so it
-shows as modified in git when your `fleet.local.json` sets another id. Run the setup and Console
-scripts through `pnpm run` so the file is current; they stop if it is not.
-
-`title` (optional, in `fleet.local.json` or `fleet.json`) replaces the name derived from the id. It
-names the Console's App Link and heads its page; the slugs keep the id, so renaming a deployed
-fleet keeps the Console's link and URL.
-
-Changing `fleetId` on an install that is already deployed creates a second fleet (new agents, a
-new database, new triggers) and leaves the old one running.
-
-### Renaming an existing install
-
-An install deployed under another id keeps working when its `fleet.local.json` sets that id. For
-an install deployed as `helpdesk`:
-
-```json
-{ "fleetId": "helpdesk" }
-```
-
-Then run `pnpm run setup` (it redeploys each agent from the new code under the same slugs and
-finds the existing triggers and database) and `pnpm run console:publish` (the Console reads
-`CONSOLE_API_KEY` now, so republish to set it). The watchdog reads no key any more: a
-`WATCHDOG_API_KEY` or `<PREFIX>_WATCHDOG_API_KEY` secret on it, and the `org.read` API key behind
-it, can be deleted.
-
-## Desks
-
-A desk is the unit that keeps test traffic and real traffic apart while they share agents and code.
-It owns a triage channel, a Linear team and project, an on-call user and the nudge threshold; its
-accounts and issues belong to it, and each knowledge article belongs to one desk or to all of them.
-
-| Desk field                        | Used by                                                                       |
-| --------------------------------- | ----------------------------------------------------------------------------- |
-| `triageChannel`                   | cards, drafts, notes and nudges for the desk's issues; where its clicks count |
-| `linearTeamId`, `linearProjectId` | escalation (falls back to the old `linear.*` config keys when unset)          |
-| `oncallSlackId`                   | urgent-pager (falls back to the old `oncall.slack_id` key)                    |
-| `nudgeMinutes` (default 30)       | controller, when the `sla` key is unset                                       |
-| `default`                         | the desk for any customer channel `channels.customer` does not assign         |
-
-`nudgeMinutes` is how long a condition holds before its first nudge. While it still holds, the
-controller nudges again after each gap in the fleet-wide config key `nudge.repeat_minutes`
-(default `[60, 240]`: +1 h, then every 4 h, the last gap repeating); `[]` nudges once. It stops as
-soon as the condition clears.
-
-How a message finds its desk: intake looks up the customer channel in `channels.customer`; its
-`desk` slug names the desk, and an entry without one (or an unlisted channel) gets the default desk.
-The account keeps that desk, and every issue it opens does too. A channel naming an unknown desk,
-or any channel when no default desk exists, is skipped with the outcome `no desk for channel`;
-nothing is filed. A Take or Close counts only from the channel holding the issue's card (its desk's
-triage channel, or the one the card was posted in before that desk's channel moved), and a
-triage-thread message only from the issue's desk's triage channel, so a click in the `test` triage
-channel cannot touch a `support` issue. The watchdog
-is fleet-wide: it alerts in `alerts.channel`, else the default desk's triage channel.
-
-Add or change a desk by editing `desks` in `fleet.local.json` and running `pnpm run setup`
-(`--overwrite` updates a desk that exists). A database installed before desks gets a default desk
-`test` from its existing `channels.triage`, `linear.*`, `oncall.slack_id` and `nudge.minutes`
-config rows in migration 080, and every existing account and issue is filed under it. Those config
-keys stay readable as fallbacks and are no longer required. Each issue stores the channel its card
-was posted in, so moving a desk's triage channel leaves its existing cards working in the old
-channel (nudges, card updates and clicks), while new cards go to the new one.
-
-Then install the fleet:
-
-```bash
-SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's own command)
-```
-
-`setup.ts` reads `fleet.json` and runs each step as check-then-create, so a second run prints
-`no changes: the fleet is installed`:
-
-1. Probes the Slack and Linear connectors, and stops with what to connect if one is missing.
-2. Resolves or creates the fleet database (`support-desk` by default), applies migrations, seeds missing desks, config and accounts.
-3. Adds three starter policy articles when the knowledge base is empty.
-4. Links and deploys each project, skipping one whose bundle is already the live build.
-5. Lists each agent's triggers and attaches only the missing ones. The server dedups event
-   triggers but not cron. It detaches the triggers in `RETIRED_TRIGGERS` (`scripts/fleet.ts`).
-6. Writes `.sapiom/fleet-state.json`: definition, build and trigger ids, with no keys.
-
-`--skip <key>` leaves a project out, and `--only <key>` acts on exactly the named projects,
-including optional ones. `--no-triggers` deploys without attaching triggers. `--overwrite` resets desks and config to `fleet.local.json` + `fleet.json`
-(normally a rerun keeps what an onboarding flow changed).
-
-### Escalation to a person
-
-Nudges stay in the triage thread. When an issue stays unowned, or its customer keeps waiting for a
-reply, past a level, the controller also DMs on-call and mentions a Slack user group in the issue's
-triage thread. It is set per desk in the `escalation` config key, keyed by desk slug, and is off
-for a desk without an entry (so existing installs change nothing until you turn it on):
-
-```json
-{
-  "support": {
-    "levels": [30, 120],
-    "groupId": "S0123ABCD",
-    "oncallSlackId": "U0456EFGH"
-  }
-}
-```
-
-- `levels`: minutes, 1 to 5, strictly ascending. The issue's stall age is the age of its oldest
-  condition that holds (no owner since it opened, or the customer's unanswered last message, not
-  while On Hold). Only the highest level reached is sent, and each level at most once per issue
-  (recorded as `escalate:<n>` in `nudges`), so a condition coming back never repeats a level.
-- `groupId` (optional): the user group mentioned in the thread. User groups need a paid Slack plan,
-  and the controller cannot tell when the mention reaches nobody: on a free plan leave `groupId`
-  unset, and the thread post mentions on-call instead.
-- `oncallSlackId` (optional): who gets the DM; defaults to the desk's on-call. With neither a group
-  nor an on-call the escalation is logged and not recorded.
-- A customer message Jev reads as needing no reply (a thank-you) does not count, as for nudges.
-
-Edit it on the Console's Settings tab (Escalation to a person, per selected desk: Save, Turn off). Per-priority
-thresholds from SLAs come later (SAP-3790); until then levels are explicit minutes.
-
-### Failure alerts (watchdog)
-
-The engine emits `sapiom.run.failed` when a run in the org ends failed, and the watchdog's event
-trigger starts one run per failure. It posts one message for a fleet agent's failure (itself and
-the smoke agents excluded). A trigger cannot filter on the payload, so another agent's failure in
-the same org also starts a watchdog run, which ends at once without a post. An org where nothing
-fails costs no watchdog runs.
-
-- **Message.** The agent, the failed step and attempt, the fault class (`infra`: Sapiom could not
-  run the step; `workload`: the step's code failed), the issue the run worked on, a link to the run
-  and action items. The event carries no error text, since a step's error can hold a secret; the
-  run page shows it.
-- **Channel.** `alerts.channel` in `fleet.local.json` (or the `config` table). When unset, alerts go to
-  the default desk's triage channel.
-- **Credential.** None. The event is the input, so the watchdog calls no Sapiom API.
-- **Dedup.** `watchdog_alerts` records each failure posted, keyed on the run and when it finished,
-  so a redelivered event posts nothing and a resumed run that fails again posts again.
-- **Silent cases.** The engine does not send the watchdog its own failure. A failed Slack post fails
-  the watchdog's run, which the Runs page shows.
-- **Upgrading.** Setup attaches the event trigger and detaches the watchdog's old `*/5 * * * *`
-  cron, which would otherwise fail every tick: the new entry step needs a `sapiom.run.failed`
-  payload. It is the one trigger setup detaches (`RETIRED_TRIGGERS` in `scripts/fleet.ts`).
-
-### Daily digest
-
-The digest's post time is its trigger in `fleet.json` (`0 9 * * *` in `America/Los_Angeles`, every
-day), not a `config` row. To change it, edit that trigger's `cron` or `timezone` (`0 9 * * 1-5` for
-weekdays only), cancel the old trigger (Console, or `sapiom agents schedule`), then run
-`pnpm run setup`. Setup detaches only retired triggers, never a changed one, so a skipped cancel leaves both schedules firing;
-the `digests` table still keeps it to one post per desk per day. A failed post fails the run, which
-the watchdog reports; rerun the digest agent to post the desks still missing that day. Past about
-50 Slack blocks the message ends with `+k more open issues`. Issues stay grouped by status, past-SLA
-first within each status, and past-SLA issues are the last to be cut.
-
-Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
-each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open
-issue. See `docs/DEMO.md`.
-
-## Knowledge
-
-The copilot drafts from two sources, and neither is compiled into the agent.
-
-- **Public docs, fetched live.** Each draft starts with one small model call that reads the issue,
-  the customer's latest messages and the index at `https://docs.sapiom.ai/llms.txt`, and picks up to
-  three pages. Those pages are fetched as markdown (`<page url>.md`), cut to 12,000 characters each,
-  and cached in the `doc_cache` table for one hour. Only URLs under `https://docs.sapiom.ai/` are
-  ever fetched. If the docs cannot be read, the draft is written from the team's articles alone and
-  its confidence is capped at 50%; if only some selected pages fail, the prompt names them and
-  confidence is capped at 60%. The run does not fail.
-- **Team knowledge, edited in the Console.** The **Knowledge** tab lists the `kb_articles` table:
-  create, edit, enable or disable, and delete. A _policy_ is a rule the copilot always follows
-  (refund wording, SLAs, tone). An _answer_ is a team-written Q&A; they are all included while
-  their text totals under 15,000 characters, and chosen by the same selection call beyond that.
-  Edits apply to the next draft with no redeploy. An article is for one desk or for all desks
-  (`desk_id` null); a draft reads its issue's desk articles plus the all-desks ones. Setup's starter
-  policies are for all desks.
-
-Citations on a draft card are the docs pages (as links) and the team articles the reply used.
-
-Seeding: `pnpm run setup` adds three starter policies (billing questions beyond the pricing page,
-never ask for credentials, tone) when the table is empty. They are examples; edit or delete them in
-the Console. To load more at once, insert rows into `kb_articles` with `kind` `policy` or `answer`.
+| `digest`              | cron, daily at 09:00 America/Los_Angeles                               | Posts one message per desk in its triage channel: open issues grouped by status, with age, owner, a link to the card, and the ones past their SLA flagged. Once per desk per day.                                                                                             |
+| `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see Add your own agent.                                                                                                                                                                                   |
+| `setup` (by hand)     | none                                                                   | Creates and migrates the database, seeds desks and config, probes Slack channels and Linear, lists Linear ids. Its output ends with next steps. `"manual": true` in `fleet.json`: setup deploys it only with `--only setup`.                                                  |
 
 ## Console
 
-The Console is an App Link (`support-desk-console`) for running the desk. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes every tab to one desk.
+The Console is an App Link (`support-desk-console`) for running the desk. A desk switcher in the
+header (`?desk=<slug>`, default desk preselected) scopes every tab to one desk.
 
-- **Tickets**: the open tickets, with the status counts above them as filters. A row opens a drawer with the ticket's facts, its pending draft, the Linear issue with the state linear-sync last read (`issues.linear_state`), links to the Slack triage thread and the Linear issue, and the Slack card's buttons: Approve, Escalate and Dismiss on a pending draft, Take and Close. An account opens its own drawer: channel, open tickets, tickets closed in the last 30 days, last contact and its tickets. Below the board: metrics (cost per ticket, message → draft and message → card latency, tickets per day) and failed events with Replay.
-- **Knowledge**: the team's policies and answers (see above).
-- **Settings**: the desk's name, triage channel, Linear team and project, on-call, first nudge and default flag; its escalation to a person; and the fleet-wide repeat nudges, digest age limits and `linear_sync.notify_customer`. Values are validated before they are written, and the agents read them on their next run. The digest schedule is shown; it changes through `fleet.json` and setup.
+- **Tickets**: the open tickets, with the status counts above them as filters. A row opens a drawer with the ticket's facts, its pending draft, the Linear issue with the state linear-sync last read, links to the Slack triage thread and the Linear issue, and the Slack card's buttons: Approve, Escalate and Dismiss on a pending draft, Take and Close. An account opens its own drawer. Below the board: metrics (cost per ticket, message → draft and message → card latency, tickets per day) and failed events with Replay.
+- **Knowledge**: the public docs source (`knowledge.docs_url`) and the team's policies and answers (see [Knowledge](#knowledge)).
+- **Settings**: the desk's name, triage channel, Linear team and project, on-call, first nudge and default flag; its escalation to a person; and the fleet-wide repeat nudges, digest age limits and `linear_sync.notify_customer`. Values are validated before they are written, and the agents read them on their next run.
 - **System**: the fleet's switches with Pause and Resume, the channels, how events come in, the agents, the tables and each desk's Linear project.
 - **Testing**: Run controller now, Reset board (closes only the selected desk's open tickets) and the cue cards.
 
-A ticket action does what the Slack button does, through the same code: the Console emits the `slack.block_actions` event a click on the Slack card would produce (`POST /v1/workflows/events` with the Console's org key), and intake (Take, Close) or the copilot (Approve, Escalate, Dismiss) handles it and redraws the card. An App Link forwards no viewer identity, so the drawer has an **Acting as** picker. It lists the people in your workspace who have worked the desk (ticket owners, draft deciders, teammates in its threads) plus its on-call, defaults to the on-call, and is remembered per browser. The click carries that person's Slack id, so a Take makes them the owner and the cards name them. The Slack connector cannot list a channel's members, which is why the list comes from the desk's history. A failed event that carries no issue (a raw Slack event) shows on every desk. Its state lives in the fleet database and the Sapiom API.
+A ticket action does what the Slack button does, through the same code: the Console emits the `slack.block_actions` event a click on the Slack card would produce, and intake (Take, Close) or the copilot (Approve, Escalate, Dismiss) handles it and redraws the card. An App Link forwards no viewer identity, so the drawer has an **Acting as** picker. It lists the people in your workspace who have worked the desk plus its on-call, defaults to the on-call, and is remembered per browser.
 
 ```bash
 pnpm run console:build     # bundle apps/console into apps/console/dist/server.mjs
 pnpm run console:publish   # build, then create or update the org-only App Link and publish it
 ```
 
-`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, emits ticket actions, replays receipts, writes settings and redraws Slack cards). The key is stored in the link's env as `CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
+`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access. The key is stored in the link's env as `CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. Run it again to update the same link.
 
 ## Add your own agent
 
@@ -452,18 +617,22 @@ added to a running fleet with one deploy and one trigger.
    `fakeCtx({ isLocalTrace: true })`, which stubs Slack and gives the run an in-memory database.
 4. **Register it in `fleet.json`**: a project (`"optional": true` if a default install should
    leave it out) and its triggers.
-5. **Ship it:** `pnpm run setup --only urgent-pager`. In our own workspace this created, deployed
-   and armed the agent in 37 seconds, and the next urgent message DMed on-call.
+5. **Ship it:** `pnpm run setup --only urgent-pager`, or link, deploy and attach its trigger
+   through the MCP. In our own workspace this created, deployed and armed the agent in 37 seconds.
 
-A new source works the same way: an adapter (say, a Read.ai meeting adapter) emits the existing
-`issue.*` events with a new `source`, and every domain agent picks it up unchanged.
+A new source works the same way: an adapter emits the existing `issue.*` events with a new
+`source`, and every domain agent picks it up unchanged.
+
+Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
+each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open
+issue. See `docs/DEMO.md`.
 
 ## Layout
 
 ```
 fleet.json            projects, triggers, connectors, example config values
 fleet.local.json      your workspace's ids (gitignored; you create it)
-setup.ts              pnpm run setup: the installer (preflight, db, starter articles, deploy, triggers, state)
+setup.ts              pnpm run setup: the CLI installer (preflight, db, starter articles, deploy, secret, triggers, state)
 _shared/              inlined into every agent by the bundler (relative imports, zod/v4)
   events.ts           raw slack.* and domain issue.* schemas
   db.ts               Db interface, withDb(ctx, fn), migrations runner, pg-mem for local runs
@@ -473,10 +642,12 @@ _shared/              inlined into every agent by the bundler (relative imports,
   desks.ts            the only reader/writer of desks (triage channel, Linear target, on-call, nudge)
   slack.ts linear.ts  Slack connector methods; Linear MCP relay
   emit.ts blocks.ts   events.emit + events_log; Block Kit cards and the button codec
-  kb.ts docs.ts       the team's knowledge articles; live docs.sapiom.ai pages with a db cache
+  kb.ts docs.ts       the team's knowledge articles; the optional docs site (knowledge.docs_url) with a db cache
 agents/<key>/         one deployable project each (index.ts, package.json, gitignored sapiom.json)
+agents/setup/         the run-by-hand setup agent (database, seeding, probes, Linear ids)
+apps/console/         the Console App Link
 fixtures/<dir>/       { type, description, payload } per event; payload is the run input
-scripts/              fleet (setup's pure logic), replay, reset-demo
+scripts/              fleet (setup's pure logic), secrets, linear-list, replay, reset-demo
 docs/DEMO.md          rehearsal checklist and failure drill
 ```
 
@@ -487,12 +658,15 @@ The deployed agents always share the fleet database.
 
 ## Known limitations
 
-| Limitation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Why                                                                                                                                     |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Limitation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Why                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A channel without the bot is invisible.** A customer posting there produces no event, no run and no alert.                                                                                                                                                                                                                                                                                                                                                                                                                                   | Slack sends nothing for a channel the bot is not in. The setup agent probes the channels listed in `channels.customer`; it cannot find unlisted ones.                      |
+| **The Console needs an org key on the MCP path:** its `CONSOLE_API_KEY`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | No MCP tool sets an App Link's environment, and an agent run's credential cannot mint a key.                                                                               |
 | **Post, then record (top-level posts).** A threaded post that is recorded after it is sent is stamped with a `sylon:<key>` block id, so a retry finds it in the thread and records it instead of posting again (intake's team-reply mirror records first, so it cannot duplicate). A top-level post (the intake triage card, the urgent-pager DM, the controller's on-call escalation DM, the daily digest, a linear-sync notice on an issue with no triage thread) still posts again if Slack accepted it and the next database write failed. | Slack's Web API has no idempotency key, and the Slack connector exposes neither `conversations.history` nor message `metadata`, so a top-level post cannot be found again. |
-| **Linear adoption window.** A retry more than 7 days after a crash between creating the Linear issue and recording it creates a second one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `save_issue` has no idempotency key; escalation adopts by a `<fleetId>:<issueId>` marker over the last 7 days.                          |
-| **Thread replies under a card left in an old triage channel are not notes.** After a desk's `triageChannel` moves, a teammate's reply under one of its existing cards is not stored on the issue.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Intake routes a message by its channel, and the old channel is no longer a desk's triage channel.                                       |
-| **Intake links by content.** A new top-level message joins any open issue Jev judges to be the same problem (p ≥ 0.8). Leftover open issues capture new messages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Run `pnpm run reset-demo` before a demo.                                                                                                |
-| **Latency.** Dispatch takes about 65–100 ms. The intake run takes about 24 s, roughly 3 s per step. A customer message reaches its draft card in about 35 s. A click shows a working state in about 2 s.                                                                                                                                                                                                                                                                                                                                                                                                                                                              | The time goes to the steps, not the engine: intake makes a Jev call and several Slack calls, and each step starts a fresh sandbox call. |
-| **Deploy detection is local.** setup skips a deploy when the bundle hash in `.sapiom/fleet-state.json` matches the live build; a fresh clone redeploys once.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | The server does not expose a content hash for a build.                                                                                  |
-| **One Linear team; customers are recognised by Slack workspace.** Anyone outside `team.slack_team_ids` (default: the connector's own workspace) posting in a channel the bot is in is a customer, and the channel gets an account. The connector has no `conversations.info`, so shared channels cannot be detected. A team member's message is kept only in a channel that already has an account; elsewhere it is skipped and nothing is stored. A customer who posts from your workspace needs `customers.test_user_ids`. A team reply moves the issue to On Customer and supersedes pending drafts without redrawing their cards. No email intake or board. | Out of scope for this example.                                                                                                          |
+| **Linear adoption window.** A retry more than 7 days after a crash between creating the Linear issue and recording it creates a second one.                                                                                                                                                                                                                                                                                                                                                                                                    | `save_issue` has no idempotency key; escalation adopts by a `<fleetId>:<issueId>` marker over the last 7 days.                                                             |
+| **Thread replies under a card left in an old triage channel are not notes.** After a desk's `triageChannel` moves, a teammate's reply under one of its existing cards is not stored on the issue.                                                                                                                                                                                                                                                                                                                                              | Intake routes a message by its channel, and the old channel is no longer a desk's triage channel.                                                                          |
+| **Intake links by content.** A new top-level message joins any open issue Jev judges to be the same problem (p ≥ 0.8). Leftover open issues capture new messages.                                                                                                                                                                                                                                                                                                                                                                              | Run `pnpm run reset-demo` before a demo.                                                                                                                                   |
+| **Latency.** A customer message reaches its draft card in about 35 s. A click shows a working state in about 2 s.                                                                                                                                                                                                                                                                                                                                                                                                                              | The time goes to the steps: intake makes a Jev call and several Slack calls, and each step starts a fresh sandbox call.                                                    |
+| **Deploy detection is local.** setup skips a deploy when the bundle hash in `.sapiom/fleet-state.json` matches the live build; a fresh clone redeploys once.                                                                                                                                                                                                                                                                                                                                                                                   | The server does not expose a content hash for a build.                                                                                                                     |
+| **Customers are recognised by Slack workspace.** Anyone outside `team.slack_team_ids` posting in a channel the bot is in is a customer. Shared channels cannot be detected. A team member's message is kept only in a channel that already has an account. A customer who posts from your workspace needs `customers.test_user_ids`.                                                                                                                                                                                                           | The connector has no `conversations.info`.                                                                                                                                 |
+| **The docs source is fleet-wide.** Every desk drafts from the same `knowledge.docs_url`.                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Desks share it until a per-desk override is needed.                                                                                                                        |
