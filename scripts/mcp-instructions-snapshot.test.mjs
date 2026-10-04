@@ -8,6 +8,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import prettier from "prettier";
+
+import { OUTPUT_PATH, renderModule } from "./mcp-instructions-snapshot.mjs";
+
 const SCRIPT = fileURLToPath(
   new URL("./mcp-instructions-snapshot.mjs", import.meta.url),
 );
@@ -163,4 +167,20 @@ test("writes a stamped body without its footer, then is a no-op on the second ru
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /already matches/);
   assert.equal(await readFile(out, "utf8"), generated);
+});
+
+// A hand edit anywhere in the committed snapshot, header included, fails this offline:
+// the file must be exactly what the generator renders from its own constants.
+test("the committed snapshot is the generator's output for its own body", async () => {
+  const snapshot = await import(OUTPUT_PATH);
+  const rendered = await prettier.format(
+    renderModule({
+      body: snapshot.AUTHORING_INSTRUCTIONS,
+      release: snapshot.AUTHORING_INSTRUCTIONS_RELEASE,
+      digest: snapshot.AUTHORING_INSTRUCTIONS_DIGEST,
+      apiURL: "https://api.sapiom.ai",
+    }),
+    { filepath: OUTPUT_PATH },
+  );
+  assert.equal(await readFile(OUTPUT_PATH, "utf8"), rendered);
 });
