@@ -107,6 +107,12 @@ const ApplyIn = z.object({
 
 const UUID = z.string().uuid();
 
+/** Verbs that must not act on a closed issue, with the note the dismissed card shows. */
+const CLOSED_ISSUE_NOTE: Record<string, string> = {
+  approve: "Issue is closed; reply not sent.",
+  escalate: "Issue is closed; not escalated.",
+};
+
 /** Open the db; on a local trace, add the fixtures' issue and drafts first. */
 function db<R>(ctx: DbCtx, fn: (db: Db) => Promise<R>): Promise<R> {
   return withDb(ctx, async (d) => {
@@ -519,10 +525,11 @@ const decide = defineStep({
         return terminate({ skipped: "draft not found" });
       }
       await recordRun(db, ctx, AGENT, found.issueId);
-      // A reply drafted before the issue closed must not reach the customer: Approve on a closed
-      // issue dismisses the draft instead.
+      // A closed issue must not get a reply to the customer (Approve) nor open work for the
+      // escalation agent (Escalate): either click dismisses the draft instead.
       const issueNow = await getIssue(db, found.issueId);
-      if (verb === "approve" && issueNow.status === "closed") {
+      const closedNote = CLOSED_ISSUE_NOTE[verb];
+      if (closedNote && issueNow.status === "closed") {
         const dismissed = await decideDraft(
           db,
           found.id,
@@ -534,7 +541,7 @@ const decide = defineStep({
           db,
           dismissed.draft,
           issueNow,
-          dismissed.changed ? "Issue is closed; reply not sent." : undefined,
+          dismissed.changed ? closedNote : undefined,
           {
             channel: click.container?.channel_id,
             ts: click.container?.message_ts,

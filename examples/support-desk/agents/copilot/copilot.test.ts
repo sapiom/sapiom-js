@@ -741,6 +741,27 @@ describe("click path", () => {
     );
   });
 
+  it("Escalate on a closed issue emits nothing and dismisses the draft", async () => {
+    await setStatus(db, FIXTURE_ISSUE, "closed");
+    const t = ctxFor("e");
+    const ds = await runAgent(
+      fixture("slack/block-actions.draft-escalate.json").payload,
+      t.ctx,
+    );
+    expect(last(ds).output).toMatchObject({
+      skipped: "issue is closed",
+      status: "dismissed",
+    });
+    expect(t.emitted).toHaveLength(0);
+    expect(await getDraft(db, FIXTURE_DRAFT)).toMatchObject({
+      status: "dismissed",
+      decidedBy: "U0TEAMMATE1",
+    });
+    const card = JSON.stringify(t.slack("chat.update")[0].blocks);
+    expect(card).toContain("Issue is closed; not escalated.");
+    expect(card).toContain("Dismissed by <@U0TEAMMATE1>");
+  });
+
   it("an issue closed between the decision and the send keeps the approval but sends nothing", async () => {
     const t = ctxFor("e");
     const click = fixture("slack/block-actions.draft-approve.json").payload;
