@@ -1,5 +1,15 @@
 # @sapiom/tools
 
+## 0.42.0
+
+### Minor Changes
+
+- 687a69b: `llm.run` with `output` now throws `LlmStructuredOutputMissingError` when the turn ends without a `tool_use` block for `output.name` (for example `stop_reason: "end_turn"` with only `thinking` and `text` blocks). Previously it returned the response and `structuredOf` read `undefined`, so a step could proceed with no result (SAP-3782). The error carries `outputName`, `stopReason`, `servedClass`, `model`, `blockTypes` and the raw `response`. The `max_tokens` case still throws `LlmStructuredOutputTruncatedError`, and `structuredOf` still returns `undefined` for a response with no matching block. Callers that checked `structuredOf(...) === undefined` after `llm.run({ output })` to retry or degrade must now catch the new error instead.
+
+### Patch Changes
+
+- 173ddce: Trim a trailing slash from `SAPIOM_TOOLS_BASE` (and the `SAPIOM_AGENTS_URL` / `SAPIOM_MODELS_URL` overrides) before appending routes. `https://tools.example/` previously produced `//connectors/v1/...` in every module except the Google connector.
+
 ## 0.41.0
 
 ### Minor Changes
