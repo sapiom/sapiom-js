@@ -210,20 +210,6 @@
     "reason": "The persisted registry filename remains stable for existing installations."
   },
   {
-    "id": "app-private-css-and-test-ids",
-    "path": "packages/harness/web/src/App.tsx",
-    "pattern": "workflow-(?:deployed-tag|dashboard-link)",
-    "occurrences": 2,
-    "reason": "Private CSS classes and test IDs remain stable."
-  },
-  {
-    "id": "app-canvas-tab-icon-identifier",
-    "path": "packages/harness/web/src/App.tsx",
-    "pattern": "^Workflow$",
-    "occurrences": 1,
-    "reason": "The design-system Workflow icon identifier is private and remains unchanged in the Canvas / Agent Map tab."
-  },
-  {
     "id": "agent-map-pane-icon-identifier",
     "path": "packages/harness/web/src/components/AgentMapPane.tsx",
     "pattern": "^Workflow$",
