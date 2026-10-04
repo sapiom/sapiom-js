@@ -92,11 +92,12 @@ export async function digest(ctx: Ctx, db: Db, now?: Date) {
     now ??
     new Date((await db.query<{ now: Date }>("select now() as now"))[0].now);
   const day = localDay(clock, TIME_ZONE);
+  const sla = await getConfigOr(db, "sla", null);
+  // The age table is unused while `sla` is set, so a bad row there must not stop the post.
   const ageHours = {
     ...DEFAULT_SLA_HOURS,
-    ...(await getConfigOr(db, "digest.sla_hours", {})),
+    ...(sla ? {} : await getConfigOr(db, "digest.sla_hours", {})),
   };
-  const sla = await getConfigOr(db, "sla", null);
 
   const names = new Map<string, string>();
   const ownerName = async (id: string) => {

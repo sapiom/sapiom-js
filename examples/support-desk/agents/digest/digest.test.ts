@@ -595,6 +595,19 @@ describe("digest run", () => {
     expect(messageQueries()).toHaveLength(before);
   });
 
+  it("with sla set, posts even when the unused digest.sla_hours row is invalid", async () => {
+    await setConfig(db, "sla", WALL, "test");
+    await db.query(
+      "insert into config (key, value, set_by) values ('digest.sla_hours', '{\"normal\": \"soon\"}'::jsonb, 'test')",
+    );
+    const { ctx, posts } = slackCtx();
+    expect((await digest(ctx as never, db)).posted).toEqual([
+      "support",
+      "billing",
+    ]);
+    expect(posts()).toHaveLength(2);
+  });
+
   it("refuses an invalid stored sla before posting", async () => {
     await db.query(
       "insert into config (key, value, set_by) values ('sla', '{\"targets\": {}}'::jsonb, 'test')",
