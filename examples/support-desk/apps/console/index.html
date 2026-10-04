@@ -804,28 +804,23 @@
                 >Triage channel<input
                   id="set-triage"
                   type="text"
-                  placeholder="C0123ABCD"
-                /><span class="hint"
-                  >Slack channel id for ticket cards and drafts.</span
-                ></label
-              >
+                  placeholder="C0123ABCD" /><span
+                  class="hint"
+                  id="set-triage-link"
+                ></span
+              ></label>
               <label
-                >Linear team<input id="set-linear-team" type="text"
-              /></label>
+                >Linear team<input id="set-linear-team" type="text" /><span
+                  class="hint"
+                  id="set-linear-team-name"
+                ></span
+              ></label>
               <label
                 >Linear project<input
                   id="set-linear-project"
                   type="text" /><span class="hint" id="set-linear-name"></span
               ></label>
-              <label
-                >On-call<input
-                  id="set-oncall"
-                  type="text"
-                  placeholder="U0123ABCD" /><span
-                  class="hint"
-                  id="set-oncall-name"
-                ></span
-              ></label>
+              <label>On-call<select id="set-oncall"></select></label>
               <label
                 >First nudge after (minutes)<input
                   id="set-nudge"
@@ -1157,6 +1152,8 @@
         Object.assign(S, { counts: null, failed: null, metrics: null });
         filter = null;
         closeDrawer();
+        people = { members: [], defaultActor: null };
+        loadPeople();
         refreshBoard();
         refreshReceipts();
         refreshMetrics();
@@ -1314,7 +1311,7 @@
       }
       const linearCell = (i) =>
         i.linear
-          ? `${link(i.linearUrl, i.linear)}${i.linearState ? ` <span class="linear-state">${esc(i.linearState)}</span>` : ""}`
+          ? `${link(i.linearUrl, i.linear)}${i.linearState ? ` <span class="linear-state">· ${esc(i.linearState)}</span>` : ""}`
           : none;
       async function refreshBoard() {
         const forDesk = desk;
@@ -1394,6 +1391,8 @@
       }
       async function refreshDrawer() {
         if (!drawer) return;
+        // A redraw would close the picker under the viewer's cursor.
+        if (document.activeElement?.id === "actor") return;
         const seq = ++drawerSeq;
         const { kind, id } = drawer;
         try {
@@ -1416,6 +1415,35 @@
       }
       const head = (over, title) =>
         `<div class="head"><div><span class="muted num">${over}</span><h3>${esc(title)}</h3></div><button class="close-x" data-close aria-label="Close panel">×</button></div>`;
+      // --- acting as: the App Link forwards no viewer identity, so the viewer says who they are --
+      let people = { members: [], defaultActor: null };
+      const actorKey = () => `console-actor:${desk}`;
+      /** The remembered choice when it is still on the desk's list, else the desk's on-call. */
+      const actor = () => {
+        const kept = store.get(actorKey());
+        return people.members.some((m) => m.id === kept)
+          ? kept
+          : people.defaultActor || "";
+      };
+      async function loadPeople() {
+        const forDesk = desk;
+        try {
+          const p = await get(scoped("/api/members"));
+          if (desk === forDesk) people = p;
+        } catch (e) {
+          log(`acting-as list FAILED: ${e.message}`);
+        }
+      }
+      const actorPicker = () =>
+        `<label class="row hint">Acting as<select id="actor" aria-label="Acting as">${
+          people.members
+            .map(
+              (m) =>
+                `<option value="${esc(m.id)}"${m.id === actor() ? " selected" : ""}>${esc(m.name)}</option>`,
+            )
+            .join("") || '<option value="">nobody on this desk</option>'
+        }</select></label>`;
+
       /** Button state survives a redraw: a click in flight keeps its button disabled. */
       const busy = new Set();
       const actButton = (t, verb, label, cls = "") =>
@@ -1430,6 +1458,7 @@
           !closed ? actButton(t, "close", "Close", "danger") : "",
         ].join("");
         return `${head(`#${t.number} · ${esc(t.account)}`, t.title || "(untitled)")}
+          ${closed ? "" : actorPicker()}
           <dl class="facts">
             <dt>Status</dt><dd>${statusPill(t.status)}</dd>
             <dt>Priority</dt><dd>${prio(t.priority)}</dd>
@@ -1447,7 +1476,7 @@
           ${
             draftActions || ticketActions
               ? `<div class="actions">${draftActions}${ticketActions ? `<div class="row"><span class="label">Ticket</span>${ticketActions}</div>` : ""}
-                <div class="hint">The agents handle these as if clicked in Slack, and the Slack card redraws. Recorded as <code>console</code>.</div></div>`
+                <div class="hint">The agents handle these as if clicked in Slack by the person you act as, and the Slack card redraws.</div></div>`
               : ""
           }`;
       }
@@ -1470,6 +1499,9 @@
             }
           </div>`;
       }
+      $("drawer").onchange = (e) => {
+        if (e.target.id === "actor") store.set(actorKey(), e.target.value);
+      };
       $("drawer").onclick = async (e) => {
         if (e.target.closest("[data-close]")) return closeDrawer();
         const acct = e.target.closest("a[data-account]");
@@ -1491,7 +1523,9 @@
         b.dataset.busy = "1";
         syncButtons();
         try {
-          const out = await post(scoped(`/api/tickets/${id}/actions/${verb}`));
+          const out = await post(scoped(`/api/tickets/${id}/actions/${verb}`), {
+            actor: actor(),
+          });
           log(
             `${verb} #${out.number}: sent (receipt ${out.receiptId}${out.duplicate ? ", already sent" : ""}); the Slack card redraws when the agent finishes`,
           );
@@ -1606,8 +1640,24 @@
         $("set-linear-name").innerHTML = s.linearProject?.url
           ? link(s.linearProject.url, s.linearProject.name)
           : "";
+        $("set-triage-link").innerHTML = link(
+          `https://slack.com/archives/${d.triageChannel}`,
+          "Open the channel in Slack ↗",
+        );
+        $("set-linear-team-name").textContent = s.linearTeam || "";
+        // The stored on-call stays selectable even when they are not on the desk's list.
+        const people = [...s.members];
+        if (d.oncallSlackId && !people.some((m) => m.id === d.oncallSlackId))
+          people.unshift({
+            id: d.oncallSlackId,
+            name: s.oncallName || d.oncallSlackId,
+          });
+        $("set-oncall").innerHTML =
+          '<option value="">nobody</option>' +
+          people
+            .map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`)
+            .join("");
         $("set-oncall").value = d.oncallSlackId || "";
-        $("set-oncall-name").textContent = s.oncallName || "";
         $("set-nudge").value = d.nudgeMinutes;
         $("set-default").checked = d.isDefault;
         // A default desk stops being one only when another desk becomes the default.
@@ -2010,6 +2060,7 @@
       // The desk is known before the first scoped request, so nothing renders the wrong desk.
       loadDesks().then(() => {
         desksReady = true;
+        loadPeople();
         refreshBoard();
         refreshReceipts();
         refreshMetrics();

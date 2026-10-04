@@ -28,10 +28,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { createClient } from "@sapiom/tools";
 
-import { getConfigOr } from "../../_shared/config";
+import { deskEscalation, getConfigOr } from "../../_shared/config";
 import {
   DB_HANDLE,
   connectPostgres,
+  ensureMigrated,
   resolveConnectionString,
   type Db,
 } from "../../_shared/db";
@@ -56,11 +57,12 @@ import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
 import replay from "../../scripts/replay.json";
 import page from "./index.html";
-import { CONSOLE_ACTOR, planAction } from "./actions";
+import { planAction } from "./actions";
 import { getEscalation, putEscalation } from "./escalation";
 import {
   boardIssues,
   deskAccount,
+  deskPeople,
   deskTicket,
   metricIssues,
   parseBoardFilter,
@@ -253,6 +255,9 @@ function db(): Promise<Db> {
     const { db } = await connectPostgres(
       await resolveConnectionString({ sapiom: client } as never),
     );
+    // The Console reads columns a newer migration adds (linear_state); apply any the agents have
+    // not applied yet, as every agent run does.
+    await ensureMigrated(db);
     return db;
   })();
   return dbPromise;
@@ -308,32 +313,123 @@ function linearProject(d: Db, desk: Desk) {
   return project;
 }
 
-const names = new Map<string, { at: number; name: Promise<string> }>();
-const NAME_TTL_MS = 60 * 60_000;
+const teams = new Map<string, { at: number; name: Promise<string | null> }>();
 
-/** A Slack user's display name, looked up at most hourly; the id itself when the lookup fails. */
-function slackName(id: string): Promise<string> {
-  if (id === CONSOLE_ACTOR) return Promise.resolve("Console");
-  const cached = names.get(id);
-  if (cached && Date.now() - cached.at <= NAME_TTL_MS) return cached.name;
-  const name = operatorClient()
+/** A Linear team's name, looked up at most every five minutes; null when the lookup fails. */
+function linearTeamName(teamId: string): Promise<string | null> {
+  const cached = teams.get(teamId);
+  if (cached && Date.now() - cached.at <= PROJECT_TTL_MS) return cached.name;
+  const name = callTool("get_team", { query: teamId }, {
+    sapiom: operatorClient(),
+  } as never)
+    .then((t) => (typeof t.name === "string" ? t.name : null))
+    .catch(() => {
+      teams.delete(teamId);
+      return null;
+    });
+  teams.set(teamId, { at: Date.now(), name });
+  return name;
+}
+
+interface SlackUser {
+  id: string;
+  name: string;
+  teamId: string | null;
+  /** A person who can act: not a bot, not deactivated. */
+  person: boolean;
+}
+
+const users = new Map<
+  string,
+  { at: number; user: Promise<SlackUser | null> }
+>();
+const USER_TTL_MS = 60 * 60_000;
+
+/** A Slack user, looked up at most hourly; null when the lookup fails (retried next time). */
+function slackUser(id: string): Promise<SlackUser | null> {
+  const cached = users.get(id);
+  if (cached && Date.now() - cached.at <= USER_TTL_MS) return cached.user;
+  const user = operatorClient()
     .connectors.slack.userInfo({ user: id })
     .then((r) => {
-      const u = r.user as
-        | {
-            real_name?: string;
-            name?: string;
-            profile?: { display_name?: string };
-          }
-        | undefined;
-      return u?.profile?.display_name || u?.real_name || u?.name || id;
+      const u = r.user as {
+        real_name?: string;
+        name?: string;
+        team_id?: string;
+        is_bot?: boolean;
+        deleted?: boolean;
+        profile?: { display_name?: string };
+      };
+      return {
+        id,
+        name: u.profile?.display_name || u.real_name || u.name || id,
+        teamId: u.team_id ?? null,
+        person: !u.is_bot && !u.deleted && id !== "USLACKBOT",
+      };
     })
     .catch(() => {
-      names.delete(id);
-      return id;
+      users.delete(id);
+      return null;
     });
-  names.set(id, { at: Date.now(), name });
-  return name;
+  users.set(id, { at: Date.now(), user });
+  return user;
+}
+
+const slackName = async (id: string) => (await slackUser(id))?.name ?? id;
+
+const memberLists = new Map<
+  string,
+  {
+    at: number;
+    list: Promise<{
+      members: { id: string; name: string }[];
+      defaultActor: string | null;
+    }>;
+  }
+>();
+const MEMBERS_TTL_MS = 10 * 60_000;
+
+/**
+ * Who a viewer may act as on this desk: people in our own workspace (the on-call's) who have
+ * worked the desk (`deskPeople`), plus its on-call and escalation on-call, with names. Cached per
+ * desk for ten minutes. The default is the desk's on-call.
+ */
+function members(d: Db, desk: Desk) {
+  const cached = memberLists.get(desk.id);
+  if (cached && Date.now() - cached.at <= MEMBERS_TTL_MS) return cached.list;
+  const list = (async () => {
+    const [people, oncall, escalation] = await Promise.all([
+      deskPeople(d, desk.id),
+      oncallFor(d, desk),
+      deskEscalation(d, desk.slug),
+    ]);
+    const ids = [
+      ...new Set(
+        [oncall, escalation?.oncallSlackId, ...people].filter(
+          (x): x is string => !!x,
+        ),
+      ),
+    ];
+    const resolved = (await Promise.all(ids.map(slackUser))).filter(
+      (u): u is SlackUser => !!u?.person,
+    );
+    const ours = resolved.find((u) => u.id === oncall)?.teamId ?? null;
+    const list = resolved
+      .filter((u) => ours === null || u.teamId === ours)
+      .map((u) => ({ id: u.id, name: u.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return {
+      members: list,
+      defaultActor: list.some((m) => m.id === oncall)
+        ? oncall
+        : (list[0]?.id ?? null),
+    };
+  })().catch((err: unknown) => {
+    memberLists.delete(desk.id);
+    throw err;
+  });
+  memberLists.set(desk.id, { at: Date.now(), list });
+  return list;
 }
 
 async function ownerNames(
@@ -411,20 +507,34 @@ async function ticket(d: Db, desk: Desk, id: string) {
  * (`actions.ts`). Returns once the event is accepted; the agent's run then updates the database and
  * redraws the Slack card, and the board picks the change up on its next poll.
  */
-async function ticketAction(d: Db, desk: Desk, id: string, verb: string) {
+async function ticketAction(
+  d: Db,
+  desk: Desk,
+  id: string,
+  verb: string,
+  body: Record<string, unknown>,
+) {
   if (!UUID.test(id)) throw new HttpError(404, "ticket not found");
   const t = await deskTicket(d, desk.id, id);
   if (!t) throw new HttpError(404, "ticket not found");
-  const plan = planAction(verb, {
-    issue: {
-      id: t.id,
-      status: t.status,
-      ownerSlackId: t.ownerSlackId,
-      triageRootTs: t.triageRootTs,
+  // Only someone on the desk's list: the org key could otherwise record any Slack id as the clicker.
+  const actor = typeof body.actor === "string" ? body.actor : "";
+  if (!(await members(d, desk)).members.some((m) => m.id === actor))
+    throw new HttpError(400, "pick who you are acting as");
+  const plan = planAction(
+    verb,
+    {
+      issue: {
+        id: t.id,
+        status: t.status,
+        ownerSlackId: t.ownerSlackId,
+        triageRootTs: t.triageRootTs,
+      },
+      triageChannel: desk.triageChannel,
+      draft: t.pendingDraft,
     },
-    triageChannel: desk.triageChannel,
-    draft: t.pendingDraft,
-  });
+    actor,
+  );
   if (!plan.ok) throw new HttpError(plan.status, plan.reason);
   const result = await sapiom<{
     receiptId: string;
@@ -751,6 +861,11 @@ const GET: [RegExp, Handler][] = [
       withConsoleDb(async (d) => ticket(d, await deskOf(d, url), id!)),
   ],
   [
+    /^\/api\/members$/,
+    (_, __, url) =>
+      withConsoleDb(async (d) => members(d, await deskOf(d, url))),
+  ],
+  [
     /^\/api\/accounts\/([^/]+)$/,
     ([id], __, url) =>
       withConsoleDb(async (d) => account(d, await deskOf(d, url), id!)),
@@ -852,9 +967,9 @@ const POST: [RegExp, Handler][] = [
   [/^\/api\/receipts\/(\d+)\/replay$/, ([id]) => replayReceipt(id!)],
   [
     /^\/api\/tickets\/([^/]+)\/actions\/([a-z]+)$/,
-    ([id, verb], __, url) =>
+    ([id, verb], body, url) =>
       withConsoleDb(async (d) =>
-        ticketAction(d, await deskOf(d, url), id!, verb!),
+        ticketAction(d, await deskOf(d, url), id!, verb!, body),
       ),
   ],
   [/^\/api\/kb$/, (_, body) => createKbArticle(body)],
@@ -903,7 +1018,10 @@ async function deleteKbArticle(id: string) {
   return { deleted: id };
 }
 
-/** A Settings response, plus the names the form shows beside the desk's Linear and on-call ids. */
+/**
+ * A Settings response, plus the names the form shows beside the stored ids: the Linear team and
+ * project, and the people the on-call select offers (the "Acting as" list).
+ */
 async function settingsView(
   d: Db,
   desk: Desk,
@@ -911,11 +1029,21 @@ async function settingsView(
 ) {
   const body = httpBody(res) as Record<string, unknown>;
   const saved = (await deskBySlug(d, desk.slug)) ?? desk;
-  const [linearProjectView, oncallName] = await Promise.all([
-    linearProject(d, saved),
-    saved.oncallSlackId ? slackName(saved.oncallSlackId) : null,
-  ]);
-  return { ...body, linearProject: linearProjectView, oncallName };
+  const [linearProjectView, linearTeam, people, oncallName] = await Promise.all(
+    [
+      linearProject(d, saved),
+      saved.linearTeamId ? linearTeamName(saved.linearTeamId) : null,
+      members(d, saved).catch(() => ({ members: [], defaultActor: null })),
+      saved.oncallSlackId ? slackName(saved.oncallSlackId) : null,
+    ],
+  );
+  return {
+    ...body,
+    linearProject: linearProjectView,
+    linearTeam,
+    oncallName,
+    members: people.members,
+  };
 }
 
 function httpBody(res: { status: number; body: unknown }) {
@@ -932,9 +1060,13 @@ const PUT: [RegExp, Handler][] = [
   [
     /^\/api\/escalation$/,
     (_, body, url) =>
-      withConsoleDb(async (d) =>
-        httpBody(await putEscalation(d, await deskOf(d, url), body)),
-      ),
+      withConsoleDb(async (d) => {
+        const desk = await deskOf(d, url);
+        const res = httpBody(await putEscalation(d, desk, body));
+        // The escalation on-call is on the Acting-as list.
+        memberLists.delete(desk.id);
+        return res;
+      }),
   ],
   [
     /^\/api\/settings\/desk$/,
@@ -942,8 +1074,9 @@ const PUT: [RegExp, Handler][] = [
       withConsoleDb(async (d) => {
         const desk = await deskOf(d, url);
         const res = await putDeskSettings(d, desk, body);
-        // The Linear project may have changed; drop its cached name.
+        // The Linear project or the on-call may have changed; drop what was cached for the desk.
         projects.delete(desk.id);
+        memberLists.delete(desk.id);
         return settingsView(d, desk, res);
       }),
   ],

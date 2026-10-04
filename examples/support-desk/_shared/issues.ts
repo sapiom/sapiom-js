@@ -11,12 +11,20 @@ import { defaultDesk } from "./desks";
 import type { SlackRef } from "./events";
 
 export type IssueStatus =
-  "new" | "on_you" | "on_customer" | "on_hold" | "closed";
+  | "new"
+  | "on_you"
+  | "on_customer"
+  | "on_hold"
+  | "closed";
 /** Widen when a new source adapter lands; never a free string. */
 export type IssueSource = "slack";
 export type Direction = "customer" | "agent" | "internal";
 export type DraftStatus =
-  "pending" | "approved" | "dismissed" | "escalated" | "superseded";
+  | "pending"
+  | "approved"
+  | "dismissed"
+  | "escalated"
+  | "superseded";
 export type DraftDecision = Exclude<DraftStatus, "pending">;
 
 export const ISSUE_STATUSES: readonly IssueStatus[] = [
@@ -62,6 +70,8 @@ export interface Issue {
   linearIdentifier: string | null;
   /** 050_linear_url: null for issues escalated before it, and on Linear replies without a URL. */
   linearUrl: string | null;
+  /** 100_linear_state: the Linear state linear-sync last read; null until its first check. */
+  linearState: string | null;
   /** 062_escalation_generation: when the issue last entered On Hold; one value per escalation. */
   onHoldAt: Date | null;
   /** 062_escalation_generation: the triage card is stale; cleared once it is redrawn. */
@@ -162,6 +172,7 @@ const toIssue = (r: Row): Issue => ({
   linearIssueId: (r.linear_issue_id as string | null) ?? null,
   linearIdentifier: (r.linear_identifier as string | null) ?? null,
   linearUrl: (r.linear_url as string | null) ?? null,
+  linearState: (r.linear_state as string | null) ?? null,
   onHoldAt: (r.on_hold_at as Date | null) ?? null,
   cardDirty: (r.card_dirty as boolean | null) ?? false,
   createdAt: r.created_at as Date,
@@ -399,13 +410,16 @@ export async function setCardDirty(
 }
 
 /** Stamp the time linear-sync last read this issue's Linear state, so the next tick checks others first. */
+/** Stamp the Linear read; `state`, when the read returned one, replaces the stored Linear state. */
 export async function markLinearChecked(
   db: Db,
   issueId: string,
+  state?: string | null,
 ): Promise<void> {
-  await db.query("update issues set linear_checked_at = now() where id = $1", [
-    issueId,
-  ]);
+  await db.query(
+    "update issues set linear_checked_at = now(), linear_state = coalesce($2, linear_state) where id = $1",
+    [issueId, state || null],
+  );
 }
 
 /** Enforces {@link TRANSITIONS}. Moving to the current status is a no-op, so retries are safe. */

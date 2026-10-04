@@ -8,20 +8,14 @@
  * triage channel) for Take and Close, the draft card for the draft verbs. intake accepts an issue
  * action only from the issue's own triage channel, so that is the channel the click carries.
  *
- * The App Link has no per-user identity, so the clicker is always `console`: it is the owner a
- * Take records and the name on "Closed by" and on a decided draft.
+ * The App Link forwards no viewer identity, so the viewer picks who they act as (a member of the
+ * desk's triage channel, see `server.ts` `members`) and the click carries that Slack user: Take
+ * makes them the owner, and the cards and thread name them as a Slack click would.
  */
 import { randomUUID } from "node:crypto";
 
-import {
-  ACTIONS,
-  CONSOLE_ACTOR,
-  encodeAction,
-  type ActionOwner,
-} from "../../_shared/blocks";
+import { ACTIONS, encodeAction, type ActionOwner } from "../../_shared/blocks";
 import { SlackBlockActions } from "../../_shared/events";
-
-export { CONSOLE_ACTOR };
 
 export const ACTION_TYPE = "slack.block_actions";
 
@@ -70,6 +64,8 @@ const ownerOf = (verb: string): ActionOwner | null =>
 export function planAction(
   verb: string,
   target: ActionTarget,
+  /** The Slack user id the viewer acts as. */
+  actor: string,
   nonce: string = randomUUID(),
 ): ActionPlan {
   const owner = ownerOf(verb);
@@ -117,7 +113,7 @@ export function planAction(
   const payload = SlackBlockActions.parse({
     type: "block_actions",
     trigger_id: triggerId,
-    user: { id: CONSOLE_ACTOR, name: CONSOLE_ACTOR },
+    user: { id: actor },
     container: { type: "message", channel_id: channel, message_ts: ts },
     channel: { id: channel },
     actions: [

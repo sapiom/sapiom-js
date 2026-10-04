@@ -39,6 +39,7 @@ const issue: Issue = {
   linearIssueId: null,
   linearIdentifier: null,
   linearUrl: null,
+  linearState: null,
   onHoldAt: null,
   cardDirty: false,
   createdAt: now,
@@ -64,7 +65,8 @@ type Btn = { action_id: string; value: string };
 /** The mrkdwn text of the block with this `block_id` (a section's text, or a context's first element). */
 const textOf = (blocks: Record<string, unknown>[], id: string): string => {
   const b = blocks.find((x) => x.block_id === id) as
-    { text?: { text: string }; elements?: { text: string }[] } | undefined;
+    | { text?: { text: string }; elements?: { text: string }[] }
+    | undefined;
   return b?.text?.text ?? b?.elements?.[0]?.text ?? "";
 };
 const buttons = (blocks: Record<string, unknown>[]): Btn[] =>

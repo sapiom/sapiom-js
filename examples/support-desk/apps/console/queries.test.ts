@@ -8,6 +8,7 @@ import {
   linkMessage,
   logEvent,
   ensureAccount,
+  markLinearChecked,
   openIssue,
   setStatus,
 } from "../../_shared/issues";
@@ -18,6 +19,7 @@ import { scopeReceipts } from "./logic";
 import {
   boardIssues,
   deskAccount,
+  deskPeople,
   deskTicket,
   metricIssues,
   parseBoardFilter,
@@ -96,22 +98,18 @@ describe("desk-scoped reads", () => {
     expect(parseBoardFilter("deleted")).toBeNull();
   });
 
-  it("gives each row its newest draft status and the Linear state linear-sync recorded", async () => {
+  it("gives each row its newest draft status and the Linear state linear-sync stored", async () => {
     const a = await issueOn(test, "a");
     const b = await issueOn(test, "b");
     await createDraft(db, { issueId: a.id, text: "first" });
     await db.query("update drafts set status = 'superseded'");
     await createDraft(db, { issueId: a.id, text: "second" });
-    await logEvent(db, {
-      type: "issue.engineering_resolved",
-      payload: { issueId: a.id, linearState: "Done" },
-      emittedBy: "linear-sync",
-    });
+    await markLinearChecked(db, a.id, "In Progress");
     const rows = await boardIssues(db, test.id);
     const byId = new Map(rows.map((r) => [r.id, r]));
     expect(byId.get(a.id)).toMatchObject({
       draftStatus: "pending",
-      linearState: "Done",
+      linearState: "In Progress",
     });
     expect(byId.get(b.id)).toMatchObject({
       draftStatus: null,
@@ -214,6 +212,46 @@ describe("desk-scoped reads", () => {
     expect(scopeReceipts(failed, owners, test.id).map((r) => r.id)).toEqual([
       "11",
       "13",
+    ]);
+  });
+});
+
+describe("deskPeople", () => {
+  it("lists the desk's owners, draft deciders and teammates, not its customers or another desk's", async () => {
+    const a = await issueOn(test, "a");
+    const b = await issueOn(support, "b");
+    await db.query(
+      "update issues set owner_slack_id = 'U0OWNER' where id = $1",
+      [a.id],
+    );
+    await db.query(
+      "update issues set owner_slack_id = 'U0OTHERDESK' where id = $1",
+      [b.id],
+    );
+    await createDraft(db, { issueId: a.id, text: "d" });
+    await db.query(
+      "update drafts set status = 'approved', decided_by = 'U0DECIDER'",
+    );
+    const say = (
+      userId: string,
+      direction: "customer" | "internal",
+      n: number,
+    ) =>
+      linkMessage(db, {
+        issueId: a.id,
+        source: "slack",
+        sourceEventId: `ev-p${n}`,
+        direction,
+        slack: { channel: "C0X", ts: `1790400000.00010${n}` },
+        userId,
+        text: "t",
+      });
+    await say("U0CUSTOMER", "customer", 1);
+    await say("U0TEAMMATE", "internal", 2);
+    expect((await deskPeople(db, test.id)).sort()).toEqual([
+      "U0DECIDER",
+      "U0OWNER",
+      "U0TEAMMATE",
     ]);
   });
 });

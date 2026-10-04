@@ -7,7 +7,6 @@ import { z } from "zod/v4";
 import {
   draftCard,
   escapeMrkdwn,
-  mention,
   mrkdwnLink,
   slackToPlain,
 } from "../../_shared/blocks";
@@ -252,7 +251,7 @@ export function copilotCard(
   });
   if (draft.status === "approved" && replySent === false) {
     const i = blocks.findIndex((b) => b.block_id === "draft.outcome");
-    const by = draft.decidedBy ? mention(draft.decidedBy) : "a teammate";
+    const by = draft.decidedBy ? `<@${draft.decidedBy}>` : "a teammate";
     const line: Block = {
       type: "context",
       block_id: "draft.outcome",

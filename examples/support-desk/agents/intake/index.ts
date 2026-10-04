@@ -15,7 +15,6 @@ import {
   escapeMrkdwn,
   issueCard,
   issueCardText,
-  mention,
   mrkdwnLink,
   slackToPlain,
   replaceActions,
@@ -1064,12 +1063,12 @@ const button = defineStep({
         const line =
           verb === "take"
             ? changed
-              ? `Taken by ${mention(clicker)}`
+              ? `Taken by <@${clicker}>`
               : issue.status === "closed"
                 ? "Issue is closed"
-                : `Owned by ${mention(issue.ownerSlackId!)}`
+                : `Owned by <@${issue.ownerSlackId}>`
             : changed
-              ? `Closed by ${mention(clicker)}`
+              ? `Closed by <@${clicker}>`
               : "Already closed";
         await settleClicked(ctx, input, line);
       }
@@ -1077,7 +1076,7 @@ const button = defineStep({
         await post(ctx, {
           channel: triageChannel,
           threadTs: issue.triageRootTs,
-          text: `Closed by ${mention(clicker)}`,
+          text: `Closed by <@${clicker}>`,
         });
       }
       return terminate({

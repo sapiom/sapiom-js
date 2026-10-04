@@ -16,13 +16,11 @@ import {
   seedLocalFixtures,
 } from "../../agents/copilot/local";
 import { agent as intake } from "../../agents/intake/index";
-import {
-  ACTION_TYPE,
-  CONSOLE_ACTOR,
-  planAction,
-  type ActionTarget,
-} from "./actions";
+import { ACTION_TYPE, planAction, type ActionTarget } from "./actions";
 import { deskTicket } from "./queries";
+
+/** The teammate the viewer picked in "Acting as". */
+const ACTOR = "U0ACTOR001";
 
 type Directive = {
   kind: string;
@@ -86,14 +84,14 @@ const target = (
 
 describe("planAction", () => {
   it("builds the Slack click for an issue verb on the issue card", () => {
-    const plan = planAction("close", target(), "n1");
+    const plan = planAction("close", target(), ACTOR, "n1");
     expect(plan).toMatchObject({
       ok: true,
       type: ACTION_TYPE,
       id: "slack.block_actions:console:n1",
     });
     if (!plan.ok) return;
-    expect(plan.payload.user.id).toBe(CONSOLE_ACTOR);
+    expect(plan.payload.user.id).toBe(ACTOR);
     expect(plan.payload.container).toMatchObject({
       channel_id: "C0TRIAGE",
       message_ts: "1790000000.000100",
@@ -108,7 +106,7 @@ describe("planAction", () => {
   });
 
   it("builds the click for a draft verb on the draft card", () => {
-    const plan = planAction("approve", target(), "n2");
+    const plan = planAction("approve", target(), ACTOR, "n2");
     if (!plan.ok) throw new Error(plan.reason);
     expect(plan.payload.container?.message_ts).toBe("1790000001.000100");
     expect(plan.payload.actions[0]).toMatchObject({
@@ -118,33 +116,37 @@ describe("planAction", () => {
   });
 
   it("refuses what the Slack card would not offer", () => {
-    expect(planAction("reopen", target())).toMatchObject({
+    expect(planAction("reopen", target(), ACTOR)).toMatchObject({
       ok: false,
       status: 400,
     });
-    expect(planAction("close", target({ status: "closed" }))).toMatchObject({
-      ok: false,
-      status: 409,
-    });
     expect(
-      planAction("take", target({ ownerSlackId: "U0OWNER" })),
+      planAction("close", target({ status: "closed" }), ACTOR),
     ).toMatchObject({
       ok: false,
       status: 409,
     });
-    expect(planAction("take", target({ triageRootTs: null }))).toMatchObject({
+    expect(
+      planAction("take", target({ ownerSlackId: "U0OWNER" }), ACTOR),
+    ).toMatchObject({
       ok: false,
       status: 409,
     });
-    expect(planAction("dismiss", target({}, false))).toMatchObject({
+    expect(
+      planAction("take", target({ triageRootTs: null }), ACTOR),
+    ).toMatchObject({
+      ok: false,
+      status: 409,
+    });
+    expect(planAction("dismiss", target({}, false), ACTOR)).toMatchObject({
       ok: false,
       status: 409,
     });
   });
 
   it("gives every click its own trigger id, so two clicks are two events", () => {
-    const a = planAction("close", target());
-    const b = planAction("close", target());
+    const a = planAction("close", target(), ACTOR);
+    const b = planAction("close", target(), ACTOR);
     if (!a.ok || !b.ok) throw new Error("expected plans");
     expect(a.id).not.toBe(b.id);
   });
@@ -163,11 +165,15 @@ describe("the agents handle a Console click as a Slack click", () => {
 
   async function click(verb: string) {
     const t = (await deskTicket(db, desk.id, FIXTURE_ISSUE))!;
-    const plan = planAction(verb, {
-      issue: t,
-      triageChannel: desk.triageChannel,
-      draft: t.pendingDraft,
-    });
+    const plan = planAction(
+      verb,
+      {
+        issue: t,
+        triageChannel: desk.triageChannel,
+        draft: t.pendingDraft,
+      },
+      ACTOR,
+    );
     if (!plan.ok) throw new Error(plan.reason);
     return plan.payload;
   }
@@ -181,7 +187,7 @@ describe("the agents handle a Console click as a Slack click", () => {
     expect(took.output).toMatchObject({
       outcome: "take",
       changed: true,
-      owner: CONSOLE_ACTOR,
+      owner: ACTOR,
     });
     // The issue card redraws.
     expect(took.slack("chat.update")).toEqual([
@@ -191,11 +197,11 @@ describe("the agents handle a Console click as a Slack click", () => {
     const closed = await run(intake, await click("close"), "i-close");
     expect(closed.output).toMatchObject({ changed: true, status: "closed" });
     expect(closed.slack("chat.postMessage")).toEqual([
-      expect.objectContaining({ text: "Closed by the Console" }),
+      expect.objectContaining({ text: `Closed by <@${ACTOR}>` }),
     ]);
     expect(await getIssue(db, FIXTURE_ISSUE)).toMatchObject({
       status: "closed",
-      ownerSlackId: CONSOLE_ACTOR,
+      ownerSlackId: ACTOR,
     });
   });
 
@@ -216,15 +222,15 @@ describe("the agents handle a Console click as a Slack click", () => {
     ]);
     expect(await getDraft(db, FIXTURE_DRAFT)).toMatchObject({
       status: "approved",
-      decidedBy: CONSOLE_ACTOR,
+      decidedBy: ACTOR,
     });
-    // The Console is no Slack user, so the card names it in plain text rather than as a mention.
+    // The card names the teammate the viewer acted as, as after a click in Slack.
     expect(JSON.stringify(out.slack("chat.update")[1]!.blocks)).toContain(
-      "Approved and sent by the Console",
+      `Approved and sent by <@${ACTOR}>`,
     );
   });
 
-  it("Escalate emits issue.escalate as the Slack click does, requested by the Console", async () => {
+  it("Escalate emits issue.escalate as the Slack click does, requested by the acting teammate", async () => {
     const out = await run(copilot, await click("escalate"), "c-escalate");
     expect(out.output).toMatchObject({ changed: true, status: "escalated" });
     expect(out.emitted).toEqual([
@@ -232,7 +238,7 @@ describe("the agents handle a Console click as a Slack click", () => {
         type: "issue.escalate",
         payload: expect.objectContaining({
           issueId: FIXTURE_ISSUE,
-          requestedBy: CONSOLE_ACTOR,
+          requestedBy: ACTOR,
         }),
       }),
     ]);

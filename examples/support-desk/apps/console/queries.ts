@@ -49,7 +49,7 @@ export interface BoardRow {
   ownerSlackId: string | null;
   linearIdentifier: string | null;
   linearUrl: string | null;
-  /** The newest `issue.engineering_resolved` state linear-sync recorded; null until one exists. */
+  /** The Linear state linear-sync last read (`issues.linear_state`); null until its first check. */
   linearState: string | null;
   /** The newest draft's status; null when the copilot has drafted nothing. */
   draftStatus: string | null;
@@ -68,47 +68,26 @@ const toBoardRow = (r: Record<string, unknown>): BoardRow => ({
   ownerSlackId: (r.owner_slack_id as string | null) ?? null,
   linearIdentifier: (r.linear_identifier as string | null) ?? null,
   linearUrl: (r.linear_url as string | null) ?? null,
-  linearState: null,
+  linearState: (r.linear_state as string | null) ?? null,
   draftStatus: null,
   triageRootTs: (r.triage_root_ts as string | null) ?? null,
   createdAt: r.created_at as Date,
 });
 
 const ISSUE_COLUMNS = `i.id, i.number, i.account_id, a.name as account, i.title, i.status, i.priority,
-  i.owner_slack_id, i.linear_identifier, i.linear_url, i.triage_root_ts, i.created_at`;
+  i.owner_slack_id, i.linear_identifier, i.linear_url, i.linear_state, i.triage_root_ts, i.created_at`;
 
-/** Each row's newest draft status and Linear state, read in two queries rather than per row. */
-async function withDraftAndLinear(
-  d: Db,
-  rows: BoardRow[],
-): Promise<BoardRow[]> {
+/** Each row's newest draft status, read in one query rather than per row. */
+async function withDraftStatus(d: Db, rows: BoardRow[]): Promise<BoardRow[]> {
   if (!rows.length) return rows;
-  const ids = rows.map((r) => r.id);
-  const [drafts, resolved] = await Promise.all([
-    d.query<{ issue_id: string; status: string }>(
-      "select issue_id, status from drafts where issue_id = any($1) order by created_at desc",
-      [ids],
-    ),
-    d.query<{ issue_id: string; state: string }>(
-      `select payload->>'issueId' as issue_id, payload->>'linearState' as state from events_log
-        where type = 'issue.engineering_resolved' and payload->>'issueId' = any($1)
-        order by created_at desc`,
-      [ids],
-    ),
-  ]);
-  const first = <T extends { issue_id: string }>(list: T[]) => {
-    const out = new Map<string, T>();
-    for (const row of list)
-      if (!out.has(row.issue_id)) out.set(row.issue_id, row);
-    return out;
-  };
-  const draftOf = first(drafts);
-  const stateOf = first(resolved);
-  return rows.map((r) => ({
-    ...r,
-    draftStatus: draftOf.get(r.id)?.status ?? null,
-    linearState: stateOf.get(r.id)?.state ?? null,
-  }));
+  const drafts = await d.query<{ issue_id: string; status: string }>(
+    "select issue_id, status from drafts where issue_id = any($1) order by created_at desc",
+    [rows.map((r) => r.id)],
+  );
+  const newest = new Map<string, string>();
+  for (const row of drafts)
+    if (!newest.has(row.issue_id)) newest.set(row.issue_id, row.status);
+  return rows.map((r) => ({ ...r, draftStatus: newest.get(r.id) ?? null }));
 }
 
 /** The desk's issues in `filter`, newest first. */
@@ -125,7 +104,7 @@ export async function boardIssues(
       order by i.number desc limit ${Math.trunc(limit)}`,
     filter === "open" ? [deskId] : [deskId, filter],
   );
-  return withDraftAndLinear(d, rows.map(toBoardRow));
+  return withDraftStatus(d, rows.map(toBoardRow));
 }
 
 export interface TicketView extends BoardRow {
@@ -151,7 +130,7 @@ export async function deskTicket(
     [deskId, issueId],
   );
   if (!rows[0]) return null;
-  const [row] = await withDraftAndLinear(d, [toBoardRow(rows[0])]);
+  const [row] = await withDraftStatus(d, [toBoardRow(rows[0])]);
   const [pending] = await d.query<Record<string, unknown>>(
     "select id, text, card_channel, card_ts from drafts where issue_id = $1 and status = 'pending' order by created_at desc limit 1",
     [issueId],
@@ -235,6 +214,31 @@ export async function deskAccount(
       createdAt: t.created_at as Date,
     })),
   };
+}
+
+/**
+ * Slack users who have worked the desk: ticket owners, draft deciders, and the authors of its
+ * non-customer messages. The connector cannot list a channel's members (`conversations.members` is
+ * not a method it allows), so these stand in for the triage channel's membership.
+ */
+export async function deskPeople(d: Db, deskId: string): Promise<string[]> {
+  const [owners, deciders, authors] = await Promise.all([
+    d.query<{ id: string }>(
+      "select distinct owner_slack_id as id from issues where desk_id = $1 and owner_slack_id is not null",
+      [deskId],
+    ),
+    d.query<{ id: string }>(
+      `select distinct dr.decided_by as id from drafts dr join issues i on i.id = dr.issue_id
+        where i.desk_id = $1 and dr.decided_by is not null`,
+      [deskId],
+    ),
+    d.query<{ id: string }>(
+      `select distinct m.user_id as id from messages m join issues i on i.id = m.issue_id
+        where i.desk_id = $1 and m.direction <> 'customer' and m.user_id is not null`,
+      [deskId],
+    ),
+  ]);
+  return [...new Set([...owners, ...deciders, ...authors].map((r) => r.id))];
 }
 
 /** The desk's issues created since `since`, newest first. */

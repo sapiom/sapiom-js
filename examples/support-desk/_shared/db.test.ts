@@ -44,6 +44,7 @@ describe("db", () => {
       { id: "080_desks" },
       { id: "081_desk_triage_unique" },
       { id: "090_digests" },
+      { id: "100_linear_state" },
     ]);
   });
 

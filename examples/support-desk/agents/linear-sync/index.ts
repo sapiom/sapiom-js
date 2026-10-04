@@ -267,8 +267,13 @@ export async function sync(ctx: Ctx, db: Db, limit: number = READ_CAP) {
         ctx,
         issue.linearIssueId ?? identifier,
       );
-      // Stamped on a failed read too, so one broken issue does not pin the front of the queue.
-      await markLinearChecked(db, issue.id);
+      // Stamped on a failed read too, so one broken issue does not pin the front of the queue. The
+      // state is stored for the Console's board.
+      await markLinearChecked(
+        db,
+        issue.id,
+        linear.status ?? linear.statusType ?? null,
+      );
       const r = resolution(linear);
       if (!r) continue;
       const moved = await resolveIssue(ctx, db, triageChannel, {
