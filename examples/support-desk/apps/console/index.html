@@ -1139,14 +1139,14 @@
 
       /** Every result shows in the header for a few seconds, beside the controls. */
       let toastTimer;
-      // Set when the page's preview session is gone (401 or no answer): every later request would
-      // fail the same way, so the page stops calling and keeps one message up instead.
+      // Set when the page's preview session is gone (a 401): every later request would fail the
+      // same way, so the page stops calling and keeps one message up instead.
       let expired = false;
       function sessionGone() {
         if (expired) return;
         expired = true;
         log(
-          "Session expired FAILED: this Console page lost its connection. Reopen the Console from its Sapiom link (apps.sapiom.ai/<org>/<console>) to keep working.",
+          "Session expired FAILED: this Console page's session ended. Reopen the Console from its Sapiom link (apps.sapiom.ai/<org>/<console>) to keep working.",
         );
       }
       function log(line) {
@@ -1215,7 +1215,11 @@
         try {
           r = await fetch(path, init);
         } catch (err) {
-          sessionGone();
+          // No answer can be a dropped connection that comes back, so polling goes on and the
+          // next successful refresh simply replaces this message.
+          log(
+            `Unreachable FAILED: the Console server did not answer (${err.message}); retrying`,
+          );
           throw err;
         }
         if (r.status === 401) {

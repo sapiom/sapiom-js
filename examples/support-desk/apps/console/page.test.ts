@@ -114,12 +114,18 @@ describe("console page session expiry", () => {
     expect(calls).toEqual(["/api/tickets/1/actions/close"]);
   });
 
-  it("treats a request with no answer as an expired session", async () => {
-    const { api, toast } = load(() =>
-      Promise.reject(new TypeError("Failed to fetch")),
+  it("keeps polling after a request with no answer, so a dropped connection recovers", async () => {
+    let down = true;
+    const { api, toast, calls } = load(() =>
+      down
+        ? Promise.reject(new TypeError("Failed to fetch"))
+        : json(200, { ok: true }),
     );
     await expect(api.get("/api/board")).rejects.toThrow("Failed to fetch");
-    expect(toast.textContent).toMatch(/^Session expired/);
+    expect(toast.textContent).toMatch(/^Unreachable FAILED: .*retrying/);
+    down = false;
+    await expect(api.get("/api/board")).resolves.toEqual({ ok: true });
+    expect(calls).toEqual(["/api/board", "/api/board"]);
   });
 
   it("leaves the server's own 403 an ordinary failure", async () => {
