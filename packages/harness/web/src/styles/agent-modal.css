@@ -320,3 +320,114 @@
   font-size: var(--type-meta);
   color: var(--text-dim);
 }
+
+/* Runs (4.7.1): the agent's runs newest first on the left, the shown run's
+   workspace on the right, each scrolling on its own. */
+.runs-panel {
+  display: grid;
+  grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  min-height: 0;
+  margin: 0;
+  padding: var(--sp2);
+  overflow-y: auto;
+  list-style: none;
+  border-right: 1px solid var(--ui-line);
+}
+
+.runs-list-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp1);
+  width: 100%;
+  padding: var(--sp2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+}
+
+.runs-list-row:hover {
+  background: var(--surface-hover);
+}
+
+.runs-list-row.is-selected {
+  background: var(--active-shade);
+}
+
+.runs-list-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.runs-list-sub {
+  display: flex;
+  gap: var(--sp2);
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.runs-list-sub code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.runs-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* A narrow modal stacks the list over the workspace. */
+@container agentmodal (max-width: 640px) {
+  .runs-panel {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .runs-list {
+    max-height: 9rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-line);
+  }
+}
+
+/* `</>` (4.7.2): the integration snippets, anchored under the button. */
+.agent-modal-snippets-popover {
+  width: min(34rem, calc(100vw - var(--sp6) * 2));
+  overflow-y: auto;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-md);
+  z-index: 31;
+  animation: pop-in var(--transition-fast) ease-out;
+}
+
+.agent-modal-snippets-popover > .snippet-panel {
+  margin: 0;
+  border: 0;
+}
+
+.agent-modal-snippets-pending {
+  margin: 0;
+  padding: var(--sp3) var(--sp4);
+  font-size: var(--type-label);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
