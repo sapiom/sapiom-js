@@ -168,7 +168,7 @@ test("brand header shows the Sapiom wordmark and the demo-workspace identity", a
   await expect(page.locator(".brand-product")).toHaveText("agent.studio");
   await expect(page.getByTestId("palette-trigger")).toHaveAttribute(
     "aria-label",
-    "Search sessions, agents, and paths",
+    "Search",
   );
   // Mock mode is the static demo build: it must never claim a connected
   // Sapiom account — the identity chip reads "Demo workspace" instead.
