@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  acquireConfigLock,
   claudeCodeConfigPath,
   trustClaudeCodeProject,
 } from "./claude-code-trust.js";
@@ -102,10 +103,15 @@ describe("trustClaudeCodeProject (SAP-3879)", () => {
     }
   });
 
-  it("never trusts the home directory or a filesystem root", async () => {
+  it("never trusts the home directory, a folder above it, or a filesystem root", async () => {
     await writeConfig({ projects: {} });
     const before = await fs.readFile(configFile, "utf8");
-    for (const broad of [home, path.parse(project).root])
+    for (const broad of [
+      home,
+      dir,
+      path.dirname(dir),
+      path.parse(project).root,
+    ])
       expect(await trustClaudeCodeProject(broad, { env, home })).toBe(
         "skipped",
       );
@@ -166,6 +172,26 @@ describe("trustClaudeCodeProject (SAP-3879)", () => {
     );
     expect((await readConfig()).projects).toEqual({});
     await expect(fs.stat(lock)).resolves.toBeDefined();
+  });
+});
+
+describe("acquireConfigLock", () => {
+  it("leaves a lock another writer took over in place", async () => {
+    const lock = path.join(home, ".claude.json.lock");
+    const release = await acquireConfigLock(lock);
+    expect(release).not.toBeNull();
+    // Held past the stale interval: another writer removed it and made its own.
+    await fs.rmdir(lock);
+    await fs.mkdir(lock);
+    const later = new Date(Date.now() + 5_000);
+    await fs.utimes(lock, later, later);
+    await release!();
+    await expect(fs.stat(lock)).resolves.toBeDefined();
+
+    await fs.rmdir(lock);
+    const own = await acquireConfigLock(lock);
+    await own!();
+    await expect(fs.stat(lock)).rejects.toThrow();
   });
 });
 

@@ -1,0 +1,11 @@
+import { chromium } from "playwright";
+const browser = await chromium.launch();
+const page = await browser.newPage();
+const seen = [];
+page.on("response", async (r) => { if (r.url().includes("/api/assistant/access")) seen.push(r.status() + " " + (await r.text())); });
+await page.goto(process.env.URL);
+await page.locator(".rail-workflows").waitFor();
+await page.getByTestId("project-select-r5s-tree/proj-c").click();
+await page.waitForTimeout(3000);
+console.log(seen);
+await browser.close();

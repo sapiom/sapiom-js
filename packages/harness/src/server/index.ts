@@ -959,6 +959,15 @@ export const startServer = async (
   } catch (err) {
     console.error("[harness] agent registry prune failed:", err);
   }
+  /** Hand-off and Open in session sessions start in a project root without
+   *  Claude Code's trust dialog (flow-map-chat-overlay.md §4.7 item 5). */
+  const pretrustProjectRoot = (root: string): Promise<void> =>
+    trustClaudeCodeProject(root).then(
+      () => {},
+      () => {
+        console.error("[harness] could not pre-trust a project for Claude Code");
+      },
+    );
   // Same hygiene for settings.json's recentDirs — dead entries are already
   // filtered from every read, but pruning here persists their removal.
   // Awaited so it can't race a settings PATCH once the server is listening.
@@ -1558,7 +1567,20 @@ export const startServer = async (
     // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
     // session is an ordinary session: no bootstrap claim, no "Plan Agents"
     // title, no metadata that would make its first turn the coordinator's.
-    prepareProjectSession: async () => ({}),
+    prepareProjectSession: async (_identity, request) => {
+      // A Claude Code session waits for its project's trust record, so the
+      // dialog cannot win a race with the add-time write, and a project added
+      // before Studio pre-trusted roots gets one too. Only an added root
+      // (recentDirs) is trusted, never the session folder itself.
+      if (request.harness === "claude-code")
+        await loadSettings(statePaths.settings).then(({ recentDirs }) => {
+          const root = recentDirs
+            .filter((dir) => isWithinWorkspacePath(dir, request.cwd))
+            .sort((a, b) => b.length - a.length)[0];
+          return root ? pretrustProjectRoot(root) : undefined;
+        }, () => {});
+      return {};
+    },
     onTerminalInput: (sessionId, context) =>
       projectBootstrap?.onTerminalInput(sessionId, context),
     onRuntimeEpochTransition: async (session, runtimeEpoch) => {
@@ -3222,6 +3244,7 @@ export const startServer = async (
   const initializeOpenedProject = async (
     requestedRoot: string,
   ): Promise<void> => {
+    await pretrustProjectRoot(requestedRoot);
     pendingProjectCwds.add(requestedRoot);
     try {
       await serializeProjectScopeResolution(async () => {
@@ -3232,11 +3255,6 @@ export const startServer = async (
     } finally {
       pendingProjectCwds.delete(requestedRoot);
     }
-    // Hand-off and Open in session sessions start in this root without Claude
-    // Code's trust dialog (flow-map-chat-overlay.md §4.7 item 5).
-    await trustClaudeCodeProject(requestedRoot).catch(() => {
-      console.error("[harness] could not pre-trust the project for Claude Code");
-    });
   };
 
   // One ordinary-session input authority serves the canonical REST endpoint

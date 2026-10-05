@@ -33,8 +33,8 @@ import { join, parse, resolve } from "node:path";
  * Only this root's record changes; every other key is kept. Nothing is
  * written when the file is missing (Claude Code restores a missing config
  * from its backups, and a stub would hide that), unreadable, or not an
- * object, and never for the home directory or a filesystem root, whose
- * trust would cover every folder beneath them.
+ * object, and never for the home directory, a folder above it or a
+ * filesystem root, whose trust would cover every project beneath them.
  */
 export async function trustClaudeCodeProject(
   root: string,
@@ -43,9 +43,14 @@ export async function trustClaudeCodeProject(
   const env = options.env ?? process.env;
   const home = options.home ?? homedir();
   const keys = await trustKeys(root);
-  const broad = [spell(home), spell(parse(resolve(root)).root)];
-  if (keys.some((key) => broad.includes(key))) return "skipped";
+  const homeKey = spell(home);
+  const covers = (key: string) =>
+    key === spell(parse(key).root) ||
+    homeKey === key ||
+    homeKey.startsWith(key.endsWith("/") ? key : `${key}/`);
+  if (keys.some(covers)) return "skipped";
   const file = await claudeCodeConfigPath(env, home);
+  if (!(await exists(file))) return "skipped";
   const release = await acquireConfigLock(`${file}.lock`);
   if (!release) return "skipped";
   try {
@@ -137,14 +142,21 @@ const LOCK_RETRY_MS = 50;
  * The lock Claude Code takes around a config save: the directory
  * `<file>.lock`, created with mkdir and considered abandoned once its mtime
  * is older than ten seconds. Returns null rather than write without it.
+ * Release removes the directory only while it is still the one this call
+ * made, so a writer that took over a lock this call held too long keeps it.
  */
-async function acquireConfigLock(
+export async function acquireConfigLock(
   lock: string,
 ): Promise<(() => Promise<void>) | null> {
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
     try {
       await mkdir(lock);
-      return () => rmdir(lock).catch(() => {});
+      const made = await stat(lock);
+      return async () => {
+        const now = await stat(lock).catch(() => null);
+        if (now?.ino === made.ino && now.mtimeMs === made.mtimeMs)
+          await rmdir(lock).catch(() => {});
+      };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
       const held = await stat(lock).catch(() => null);
