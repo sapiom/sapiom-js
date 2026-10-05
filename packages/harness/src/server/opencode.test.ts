@@ -20,6 +20,7 @@ let origin: string;
 let router: Router;
 let enabled: boolean;
 let created: number;
+let history: unknown[];
 const hosts = new Map<string, HostedOpenCode>();
 const aborts = new Map<string, AbortController>();
 const sessions = new Map<string, { id: string; title: string }>();
@@ -47,6 +48,7 @@ beforeEach(async () => {
   enabled = true;
   abortFails = false;
   created = 0;
+  history = [];
   requests.length = streams.length = 0;
   sessions.clear();
   hosts.clear();
@@ -80,13 +82,14 @@ beforeEach(async () => {
     else res.status(404).json({ error: "private native diagnostics" });
   });
   engine.get("/session/:id/message", (req, res) => {
-    res.json(
-      requests.some(
+    res.json([
+      ...history,
+      ...(requests.some(
         (request) => request.path === `/session/${req.params.id}/prompt_async`,
       )
         ? [{ info: { id: "msg_admitted", role: "user", time: {} }, parts: [] }]
-        : [],
-    );
+        : []),
+    ]);
   });
   engine.post("/session/:id/prompt_async", (_req, res) => {
     res.status(204).end();
@@ -592,6 +595,51 @@ describe("map chat transport", () => {
     // attach, Stop, and the foreign Stop reach the host; GET is refused first.
     expect(hold).toHaveBeenCalledTimes(3);
     expect(released).toHaveBeenCalledTimes(3);
+  });
+
+  it("binds every prompt in a conversation to the result token its first turn was given", async () => {
+    const first = await attach(mapKey);
+    const send = async () => {
+      requests.length = 0;
+      const response = await request(
+        `${mapKey}/session/${first}/prompt_async`,
+        {
+          method: "POST",
+          body: JSON.stringify({ parts: [{ type: "text", text: "Next" }] }),
+        },
+      );
+      expect(response.status).toBe(204);
+      return /^StudioAssistantResult\/v2:([a-f0-9-]{36})\n/.exec(
+        (
+          requests.find((item) => item.path.endsWith("/prompt_async"))!
+            .body as { system: string }
+        ).system,
+      )![1]!;
+    };
+    const token = await send();
+    history = [
+      {
+        info: {
+          id: "msg_u1",
+          role: "user",
+          time: {},
+          system: `StudioAssistantResult/v2:${token}\n`,
+        },
+        parts: [],
+      },
+      {
+        info: { id: "msg_a1", role: "assistant", parentID: "msg_u1", time: {} },
+        parts: [
+          {
+            type: "text",
+            text: `<!-- studio-result:${token}:finished -->\nok`,
+          },
+        ],
+      },
+    ];
+    // Models copy the marker from their earlier answers (SAP-3876).
+    expect(await send()).toBe(token);
+    expect(await send()).toBe(token);
   });
 
   it("serves a project's map-chat key and resets only its conversation for New chat", async () => {

@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { mapChatProjectId, type HostedOpenCode } from "./opencode-host.js";
 import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
-import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
+import {
+  openCodeCompletionPrompt,
+  openCodeConversationToken,
+} from "../shared/opencode-completion.js";
 import {
   turnRecoveryAgent,
   openCodeTurn,
@@ -151,6 +154,7 @@ export class OpenCodeFinalResponse {
             // no shell); a Studio session's turn keeps the default prompt.
             ...openCodeCompletionPrompt({
               mapChat: mapChatProjectId(hosted.harnessSessionId) !== null,
+              token: openCodeConversationToken(messages),
             }),
             model: hosted.model,
             agent: turnRecoveryAgent,

@@ -15,7 +15,11 @@ import {
   type OpenCodeTransportFailure,
 } from "../shared/opencode-errors.js";
 import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
-import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
+import {
+  openCodeCompletionPrompt,
+  openCodeConversationToken,
+} from "../shared/opencode-completion.js";
+import type { OpenCodeTurnMessage } from "../shared/opencode-turn.js";
 
 export function createOpenCodeRouter(
   host: Pick<OpenCodeHost, "ensure" | "observe" | "hold" | "forget">,
@@ -171,6 +175,15 @@ export function createOpenCodeRouter(
       }
       const nativePath =
         path === "experimental/session" ? `session/${nativeId}` : path;
+      const timeout = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
+      const token = prompt
+        ? openCodeConversationToken(
+            await hosted.server.fetchJson<OpenCodeTurnMessage[]>(
+              `/session/${nativeId}/message`,
+              { signal: timeout },
+            ),
+          )
+        : undefined;
       const init = {
         method: req.method,
         headers: {
@@ -183,13 +196,14 @@ export function createOpenCodeRouter(
                 ...req.body,
                 ...openCodeCompletionPrompt({
                   mapChat: mapChatProjectId(id) !== null,
+                  token,
                 }),
                 // Saved conversations may still remember a retired model.
                 model: hosted.model,
               }),
             }
           : {}),
-        signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+        signal: timeout,
       };
       const upstream = prompt
         ? await finalResponse.send(hosted, nativeId, init)
