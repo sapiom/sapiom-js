@@ -1,8 +1,8 @@
 /**
  * What can be done TO an agent: visualize and the other macros, deploy, run
- * (locally or in the cloud), Describe with AI, and Change location. Today each
- * verb binds the agent to a live session first (`handleBindWorkflow`); P4.2b
- * addresses them by agent path instead.
+ * (locally or in the cloud), Ask / Describe with AI, and Change location.
+ * Every verb is addressed by the agent's path; none takes, binds or needs a
+ * session (design-map-chat.md I2, I3; flow-map-chat-overlay.md 4.4b).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -12,38 +12,36 @@ import type {
 } from "@shared/types";
 
 import { errorMessage } from "./api";
-import { describeWorkflowPrompt } from "./describe-prompt";
 import { refuseMove } from "./agent-move";
-import { resolveMacroUrl } from "./macro-gating";
-import { directActionKind } from "./macro-actions";
+import {
+  agentMacroFirstMessage,
+  type AgentMacroKind,
+} from "./agent-session-macro";
+import { agentVerbRoute } from "./agent-verb-route";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
-import { railSessions } from "./rail-sessions";
 import { rootContains } from "./session-scope";
-import { projectIdForAgent, type ShellProjects } from "./shell-projects";
+import type { ShellProjects } from "./shell-projects";
 import type { HarnessStateHook, RunTarget } from "./use-harness-state";
 import type { SessionActions, ShellNav } from "./use-session-actions";
-import {
-  isWorkflowRunnable,
-  prodRunBlockedToast,
-  workflowDeploymentState,
-} from "./workflow-deployment";
+import { isWorkflowRunnable } from "./workflow-deployment";
 
 export const useAgentVerbs = ({
   harness,
   projects,
   nav,
   sessions,
-  now,
 }: {
   harness: HarnessStateHook;
   projects: ShellProjects | null;
   nav: ShellNav;
   sessions: SessionActions;
-  now: number;
+  /** Unused since the verbs stopped picking a live session to bind; kept so
+   *  the shell's call compiles until it drops the argument. */
+  now?: number;
 }) => {
   const state = harness.state;
   const { setView, setMapPanelPath, closeMobileDrawer } = nav;
-  const { hiddenSessionIds, createSessionAt, openSession } = sessions;
+  const { createSessionAt } = sessions;
   const [runRequest, setRunRequest] = useState<{
     workflow: WorkflowInfo;
     target: RunTarget;
@@ -140,163 +138,95 @@ export const useAgentVerbs = ({
   };
 
   /**
-   * Binds an agent to a live session in its own project and shows that
-   * session — used when navigating to a launched sub-agent from the board, and
-   * before running a macro against an agent (the canvas is served from the
-   * binding). It lands on the selected session when that session is in the
-   * agent's project, else the project's newest live session, else STARTS one
-   * at the project ROOT (SAP-2927: passing the agent's own directory brought a
-   * session up without the project's CLAUDE.md, .claude/ or skills). Resolves
-   * to the session the binding landed on.
+   * The verb macros (Ask, Ask to modify, Ask to fix, the run-attempt debug,
+   * Describe with AI): a NEW session at the agent's project root, unbound,
+   * whose first message names the job and the agent (agent-session-macro.ts),
+   * opened in the full view. Never a binding (design-map-chat.md I2): the
+   * session is ordinary project-root work, and the agent is context in the
+   * message.
    */
-  const handleBindWorkflow = async (path: string): Promise<string | null> => {
-    if (!state || !projects) return null;
+  const startAgentMacro = (
+    workflow: WorkflowInfo,
+    job: AgentMacroKind,
+    text = "",
+  ): void => {
+    if (!projects) return;
     closeMobileDrawer();
-    const projectId = projectIdForAgent(path, state);
-    const live = railSessions(
-      state.sessions,
-      projectId,
-      hiddenSessionIds,
-      now,
-    ).filter((session) => session.status !== "exited");
-    const owner =
-      live.find((session) => session.id === harness.activeSessionId) ??
-      live[0];
-    let targetId: string;
-    if (owner) {
-      targetId = owner.id;
-    } else {
-      try {
-        targetId = (
-          await createSessionAt(projects.sessionCwdForAgent(path), "claude-code")
-        ).id;
-      } catch (err) {
-        harness.showToast(
-          errorMessage(err, "Couldn't start a session in this folder."),
-        );
-        return null;
-      }
-    }
-    await harness.bindWorkflow(targetId, path);
-    openSession(targetId);
-    return targetId;
+    void createSessionAt(projects.sessionCwdForAgent(workflow.path), "claude-code", {
+      initialPrompt: agentMacroFirstMessage(job, workflow, text),
+    }).catch((err: unknown) => {
+      harness.showToast(
+        errorMessage(err, `Couldn't start a session for ${workflow.name}.`),
+      );
+    });
   };
 
-  // Shared by the canvas Visualize CTA, the steps macros, and anything else
-  // that fires a macro. Running a macro against a workflow (re-)binds too — the
-  // canvas is served from the binding, so a render on an unbound workflow would
-  // draw into the wrong root.
+  /** What a surface's "Ask coding agent" composed, about `workflow`. */
+  const handleAskAgent = (
+    workflow: WorkflowInfo,
+    text: string,
+    job: Exclude<AgentMacroKind, "describe"> = "ask",
+  ): void => startAgentMacro(workflow, job, text);
+
+  // Shared by the canvas Visualize CTA and render-error Retry, a failed task's
+  // Retry, the run buttons and anything else that fires a macro. Every route
+  // is by agent path (agent-verb-route.ts); none needs, binds or starts a
+  // session except the macro session itself.
   const handleRunMacroForWorkflow = (
     workflow: WorkflowInfo | null,
     macro: MacroDef,
   ): void => {
-    void (async () => {
-      // Deploy / Prod-run / Run-local run via the DIRECT harness routes (no
-      // Claude Code, no user LLM credits). Once a macro is a direct action we
-      // NEVER fall through to the pty-inject runMacro — the buttons are already
-      // gated (require a workflow / a deploy), so a missing prerequisite here is
-      // a no-op, never a silent revert to the Claude Code path.
-      const direct = directActionKind(macro.id);
-      let sessionId = harness.activeSessionId;
-      if (workflow)
-        sessionId = (await handleBindWorkflow(workflow.path)) ?? sessionId;
-      if (macro.action.kind === "open-url") {
-        window.open(
-          resolveMacroUrl(macro.action.url, workflow),
-          "_blank",
-          "noopener,noreferrer",
-        );
+    const route = agentVerbRoute(
+      macro,
+      workflow,
+      workflow ? harness.lastDeployErrorFor(workflow.path) : null,
+    );
+    switch (route.kind) {
+      case "open-url":
+        window.open(route.url, "_blank", "noopener,noreferrer");
         return;
-      }
-      if (!sessionId) return;
-      if (direct !== null) {
-        if (direct === "deploy") {
-          if (!workflow) {
-            harness.showToast("Select an agent first.");
-          } else {
-            void harness.deploy(workflow.path);
-          }
-        } else if (direct === "prod-run") {
-          if (workflow?.definitionId != null && isWorkflowRunnable(workflow)) {
-            // The definition has a ready cloud build; the runs route wants its
-            // id as a string.
-            void harness.startProdRun(sessionId, String(workflow.definitionId));
-          } else {
-            // The button is already disabled in SessionStepsBar when there is
-            // no ready build. This branch protects keyboard/programmatic calls.
-            const lastErr = workflow
-              ? harness.lastDeployErrorFor(workflow.path)
-              : null;
-            const deploymentState = workflow
-              ? workflowDeploymentState(workflow, lastErr)
-              : "draft";
-            harness.showToast(prodRunBlockedToast(deploymentState));
-          }
-        } else if (direct === "run-local") {
-          if (!workflow) {
-            harness.showToast("Select an agent first.");
-          } else {
-            void harness.runLocal(sessionId, workflow.path);
-          }
-        }
+      case "refuse":
+        harness.showToast(route.reason);
         return;
-      }
-      // Visualize (render-canvas) and every inject macro (Debug / Explain /
-      // free-form) keep their existing path through runMacro.
-      void harness.runMacro(macro.id, {
-        harnessSessionId: sessionId,
-        workflowPath: workflow?.path,
-      });
-    })();
+      case "deploy":
+        void harness.deploy(route.agentPath);
+        return;
+      case "prod-run":
+        void harness.startProdRun(route.agentPath, route.definitionId);
+        return;
+      case "run-local":
+        void harness.runLocal(route.agentPath);
+        return;
+      case "reload-graph":
+        harness.reloadAgentGraph(route.agentPath);
+        return;
+      case "session-macro":
+        if (workflow) startAgentMacro(workflow, route.job, route.text);
+        return;
+    }
   };
 
   const handleLaunchRun = (input: unknown): void => {
     const request = runRequest;
     if (!request) return;
-    // The launch surface closes immediately while binding / network work
-    // continues.
     setRunRequest(null);
-    void (async () => {
-      const sessionId =
-        (await handleBindWorkflow(request.workflow.path)) ??
-        harness.activeSessionId;
-      if (!sessionId) return;
-      if (request.target === "prod") {
-        if (
-          request.workflow.definitionId == null ||
-          !isWorkflowRunnable(request.workflow)
-        ) {
-          harness.showToast("This agent needs a ready cloud deployment first.");
-          return;
-        }
-        await harness.startProdRun(
-          sessionId,
-          String(request.workflow.definitionId),
-          input,
-        );
-      } else {
-        await harness.runLocal(sessionId, request.workflow.path, input);
+    const { workflow } = request;
+    if (request.target === "prod") {
+      if (workflow.definitionId == null || !isWorkflowRunnable(workflow)) {
+        harness.showToast("This agent needs a ready cloud deployment first.");
+        return;
       }
-    })();
+      void harness.startProdRun(workflow.path, String(workflow.definitionId), input);
+    } else {
+      void harness.runLocal(workflow.path, input);
+    }
   };
 
-  // "Describe with AI": run the describe macro HEADLESS (execution:"background")
-  // so the agent edits the workflow source out of sight — never the interactive
-  // terminal. The prompt is passed as the macro's `subject`; the source watcher
-  // re-renders the canvas when the agent saves. The button's loading state is
-  // driven by the resulting background task (see CanvasPane `describeRunning`).
-  const handleDescribeWithAI = (workflow: WorkflowInfo): void => {
-    void (async () => {
-      const sessionId =
-        (await handleBindWorkflow(workflow.path)) ?? harness.activeSessionId;
-      if (!sessionId) return;
-      void harness.runMacro("describe", {
-        harnessSessionId: sessionId,
-        workflowPath: workflow.path,
-        subject: describeWorkflowPrompt(workflow),
-      });
-    })();
-  };
+  // "Describe with AI": the same macro rule as Ask (flow 4.4b), with the
+  // describe prompt as the job. The source watcher re-renders the canvas when
+  // the session saves the descriptions.
+  const handleDescribeWithAI = (workflow: WorkflowInfo): void =>
+    startAgentMacro(workflow, "describe");
 
   return {
     runRequest,
@@ -304,7 +234,7 @@ export const useAgentVerbs = ({
     loadRunInputContract,
     handleMoveAgent,
     locationRefusal,
-    handleBindWorkflow,
+    handleAskAgent,
     handleRunMacroForWorkflow,
     handleLaunchRun,
     handleDescribeWithAI,
