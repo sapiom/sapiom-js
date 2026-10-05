@@ -70,8 +70,7 @@ type Btn = { action_id: string; value: string };
 /** The mrkdwn text of the block with this `block_id` (a section's text, or a context's first element). */
 const textOf = (blocks: Record<string, unknown>[], id: string): string => {
   const b = blocks.find((x) => x.block_id === id) as
-    | { text?: { text: string }; elements?: { text: string }[] }
-    | undefined;
+    { text?: { text: string }; elements?: { text: string }[] } | undefined;
   return b?.text?.text ?? b?.elements?.[0]?.text ?? "";
 };
 const buttons = (blocks: Record<string, unknown>[]): Btn[] =>
@@ -231,18 +230,12 @@ describe("nudge", () => {
     expect(JSON.stringify(owned)).toContain("<@U5>");
   });
 
-  it("links #n to the ticket card when given the triage channel", () => {
+  it("names the ticket as plain #n, so Slack attaches no frozen preview of the card", () => {
     const carded = { ...issue, triageRootTs: "1790889400.000200" };
-    expect(
-      textOf(
-        nudge(carded, "no_draft", null, { triageChannel: "C0T" }),
-        "nudge.no_draft",
-      ),
-    ).toBe(
-      "*No draft yet* on <https://slack.com/archives/C0T/p1790889400000200|#7>",
-    );
-    expect(textOf(nudge(carded, "no_draft"), "nudge.no_draft")).toBe(
-      "*No draft yet* on #7",
+    const text = textOf(nudge(carded, "no_draft"), "nudge.no_draft");
+    expect(text).toBe("*No draft yet* on #7");
+    expect(JSON.stringify(nudge(carded, "customer_waiting"))).not.toContain(
+      "slack.com/archives",
     );
   });
 });

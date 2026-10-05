@@ -203,10 +203,8 @@ describe("controller", () => {
     for (const p of first.posts) {
       expect(p.channel).toBe("C0TRIAGE001");
       expect(p.threadTs).toMatch(/^1790100/);
-      // ... and links #n back to the ticket card (the thread root).
-      expect(JSON.stringify(p.blocks)).toContain(
-        `<https://slack.com/archives/C0TRIAGE001/p${String(p.threadTs).replace(".", "")}|#`,
-      );
+      // ... and does not link to the card: Slack would attach a frozen preview of it.
+      expect(JSON.stringify(p.blocks)).not.toContain("slack.com/archives");
     }
     expect(
       first.posts
@@ -524,7 +522,6 @@ describe("controller", () => {
           channel: "C0TRIAGE001",
           threadTs: issue.triageRootTs,
         });
-        expect(JSON.stringify(p.blocks)).toContain("archives/C0TRIAGE001/");
         expect(JSON.stringify(p.blocks)).not.toContain("C0NEW");
       }
     });
