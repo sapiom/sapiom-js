@@ -5,8 +5,11 @@ export interface SapiomOpenCodeConfigOptions {
   /** Deny every rule OpenCode would otherwise ask the user about. */
   neverAsk?: boolean;
   /**
-   * Remove the shell. OpenCode's external_directory rule covers file tools
-   * only, so a shell command could still write outside the project.
+   * Remove the shell and the file-editing tools (the map chat, design I4 and
+   * I10). OpenCode's external_directory rule covers file tools only, so a
+   * shell command could still write outside the project; an edit from a chat
+   * that shows no diff changes an agent silently, so a change request goes to
+   * the handoff tool instead.
    */
   noShell?: boolean;
 }
@@ -39,6 +42,13 @@ export const deniedAskPermissions = {
  */
 export const deniedShellPermissions = { bash: "deny" } as const;
 
+/**
+ * OpenCode 1.18.29 checks its three file-writing tools, `edit`, `write` and
+ * `apply_patch`, against the one permission key `edit`; a fully denied key
+ * drops all three from the model's tool list. `read`, `glob` and `grep` stay.
+ */
+export const deniedEditPermissions = { edit: "deny" } as const;
+
 /** Only a revocable runtime credential enters OpenCode; Studio holds the key. */
 export function createSapiomOpenCodeConfig(
   options: SapiomOpenCodeConfigOptions,
@@ -66,7 +76,9 @@ export function createSapiomOpenCodeConfig(
       ? {
           permission: {
             ...(options.neverAsk ? deniedAskPermissions : {}),
-            ...(options.noShell ? deniedShellPermissions : {}),
+            ...(options.noShell
+              ? { ...deniedShellPermissions, ...deniedEditPermissions }
+              : {}),
           },
         }
       : {}),

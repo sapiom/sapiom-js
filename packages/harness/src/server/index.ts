@@ -28,6 +28,7 @@ import {
 } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
@@ -111,6 +112,7 @@ import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
+import { trustClaudeCodeProject } from "../core/claude-code-trust.js";
 import {
   generateMcpConfig,
   type McpDevServerCommand,
@@ -958,6 +960,15 @@ export const startServer = async (
   } catch (err) {
     console.error("[harness] agent registry prune failed:", err);
   }
+  /** Hand-off and Open in session sessions start in a project root without
+   *  Claude Code's trust dialog (flow-map-chat-overlay.md §4.7 item 5). */
+  const pretrustProjectRoot = (root: string): Promise<void> =>
+    trustClaudeCodeProject(root).then(
+      () => {},
+      () => {
+        console.error("[harness] could not pre-trust a project for Claude Code");
+      },
+    );
   // Same hygiene for settings.json's recentDirs — dead entries are already
   // filtered from every read, but pruning here persists their removal.
   // Awaited so it can't race a settings PATCH once the server is listening.
@@ -1557,7 +1568,24 @@ export const startServer = async (
     // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
     // session is an ordinary session: no bootstrap claim, no "Plan Agents"
     // title, no metadata that would make its first turn the coordinator's.
-    prepareProjectSession: async () => ({}),
+    prepareProjectSession: async (_identity, request) => {
+      // A Claude Code session waits for its project's trust record, so the
+      // dialog cannot win a race with the add-time write, and a project added
+      // before Studio pre-trusted roots gets one too. Only an added root
+      // (recentDirs) is trusted, never the session folder itself.
+      if (request.harness === "claude-code")
+        await loadSettings(statePaths.settings).then(async ({ recentDirs }) => {
+          // Compared resolved, so a symlink spelling on either side matches.
+          const real = (path: string) => realpath(path).catch(() => path);
+          const cwd = await real(request.cwd);
+          const roots = await Promise.all(recentDirs.map(real));
+          const root = recentDirs
+            .filter((_, i) => isWithinWorkspacePath(roots[i]!, cwd))
+            .sort((a, b) => b.length - a.length)[0];
+          return root ? pretrustProjectRoot(root) : undefined;
+        }, () => {});
+      return {};
+    },
     onTerminalInput: (sessionId, context) =>
       projectBootstrap?.onTerminalInput(sessionId, context),
     onRuntimeEpochTransition: async (session, runtimeEpoch) => {
@@ -3221,6 +3249,7 @@ export const startServer = async (
   const initializeOpenedProject = async (
     requestedRoot: string,
   ): Promise<void> => {
+    await pretrustProjectRoot(requestedRoot);
     pendingProjectCwds.add(requestedRoot);
     try {
       await serializeProjectScopeResolution(async () => {

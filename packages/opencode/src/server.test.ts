@@ -21,6 +21,11 @@ const shellActions = (config: Record<string, unknown>) => {
   return ["bash"].map((tool) => permission[tool] ?? "allow (default)");
 };
 
+/** Action on `edit`, the key OpenCode 1.18.29 checks for edit, write and apply_patch. */
+const editAction = (config: Record<string, unknown>) =>
+  ((config.permission ?? {}) as Record<string, unknown>).edit ??
+  "allow (default)";
+
 let directory: string;
 let server: OpenCodeServer | undefined;
 const command = {
@@ -407,6 +412,30 @@ describe("packaged OpenCode runtime", () => {
     expect(
       shellActions(createSapiomOpenCodeConfig({ ...options, noShell: true })),
     ).toEqual(["deny"]);
+  });
+
+  it("removes the file-editing tools with the shell, and only then (I10)", () => {
+    const options = {
+      bridgeUrl: "http://127.0.0.1:1234/opencode-runtime/runtime",
+      runtimeToken: "token",
+    };
+    // A Studio session's Assistant keeps OpenCode's default edit rule.
+    expect(editAction(createSapiomOpenCodeConfig(options))).toBe(
+      "allow (default)",
+    );
+    expect(
+      editAction(createSapiomOpenCodeConfig({ ...options, neverAsk: true })),
+    ).toBe("allow (default)");
+    const mapChat = createSapiomOpenCodeConfig({
+      ...options,
+      neverAsk: true,
+      noShell: true,
+    });
+    expect(editAction(mapChat)).toBe("deny");
+    // Reading stays: the map chat answers questions about the project.
+    expect(mapChat.permission).toMatchObject({
+      read: { "*": "allow" },
+    });
   });
 
   it("generates a handoff tool that takes a title and a prompt and rejects empty input", async () => {

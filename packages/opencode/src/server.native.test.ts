@@ -504,12 +504,14 @@ describe("pinned OpenCode 1.18.29", () => {
     ).toEqual([
       expect.objectContaining({ name: "probe_add", arguments: { a: 2, b: 3 } }),
     ]);
-    // Without handoffTool (a Studio session's Assistant) the tool is absent.
-    expect(
-      synthetic.state.modelRequests.flatMap((body) =>
-        (body.tools ?? []).map((tool) => tool.name),
-      ),
-    ).not.toContain("handoff");
+    // Without handoffTool (a Studio session's Assistant) the tool is absent,
+    // and the session keeps its shell and its file-editing tool.
+    const offered = synthetic.state.modelRequests.flatMap((body) =>
+      (body.tools ?? []).map((tool) => tool.name),
+    );
+    expect(offered).not.toContain("handoff");
+    for (const kept of ["bash", "read", "apply_patch"])
+      expect(offered, kept).toContain(kept);
     for (const body of synthetic.state.modelRequests) {
       expect(body).toMatchObject({
         model: "gpt-luna",
@@ -570,7 +572,7 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(synthetic.state.rejected).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
-  it("offers the handoff plugin tool, records its call in history, and leaves no ask rule or shell for the map chat", async () => {
+  it("offers the handoff plugin tool, records its call in history, and leaves no ask rule, shell or file edit for the map chat", async () => {
     const token = "synthetic-bridge-grant";
     const calls: SyntheticCall[] = [
       {
@@ -631,6 +633,15 @@ describe("pinned OpenCode 1.18.29", () => {
             ["bash", "*"].includes(rule.permission) && rule.pattern === "*",
         );
       expect(shell?.action, agent.name).toBe("deny");
+      // edit, write and apply_patch share the permission key `edit`; every
+      // agent, subagents included, is denied it, so none can change a file.
+      const edit = [...agent.permission]
+        .reverse()
+        .find(
+          (rule) =>
+            ["edit", "*"].includes(rule.permission) && rule.pattern === "*",
+        );
+      expect(edit?.action, agent.name).toBe("deny");
     }
 
     const parts = [];
@@ -665,8 +676,10 @@ describe("pinned OpenCode 1.18.29", () => {
         (body.tools ?? []).map((tool) => tool.name),
       ),
     );
-    expect(offeredNames.has("bash")).toBe(false);
-    for (const kept of ["read", "apply_patch", "handoff"])
+    // The map chat never edits (I10): a change request becomes the handoff.
+    for (const removed of ["bash", "edit", "write", "apply_patch"])
+      expect(offeredNames.has(removed), removed).toBe(false);
+    for (const kept of ["read", "glob", "grep", "handoff"])
       expect(offeredNames.has(kept), kept).toBe(true);
     // Code mode collapses MCP tools into execute; a plugin tool stays native.
     const offered = synthetic.state.modelRequests

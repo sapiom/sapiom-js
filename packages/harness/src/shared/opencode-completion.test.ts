@@ -169,3 +169,16 @@ describe("one result token per conversation (SAP-3876)", () => {
     ).toEqual({ status: "stopped", missing: "msg_a2" });
   });
 });
+
+describe("map chat guidance (SAP-3879, I10)", () => {
+  it("sends every change request to the handoff tool, in the map chat only", () => {
+    const { system: map } = openCodeCompletionPrompt({ mapChat: true });
+    expect(map).toContain("cannot edit files");
+    expect(map).toMatch(/asks to change anything[^.]*call the handoff tool/);
+    expect(map).toContain("add or edit a step");
+    // A Studio session's Assistant edits and has no handoff tool.
+    const { system: session } = openCodeCompletionPrompt();
+    expect(session).not.toContain("handoff");
+    expect(session).not.toContain("cannot edit files");
+  });
+});

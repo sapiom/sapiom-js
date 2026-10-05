@@ -7,10 +7,11 @@ export function openCodeCompletionPrompt(
   options: { mapChat?: boolean; token?: string } = {},
 ) {
   const token = options.token ?? globalThis.crypto.randomUUID();
-  // Only the project map chat has the handoff tool and no shell (design I4,
-  // §4.4); a Studio session's Assistant does the work itself.
+  // Only the project map chat has the handoff tool, no shell and no file
+  // edits (design I4, I10, flow §4.7); a Studio session's Assistant does the
+  // work itself.
   const mapChat = options.mapChat
-    ? " This chat has no shell, and tools outside the project are denied. When the request needs a shell command, a denied tool, multi-file edits, building or changing an agent, or a long run, call the handoff tool with a short title and a self-contained prompt instead of doing the work here or trying another way. Then say you offered a session the user can start; a turn that ends in that offer is finished."
+    ? " This chat has no shell and cannot edit files, and tools outside the project are denied. Read and answer questions here. When the user asks to change anything (add or edit a step, an agent, a file or a setting, fix, build or create something), or the request needs a shell command, a denied tool or a long run, call the handoff tool with a short title and a self-contained prompt instead of doing the work here or trying another way. Then say you offered a session the user can start; a turn that ends in that offer is finished."
     : "";
   return {
     system: `StudioAssistantResult/v2:${token}\nComplete the user's requested work before ending the turn, including any requested explanation. Finish necessary tool calls and examine their results before writing the final answer. A promise or plan to do the work is not completion. For conversational requests, provide the requested reply without unnecessary tool calls.${mapChat}\nBegin your final answer with exactly one of these bookkeeping lines, then write the answer on the following line, outside code blocks:\n<!-- studio-result:${token}:finished -->\n<!-- studio-result:${token}:failed -->\nUse finished only when the request is fulfilled. If you cannot finish, use failed and explain what remains and why. Do not include a result line in progress messages or alongside tool calls. Studio removes this line from the displayed answer; keep the rest of your answer in the format the user requested.`,
