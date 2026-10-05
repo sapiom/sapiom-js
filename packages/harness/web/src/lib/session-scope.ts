@@ -271,7 +271,7 @@ export function runsForSubject<R extends AttributedRun>(
  * source in without a bound is how the prototype's run picker came to offer
  * 309 runs in a client that retains 200 and can reopen none of the rest.
  *
- * `use-harness-state.ts` does not trim its own `runIdsBySession` today, so this
+ * `use-harness-state.ts` does not trim its own `runIdsByAgent` today, so this
  * is the single enforcement point, applied at the merge that feeds the picker.
  * If a trim is ever added there it must import this constant rather than hold
  * a private copy: this is the module that owns run-evidence decisions.
