@@ -73,6 +73,7 @@ import { renderLocalRun } from "@shared/render-local-run";
 import {
   emptyAgentRunIndex,
   moveAgentRuns,
+  moveRunAttribution,
   pickAgentRun,
   recordAgentRun,
   shownRunIdByAgent,
@@ -841,10 +842,13 @@ export function useHarnessState(): HarnessStateHook {
       // re-count the start. The terminal event is deliberately NOT suppressed.
       advanceFunnel({ kind: "announced", duplicate: alreadyAnnounced });
 
+      // Stops THIS poller only: a late answer from a poller a repeat
+      // announcement replaced must not clear its replacement.
+      let ownTimer: ReturnType<typeof setInterval> | undefined;
       const stopPolling = (): void => {
-        const timer = runPollers.current.get(executionId);
-        if (timer) clearInterval(timer);
-        runPollers.current.delete(executionId);
+        if (ownTimer) clearInterval(ownTimer);
+        if (runPollers.current.get(executionId) === ownTimer)
+          runPollers.current.delete(executionId);
       };
 
       const poll = async (): Promise<void> => {
@@ -854,7 +858,8 @@ export function useHarnessState(): HarnessStateHook {
             new Map(prev).set(executionId, {
               run,
               target,
-              workflowPath,
+              // A Change location mid-run re-attributed the stored snapshot.
+              workflowPath: prev.get(executionId)?.workflowPath ?? workflowPath,
               observedAt,
             }),
           );
@@ -870,10 +875,8 @@ export function useHarnessState(): HarnessStateHook {
         }
       };
       void poll();
-      runPollers.current.set(
-        executionId,
-        setInterval(() => void poll(), 2000),
-      );
+      ownTimer = setInterval(() => void poll(), 2000);
+      runPollers.current.set(executionId, ownTimer);
     },
     [],
   );
@@ -934,7 +937,7 @@ export function useHarnessState(): HarnessStateHook {
           new Map(prev).set(executionId, {
             run,
             target: "local",
-            workflowPath,
+            workflowPath: prev.get(executionId)?.workflowPath ?? workflowPath,
             observedAt,
           }),
         );
@@ -1796,6 +1799,7 @@ export function useHarnessState(): HarnessStateHook {
     async (from: string, to: string): Promise<void> => {
       await api.moveAgent(from, to);
       setRunIndex((prev) => moveAgentRuns(prev, from, to));
+      setRunsByExecution((prev) => moveRunAttribution(prev, from, to));
       void refreshWorkflows().catch(() => undefined);
       // Best-effort, and only the two fields a move changes: the move already
       // happened, and a status frame newer than this snapshot must survive it.

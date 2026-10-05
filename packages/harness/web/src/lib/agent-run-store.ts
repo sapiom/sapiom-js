@@ -96,6 +96,24 @@ export function moveAgentRuns(
 }
 
 /**
+ * Re-attributes the stored run snapshots of a moved agent to its new path,
+ * the snapshot half of {@link moveAgentRuns}. A move keeps the agent, so its
+ * runs keep belonging to it; only a different agent may never inherit them.
+ */
+export function moveRunAttribution<T extends { workflowPath: string | null }>(
+  runs: Map<string, T>,
+  from: string,
+  to: string,
+): Map<string, T> {
+  let next: Map<string, T> | null = null;
+  runs.forEach((observed, id) => {
+    if (observed.workflowPath === null || !samePath(observed.workflowPath, from)) return;
+    (next ??= new Map(runs)).set(id, { ...observed, workflowPath: to });
+  });
+  return next ?? runs;
+}
+
+/**
  * The executionId each agent shows: its pick while that run is still filed
  * under it, else its latest run.
  */

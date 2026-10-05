@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   emptyAgentRunIndex,
   moveAgentRuns,
+  moveRunAttribution,
   pickAgentRun,
   recordAgentRun,
   runIdsForAgent,
@@ -86,5 +87,30 @@ describe("agent run store: runs keyed by agent path", () => {
   it("moving an agent with no runs returns the same index", () => {
     const index = recordAgentRun(emptyAgentRunIndex(), A, "r1");
     expect(moveAgentRuns(index, B, "/elsewhere/triage")).toBe(index);
+  });
+});
+
+describe("moveRunAttribution: a moved agent's run snapshots follow it", () => {
+  const observed = (workflowPath: string | null) => ({ workflowPath, observedAt: 1 });
+
+  it("re-attributes every snapshot of the moved agent, any spelling", () => {
+    const moved = "/work/proj/flows/intake";
+    const runs = new Map([
+      ["r1", observed(A)],
+      ["r2", observed(`${A}/`)],
+      ["r3", observed(B)],
+      ["r4", observed(null)],
+    ]);
+    const next = moveRunAttribution(runs, A, moved);
+    expect(next.get("r1")?.workflowPath).toBe(moved);
+    expect(next.get("r2")?.workflowPath).toBe(moved);
+    expect(next.get("r3")?.workflowPath).toBe(B);
+    expect(next.get("r4")?.workflowPath).toBeNull();
+    expect(runs.get("r1")?.workflowPath).toBe(A);
+  });
+
+  it("returns the same map when no snapshot names the agent", () => {
+    const runs = new Map([["r1", observed(B)]]);
+    expect(moveRunAttribution(runs, A, "/elsewhere/intake")).toBe(runs);
   });
 });
