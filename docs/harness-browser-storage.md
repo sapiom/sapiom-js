@@ -41,7 +41,9 @@ behind `GET`/`PATCH /api/settings`, or in the project's own
 These are about this window on this screen. Losing them on a new launch is
 mildly annoying at worst, and none of them is a claim about the install.
 
-- `ui-prefs.railCollapsed`, `rightCollapsed`, `rightTab` — which panes are open.
+- `ui-prefs.railCollapsed` — whether the rail is collapsed.
+- `ui-prefs.rightCollapsed`, `rightTab` — retired with the agent pane that sat
+  beside a session. `UiPrefs` still declares them; nothing reads them.
 - `ui-prefs.collapsedKeys` — which rows are folded.
 - `ui-prefs.railAxis`, `railSort` — how the explorer is filed and ordered.
 - `ui-prefs.canvasInspectorHeight` — a dragged panel height.
