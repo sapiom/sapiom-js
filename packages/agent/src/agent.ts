@@ -139,9 +139,12 @@ export function isLegacyOrchestrationDefinition(val: unknown): val is AgentDefin
  * which now carries it. Declaring a *different* schema in both places is a
  * conflict and throws; declaring the identical schema object in both is allowed.
  *
- * Attaches a non-enumerable brand symbol (`AGENT_DEFINITION_BRAND`) so
- * the object can be detected by `isAgentDefinition` after bundling +
- * dynamic import without relying on duck-typed property names.
+ * Returns a shallow copy of `def` carrying a non-enumerable brand symbol
+ * (`AGENT_DEFINITION_BRAND`) so the definition can be detected by
+ * `isAgentDefinition` after bundling + dynamic import without relying on
+ * duck-typed property names. The caller's `def` object is left unmutated —
+ * its `steps` reference is not reassigned and the brand is not attached to it
+ * (#572) — so always use the returned value, never the object you passed in.
  *
  * Static validation of every `continue` target is intentionally NOT
  * done — most are computed at runtime inside `run()`. PR review is the
@@ -167,27 +170,35 @@ export function defineAgent<TInput = unknown, TShared extends Record<string, unk
       throw new Error(`Agent '${def.name}' step name mismatch at key '${key}': step.name='${step.name}'`);
     }
   }
+  // Build the returned definition on a shallow copy of `def`. Everything below —
+  // folding the input contract, attaching the brand — happens on `result`, so the
+  // caller's original object is never mutated: its `steps` reference is not
+  // reassigned and the brand symbol is not added to it. Callers routinely hold a
+  // reference to the object literal they pass in; mutating it in place is a
+  // surprising side effect (#572). Downstream code uses the returned value.
+  const result: AgentDefinition<TInput, TShared> = { ...def };
+
   // Fold the agent-level input contract onto the entry step (see the doc above).
-  if (def.inputSchema) {
-    const entryStep = def.steps[def.entry];
-    if (entryStep.inputSchema && entryStep.inputSchema !== def.inputSchema) {
+  if (result.inputSchema) {
+    const entryStep = result.steps[result.entry];
+    if (entryStep.inputSchema && entryStep.inputSchema !== result.inputSchema) {
       throw new Error(
-        `Agent '${def.name}' declares a different inputSchema at the agent level and on its entry step '${def.entry}'. ` +
+        `Agent '${result.name}' declares a different inputSchema at the agent level and on its entry step '${result.entry}'. ` +
           `Declare the input contract once and reference that single schema object in both places (or remove one).`,
       );
     }
     if (!entryStep.inputSchema) {
       // The entry step declared no schema: the agent-level contract becomes it.
-      // Copy-on-write — build a FRESH steps map with a fresh entry step rather
-      // than mutating the caller's (Readonly) `steps` object in place. Mutating
-      // it would corrupt a `steps` literal shared across two `defineAgent` calls
-      // (the first fold would rewrite the second's entry step) and would throw on
-      // an `Object.freeze()`d map. The step's `run` and routing declarations are
+      // Build a FRESH steps map with a fresh entry step and assign it onto the
+      // copy — never onto the caller's `steps`. Mutating the caller's map would
+      // corrupt a `steps` literal shared across two `defineAgent` calls (the
+      // first fold would rewrite the second's entry step) and would throw on an
+      // `Object.freeze()`d map. The step's `run` and routing declarations are
       // carried over by the spread, so downstream readers of
       // `steps[entry].inputSchema` pick up the contract without special-casing.
-      (def as { steps: Record<string, StepDefinition<TShared>> }).steps = {
-        ...def.steps,
-        [def.entry]: { ...entryStep, inputSchema: def.inputSchema as ZodType<unknown> },
+      (result as { steps: Record<string, StepDefinition<TShared>> }).steps = {
+        ...result.steps,
+        [result.entry]: { ...entryStep, inputSchema: result.inputSchema as ZodType<unknown> },
       };
     }
   }
@@ -195,11 +206,11 @@ export function defineAgent<TInput = unknown, TShared extends Record<string, unk
   //   - survives esbuild bundling (symbol properties pass through)
   //   - survives dynamic import (the imported object is the same reference)
   //   - doesn't pollute JSON.stringify or for...in iteration
-  Object.defineProperty(def, AGENT_DEFINITION_BRAND, {
+  Object.defineProperty(result, AGENT_DEFINITION_BRAND, {
     value: 1,
     enumerable: false,
     writable: false,
     configurable: false,
   });
-  return def;
+  return result;
 }
