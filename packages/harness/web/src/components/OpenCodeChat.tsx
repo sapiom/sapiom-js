@@ -24,6 +24,12 @@ import {
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { EmptyState } from "./EmptyState";
+import { HandoffCard } from "./HandoffCard";
+import { askChipLabel, parseAskPrompt } from "../lib/map-ask";
+import {
+  HANDOFF_TOOL,
+  latestTurnOffersHandoff,
+} from "../lib/map-chat-host";
 import {
   finalResponseAgent,
   turnRecoveryAgent,
@@ -47,6 +53,23 @@ export interface ChatDraft {
 }
 /** In-memory only: App owns one store for the current authenticated principal. */
 export type ChatDraftStore = Map<string, ChatDraft>;
+
+/**
+ * The project's MAP CHAT variant (flow-map-chat-overlay.md 4.3): the same
+ * conversation machinery, addressed by the map-chat host key instead of a
+ * session id, with what only the map chat has. Absent for a session's
+ * Assistant, which renders exactly as before.
+ */
+export interface MapChatSurface {
+  /** "Ask about <selection>", following the map's pick (4.1.2, 4.2.1). */
+  placeholder: string;
+  /** The question with the selection's context line ahead of it (Q4). Read at
+   *  send time, so a pick mid-chat moves the next message's chip. */
+  composePrompt: (question: string) => string;
+  /** A question asked from the card before the chat was open, sent once. */
+  takePending: () => string | null;
+}
+
 interface Props {
   harnessSessionId: string;
   bootToken: string;
@@ -54,6 +77,7 @@ interface Props {
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  mapChat?: MapChatSurface;
 }
 interface RecoveryNotice {
   message: string;
@@ -99,6 +123,7 @@ export function OpenCodeChat({
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  mapChat,
 }: Props) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [error, setError] = useState<RecoveryNotice | null>(null);
@@ -153,6 +178,7 @@ export function OpenCodeChat({
       onSignIn={onSignIn}
       onOpenSettings={onOpenSettings}
       onOpenTerminal={onOpenTerminal}
+      mapChat={mapChat}
     />
   ) : (
     <div className="studio-chat-start">
@@ -180,6 +206,7 @@ function RuntimeChat({
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  mapChat,
 }: {
   baseUrl: string;
   bootToken: string;
@@ -189,7 +216,12 @@ function RuntimeChat({
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  mapChat?: MapChatSurface;
 }) {
+  // Read at send time through a ref: the client below is built once per
+  // conversation, and the selection it prefixes changes under it.
+  const composePromptRef = useRef(mapChat?.composePrompt);
+  composePromptRef.current = mapChat?.composePrompt;
   const [transportError, setTransportError] = useState<RecoveryNotice | null>(
     null,
   );
@@ -213,9 +245,26 @@ function RuntimeChat({
       headers: { "X-Harness-Token": bootToken },
       credentials: "omit",
       fetch: async (input, init) => {
-        const request = new Request(input, init);
+        let request = new Request(input, init);
         const path = new URL(request.url).pathname;
         const root = new URL(`${baseUrl}/session/${conversationId}`).pathname;
+        const composePrompt = composePromptRef.current;
+        if (
+          composePrompt &&
+          request.method === "POST" &&
+          path === `${root}/prompt_async`
+        ) {
+          // The map chat's context line (Q4) rides the stored prompt, so the
+          // chip is read back from history and survives a reload.
+          const body = (await request.clone().json()) as {
+            parts?: { type?: string; text?: string }[];
+          };
+          const part = body.parts?.find((candidate) => candidate.type === "text");
+          if (part && typeof part.text === "string") {
+            part.text = composePrompt(part.text);
+            request = new Request(request, { body: JSON.stringify(body) });
+          }
+        }
         const required =
           path === root ||
           path === `${root}/message` ||
@@ -318,6 +367,7 @@ function RuntimeChat({
         onOpenSettings={onOpenSettings}
         onOpenTerminal={onOpenTerminal}
         onTypedError={onTypedError}
+        mapChat={mapChat}
       />
     </AssistantRuntimeProvider>
   );
@@ -356,6 +406,7 @@ function ChatSurface({
   onOpenSettings,
   onOpenTerminal,
   onTypedError,
+  mapChat,
 }: {
   baseUrl: string;
   bootToken: string;
@@ -370,6 +421,7 @@ function ChatSurface({
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
   onTypedError: (failure: OpenCodeTransportFailure) => void;
+  mapChat?: MapChatSurface;
 }) {
   const loading = useAuiState((s) => s.thread.isLoading);
   const running = useAuiState((s) => s.thread.isRunning);
@@ -384,6 +436,19 @@ function ChatSurface({
       draft.text = composer.getState().text;
     });
   }, [composer, draft, ready]);
+  // A question asked from the map card before this chat existed: sent once,
+  // as soon as the conversation can take it, leaving any draft in place.
+  const takePending = mapChat?.takePending;
+  const sendable = ready && connected && !running && !loading;
+  useEffect(() => {
+    if (!takePending || !sendable) return;
+    const question = takePending();
+    if (!question) return;
+    const kept = composer.getState().text;
+    composer.setText(question);
+    void composer.send();
+    composer.setText(kept);
+  }, [composer, sendable, takePending]);
   const native = useOpenCodeThreadState((s) => s);
   const completionTokens = useMemo(
     () =>
@@ -394,15 +459,28 @@ function ChatSurface({
       ),
     [native.messageOrder, native.messagesById],
   );
-  const turn = openCodeTurn(
-    native.messageOrder.map((id) => native.messagesById[id]!).filter(Boolean),
-    native.sessionStatus?.type,
-  );
+  const nativeMessages = native.messageOrder
+    .map((id) => native.messagesById[id]!)
+    .filter(Boolean);
+  const nativeTurn = openCodeTurn(nativeMessages, native.sessionStatus?.type);
+  // A map-chat turn that ended in a hand-off card did what it should: the
+  // model often marks it failed because the work was not done here (P2's
+  // real check). The card is the outcome, so it is neither shown as a
+  // failure nor sent for a "final response" (design §4.4).
+  const handedOff = mapChat != null && latestTurnOffersHandoff(nativeMessages);
+  const turn = handedOff
+    ? {
+        status:
+          nativeTurn.status === "failed" || nativeTurn.status === "stopped"
+            ? ("finished" as const)
+            : nativeTurn.status,
+      }
+    : nativeTurn;
   const attempted = useRef(new Set<string>());
   const recoveryAbort = useRef<AbortController | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [recoveryFailed, setRecoveryFailed] = useState(false);
-  const missing = turn.missing;
+  const missing = "missing" in turn ? turn.missing : undefined;
   const pending = Object.values(native.pendingUserMessages).some(
     (message) => message.status === "pending",
   );
@@ -531,10 +609,17 @@ function ChatSurface({
       >
         <div className="studio-chat-feed">
           <ThreadPrimitive.Empty>
-            <EmptyState
-              title="Start a conversation"
-              body="Describe the change you want to make in this project."
-            />
+            {mapChat ? (
+              <p className="map-chat-empty" data-testid="map-chat-empty">
+                Ask about the map. Work that needs a session comes back as a
+                card you can start.
+              </p>
+            ) : (
+              <EmptyState
+                title="Start a conversation"
+                body="Describe the change you want to make in this project."
+              />
+            )}
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages>
             {({ message }) => {
@@ -564,9 +649,13 @@ function ChatSurface({
                   {message.content.map((part, index) =>
                     part.type === "text" ? (
                       message.role === "user" ? (
-                        <p key={index} className="studio-chat-user-text">
-                          {part.text}
-                        </p>
+                        mapChat ? (
+                          <MapChatQuestion key={index} text={part.text} />
+                        ) : (
+                          <p key={index} className="studio-chat-user-text">
+                            {part.text}
+                          </p>
+                        )
                       ) : result ? null : (
                         <Markdown
                           key={index}
@@ -577,7 +666,14 @@ function ChatSurface({
                       <MessagePrimitive.PartByIndex
                         key={index}
                         index={index}
-                        components={{ tools: { Fallback: ToolProgress } }}
+                        components={{
+                          tools: mapChat
+                            ? {
+                                by_name: { [HANDOFF_TOOL]: HandoffCard },
+                                Fallback: ToolProgress,
+                              }
+                            : { Fallback: ToolProgress },
+                        }}
                       />
                     ),
                   )}
@@ -622,7 +718,10 @@ function ChatSurface({
         <div
           role="status"
           aria-label="Assistant status"
-          className="status-tag studio-chat-status"
+          className={
+            "status-tag studio-chat-status" +
+            (mapChat ? " visually-hidden" : "")
+          }
           data-status={status}
         >
           <span className="status-tag-dot" aria-hidden="true" />
@@ -632,8 +731,9 @@ function ChatSurface({
         <ComposerPrimitive.Root className="studio-chat-composer">
           <ComposerPrimitive.Input
             className="studio-chat-input"
-            aria-label="Message Assistant"
-            placeholder="Describe the change you want"
+            data-testid={mapChat ? "chat-input" : undefined}
+            aria-label={mapChat ? "Ask the map chat" : "Message Assistant"}
+            placeholder={mapChat?.placeholder ?? "Describe the change you want"}
             minRows={1}
             maxRows={6}
             submitMode="enter"
@@ -650,23 +750,62 @@ function ChatSurface({
             }
           />
           <div className="studio-chat-actions">
-            <ComposerPrimitive.Send
-              className="composer-send"
-              aria-label="Send message"
-              disabled={
-                !connected ||
-                !ready ||
-                !!visibleError ||
-                working ||
-                (!!missing && !recoveryFailed)
-              }
-            >
-              <Icon name="ArrowUp" size={14} />
-            </ComposerPrimitive.Send>
+            {mapChat && running ? (
+              /* Stop (P2's abort route): the send button's place while a reply
+                 streams, as in the mock's composer. */
+              <ComposerPrimitive.Cancel
+                className="composer-send is-stop"
+                data-testid="chat-submit"
+                data-pending="true"
+                aria-label="Stop"
+                data-tooltip="Stop"
+              >
+                <Icon name="Square" size={12} />
+              </ComposerPrimitive.Cancel>
+            ) : (
+              <ComposerPrimitive.Send
+                className="composer-send"
+                data-testid={mapChat ? "chat-submit" : undefined}
+                aria-label="Send message"
+                disabled={
+                  !connected ||
+                  !ready ||
+                  !!visibleError ||
+                  working ||
+                  (!!missing && !recoveryFailed)
+                }
+              >
+                <Icon name="ArrowUp" size={14} />
+              </ComposerPrimitive.Send>
+            )}
           </div>
         </ComposerPrimitive.Root>
       </div>
     </ThreadPrimitive.Root>
+  );
+}
+
+/**
+ * A map-chat question as the feed shows it: the user's own words, and the chip
+ * naming what was selected when it was asked (Q4). The stored prompt carries
+ * the context line ahead of the words; the row keeps it on `data-prompt`.
+ */
+function MapChatQuestion({ text }: { text: string }) {
+  const { subject, question } = parseAskPrompt(text);
+  return (
+    <div className="map-chat-question" data-prompt={text}>
+      <p className="studio-chat-user-text">{question}</p>
+      {subject && (
+        <span
+          className="map-chat-chip"
+          data-testid="chat-context-chip"
+          data-tooltip={subject.path}
+        >
+          <Icon name="Zap" size={11} />
+          <span>{askChipLabel(subject)}</span>
+        </span>
+      )}
+    </div>
   );
 }
 

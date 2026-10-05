@@ -16,14 +16,16 @@
  *
  *   The selected SESSION (`harness.activeSessionId`, persisted). Changed only
  *               by a session click, Start chat, a project's `+`, Cmd/Ctrl+N.
- *   The VIEW   (`view`, `lib/centre-pane.ts`): session, a project's map, or an
- *               agent's canvas entered from that map. A project click changes
- *               the view and leaves the selected session alone, so it stays
+ *   The VIEW   (`view`, `lib/centre-pane.ts`): session, a project's map, or
+ *               an agent's modal over that map. A project click changes the
+ *               view and leaves the selected session alone, so it stays
  *               highlighted in the rail and one click brings it back.
  *
  * What the centre shows is ONE pure function of those (`centrePane`), and
  * which sessions a project lists is ONE function (`lib/rail-sessions.ts`) read
- * by the rail, the shortcut and the map's agent panel.
+ * by the rail and the shortcut. The map chat is not a session and is never
+ * on the rail (I5): its client state is `useMapChat`, held here so it
+ * outlives the project view.
  *
  * This file is the shell: it holds the View and renders the rail
  * (`ShellRail`), the centre switch and the cards on top (`ShellDialogs`). The
@@ -58,7 +60,6 @@ import { SessionView, useAssistantDrafts } from "./components/SessionView";
 import { ShellDialogs } from "./components/ShellDialogs";
 import { boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
-import { sessionMark } from "./lib/rail-sessions";
 import {
   centrePane,
   shownProjectId,
@@ -84,6 +85,7 @@ import { useSessionActions, type ShellNav } from "./lib/use-session-actions";
 import { useProjectActions } from "./lib/use-project-actions";
 import { useAgentVerbs } from "./lib/use-agent-verbs";
 import { useDeepLinks } from "./lib/use-deep-links";
+import { useMapChat } from "./lib/use-map-chat";
 import { useShellNavigation } from "./lib/use-shell-navigation";
 
 export const App = (): JSX.Element => {
@@ -114,7 +116,7 @@ export const App = (): JSX.Element => {
   } = dialogs;
   /**
    * WHAT THE CENTRE IS POINTED AT (design.md §1, the View slot): the selected
-   * session, a project's Agent Map, or an agent's canvas entered from that map.
+   * session, a project's Agent Map, or an agent's modal over that map.
    *
    * ONE slot. It replaced three that had to agree (a durable map selection, an
    * unresolved project, and a focused agent path), and every door had to clear
@@ -125,8 +127,12 @@ export const App = (): JSX.Element => {
    * click brings it back (flow-navigation.md 4.3.2).
    */
   const [view, setView] = useState<CentreView>({ kind: "session" });
-  /** The agent whose panel is open on the map, by path (flow 4.4). */
+  /** The agent picked on the map, by path: the card names it (4.2). */
   const [mapPanelPath, setMapPanelPath] = useState<string | null>(null);
+  const mapChat = useMapChat({
+    bootToken: harness.bootToken,
+    authRevision: harness.authRevision,
+  });
   /**
    * The clock the rail's marks and relative times read. A session quiet for ten
    * minutes turns idle without any event arriving, and "2m ago" must not read
@@ -141,10 +147,10 @@ export const App = (): JSX.Element => {
   const navGenerationRef = useRef(0);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
   /** The centre map's full view. Its own flag, so leaving the map always
-   *  lowers it. */
+   *  lowers it; an agent's modal over the map leaves it as it was (I9). */
   const [mapExpanded, setMapExpanded] = useState(false);
   useEffect(() => {
-    if (view.kind !== "project") setMapExpanded(false);
+    if (view.kind === "session") setMapExpanded(false);
   }, [view.kind]);
   const agentMapEntry = useAgentMapEntry({
     projectId: viewProjectId,
@@ -298,8 +304,6 @@ export const App = (): JSX.Element => {
     state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
   const sessionLabel = (session: HarnessSession): string =>
     sessionDisplayName(session, sessions.sessionNames);
-  const markOf = (session: HarnessSession) =>
-    sessionMark(session, harness.busySessionIds.has(session.id), now);
 
   /**
    * ONE answer to what the centre shows (design.md I2). Every branch below
@@ -503,13 +507,16 @@ export const App = (): JSX.Element => {
                   }
                   onToggleTelemetry={toggleTelemetry}
                 />
-              ) : centre.kind === "project-map" ||
-                centre.kind === "agent-canvas" ? (
+              ) : centre.kind === "project-map" ? (
                 <ProjectView
                   harness={harness}
                   state={state}
                   projectId={centre.projectId}
-                  agentPath={centre.kind === "agent-canvas" ? centre.path : null}
+                  projectLabel={projects.projectLabelOf(centre.projectId)}
+                  projectRoot={
+                    projects.projectScope(centre.projectId)?.cwd ?? ""
+                  }
+                  agentPath={centre.agentPath}
                   mapMode={mapMode}
                   agentMapEntry={agentMapEntry}
                   viewportStore={agentMapViewportStore}
@@ -519,11 +526,11 @@ export const App = (): JSX.Element => {
                   mapPanelPath={mapPanelPath}
                   onPickAgent={setMapPanelPath}
                   onClosePanel={() => setMapPanelPath(null)}
-                  onOpenAgentCanvas={projectActions.openAgentCanvas}
-                  hiddenSessionIds={hiddenSessionIds}
-                  now={now}
-                  sessionLabel={sessionLabel}
-                  markOf={markOf}
+                  onOpenAgent={projectActions.openAgentCanvas}
+                  onCloseAgent={projectActions.backToMap}
+                  mapChat={mapChat}
+                  onSignIn={assistant.signIn}
+                  onOpenSettings={() => setSettingsOpen(true)}
                   sessions={sessions}
                   verbs={verbs}
                 />

@@ -32,6 +32,14 @@ import { EmptyState } from "./EmptyState";
 import { AgentMapCanvas } from "./AgentMapCanvas";
 import { Icon } from "./Icon";
 
+/** A picked map node that is not an agent: a resource, a step or a group. It
+ *  opens no agent, only the card's header row (flow 4.2.3). */
+export interface MapNodePick {
+  id: PlanNodeId;
+  name: string;
+  kind: string;
+}
+
 interface AgentMapPaneProps {
   viewportStore: GraphViewportStore;
   visible: boolean;
@@ -42,15 +50,23 @@ interface AgentMapPaneProps {
   workflows: readonly WorkflowInfo[];
   refreshWorkflows: () => Promise<WorkflowInfo[]>;
   /**
-   * Single click on an agent node: open its panel in place (flow-navigation.md
-   * 4.4, Q7). The map resolves the node to its registry agent first; the panel
-   * itself is the shell's, passed back as `agentPanel`.
+   * Single click on an agent node: the card names it (flow-map-chat-overlay.md
+   * 4.2). The map resolves the node to its registry agent first.
    */
   onPickAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
-  /** Double click on an agent node: enter the agent's canvas in this centre. */
+  /** Double click on an agent node: its modal over this map (4.2.4). */
   onEnterAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
-  /** The picked agent's panel, floating over the map; null closes it. */
-  agentPanel: JSX.Element | null;
+  /** Whether the shell holds an agent pick; false releases the node's ring. */
+  agentPicked: boolean;
+  /** The picked node that is not an agent, held by the project view so the
+   *  card can name it and Escape can clear it. */
+  nodePick: MapNodePick | null;
+  onNodePick: (node: MapNodePick | null) => void;
+  /** A click on the empty map: the card returns to the project (4.2.5). */
+  onClearPick: () => void;
+  /** The floating card, over the board's bottom-right. It is out of flow, so
+   *  nothing it shows changes the board's width (I1). */
+  card: JSX.Element | null;
   state: AgentMapWorkspacePaneState;
   initialization?: AgentMapInitializationStatus | null;
   onRetryGeneration?: () => void;
@@ -68,7 +84,11 @@ export function AgentMapPane({
   refreshWorkflows,
   onPickAgent,
   onEnterAgent,
-  agentPanel,
+  agentPicked,
+  nodePick,
+  onNodePick,
+  onClearPick,
+  card,
   state,
   initialization,
   onRetryGeneration,
@@ -79,16 +99,25 @@ export function AgentMapPane({
 }: AgentMapPaneProps): JSX.Element {
   const value = state.status === "ready" ? state.value : null;
   const proposal = value?.proposal ?? null;
-  // A picked node that opens no panel (a resource, a step, or an agent whose
-  // folder could not be found): highlighted, announced, and nothing else. No
-  // inspector beside the map (flow-map-chat-overlay.md §5).
-  const [selected, setSelected] = useState<PlanNodeId | null>(null);
-  // The agent node whose panel is open. Held apart from `selected`: a
-  // selection releases it, so the panel shows only for the latest pick.
+  // A picked node that is not an agent (a resource, a step, or an agent whose
+  // folder could not be found): highlighted, announced, and named by the
+  // card's header row. No inspector beside the map (flow §5).
+  const selected = nodePick?.id ?? null;
+  const setSelected = useCallback(
+    (nodeId: PlanNodeId | null): void => {
+      const node = nodeId
+        ? proposal?.nodes.find((candidate) => candidate.id === nodeId)
+        : undefined;
+      onNodePick(node ? { id: node.id, name: node.name, kind: node.kind } : null);
+    },
+    [onNodePick, proposal],
+  );
+  // The agent node the card is about. Held apart from `selected`: a
+  // selection releases it, so the card names only the latest pick.
   const [picked, setPicked] = useState<PlanNodeId | null>(null);
   useEffect(() => {
-    if (!agentPanel) setPicked(null);
-  }, [agentPanel]);
+    if (!agentPicked) setPicked(null);
+  }, [agentPicked]);
   const [pending, setPending] = useState<PlanNodeId | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const returnFocus = useRef<HTMLButtonElement | null>(null);
@@ -239,7 +268,7 @@ export function AgentMapPane({
     ) {
       setSelected(null);
     }
-  }, [proposal, selected]);
+  }, [proposal, selected, setSelected]);
 
   const clearSelection = useCallback((): void => {
     generation.current += 1;
@@ -247,7 +276,7 @@ export function AgentMapPane({
     setPending(null);
     setOpenError(null);
     returnFocus.current?.focus();
-  }, []);
+  }, [setSelected]);
 
   // Match the per-agent graph's full-view contract: Escape unwinds one layer
   // at a time, clearing the selection before it lowers the map overlay.
@@ -320,11 +349,15 @@ export function AgentMapPane({
         onEnterNode={(nodeId, control) =>
           void resolveAgent(nodeId, control, onEnterAgent)
         }
-        picked={picked}
-        agentPanel={agentPanel}
+        picked={agentPicked ? picked : null}
+        card={card}
         pending={pending}
         openError={openError}
         onClearSelection={clearSelection}
+        onClearPick={() => {
+          clearSelection();
+          onClearPick();
+        }}
       />
     );
   } else if (
@@ -403,10 +436,11 @@ function PopulatedAgentMap({
   onSelectNode,
   onEnterNode,
   picked,
-  agentPanel,
+  card,
   pending,
   openError,
   onClearSelection,
+  onClearPick,
 }: {
   viewportStore: GraphViewportStore;
   value: AgentMapWorkspaceResponse;
@@ -416,11 +450,15 @@ function PopulatedAgentMap({
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   onEnterNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   picked: PlanNodeId | null;
-  agentPanel: JSX.Element | null;
+  card: JSX.Element | null;
   pending: PlanNodeId | null;
   openError: string | null;
   onClearSelection: () => void;
+  onClearPick: () => void;
 }): JSX.Element {
+  // A click on the empty board clears the pick, a drag pans it: only a press
+  // that did not move counts as a click (4.2.5).
+  const press = useRef<{ x: number; y: number } | null>(null);
   const proposal = value.proposal!;
   const failed = [...deployments.values()].filter(
     (status) => status.unavailable && !status.loading,
@@ -472,17 +510,35 @@ function PopulatedAgentMap({
           </span>
         )}
       </div>
-      <div className="agent-map-live-body">
+      <div
+        className="agent-map-live-body"
+        onPointerDownCapture={(event) => {
+          press.current = { x: event.clientX, y: event.clientY };
+        }}
+        onClick={(event) => {
+          const start = press.current;
+          press.current = null;
+          const target = event.target as Element;
+          if (
+            !start ||
+            Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4 ||
+            !target.closest(".agent-map-viewport") ||
+            target.closest("button")
+          )
+            return;
+          if (selected || picked) onClearPick();
+        }}
+      >
         <AgentMapCanvas
           viewportStore={viewportStore}
           proposal={proposal}
           deployments={deployments}
-          selectedNodeId={selected ?? (agentPanel ? picked : null)}
+          selectedNodeId={selected ?? picked}
           onSelectNode={onSelectNode}
           onEnterNode={onEnterNode}
           pendingNodeId={pending}
         />
-        {!selected && picked && agentPanel}
+        {card}
       </div>
       <p className="visually-hidden" aria-live="polite">
         {pending

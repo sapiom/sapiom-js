@@ -6,7 +6,12 @@ import { ApiError, isMockMode, type WorkflowGraphResponse } from "../lib/api";
 import { MOCK_CANVAS_OVERVIEWS, hasMockCanvasDoc } from "../lib/mock-data";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import type { CanvasSource } from "../lib/session-scope";
-import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
+import {
+  type CanvasGraph,
+  type CanvasGraphNode,
+  formatGraphCounts,
+  parseCanvasGraph,
+} from "../lib/canvas-graph";
 import type { DeployProgress, ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
 import type { CanvasLegendItem, CanvasOverviewContent } from "./CanvasOverviewPanel";
@@ -209,6 +214,12 @@ interface CanvasPaneProps {
    * Run sheet can reuse its entry contract if a fresh extraction is briefly
    * unavailable. */
   onGraphChange?: (workflowPath: string, graph: CanvasGraph) => void;
+  /**
+   * What a board pick shows in place of the bottom inspector: the agent
+   * modal's small step card (flow-map-chat-overlay.md 4.2b.4). `clear`
+   * releases the pick. Absent, a pick opens the inspector as before.
+   */
+  stepCard?: (node: CanvasGraphNode, graph: CanvasGraph, clear: () => void) => JSX.Element;
 }
 
 /** A legend row posted by a rendered document, validated before it is shown. */
@@ -248,6 +259,7 @@ export function CanvasPane({
   onOpenWorkflow,
   onCanvasState,
   onGraphChange,
+  stepCard,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   // Latest reporter, read from the content effects without listing it in their
@@ -1604,10 +1616,17 @@ export function CanvasPane({
               holds a selection \u2014 that step's live inspector. A selection
               shows the panel even when the overview was collapsed or the
               document posted no overview chrome. */}
-          {surface === "board" && ((overview && overviewOpen) || selectedNode) && (
+          {surface === "board" && stepCard && selectedNode && graph &&
+            stepCard(selectedNode, graph, () => setSelectedNodeId(null))}
+          {/* A step card stands in for the whole bottom panel while it
+              shows; the overview returns when the pick is released. */}
+          {surface === "board" &&
+            (stepCard
+              ? overview && overviewOpen && !selectedNode
+              : (overview && overviewOpen) || selectedNode) && (
             <CanvasOverviewPanel
               overview={overview ?? null}
-              selectedNode={selectedNode}
+              selectedNode={stepCard ? null : selectedNode}
               graph={graph}
               run={run}
               workflows={workflows}

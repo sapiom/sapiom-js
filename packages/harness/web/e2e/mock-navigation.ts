@@ -24,9 +24,10 @@ export async function openProjectMap(page: Page, label: string): Promise<void> {
 }
 
 /**
- * An agent's panel on its project's map. The default mock ships no drawn map,
- * so the project's agents are cards (`map-agent-<name>`); a drawn map's node
- * opens the same panel.
+ * An agent picked on its project's map: the floating card names it
+ * (flow-map-chat-overlay.md 4.2). The default mock ships no drawn map, so the
+ * project's agents are cards (`map-agent-<name>`); a drawn map's node picks
+ * the same way.
  */
 export async function openAgentPanel(
   page: Page,
@@ -35,65 +36,30 @@ export async function openAgentPanel(
 ): Promise<void> {
   await openProjectMap(page, project);
   await page.getByTestId(`map-agent-${agent}`).click();
-  await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", agent);
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", agent);
 }
 
-/** Open canvas on the agent's panel: its canvas in the same centre. */
-export async function openAgentCanvas(
+/** Open agent on the card: the agent's modal over the map (4.2b), on its
+ *  Canvas tab. */
+export async function openAgentModal(
   page: Page,
   project: string,
   agent: string,
 ): Promise<void> {
   await openAgentPanel(page, project, agent);
-  await page.getByTestId("map-agent-open-canvas").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+  await page.getByTestId("map-card-open-agent").click();
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", agent);
 }
 
-/**
- * Why a spec is fixme between SAP-3836 and SAP-3838. Each of these surfaces
- * was mounted only in the pane beside a bound session, which SAP-3836 removed
- * (flow-map-chat-overlay.md §5). The entered agent page (`openAgentCanvas`)
- * is the interim way into an agent, and it mounts the board alone: no
- * Secrets, no Steps surface, no Run/Deploy controls, no run evidence, and no
- * session to type into. The agent modal (design-map-chat.md §4.3, P4.2a)
- * gives them a home, and that PR re-points these specs at it.
- */
-export const NO_HOME = {
-  secrets: "Secrets was mounted only beside a bound session; its next home is the agent modal (SAP-3838)",
-  steps: "the Steps surface was mounted only beside a bound session; its next home is the agent modal (SAP-3838)",
-  verbs: "the Run / Run locally / Deploy controls were mounted only beside a bound session; their next home is the agent modal (SAP-3838)",
-  runs: "run evidence on the board came from the session beside it; the entered page carries no runs until the agent modal (SAP-3838)",
-  inject: "canvas prompts typed into the session beside the board; the entered page has no session until the agent modal (SAP-3838)",
-} as const;
-
-/**
- * Start chat on the agent's panel: a NEW session bound to the agent, selected.
- * Resolves to the new session's id. Nothing sits beside the session. This is the path that replaced focusing an agent row and
- * pressing its empty state's Start session.
- */
-export async function startChatWithAgent(
+/** The agent modal's Secrets tab. */
+export async function openAgentSecrets(
   page: Page,
   project: string,
   agent: string,
-): Promise<string> {
-  const before = await page
-    .getByTestId(`rail-project-${project}`)
-    .locator(".rail-session-row")
-    .count();
-  await openAgentPanel(page, project, agent);
-  await page.getByTestId("map-agent-start-chat").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
-  const rows = page.getByTestId(`rail-project-${project}`).locator(".rail-session-row");
-  await expect(rows).toHaveCount(before + 1);
-  const id = ((await rows.first().getAttribute("data-testid")) ?? "").replace("rail-session-", "");
-  await expect.poll(() => activeSessionId(page)).toBe(id);
-  await expect(rows.first()).toHaveAttribute("data-agent", agent);
-  return id;
-}
-
-/** The rfq agent bound into a fresh chat: its board is the right pane's. */
-export async function startChatWithRfq(page: Page): Promise<string> {
-  return startChatWithAgent(page, "rfq-agent", "rfq");
+): Promise<void> {
+  await openAgentModal(page, project, agent);
+  await page.getByTestId("agent-modal-tab-secrets").click();
+  await expect(page.getByTestId("agent-modal-panel-secrets")).toBeVisible();
 }
 
 /** Remove from the rail: the project header's hover × opens the confirm. */
@@ -173,3 +139,17 @@ export async function openNewAgentInProject(
   await expect(composer).toBeVisible();
   await expect(page.getByTestId("new-agent-project")).toContainText(label);
 }
+
+// TEMPORARY (SAP-3838 re-pointing in progress): removed before the PR.
+export const openAgentCanvas = openAgentModal;
+export const NO_HOME = {
+  secrets: "SAP-3838",
+  steps: "SAP-3838",
+  verbs: "SAP-3838",
+  runs: "SAP-3838",
+  inject: "SAP-3838",
+} as const;
+export async function startChatWithAgent(): Promise<string> {
+  throw new Error("Start chat was removed from the card (flow 4.2.2)");
+}
+export const startChatWithRfq = startChatWithAgent;

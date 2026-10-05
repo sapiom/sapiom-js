@@ -227,7 +227,10 @@ export const useShellNavigation = ({
         );
       }
       setReviewSummary(visit.kind === "review" ? visit.summary : null);
-      setMapPanelPath(null);
+      // A map and the agent modal over it are one place: stepping between
+      // them keeps the pick, as closing the modal does (I9).
+      if (visit.kind !== "agent-map" && visit.kind !== "agent")
+        setMapPanelPath(null);
       if (visit.kind === "agent-map") {
         setView(
           scopes.some((scope) => scope.projectId === visit.projectId)

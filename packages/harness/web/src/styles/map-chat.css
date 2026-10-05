@@ -1,0 +1,264 @@
+/* The map's floating card and the map chat inside it
+   (flow-map-chat-overlay.md 4.1 to 4.3; mock agent-studio-v2 terminal.css,
+   chat.css). The card floats over the map's bottom-right, out of flow, so
+   nothing it shows changes the board's width (design I1). */
+
+.map-card {
+  position: absolute;
+  right: var(--sp3);
+  /* Clears the board's zoom controls along the bottom edge. */
+  bottom: calc(var(--sp3) * 2 + var(--control-h-xs) + var(--sp1) * 2);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  /* Narrow enough to leave the map legible behind it, wide enough for a
+     sentence without a ragged two-word line (mock .canvas-overview). */
+  width: min(23rem, calc(100% - var(--sp3) * 2));
+  max-height: calc(100% - var(--sp3) * 2 - var(--control-h-xs) - var(--sp1) * 2);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-floating);
+  box-shadow: var(--shadow-soft);
+}
+
+/* The chat: taller than the card at rest, still a card over the map. */
+.map-card--chat {
+  height: 36rem;
+}
+
+.map-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex: 0 0 auto;
+  height: var(--pane-header-h);
+  padding: 0 var(--sp2) 0 var(--pane-pad-x);
+  color: var(--text);
+  font-size: var(--type-label);
+  font-weight: var(--fw-medium);
+}
+
+.map-card-head > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.map-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Deployed / Draft, or a resource's kind: the quiet tag beside the name. */
+.map-card-state {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.map-card-head-verbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-half);
+  margin-left: auto;
+}
+
+/* The composer sits on the card's own ground, ruled off from the head row
+   when there is one. */
+.map-card-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  margin: var(--sp2);
+  padding: var(--sp2) var(--sp3);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.map-card-head + .map-card-composer {
+  margin-top: 0;
+}
+
+.map-card-head + .map-card-composer::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 calc(var(--sp3) * -1 - var(--sp2)) var(--sp2);
+  background: var(--ui-line);
+}
+
+.map-card-composer:has(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+}
+
+.map-card-input {
+  display: block;
+  width: 100%;
+  resize: none;
+  border: 0;
+  padding: var(--sp1) 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-label);
+  line-height: 1.5;
+}
+
+.map-card-input:focus-visible {
+  outline: none;
+}
+
+.map-card-input::placeholder {
+  color: var(--text-faint);
+}
+
+.map-card-composer-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The map chat fills the card under its head row: the shared Assistant
+   conversation, sized for a card rather than a pane. */
+.map-chat-overlay {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--ui-line);
+}
+
+.map-chat-overlay .studio-chat {
+  flex: 1;
+  height: auto;
+  background: transparent;
+  font-size: var(--type-label);
+}
+
+.map-chat-overlay .studio-chat-feed {
+  gap: var(--sp4);
+  max-width: none;
+  padding: var(--sp3);
+}
+
+.map-chat-overlay .studio-chat-user {
+  max-width: 90%;
+  padding: var(--sp2) var(--sp3);
+}
+
+.map-chat-overlay .studio-chat-dock {
+  max-width: none;
+  padding: 0 var(--sp2) var(--sp2);
+}
+
+.map-chat-overlay .studio-chat-composer {
+  box-shadow: none;
+  border: 1px solid var(--ui-line);
+}
+
+.map-chat-overlay .studio-chat-start {
+  font-size: var(--type-label);
+}
+
+.map-chat-empty {
+  margin: 0;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+/* The selection chip under a question (Q4): small, one line, never taller
+   than the words it rides with. */
+.map-chat-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.map-chat-chip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--sp1);
+  max-width: 100%;
+  padding: 2px var(--sp2);
+  border-radius: var(--radius);
+  background: var(--surface-floating);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+}
+
+.map-chat-chip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Stop: the send button's square while a reply streams. */
+.composer-send.is-stop {
+  background: var(--btn);
+}
+
+/* The hand-off card (4.3.6): the title, the prompt the chat wrote in full,
+   and one verb. The prompt wraps, because the card lives in a narrow
+   overlay and a sideways scroll hides the task. */
+.chat-handoff {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp2);
+  margin: var(--sp2) 0;
+  padding: var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+}
+
+.chat-handoff-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  margin: 0;
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.chat-handoff-title > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.chat-handoff-prompt {
+  width: 100%;
+  max-height: 10rem;
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--type-meta) / 1.5 var(--font-mono);
+  color: var(--text-dim);
+}
+
+.chat-handoff-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+}
+
+/* A project with no drawn map lists its agents as cards; the same card
+   floats over the project pane's bottom-right, not inside the scrolling
+   list, so it stays put while the list scrolls. */
+.project-agent-grid-panel {
+  display: contents;
+}
+
+.project-agent-grid-panel > .map-card {
+  bottom: var(--sp3);
+  max-height: calc(100% - var(--sp3) * 2);
+}

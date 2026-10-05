@@ -93,8 +93,9 @@ export const useDeepLinks = ({
   // render the shell itself renders (never while it shows its loading or
   // connectivity screen); the effects above reach them through the refs.
   const booted = !harness.loading && !harness.error && state != null;
-  // Open a deep-linked agent if the user has it locally: its canvas, in the
-  // centre of its project; returns whether it was found.
+  // Open a deep-linked agent if the user has it locally: its modal, over its
+  // project's map (flow-map-chat-overlay.md 4.2b); returns whether it was
+  // found.
   if (booted) focusExistingRef.current = (definitionId: string): boolean => {
     const match = state?.workflows.find(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
