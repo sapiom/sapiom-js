@@ -50,7 +50,6 @@ export async function trustClaudeCodeProject(
     homeKey.startsWith(key.endsWith("/") ? key : `${key}/`);
   if (keys.some(covers)) return "skipped";
   const file = await claudeCodeConfigPath(env, home);
-  if (!(await exists(file))) return "skipped";
   const release = await acquireConfigLock(`${file}.lock`);
   if (!release) return "skipped";
   try {
@@ -161,7 +160,11 @@ export async function acquireConfigLock(
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
       const held = await stat(lock).catch(() => null);
       if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
-        await rmdir(lock).catch(() => {});
+        // proper-lockfile's own takeover has the same stat-then-remove gap;
+        // a directory lock offers no atomic compare-and-remove.
+        const again = await stat(lock).catch(() => null);
+        if (again?.ino === held.ino && again.mtimeMs === held.mtimeMs)
+          await rmdir(lock).catch(() => {});
         continue;
       }
       await new Promise((done) => setTimeout(done, LOCK_RETRY_MS));

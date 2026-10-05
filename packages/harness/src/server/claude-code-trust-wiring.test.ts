@@ -126,4 +126,18 @@ it("a Claude Code session waits for its added project's trust record, and only a
     harness: "claude-code",
   });
   expect(Object.keys((await read()).projects)).toEqual([existing]);
+
+  // Added under a symlink spelling, the session asks for the physical path.
+  const physical = path.join(root, "physical-project");
+  const linked = path.join(root, "linked-project");
+  await fs.mkdir(physical);
+  await fs.symlink(physical, linked);
+  await fs.writeFile(
+    path.join(stateRoot, "settings.json"),
+    JSON.stringify({ recentDirs: [existing, linked] }),
+  );
+  await server.sessionManager.create({ cwd: physical, harness: "claude-code" });
+  expect((await read()).projects[physical]).toEqual({
+    hasTrustDialogAccepted: true,
+  });
 }, 20_000);

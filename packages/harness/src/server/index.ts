@@ -28,6 +28,7 @@ import {
 } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
@@ -1573,9 +1574,13 @@ export const startServer = async (
       // before Studio pre-trusted roots gets one too. Only an added root
       // (recentDirs) is trusted, never the session folder itself.
       if (request.harness === "claude-code")
-        await loadSettings(statePaths.settings).then(({ recentDirs }) => {
+        await loadSettings(statePaths.settings).then(async ({ recentDirs }) => {
+          // Compared resolved, so a symlink spelling on either side matches.
+          const real = (path: string) => realpath(path).catch(() => path);
+          const cwd = await real(request.cwd);
+          const roots = await Promise.all(recentDirs.map(real));
           const root = recentDirs
-            .filter((dir) => isWithinWorkspacePath(dir, request.cwd))
+            .filter((_, i) => isWithinWorkspacePath(roots[i]!, cwd))
             .sort((a, b) => b.length - a.length)[0];
           return root ? pretrustProjectRoot(root) : undefined;
         }, () => {});

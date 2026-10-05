@@ -163,6 +163,20 @@ describe("trustClaudeCodeProject (SAP-3879)", () => {
     await expect(fs.stat(lock)).rejects.toThrow();
   });
 
+  it("reads the config only once it holds the lock, so one created meanwhile is used", async () => {
+    const lock = `${configFile}.lock`;
+    await fs.mkdir(lock);
+    // Claude Code's first run writes its config under the lock.
+    const pending = trustClaudeCodeProject(project, { env, home });
+    await new Promise((done) => setTimeout(done, 100));
+    await writeConfig({ numStartups: 1 });
+    await fs.rmdir(lock);
+    expect(await pending).toBe("trusted");
+    expect((await readConfig()).projects).toEqual({
+      [project]: { hasTrustDialogAccepted: true },
+    });
+  });
+
   it("gives up without writing when the lock stays held", async () => {
     await writeConfig({ projects: {} });
     const lock = `${configFile}.lock`;
