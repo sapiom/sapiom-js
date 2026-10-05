@@ -125,10 +125,16 @@ exactly as you left it: the same pick and the same map chat.
   board's header.
 
 Every verb is addressed by the agent's path. No verb needs a session, starts
-one, or binds one. Runs are filed under the agent. The verbs that need a coding
-agent (Ask about a step, Ask to fix a render error, debug an attempt, Describe
-with AI) each start a new terminal session at the project root whose first
-message names the job and the agent, and open it.
+one, or binds one. Runs are filed under the agent. The actions that need a
+coding agent each start a new Claude Code session at the project root, whose
+first message names the agent, and open it:
+
+- Every prompt from the Canvas (the chat panel's Ask, Explain this step, Debug
+  this step, Why slow / stuck?, and Ask coding agent to fix on a render error)
+  is sent as an **ask**: the session is told to answer from the agent's source
+  and change no files unless you ask. Fix and debug are not told apart from an
+  ask, so tell the session to make the fix.
+- Describe with AI sends its own prompt, which edits the agent's descriptions.
 
 ### Not in the UI yet
 
