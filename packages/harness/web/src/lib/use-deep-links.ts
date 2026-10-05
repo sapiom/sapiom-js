@@ -53,13 +53,13 @@ export const useDeepLinks = ({
   const focusExistingRef = useRef<((definitionId: string) => boolean) | null>(
     null,
   );
-  const bindClonedRef = useRef<((definitionId: string) => boolean) | null>(
+  const focusClonedRef = useRef<((definitionId: string) => boolean) | null>(
     null,
   );
   const coldDeepLinkRef = useRef<DeepLinkTarget | null>(deepLinkFromSearch());
   const coldDeepLinkHandledRef = useRef(false);
-  // A clone kicked off from a remote-only deep link: focus the agent once the
-  // workspace rescan surfaces it locally.
+  // A clone kicked off from a remote-only deep link, until the workspace rescan
+  // surfaces the agent locally.
   const pendingCloneFocusRef = useRef<string | null>(null);
 
   // Warm deep link: the desktop bridge pushes a target while the app is running.
@@ -80,11 +80,11 @@ export const useDeepLinks = ({
   }, [harness.loading]);
 
   // After a deep-link clone lands, the workspace rescan surfaces the agent with a
-  // matching definitionId — bind the cloning session to it then, without
-  // moving the centre off the chat that is doing the clone.
+  // matching definitionId: the clone is done. The centre stays on the chat
+  // that did it, and nothing is bound (design-map-chat.md I2).
   useEffect(() => {
     const wantId = pendingCloneFocusRef.current;
-    if (wantId && bindClonedRef.current?.(wantId)) {
+    if (wantId && focusClonedRef.current?.(wantId)) {
       pendingCloneFocusRef.current = null;
     }
   }, [harness.state?.workflows]);
@@ -93,8 +93,9 @@ export const useDeepLinks = ({
   // render the shell itself renders (never while it shows its loading or
   // connectivity screen); the effects above reach them through the refs.
   const booted = !harness.loading && !harness.error && state != null;
-  // Open a deep-linked agent if the user has it locally: its canvas, in the
-  // centre of its project; returns whether it was found.
+  // Open a deep-linked agent if the user has it locally: its modal, over its
+  // project's map (flow-map-chat-overlay.md 4.2b); returns whether it was
+  // found.
   if (booted) focusExistingRef.current = (definitionId: string): boolean => {
     const match = state?.workflows.find(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
@@ -104,20 +105,13 @@ export const useDeepLinks = ({
     if (projectId) openAgentCanvas(projectId, match.path);
     return true;
   };
-  // A cloned agent has landed: bind the session that cloned it.
-  if (booted) bindClonedRef.current = (definitionId: string): boolean => {
-    const match = state?.workflows.find(
+  // A cloned agent has landed: once found, it is marked done. Nothing binds
+  // the session that cloned it (design-map-chat.md I2); the agent is on its
+  // project's map, one Open agent away, and the clone session stays on screen.
+  if (booted) focusClonedRef.current = (definitionId: string): boolean =>
+    state?.workflows.some(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
-    );
-    if (!match) return false;
-    const activeSession =
-      state?.sessions.find((session) => session.id === harness.activeSessionId) ??
-      null;
-    if (activeSession && activeSession.status !== "exited") {
-      void harness.bindWorkflow(activeSession.id, match.path).catch(() => {});
-    }
-    return true;
-  };
+    ) ?? false;
 
   // Resolve a deep-link target. A template (`sapiom://templates/<id>`) opens the
   // templates browser on that template; an agent (`sapiom://agent/<id>`) opens
@@ -137,7 +131,8 @@ export const useDeepLinks = ({
   // Clone a remote-only deep-linked agent locally (confirmed): open a session in a
   // fresh folder and hand the coding agent the clone-by-definitionId prompt — the
   // same agent-driven path "Use template" uses. The workspace rescan then surfaces
-  // the cloned agent, and the pending-focus effect above displays it.
+  // the cloned agent on its project's map, and the pending-clone effect above
+  // marks the clone done.
   const handleCloneDefinition = async (
     target: DeepLinkAgentTarget,
   ): Promise<void> => {

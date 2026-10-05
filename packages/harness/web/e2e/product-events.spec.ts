@@ -17,7 +17,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openNewAgentScreen, NO_HOME } from "./mock-navigation";
+import { openAgentModal, openNewAgentScreen } from "./mock-navigation";
 
 interface ProductEvent {
   event: string;
@@ -38,11 +38,10 @@ test.describe("agent-lifecycle product events → PostHog", () => {
   test("deploy fires agent.deploy_started then agent.deploy_succeeded, slug-only + duration", async ({
     page,
   }) => {
-    test.fixme(true, NO_HOME.verbs);
     await page.goto("/?seed=0");
-    await expect(page.getByTestId("session-steps")).toBeVisible();
+    await openAgentModal(page, "acme-app", "leasing");
 
-    await page.getByTestId("session-step-deploy").click();
+    await page.getByTestId("agent-modal-deploy").click();
     await expect(page.getByTestId("toast")).toContainText("Deployed to Sapiom.", {
       timeout: 5_000,
     });
@@ -56,7 +55,7 @@ test.describe("agent-lifecycle product events → PostHog", () => {
     const events = await productEvents(page);
     const started = events.find((e) => e.event === "agent.deploy_started");
     const succeeded = events.find((e) => e.event === "agent.deploy_succeeded");
-    // The bound leasing agent's folder basename — never the absolute path.
+    // The leasing agent's folder basename — never the absolute path.
     expect(started?.properties?.workflow_slug).toBe("leasing");
     expect(succeeded?.properties?.workflow_slug).toBe("leasing");
     expect(typeof succeeded?.properties?.duration_ms).toBe("number");

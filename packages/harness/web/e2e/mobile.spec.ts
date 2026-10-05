@@ -116,10 +116,10 @@ test("a project's Agent Map takes the whole centre on a phone, with no sheet and
     path: "web/e2e/screenshots/mobile-agent-map.png",
   });
 
-  // A node opens its panel in place; the selected session is one rail tap
-  // away, and its workbench comes back with it.
+  // A node names itself on the floating card; the selected session is one
+  // rail tap away, and its workbench comes back with it.
   await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
-  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
   await page.getByTestId("rail-expand").click();
   await page.getByTestId("rail-session-select-sess-boot").click();
   await expect(graph).toHaveCount(0);

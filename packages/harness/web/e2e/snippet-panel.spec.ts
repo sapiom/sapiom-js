@@ -16,12 +16,19 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { selectSession, startChatWithRfq, NO_HOME } from "./mock-navigation";
+import { openAgentModal, selectSession } from "./mock-navigation";
+
+/** The snippets live on the deploy surface (the Steps surface's header,
+ *  `CanvasPane` stepsHeader), which only the pane beside a bound session
+ *  mounted. The agent modal holds Canvas and Secrets
+ *  (flow-map-chat-overlay.md 4.2b.2), so they have no home there yet. */
+const NO_HOME_IN_MODAL =
+  "SAP-3838: the integration snippets lived only on the Steps surface's deploy header; the agent modal has no home for them";
 
 
 test.beforeEach(async ({ page }) => {
   // Every test here reads the snippets on the Steps / deploy surface.
-  test.fixme(true, NO_HOME.steps);
+  test.fixme(true, NO_HOME_IN_MODAL);
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   // The boot session is bound to leasing, so the right pane is leasing's.
@@ -51,7 +58,7 @@ test.describe("the snippets follow the SUBJECT's deploy state", () => {
     // snippets leak in, and a snippet for an agent with no ready build could
     // only produce a 404 call. It follows the right pane's agent, which is the
     // session's bound agent (flow-navigation.md Q5).
-    await startChatWithRfq(page);
+    await openAgentModal(page, "rfq-agent", "rfq");
     await page.getByTestId("right-tab-steps").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
     await expect(page.getByTestId("steps-snippets")).toHaveCount(0);

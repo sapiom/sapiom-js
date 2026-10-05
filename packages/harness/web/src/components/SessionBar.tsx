@@ -56,19 +56,16 @@ interface SessionBarProps {
    *  result announcements opt into "info". */
   onToast: (message: string, tone?: ToastTone) => void;
   /**
-   * Set while a project's Agent Map (or an agent's canvas entered from it) is
-   * the centre (flow-navigation.md 4.3, 4.4). The header reads
-   * `project · Agent Map`, or `← project · agent` with the way back, and
-   * carries New agent (Q11), over the agents it adds to.
+   * Set while a project's Agent Map is the centre (flow-navigation.md 4.3).
+   * The header reads `project · Agent Map` and carries New agent (Q11), over
+   * the agents it adds to. An agent opens in a modal over the map
+   * (flow-map-chat-overlay.md 4.2b), so the header never names one.
    */
   projectView?: ProjectViewHeader | null;
 }
 
 export interface ProjectViewHeader {
   label: string;
-  /** The agent whose canvas was entered from the map, if any. */
-  agentName: string | null;
-  onBackToMap: () => void;
   onNewAgent: () => void;
   /** Full view for a drawn map; null when there is no map to enlarge. */
   onExpandMap: (() => void) | null;
@@ -136,44 +133,21 @@ export function SessionBar({
         data-session-id={activeSession?.id ?? ""}
       >
         {projectView ? (
-          /* A project is selected: the centre is its Agent Map, or an agent's
-             canvas entered from it, with the way back. */
+          /* A project is selected: the centre is its Agent Map. */
           <div className="session-current session-current-static">
-            {projectView.agentName ? (
-              <button
-                type="button"
-                className="theme-toggle project-map-back"
-                data-testid="project-map-back"
-                aria-label={`Back to ${projectView.label}'s Agent Map`}
-                data-tooltip="Back to the Agent Map"
-                onClick={projectView.onBackToMap}
-              >
-                <Icon name="ArrowLeft" size={14} />
-              </button>
-            ) : (
-              <Icon name="Waypoints" size={14} />
-            )}
+            <Icon name="Waypoints" size={14} />
             <span
               className="session-context-title"
               data-testid="session-context-title"
             >
               {projectView.label}
             </span>
-            {projectView.agentName ? (
-              <span
-                className="session-project-chip"
-                data-testid="session-map-agent-chip"
-              >
-                {projectView.agentName}
-              </span>
-            ) : (
-              <span
-                className="session-project-chip"
-                data-testid="session-project-map-chip"
-              >
-                Agent Map
-              </span>
-            )}
+            <span
+              className="session-project-chip"
+              data-testid="session-project-map-chip"
+            >
+              Agent Map
+            </span>
           </div>
         ) : overviewMode ? (
           <div className="session-current session-current-static">

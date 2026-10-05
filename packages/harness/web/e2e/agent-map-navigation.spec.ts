@@ -178,24 +178,27 @@ async function updateSession(
     { id, patch },
   );
 }
-/** Single click on an agent node: its panel in place, the map still there
- *  (flow-navigation.md 4.4, Q7), naming the EXACT agent the node resolved to. */
+/** The floating card names a resolved AGENT (it carries Open agent). */
+const agentCard = (page: Page) => page.getByTestId("map-card-open-agent");
+/** The card's name; its tooltip is the agent's path. */
+const cardName = (page: Page) => page.getByTestId("map-card-name");
+/** Single click on an agent node: the card names it in place, the map still
+ *  there (flow-map-chat-overlay.md 4.2), naming the EXACT agent the node
+ *  resolved to: its path is the name's tooltip. */
 async function expectPanel(page: Page, path: string) {
-  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
-  await expect(page.getByTestId("map-agent-panel-path")).toHaveText(path);
+  await expect(agentCard(page)).toBeVisible();
+  await expect(cardName(page)).toHaveAttribute("data-tooltip", path);
   await expect(page.getByTestId("agent-map-frame")).toBeVisible();
 }
-/** Open canvas on the panel: the agent's own board in the same centre. */
-async function expectAgentCanvas(page: Page) {
-  await page.getByTestId("map-agent-open-canvas").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute(
-    "data-view",
-    "agent",
-  );
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+/** Open agent on the card: the agent's own board in a modal over the map,
+ *  which stays mounted underneath (4.2b, I9). */
+async function expectAgentModal(page: Page) {
+  await agentCard(page).click();
+  await expect(page.getByTestId("agent-modal")).toBeVisible();
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(1);
   await expect(
     page
-      .getByTestId("project-map-pane")
+      .getByTestId("agent-modal")
       .locator('.canvas-frame-wrap[data-view="board"]'),
   ).toBeVisible();
 }
@@ -245,16 +248,17 @@ for (const mode of [
     // Navigation is client state now: nothing is written to the server's
     // per-project selection preference.
     expect((await calls(page)).writes).toBe(0);
-    await expectAgentCanvas(page);
+    await expectAgentModal(page);
     expect(await evidence(page)).toEqual(before);
-    await page.getByTestId("project-map-back").click();
+    await page.getByTestId("agent-modal-close").click();
+    await expect(page.getByTestId("agent-modal")).toHaveCount(0);
     await expect(page.getByTestId("agent-map-live")).toBeVisible();
     expect(await evidence(page)).toEqual(before);
     if (mode.startsWith("archived")) {
       // Another project's map is just as unable to move the session.
       await openMap(page, "polsia");
       await node(page).click();
-      await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+      await expect(agentCard(page)).toBeVisible();
       expect(await evidence(page)).toEqual(before);
     }
   });
@@ -268,7 +272,7 @@ test("same-name agents use the exact ID and path; one refresh finds a newly disc
   await probe(page, { path, refresh: true });
   await publish(page, { type: "workflows.changed" });
   await node(page).click();
-  // The panel names the exact path the node's id resolved to, not its
+  // The card names the exact path the node's id resolved to, not its
   // same-named neighbour at /Users/demo/polsia/backend/src/pipelines/ingest.
   await expectPanel(page, path);
   expect((await calls(page)).refreshes).toBe(2);
@@ -283,11 +287,13 @@ test("picking an agent node and a resource node leaves the board's size unchange
   await node(page).click();
   await expectPanel(page, LEASING);
   expect(await boardSize(page)).toEqual(atRest);
-  // The floating panel may lie over the resource; close it first.
-  await page.getByTestId("map-agent-panel-close").click();
+  // The floating card may lie over the resource; release the pick first.
+  await page.keyboard.press("Escape");
+  await expect(agentCard(page)).toHaveCount(0);
   await node(page, RESOURCE).click();
   await expect(node(page, RESOURCE)).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+  await expect(agentCard(page)).toHaveCount(0);
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-kind", "resource");
   expect(await boardSize(page)).toEqual(atRest);
   // A resource pick is a selection only: announced, and nothing resolved.
   await expect(page.locator(".agent-map-live [aria-live]")).toHaveText(
@@ -296,23 +302,24 @@ test("picking an agent node and a resource node leaves the board's size unchange
   expect(await calls(page)).toMatchObject({ targets: 1, writes: 0 });
 });
 
-test("picking a resource over an open agent panel releases it, and Escape does not bring it back", async ({
+test("picking a resource over a picked agent releases it, and Escape does not bring it back", async ({
   page,
 }) => {
   await open(page);
   await probe(page);
   await node(page).click();
   await expectPanel(page, LEASING);
-  // The panel floats over the map and may lie over the resource; the pick
+  // The card floats over the map and may lie over the resource; the pick
   // goes to the node itself either way.
   await node(page, RESOURCE).dispatchEvent("click");
   await expect(node(page, RESOURCE)).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+  await expect(agentCard(page)).toHaveCount(0);
   await page.getByTestId("agent-map-live").press("Escape");
   await expect(node(page, RESOURCE)).toHaveAttribute("aria-pressed", "false");
-  // The last pick was the resource: clearing it leaves the map with no panel,
-  // not the agent picked before it.
-  await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+  // The last pick was the resource: clearing it returns the card to the
+  // project, not to the agent picked before it.
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "project");
+  await expect(agentCard(page)).toHaveCount(0);
   await expect(node(page)).toHaveAttribute("aria-pressed", "false");
 });
 
@@ -330,7 +337,7 @@ for (const [code, message] of [
     await expect(error).toContainText(message);
     await expect(error).not.toContainText("private server detail");
     await expect(node(page)).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+    await expect(agentCard(page)).toHaveCount(0);
     expect(await boardSize(page)).toEqual(atRest);
     await page.keyboard.press("Escape");
     await expect(error).toHaveCount(0);
@@ -347,7 +354,7 @@ for (const action of [
   "leaving the map",
   "refresh then a resource pick",
 ]) {
-  test(`a delayed reply cannot open a panel after ${action}`, async ({
+  test(`a delayed reply cannot name an agent on the card after ${action}`, async ({
     page,
   }) => {
     await open(page, "", "polsia");
@@ -375,7 +382,7 @@ for (const action of [
     if (action === "another project") await openMap(page, "acme-app");
     if (action === "another node") {
       await node(page, 102).click();
-      await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+      await expect(agentCard(page)).toBeVisible();
     }
     if (action === "auth change")
       await publish(page, {
@@ -408,9 +415,11 @@ for (const action of [
           acceptedAt: new Date().toISOString(),
         },
       });
-    const panelPath = page.getByTestId("map-agent-panel-path");
+    const panelPath = cardName(page);
     const panelBefore =
-      (await panelPath.count()) > 0 ? await panelPath.textContent() : null;
+      (await agentCard(page).count()) > 0
+        ? await panelPath.getAttribute("data-tooltip")
+        : null;
     await page.evaluate(() => (window as TestWindow).__navigation.release!());
     await expect
       .poll(async () => (await calls(page)).completed)
@@ -422,27 +431,28 @@ for (const action of [
       await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
       await expect(page.getByTestId("agent-view")).toBeVisible();
     } else if (action === "another node") {
-      // The newer node's panel stands; the stale reply did not replace it.
-      await expect(page.getByTestId("map-agent-panel-path")).toHaveText(
+      // The newer node's card stands; the stale reply did not replace it.
+      await expect(cardName(page)).toHaveAttribute(
+        "data-tooltip",
         panelBefore!,
       );
     } else {
       await expect(page.getByTestId("agent-map-frame")).toBeVisible();
-      await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+      await expect(agentCard(page)).toHaveCount(0);
     }
   });
 }
 
-test("mobile keyboard activation opens the agent's panel, then its canvas, with the rail closed", async ({
+test("mobile keyboard activation names the agent on the card, then opens its modal, with the rail closed", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await open(page, "mockNoLiveSessions=1");
   const before = await evidence(page);
   await node(page).press("Space");
-  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await expect(agentCard(page)).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expectAgentCanvas(page);
+  await expectAgentModal(page);
   expect(await evidence(page)).toEqual(before);
 });
 
