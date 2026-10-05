@@ -152,5 +152,7 @@ test.describe("idle", () => {
       "aria-label",
       "Idle: running, quiet for a while",
     );
+    // The tooltip is the one word; the aria-label above keeps the meaning.
+    await expect(mark).toHaveAttribute("data-tooltip", "Idle");
   });
 });

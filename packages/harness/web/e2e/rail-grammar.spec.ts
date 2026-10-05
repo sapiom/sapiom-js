@@ -61,18 +61,26 @@ test.describe("project header grammar", () => {
     // three words; the aria-label carries the object's name. Eight strings
     // had grown explanation clauses ("Hide from the rail (History keeps it)").
     // The brand header is excluded: it is a separate component, not this
-    // rail's copy. Row `title`s that show a path are content, not tooltips.
+    // rail's copy. `title`s count too (TooltipLayer shows them, stashed after
+    // a hover), except row titles that show a path, which are content.
     await page.getByTestId("project-select-acme-app").click();
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveAttribute(
       "data-selected",
       "true",
     );
-    const tips = await page.locator(".rail-workflows").evaluate((rail) => [
-      ...[...rail.querySelectorAll("[data-tooltip]")]
+    const tips = await page.locator(".rail-workflows").evaluate((rail) =>
+      [...rail.querySelectorAll("[data-tooltip], [title], [data-tip-stash]")]
         .filter((el) => !el.closest(".brand-header"))
-        .map((el) => el.getAttribute("data-tooltip") ?? ""),
-      rail.querySelector("[data-testid='brand-identity']")?.getAttribute("title") ?? "",
-    ]);
+        // TooltipLayer's precedence: data-tooltip, then the (stashed) title.
+        .map(
+          (el) =>
+            el.getAttribute("data-tooltip") ||
+            el.getAttribute("title") ||
+            el.getAttribute("data-tip-stash") ||
+            "",
+        )
+        .filter((tip) => !tip.includes("/")),
+    );
     // Session marks, both project-row verbs, Hide and End, Add project, Sort.
     expect(new Set(tips)).toEqual(
       new Set([
