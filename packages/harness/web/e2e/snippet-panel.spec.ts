@@ -1,107 +1,114 @@
 /**
- * "Trigger from your code" snippets, on the DEPLOY surface — mock-mode UI
- * tests, same fixtures as smoke.spec.ts:
- *   - "leasing" → deployed (definitionId: 4821, definitionSlug: "leasing"), the
- *     boot session's binding, so the Steps surface offers the disclosure. The
- *     re-vendored contract carries definitionSlug, so the slug is the one the
- *     server resolved from the deployment (no inferred fallback).
+ * "Trigger from your code" snippets, behind the agent modal's `</>`
+ * (flow-map-chat-overlay.md 4.7.2) — mock-mode UI tests, same fixtures as
+ * smoke.spec.ts:
+ *   - "leasing" → deployed (definitionId: 4821, definitionSlug: "leasing").
+ *     The re-vendored contract carries definitionSlug, so the slug is the one
+ *     the server resolved from the deployment (no inferred fallback).
  *   - "rfq" → undeployed (definitionId: null) — only a READY cloud build has
- *     anything to copy, so the disclosure is simply not offered for it.
+ *     anything to copy, so its `</>` says why there is nothing yet.
  *
- * SAP-2980 removed the Code tab. The snippets were NOT removed with it: a
- * permanent tab spent standing IA on a question asked once, just after a
- * deploy, so they moved to where that question is actually asked — the Steps
- * surface, directly under the deploy banner that reports the build that made
- * the agent callable. The Canvas tab stays a pure board.
+ * SAP-2980 removed the Code tab and moved the snippets to the deploy surface
+ * beside the bound session; P4.0 removed that surface. They live in the
+ * modal's header now, one click from the agent they call.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-import { openAgentModal, selectSession } from "./mock-navigation";
+import { openAgentModal } from "./mock-navigation";
 
-/** The snippets live on the deploy surface (the Steps surface's header,
- *  `CanvasPane` stepsHeader), which only the pane beside a bound session
- *  mounted. The agent modal holds Canvas and Secrets
- *  (flow-map-chat-overlay.md 4.2b.2), so they have no home there yet. */
-const NO_HOME_IN_MODAL =
-  "SAP-3838: the integration snippets lived only on the Steps surface's deploy header; the agent modal has no home for them";
-
+async function openSnippets(page: Page): Promise<void> {
+  await page.getByTestId("agent-modal-snippets").click();
+  await expect(page.getByTestId("agent-modal-snippets")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(page.getByTestId("agent-modal-snippets-popover")).toBeVisible();
+}
 
 test.beforeEach(async ({ page }) => {
-  // Every test here reads the snippets on the Steps / deploy surface.
-  test.fixme(true, NO_HOME_IN_MODAL);
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  // The boot session is bound to leasing, so the right pane is leasing's.
-  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
-    "data-agent",
-    "leasing",
-  );
-  await page.getByTestId("right-tab-steps").click();
-  await page.getByTestId("steps-snippets-toggle").click();
+  await openAgentModal(page, "acme-app", "leasing");
+  await openSnippets(page);
 });
 
 test.describe("the snippets follow the SUBJECT's deploy state", () => {
   test("the Code tab is gone, and the snippets are not gone with it", async ({ page }) => {
     await expect(page.getByTestId("right-tab-code")).toHaveCount(0);
     await expect(page.getByTestId("right-panel-code")).toHaveCount(0);
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
-    await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    await expect(
+      page.getByTestId("agent-modal-snippets-popover").getByTestId("snippet-panel"),
+    ).toBeVisible();
   });
 
   test("only a READY cloud build offers them — an undeployed agent has nothing to copy", async ({
     page,
   }) => {
-    // A chat bound to rfq drops the disclosure entirely: no other agent's
-    // snippets leak in, and a snippet for an agent with no ready build could
-    // only produce a 404 call. It follows the right pane's agent, which is the
-    // session's bound agent (flow-navigation.md Q5).
+    // rfq's modal: no other agent's snippets leak in, and a snippet for an
+    // agent with no ready build could only produce a 404 call, so `</>`
+    // says why instead.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("agent-modal-snippets-popover")).toHaveCount(0);
+    await page.getByTestId("agent-modal-close").click();
     await openAgentModal(page, "rfq-agent", "rfq");
-    await page.getByTestId("right-tab-steps").click();
+    await openSnippets(page);
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
-    await expect(page.getByTestId("steps-snippets")).toHaveCount(0);
-
-    // Back on a leasing session, one click in the rail.
-    await selectSession(page, "sess-leasing-2");
-    // The disclosure is keyed to the AGENT, not to a flag, so leasing's own
-    // section comes back open exactly as it was left.
-    await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
-      "aria-expanded",
-      "true",
+    await expect(page.getByTestId("agent-modal-snippets-pending")).toHaveText(
+      "Deploy rfq first. Its snippets appear once it has a ready cloud build.",
     );
+
+    // Back on leasing: its own snippets, and only one panel.
+    await page.keyboard.press("Escape");
+    await page.getByTestId("agent-modal-close").click();
+    await openAgentModal(page, "acme-app", "leasing");
+    // The popover is the modal's: a fresh modal opens with it closed.
+    await expect(page.getByTestId("agent-modal-snippets-popover")).toHaveCount(0);
+    await openSnippets(page);
     await expect(page.getByTestId("snippet-panel")).toHaveCount(1);
+    await expect(page.getByTestId("snippet-slug")).toHaveText("leasing");
   });
 
-  test("a deploy's \"Trigger from your code\" cannot outlive the section it points at", async ({
+  test("a first deploy's snippets wait for the ready build, never an empty popover", async ({
     page,
   }) => {
-    /* Two gates used to guard one affordance: the button appears the moment the
-       deploy phase reads `ready`, which is set BEFORE the workflow refresh that
-       publishes the build — so on a first deploy the button was live while the
-       snippets did not exist yet, and clicking it switched to Steps and showed
-       nothing at all. The pairing is now structural: the caller hands the banner
-       a handler only when there is a section to land on. */
-    await page.getByTestId("session-step-deploy").click();
-    const banner = page.getByTestId("deploy-status-banner");
-    await expect(banner).toHaveAttribute("data-phase", "ready", { timeout: 6_000 });
-    await page.getByTestId("deploy-open-code").click();
-    await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
+    /* Linking sets a definitionId BEFORE the build is ready, so linkage alone
+       must not offer snippets: during the build `</>` names the build, and
+       once it is ready the snippets are there. */
+    await page.keyboard.press("Escape");
+    await page.getByTestId("agent-modal-close").click();
+    await openAgentModal(page, "rfq-agent", "rfq");
+    await page.getByTestId("agent-modal-deploy").click();
+    await expect(page.getByTestId("agent-modal-state")).toHaveText(/^Deployed/);
+    await openSnippets(page);
+    const popover = page.getByTestId("agent-modal-snippets-popover");
+    await expect(
+      popover.getByTestId("agent-modal-snippets-pending").or(
+        popover.getByTestId("snippet-panel"),
+      ),
+    ).toBeVisible();
+    await expect(page.getByTestId("agent-modal-progress")).toHaveText("Deployed", {
+      timeout: 6_000,
+    });
+    await expect(popover.getByTestId("snippet-panel")).toBeVisible();
+    await expect(popover.getByTestId("agent-modal-snippets-pending")).toHaveCount(0);
+  });
+
+  test("they live behind </> only: Canvas stays a pure board, and Escape closes them first", async ({
+    page,
+  }) => {
+    const modal = page.getByTestId("agent-modal");
+    await expect(modal.getByTestId("snippet-panel")).toHaveCount(0);
+    await expect(modal.getByTestId("steps-snippets")).toHaveCount(0);
+    // One layer per Escape: the popover, then the modal.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("agent-modal-snippets-popover")).toHaveCount(0);
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("agent-modal-snippets")).toHaveAttribute(
       "aria-expanded",
-      "true",
+      "false",
     );
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
-  });
-
-  test("they live on the Steps surface only — Canvas stays a pure board", async ({
-    page,
-  }) => {
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
-    await page.getByTestId("right-tab-canvas").click();
-    await expect(page.getByTestId("snippet-panel")).not.toBeVisible();
-    await page.getByTestId("right-tab-steps").click();
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
   });
 });
 

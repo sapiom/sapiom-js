@@ -436,8 +436,9 @@ test("Open agent opens a modal over the map; closing restores the pick and the m
   await expect(modal).toHaveAttribute("data-tab", "canvas");
   await expect(page.getByTestId("agent-modal-name")).toHaveText("leasing");
   await expect(page.getByTestId("agent-modal-state")).toHaveText("Deployed");
-  await expect(modal.getByRole("tab")).toHaveCount(2);
-  for (const verb of ["visualize", "run-local", "prod-run", "deploy"])
+  // Canvas, Runs, Secrets (4.7.1); `</>` leads the verbs (4.7.2).
+  await expect(modal.getByRole("tab")).toHaveCount(3);
+  for (const verb of ["snippets", "visualize", "run-local", "prod-run", "deploy"])
     await expect(page.getByTestId(`agent-modal-${verb}`)).toBeVisible();
   await expect(page.getByTestId("agent-modal-panel-canvas").locator(".canvas-pane")).toBeVisible();
   // The rail and a margin of the map stay visible.
