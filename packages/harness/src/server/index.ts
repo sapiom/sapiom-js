@@ -111,6 +111,7 @@ import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
+import { trustClaudeCodeProject } from "../core/claude-code-trust.js";
 import {
   generateMcpConfig,
   type McpDevServerCommand,
@@ -3231,6 +3232,11 @@ export const startServer = async (
     } finally {
       pendingProjectCwds.delete(requestedRoot);
     }
+    // Hand-off and Open in session sessions start in this root without Claude
+    // Code's trust dialog (flow-map-chat-overlay.md §4.7 item 5).
+    await trustClaudeCodeProject(requestedRoot).catch(() => {
+      console.error("[harness] could not pre-trust the project for Claude Code");
+    });
   };
 
   // One ordinary-session input authority serves the canonical REST endpoint
