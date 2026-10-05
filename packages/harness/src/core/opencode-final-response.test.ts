@@ -10,6 +10,7 @@ let permission: unknown[];
 let state: string;
 let agent: string;
 let text: string;
+let system: string | undefined;
 let abort: AbortController;
 const dispatch = vi.fn();
 beforeEach(async () => {
@@ -17,6 +18,7 @@ beforeEach(async () => {
   state = "idle";
   agent = "build";
   text = "";
+  system = undefined;
   abort = new AbortController();
   dispatch.mockReset().mockResolvedValue(new Response("{}"));
   hosted = {
@@ -31,7 +33,13 @@ beforeEach(async () => {
         if (path.endsWith("/message"))
           return [
             {
-              info: { id: "msg_user", role: "user", agent: "build", time: {} },
+              info: {
+                id: "msg_user",
+                role: "user",
+                agent: "build",
+                system,
+                time: {},
+              },
               parts: [],
             },
             {
@@ -222,4 +230,16 @@ it("recovers a map chat turn with the map chat's hand-off rules and a session tu
   const mapChat = JSON.parse(dispatch.mock.calls[1]![1].body);
   expect(mapChat.system).toContain("This chat has no shell");
   expect(mapChat.system).toContain("call the handoff tool");
+});
+
+it("recovers with the conversation's result token so a copied marker still counts", async () => {
+  const token = "d5d56cb2-31e1-4ff3-87b4-8e751cec1ea3";
+  system = `StudioAssistantResult/v2:${token}\n`;
+  text = "I'll check the steps.";
+  await new OpenCodeFinalResponse().recover(hosted, "ses_test", "msg_empty");
+  const body = JSON.parse(dispatch.mock.calls[0]![1].body);
+  expect(body.system).toMatch(
+    new RegExp(`^StudioAssistantResult/v2:${token}\\n`),
+  );
+  expect(body.system).toContain(`<!-- studio-result:${token}:finished -->`);
 });
