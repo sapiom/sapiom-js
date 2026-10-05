@@ -24,9 +24,11 @@
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
+import { managedBrowserApi } from "./managed.js";
 import { ensureOk, BrowserAutomationHttpError } from "./errors.js";
 
 export { BrowserAutomationHttpError };
+export type * from "./managed.js";
 
 // The ONLY occurrence of the backing provider subdomain — NOT in type names,
 // method names, comments, or docs.
@@ -643,8 +645,11 @@ export async function withSession<T>(
 
 // ----- Namespace exports -----
 
+const managed = managedBrowserApi(DEFAULT_BASE_URL);
+
 /** Browser session lifecycle operations. */
 export const sessions = {
+  ...managed.sessions,
   create: createSession,
   createWithIdentity: createSessionWithIdentity,
   close: closeSession,
@@ -654,3 +659,14 @@ export const sessions = {
 export const identities = {
   create: createIdentity,
 };
+
+/** Managed browser tasks accessed with secret resource IDs. */
+export const tasks = managed.tasks;
+/** Saved browser state accessed with secret profile IDs. */
+export const profiles = managed.profiles;
+/** Session recording controls and media. */
+export const recordings = managed.recordings;
+
+/** Bind the managed browser API to a client transport. */
+export const bindManagedBrowser = (transport: Transport) =>
+  managedBrowserApi(DEFAULT_BASE_URL, transport);

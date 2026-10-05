@@ -1,3 +1,5 @@
+import { readErrorBody } from "../_client/errors.js";
+
 /**
  * Error thrown by the `browserAutomation` capability when a request fails
  * (non-2xx response). Exposes `status` (HTTP status code) and `body` (parsed
@@ -6,12 +8,22 @@
 export class BrowserAutomationHttpError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** The Sapiom error code, when supplied. No codes are inferred from message text. */
+  readonly code?: string;
 
   constructor(message: string, status: number, body: unknown) {
     super(message);
     this.name = "BrowserAutomationHttpError";
     this.status = status;
     this.body = body;
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      "code" in body &&
+      typeof body.code === "string"
+    ) {
+      this.code = body.code;
+    }
   }
 }
 
@@ -24,15 +36,9 @@ export async function ensureOk(
   errorPrefix: string,
 ): Promise<Response> {
   if (response.ok) return response;
-  let body: unknown;
-  const text = await response.text().catch(() => "");
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
+  const { body } = await readErrorBody(response);
   throw new BrowserAutomationHttpError(
-    `${errorPrefix}: ${response.status} ${text}`,
+    `${errorPrefix}: HTTP ${response.status}`,
     response.status,
     body,
   );

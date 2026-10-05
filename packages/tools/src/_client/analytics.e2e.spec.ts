@@ -27,6 +27,7 @@ import { ExecutionClient } from "../executions/client.js";
 import { scrape, SearchHttpError, type ScrapeResult } from "../search/index.js";
 import { Sandbox } from "../sandboxes/index.js";
 import { Repository } from "../repositories/index.js";
+import { managedBrowserApi } from "../browser-automation/managed.js";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -466,6 +467,46 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(events[0]!.data.capability).toBe("/v1/files");
     // Nothing anywhere in the envelope carries the query string.
     expect(JSON.stringify(events[0])).not.toContain("SECRET");
+  });
+
+  it("records route templates, not the secret IDs in managed browser paths", async () => {
+    enableTelemetry();
+    const { transport, calls } = makeTransport(({ url }) => {
+      // A fetch error can repeat the request URL, secret ID included.
+      if (url.includes("/profiles/"))
+        throw new TypeError(`fetch failed: ${url}`);
+      return jsonResponse({ data: { status: "success" } });
+    });
+    const api = managedBrowserApi("https://browser.test", transport);
+
+    await api.tasks.pause({ taskId: "SECRET-TASK", idempotencyKey: "key-1" });
+    await api.sessions.recover("SECRET-CREATE-KEY");
+    await api.recordings.delete({
+      sessionId: "SECRET-SESSION",
+      recordingId: "SECRET-RECORDING",
+    });
+    // The caller still receives the original error.
+    await expect(api.profiles.get("SECRET-PROFILE")).rejects.toThrow(
+      "fetch failed: https://browser.test/v1/browser/profiles/SECRET-PROFILE",
+    );
+    // The requests themselves still carry the real IDs.
+    expect(calls[0]!.url).toBe(
+      "https://browser.test/v1/browser/tasks/SECRET-TASK/pause",
+    );
+
+    const events = await flushedEvents(transport);
+    expect(events.map((event) => event.data.capability)).toEqual([
+      "/v1/browser/tasks/:taskId/pause",
+      "/v1/browser/sessions/recovery/:idempotencyKey",
+      "/v1/browser/sessions/:sessionId/recordings/:recordingId",
+      "/v1/browser/profiles/:profileId",
+    ]);
+    expect(events[0]!.data.url).toBe(
+      "https://browser.test/v1/browser/tasks/:taskId/pause",
+    );
+    expect(events[3]!.data.error).toBe("TypeError");
+    expect(events[3]!.data.error_message).toBe("Request failed");
+    expect(JSON.stringify(events)).not.toContain("SECRET");
   });
 
   it("captures the HTTP status on a failed call — and the typed error is unchanged", async () => {

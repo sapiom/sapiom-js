@@ -121,6 +121,30 @@ export interface TransportRequestOptions {
    * A capability sets this only when its destination expects a different header.
    */
   authHeader?: AuthHeader;
+  /**
+   * The URL usage analytics records instead of the request URL. Set it when the
+   * request path carries a secret: pass the route template, e.g.
+   * `https://host/v1/tasks/:taskId`, so the secret never reaches telemetry.
+   */
+  analyticsUrl?: string;
+}
+
+/**
+ * The error usage analytics records for a failed fetch. Fetch errors may contain
+ * URLs, credentials or request data, so job errors are replaced, and so are errors
+ * from a request whose path carries a secret: only the error's name is kept.
+ */
+function trackedError(
+  error: unknown,
+  options: TransportRequestOptions,
+): unknown {
+  if (!error) return error;
+  if (options.analyticsEvent === "capability.execution.transport")
+    return new Error("Execution transport failed");
+  if (options.analyticsUrl === undefined) return error;
+  const redacted = new Error("Request failed");
+  if (error instanceof Error) redacted.name = error.name;
+  return redacted;
 }
 
 function attributionToHeaders(a: Attribution): Record<string, string> {
@@ -267,24 +291,10 @@ export class Transport {
         },
       });
     } catch (error) {
-      this.trackCapabilityCall(
-        url,
-        init,
-        startedAt,
-        undefined,
-        error,
-        options.analyticsEvent,
-      );
+      this.trackCapabilityCall(url, init, startedAt, options, undefined, error);
       throw error;
     }
-    this.trackCapabilityCall(
-      url,
-      init,
-      startedAt,
-      response,
-      undefined,
-      options.analyticsEvent,
-    );
+    this.trackCapabilityCall(url, init, startedAt, options, response);
     return response;
   }
 
@@ -299,25 +309,21 @@ export class Transport {
     url: string,
     init: RequestInit,
     startedAt: number,
+    options: TransportRequestOptions,
     response?: Response,
     error?: unknown,
-    event = CAPABILITY_CALL_EVENT,
   ): void {
     try {
       analyticsFor(this.analyticsHolder, this.apiKey).track(
-        event,
+        options.analyticsEvent ?? CAPABILITY_CALL_EVENT,
         capabilityCallData({
-          url,
+          url: options.analyticsUrl ?? url,
           method: init.method,
           requestBody: init.body,
           durationMs: Date.now() - startedAt,
           status: response?.status,
           ok: response?.ok ?? false,
-          // Fetch errors may contain URLs, credentials or request data. Job errors are sanitized.
-          error:
-            event === "capability.execution.transport" && error
-              ? new Error("Execution transport failed")
-              : error,
+          error: trackedError(error, options),
           attribution: this.attribution,
         }),
       );

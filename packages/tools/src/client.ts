@@ -172,6 +172,7 @@ import type {
   Identity,
   WithSessionOptions,
   ActiveSession,
+  ManagedBrowserApi,
 } from "./browser-automation/index.js";
 import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
@@ -664,8 +665,14 @@ export interface Sapiom {
    * `screenshot` + `identities` for direct control.
    */
   readonly browserAutomation: {
+    /** Run and control managed tasks with secret resource IDs. */
+    tasks: ManagedBrowserApi["tasks"];
+    /** Save, inspect, and delete browser profiles. */
+    profiles: ManagedBrowserApi["profiles"];
+    /** Control recordings and stream video through Sapiom. */
+    recordings: ManagedBrowserApi["recordings"];
     /** Open and close browser sessions. */
-    sessions: {
+    sessions: ManagedBrowserApi["sessions"] & {
       /** Open a new browser session. */
       create(options?: SessionTimeoutOptions): Promise<BrowserSession>;
       /** Open a new browser session pre-authenticated with an identity. */
@@ -717,6 +724,7 @@ export interface Sapiom {
 
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
 function bind(transport: Transport): Sapiom {
+  const managedBrowser = browserAutomation.bindManagedBrowser(transport);
   return {
     executions: new ExecutionClient(transport),
     sandboxes: {
@@ -904,7 +912,11 @@ function bind(transport: Transport): Sapiom {
       evaluate: (spec) => decisions.evaluate(spec, transport),
     },
     browserAutomation: {
+      tasks: managedBrowser.tasks,
+      profiles: managedBrowser.profiles,
+      recordings: managedBrowser.recordings,
       sessions: {
+        ...managedBrowser.sessions,
         create: (options) =>
           browserAutomation.createSession(options, transport),
         createWithIdentity: (input) =>
