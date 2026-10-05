@@ -205,8 +205,9 @@ Claude Code or Codex conversation in the terminal.
 (not an API-key-only login) on harness 0.16 or later, for a user with a verified
 email who is a current member of the signed-in organization, when the PostHog
 flag `studio-opencode-assistant` is on for that user. There is no internal-account
-or email-domain requirement. The flag is the rollout control and kill switch; it
-is currently targeted at `@sapiom.ai` emails only. Without access,
+or email-domain requirement. The flag is on for everyone, so every user who meets
+those requirements has the Assistant and the map chat; it stays as the kill
+switch. Without access,
 the project card shows no composer and sessions show no switch; Terminal works
 as before. Each Assistant turn is `gpt-luna` spend on the signed-in account's
 organization.
