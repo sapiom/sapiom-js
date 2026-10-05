@@ -126,6 +126,7 @@ describe("console page session expiry", () => {
     down = false;
     await expect(api.get("/api/board")).resolves.toEqual({ ok: true });
     expect(calls).toEqual(["/api/board", "/api/board"]);
+    expect(toast.hidden).toBe(true);
   });
 
   it("leaves the server's own 403 an ordinary failure", async () => {

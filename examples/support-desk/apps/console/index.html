@@ -1208,19 +1208,27 @@
         closeKbForm();
       };
 
-      /** fetch, except that a dead session (401, or no answer at all) ends the page's requests. */
+      /**
+       * fetch, except that a 401 ends the page's requests. No answer can be a dropped connection
+       * that comes back, so it shows a warning, polling goes on, and the next answer clears it.
+       */
+      let unreachable = false;
       async function call(path, init) {
         if (expired) throw new Error("session expired");
         let r;
         try {
           r = await fetch(path, init);
         } catch (err) {
-          // No answer can be a dropped connection that comes back, so polling goes on and the
-          // next successful refresh simply replaces this message.
+          unreachable = true;
           log(
             `Unreachable FAILED: the Console server did not answer (${err.message}); retrying`,
           );
           throw err;
+        }
+        if (unreachable) {
+          unreachable = false;
+          if (/^Unreachable/.test($("toast").textContent))
+            $("toast").hidden = true;
         }
         if (r.status === 401) {
           sessionGone();
