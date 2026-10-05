@@ -78,8 +78,11 @@ that belongs to the project:
 The map chat's OpenCode process starts on the first question in a project and
 stops after 15 minutes with no open request.
 
-**What the map chat can do.** Read the project, edit files inside it, and call
-the hosted Sapiom tools.
+**What the map chat can do.** Read the project and call the hosted Sapiom
+tools. It never edits files: OpenCode's `edit`, `write` and `apply_patch` tools
+are removed from its tool list, and any change request (add or edit a step, an
+agent, a file or a setting; fix, build or create) becomes a
+[hand-off](#hand-off-card).
 
 **What it cannot do.**
 
@@ -87,9 +90,8 @@ the hosted Sapiom tools.
 - It never asks for a permission. Every rule that would ask (files outside the
   project, `.env` reads, repeated identical tool calls, questions) is denied,
   because the map chat has no way to reply to a prompt.
-- When a request needs any of those, or is real build work (building or
-  changing an agent, multi-file edits, a long run), it offers a **hand-off**
-  instead of doing it.
+- When a request needs any of those, or changes anything, it offers a
+  **hand-off** instead of doing it.
 
 ### Hand-off card
 
@@ -98,7 +100,10 @@ for the job, and **Start session**. The map chat offers one on its own for the
 work above, and when you ask for it.
 
 **Start session** creates a Claude Code terminal session at the project root
-with that prompt as its first message. The session appears on the rail and its
+with that prompt as its first message. Adding a project to Studio marks its root
+as trusted for Claude Code, so this session (and **Open in session**) starts
+without the "Do you trust the files in this folder?" dialog, including in
+projects added earlier. The session appears on the rail and its
 row pulses once. Nothing navigates: you stay on the map with the chat open. The
 card then shows **Open session**, which takes you to it.
 
@@ -174,12 +179,12 @@ The Assistant is Studio's own chat view, an OpenCode conversation on Sapiom's
 side of a session's **Terminal | Assistant** switch. It is separate from the
 Claude Code or Codex conversation in the terminal.
 
-**Who has it.** Access is currently gated by the PostHog flag
-`studio-opencode-assistant`, and the Sapiom backend also still requires an
-internal Sapiom account (a verified `@sapiom.ai` email in an internal
-organization). Opening it to every signed-in account, with the flag kept as a
-kill switch, is a backend change that has not shipped. You need a browser
-sign-in (not an API-key-only login) and harness 0.16 or later. Without access,
+**Who has it.** The Sapiom backend grants the Assistant to a browser sign-in
+(not an API-key-only login) on harness 0.16 or later, for a user with a verified
+email who is a current member of the signed-in organization, when the PostHog
+flag `studio-opencode-assistant` is on for that user. There is no internal-account
+or email-domain requirement. The flag is the rollout control and kill switch; it
+is currently targeted at `@sapiom.ai` emails only. Without access,
 the project card shows no composer and sessions show no switch; Terminal works
 as before. Each Assistant turn is `gpt-luna` spend on the signed-in account's
 organization.
