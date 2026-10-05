@@ -10,7 +10,8 @@ import type { WorkflowInfo } from "@shared/types";
 import { displayAgentName } from "./agent-name";
 
 export interface ProjectAppLink {
-  /** Stable within the project: `agent-<name>` or `local-<port>`. */
+  /** Unique within the project: `agent-<name>` (`-2`, `-3` for a repeated
+   *  name) or `local-<port>`. */
   id: string;
   label: string;
   url: string;
@@ -34,13 +35,20 @@ export function mergeProjectAppLinks(
   deployed: ReadonlyArray<{ agent: WorkflowInfo; url: string }>,
   previews: readonly LocalPreview[],
 ): ProjectAppLink[] {
-  const links: ProjectAppLink[] = deployed.map(({ agent, url }) => ({
-    id: `agent-${agent.name}`,
-    label: displayAgentName(agent.name),
-    url,
-    deployed: true,
-    host: null,
-  }));
+  // Names are not unique across a project's agents: a repeat name gets a
+  // numbered id, so ids (React keys and test ids) stay one per link.
+  const named = new Map<string, number>();
+  const links: ProjectAppLink[] = deployed.map(({ agent, url }) => {
+    const seen = (named.get(agent.name) ?? 0) + 1;
+    named.set(agent.name, seen);
+    return {
+      id: seen === 1 ? `agent-${agent.name}` : `agent-${agent.name}-${seen}`,
+      label: displayAgentName(agent.name),
+      url,
+      deployed: true,
+      host: null,
+    };
+  });
   const ports = new Set<number>();
   for (const preview of [...previews].sort((a, b) => a.port - b.port)) {
     if (ports.has(preview.port)) continue;

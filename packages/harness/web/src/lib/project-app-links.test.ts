@@ -3,9 +3,9 @@ import type { WorkflowInfo } from "@shared/types";
 
 import { mergeProjectAppLinks } from "./project-app-links";
 
-const agent = (name: string): WorkflowInfo => ({
+const agent = (name: string, path = `/p/${name}`): WorkflowInfo => ({
   name,
-  path: `/p/${name}`,
+  path,
   definitionId: 1,
   definitionSlug: name,
   source: "scan",
@@ -51,6 +51,17 @@ describe("mergeProjectAppLinks", () => {
       [{ port: 5174, url: "http://localhost:5174/" }],
     );
     expect(links.map((link) => link.id)).toEqual(["agent-board"]);
+  });
+
+  it("gives two agents that share a name distinct ids", () => {
+    const links = mergeProjectAppLinks(
+      [
+        { agent: agent("portal", "/p/first/portal"), url: "https://a.apps.sapiom.ai" },
+        { agent: agent("portal", "/p/second/portal"), url: "https://b.apps.sapiom.ai" },
+      ],
+      [],
+    );
+    expect(links.map((link) => link.id)).toEqual(["agent-portal", "agent-portal-2"]);
   });
 
   it("is empty with nothing deployed and nothing running", () => {

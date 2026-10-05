@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { CSSProperties, JSX } from "react";
 import type { AppState, WorkflowInfo } from "@shared/types";
 
+import { getByAgentPath } from "../lib/agent-path-lookup";
 import { createApi } from "../lib/api";
 import { DIALOG_LAYER_SELECTOR } from "../lib/dialog-focus";
 import { relativeTimeLabel } from "../lib/relative-time";
@@ -229,12 +230,13 @@ export function AgentModal({
   // the shown one (latest, or the one picked) and every one observed.
   const runs = useMemo(
     () =>
-      (harness.runIdsByAgent.get(agent.path) ?? [])
+      (getByAgentPath(harness.runIdsByAgent, agent.path) ?? [])
         .map((id) => harness.runsByExecution.get(id))
         .filter((observed): observed is ObservedRun => observed != null),
     [harness.runIdsByAgent, harness.runsByExecution, agent.path],
   );
-  const run: ObservedRun | null = harness.runsByAgent.get(agent.path) ?? null;
+  const run: ObservedRun | null =
+    getByAgentPath(harness.runsByAgent, agent.path) ?? null;
 
   // A re-read that brings back no graph (an agent with nothing to render)
   // posts no graph message: the progress line clears rather than spinning.
