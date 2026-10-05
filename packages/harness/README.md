@@ -146,9 +146,11 @@ not list it.
 ## Sessions
 
 A session is one Claude Code or Codex terminal, usually at a project root. Its
-view opens on **Terminal**. Studio never binds a session to an agent, and
+view opens on **Terminal**. Studio does not bind a session to an agent (the
+one exception is the draft build that **Start from an idea** creates), and
 nothing about an agent sits beside a session: agent detail lives in the
-[agent modal](#agent-modal).
+[agent modal](#agent-modal). The server no longer binds a new session to an
+agent it finds under the session's folder.
 
 To end a live session, press **×** on its rail row or **End session** in the
 session menu. It ends at once, with no confirmation. The row stays, marked
