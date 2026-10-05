@@ -101,6 +101,12 @@ describe("one result token per conversation (SAP-3876)", () => {
       answer("msg_a2", "msg_u2", `${marker(t2)}\ntwo`),
       legacy("msg_u3", t3),
       answer("msg_a3", "msg_u3", `${marker(t2)}\nthree`),
+      // A reply that declares t2 and quotes turn 1 still echoes t2.
+      answer(
+        "msg_a3b",
+        "msg_u3",
+        `${marker(t2)}\nEarlier I wrote:\n${marker(t1)}\none`,
+      ),
       // The user quoting an old answer is not the model echoing it.
       {
         info: { id: "msg_quote", role: "user", agent: "build", time: {} },

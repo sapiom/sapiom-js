@@ -47,10 +47,9 @@ export function openCodeConversationToken(
           : "",
       )
       .join("");
-    for (const [, token] of text.matchAll(
-      /<!-- studio-result:([a-f0-9-]{36}):(?:finished|failed) -->/g,
-    ))
-      if (minted.has(token!)) echoed = token;
+    // Only a declaration counts; a marker quoted in the body is not an echo.
+    for (const token of minted)
+      if (parseOpenCodeCompletion(text, token)) echoed = token;
   }
   return echoed ?? first;
 }
