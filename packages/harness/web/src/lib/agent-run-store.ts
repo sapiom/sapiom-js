@@ -80,27 +80,25 @@ export function moveAgentRuns(
   from: string,
   to: string,
 ): AgentRunIndex {
+  const source = keyFor(index.idsByAgent, from);
+  const moved = index.idsByAgent.get(source);
+  if (!moved) return index;
+  const idsByAgent = new Map(index.idsByAgent);
+  idsByAgent.delete(source);
   // Lands on the destination's existing key when one is already there (runs
   // filed under a path an earlier agent held), merged, so one agent never has
   // two keys and `runIdsForAgent` sees every run.
-  const move = <V>(map: Map<string, V>, merge: (into: V, moved: V) => V): Map<string, V> => {
-    const key = keyFor(map, from);
-    if (!map.has(key)) return map;
-    const next = new Map(map);
-    const value = next.get(key) as V;
-    next.delete(key);
-    const dest = keyFor(next, to);
-    const existing = next.get(dest);
-    return next.set(dest, existing === undefined ? value : merge(existing, value));
-  };
-  const idsByAgent = move(index.idsByAgent, (into, moved) => [
-    ...into.filter((id) => !moved.includes(id)),
-    ...moved,
-  ]);
-  const pickedByAgent = move(index.pickedByAgent, (_into, moved) => moved);
-  return idsByAgent === index.idsByAgent && pickedByAgent === index.pickedByAgent
-    ? index
-    : { idsByAgent, pickedByAgent };
+  const dest = keyFor(idsByAgent, to);
+  const earlier = (idsByAgent.get(dest) ?? []).filter((id) => !moved.includes(id));
+  idsByAgent.set(dest, [...earlier, ...moved]);
+  // The moved agent's pick decides what it shows, under the same key as its
+  // runs: none means it follows its latest, never the earlier agent's pick.
+  const pick = index.pickedByAgent.get(keyFor(index.pickedByAgent, from));
+  const pickedByAgent = new Map(index.pickedByAgent);
+  pickedByAgent.delete(keyFor(pickedByAgent, from));
+  pickedByAgent.delete(keyFor(pickedByAgent, to));
+  if (pick !== undefined) pickedByAgent.set(dest, pick);
+  return { idsByAgent, pickedByAgent };
 }
 
 /**
@@ -128,7 +126,7 @@ export function moveRunAttribution<T extends { workflowPath: string | null }>(
 export function shownRunIdByAgent(index: AgentRunIndex): Map<string, string> {
   const shown = new Map<string, string>();
   index.idsByAgent.forEach((ids, agentPath) => {
-    const picked = index.pickedByAgent.get(agentPath);
+    const picked = index.pickedByAgent.get(keyFor(index.pickedByAgent, agentPath));
     const id = picked && ids.includes(picked) ? picked : ids[ids.length - 1];
     if (id) shown.set(agentPath, id);
   });

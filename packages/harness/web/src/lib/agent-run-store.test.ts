@@ -95,6 +95,33 @@ describe("agent run store: runs keyed by agent path", () => {
     expect(shownRunIdByAgent(index).get(`${dest}/`)).toBe("r1");
   });
 
+  it("a moved non-latest pick survives landing on a key spelled differently", () => {
+    const dest = "/work/proj/flows/intake";
+    let index = recordAgentRun(emptyAgentRunIndex(), `${dest}/`, "old");
+    index = recordAgentRun(index, A, "r1");
+    index = recordAgentRun(index, A, "r2");
+    index = pickAgentRun(index, A, "r1");
+    index = moveAgentRuns(index, A, dest);
+    expect(shownRunIdByAgent(index).get(`${dest}/`)).toBe("r1");
+  });
+
+  it("a moved agent with no pick follows its latest, not the earlier agent's pick", () => {
+    const dest = "/work/proj/flows/intake";
+    let index = recordAgentRun(emptyAgentRunIndex(), dest, "old1");
+    index = recordAgentRun(index, dest, "old2");
+    index = pickAgentRun(index, dest, "old1");
+    index = recordAgentRun(index, A, "r1");
+    index = moveAgentRuns(index, A, dest);
+    expect(shownRunIdByAgent(index).get(dest)).toBe("r1");
+  });
+
+  it("a pick asked under another spelling of the agent is still its pick", () => {
+    let index = recordAgentRun(emptyAgentRunIndex(), A, "r1");
+    index = recordAgentRun(index, A, "r2");
+    index = pickAgentRun(index, `${A}/`, "r1");
+    expect(shownRunIdByAgent(index).get(A)).toBe("r1");
+  });
+
   it("moving an agent with no runs returns the same index", () => {
     const index = recordAgentRun(emptyAgentRunIndex(), A, "r1");
     expect(moveAgentRuns(index, B, "/elsewhere/triage")).toBe(index);
