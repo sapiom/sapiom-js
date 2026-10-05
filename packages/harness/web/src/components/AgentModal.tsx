@@ -4,12 +4,12 @@ import type { AppState, WorkflowInfo } from "@shared/types";
 
 import { createApi } from "../lib/api";
 import { DIALOG_LAYER_SELECTOR } from "../lib/dialog-focus";
-import { canvasSourceFor } from "../lib/session-scope";
+import { canvasSourceFor, lifecycleVerbGate } from "../lib/session-scope";
 import type { AgentVerbs } from "../lib/use-agent-verbs";
 import { useDialogBehavior } from "../lib/use-dialog-behavior";
 import { useDismissable } from "../lib/use-dismissable";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import type { HarnessStateHook, ObservedRun } from "../lib/use-harness-state";
-import { isWorkflowRunnable } from "../lib/workflow-deployment";
 import { CanvasPane } from "./CanvasPane";
 import { Icon, type IconName } from "./Icon";
 import { SecretsPanel } from "./SecretsPanel";
@@ -25,7 +25,7 @@ const boardApi = createApi();
 export type AgentModalTab = "canvas" | "secrets";
 
 const TABS: Record<AgentModalTab, { label: string; icon: IconName }> = {
-  canvas: { label: "Canvas", icon: "Workflow" },
+  canvas: { label: "Canvas", icon: "GitBranch" },
   secrets: { label: "Secrets", icon: "Shield" },
 };
 
@@ -130,8 +130,29 @@ export function AgentModal({
     dismissable: false,
     initialFocusRef: closeRef,
   });
+  // What the last press landed on, read before the light-dismiss sees it: a
+  // press outside the modal counts only when it is ON the scrim. A menu the
+  // board opens (the run picker) portals to the body, outside the modal, and
+  // choosing from it must not close the modal under it.
+  const pressRef = useRef<EventTarget | null>(null);
+  useEffect(() => {
+    const onPress = (event: MouseEvent): void => {
+      pressRef.current = event.target;
+    };
+    const onKey = (): void => {
+      pressRef.current = null;
+    };
+    document.addEventListener("mousedown", onPress, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onPress, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, []);
   const dismiss = useCallback((): void => {
     if (anotherLayerAbove(backdropRef.current, containerRef.current)) return;
+    const press = pressRef.current;
+    if (press && press !== backdropRef.current) return;
     onClose();
   }, [onClose]);
   useDismissable(true, { onDismiss: dismiss, containerRef });
@@ -167,12 +188,25 @@ export function AgentModal({
     setBoardRevision((revision) => revision + 1);
   };
 
+  // The same gate the run bar used, from the same inputs: the agent's own
+  // deployment and the account's connection (`lifecycleVerbGate`).
   const verbDisabledReason = (verb: AgentVerb): string | null => {
-    if (verb === "prod_run" && !isWorkflowRunnable(agent))
-      return "Deploy first";
-    if (verb === "deploy" && deploy && deploy.phase !== "ready" && deploy.phase !== "error")
+    if (verb === "visualize") return null;
+    if (
+      verb === "deploy" &&
+      deploy &&
+      deploy.phase !== "ready" &&
+      deploy.phase !== "error"
+    )
       return "Deploying…";
-    return null;
+    return lifecycleVerbGate(
+      verb === "deploy" ? "deploy" : verb === "prod_run" ? "run" : "test",
+      {
+        subject: agent,
+        authenticated: state.authenticated === true,
+        deployError: harness.lastDeployErrorFor(agent.path),
+      },
+    ).reason;
   };
 
   const runVerb = (verb: AgentVerb, control: HTMLElement): void => {
@@ -213,6 +247,7 @@ export function AgentModal({
         data-testid="agent-modal"
         data-agent={agent.name}
         data-tab={tab}
+        {...trackingAttrs({ dialog: "agent_modal", object: "agent" })}
       >
         <div ref={headerRef} className="agent-modal-head">
           <Icon name="Zap" size={14} />
@@ -348,6 +383,7 @@ export function AgentModal({
                 node={node}
                 graph={graph}
                 workflows={state.workflows}
+                onOpenAgent={onOpenAgent}
                 onClose={clear}
               />
             )}

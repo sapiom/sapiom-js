@@ -1,17 +1,14 @@
 /**
- * The right pane, the lifecycle verbs and the run evidence are about ONE agent:
- * the selected session's bound agent (flow-navigation.md 4.2.2, Q5; design.md
- * I3). An agent with no session is looked at on its project's map, where Open
- * canvas enters its board in the centre (4.4).
+ * The agent modal's board, verbs and run evidence are about ONE agent: the
+ * agent it was opened on, by path (flow-map-chat-overlay.md 4.2b, 4.4b;
+ * design-map-chat.md I3). An agent is looked at in its modal over its
+ * project's map; opening it never moves the selected session.
  *
- * This replaced SAP-2931's "the right pane follows the rail SELECTION": the
- * rail lists no agents now (Q3), so the only things on the right are the
- * session's own. What SAP-2931 protected still holds and is asserted in a
- * browser, on a real undeployed agent: the verbs' enabled state AND their
- * targets read the same agent the board draws, so selecting a session bound to
- * an undeployed agent leaves no verb live against a deployed one. They assert
- * `disabled`, `aria-label` AND `data-tooltip` — a disabled control without its
- * reason is mute.
+ * What SAP-2931 protected still holds and is asserted in a browser, on a real
+ * undeployed agent: the verbs' enabled state AND their targets read the same
+ * agent the board draws, so a modal on an undeployed agent leaves no verb live
+ * against a deployed one. They assert `disabled`, `aria-label` AND
+ * `data-tooltip`: a disabled control without its reason is mute.
  *
  * Runs against `?mockFixtures=deep`, the fixture with several agents inside ONE
  * project:
@@ -23,38 +20,31 @@
  *     packages/harness/web/src/components/sender    undeployed
  *     services/gateway                      undeployed, no session ever
  *
- * No fixture session is rooted in polsia, which is deliberate: each test that
- * needs one starts it through the UI (Start chat on the agent's map panel).
+ * No fixture session is rooted in polsia, which is deliberate: looking at its
+ * agents must never need one.
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import {
-  activeSessionId,
-  NO_HOME,
-  openAgentCanvas,
-  selectSession,
-  startChatWithAgent,
-} from "./mock-navigation";
+import { activeSessionId, openAgentModal } from "./mock-navigation";
 
-/** A new chat bound to `name`, from its panel on polsia's map. */
-const chatWith = (page: Page, name: string): Promise<string> =>
-  startChatWithAgent(page, "polsia", name);
+/** The board document in the agent modal. */
+const modalBoard = (page: Page) =>
+  page.getByTestId("agent-modal-panel-canvas").locator(".canvas-iframe");
 
-/** The right pane, open and on the Steps tab. */
-async function openSteps(page: Page): Promise<void> {
-  const expand = page.getByTestId("right-expand");
-  if ((await expand.count()) > 0) await expand.click();
-  await page.getByTestId("right-tab-steps").click();
+/** Close the modal, back to the map it was opened over. */
+async function closeModal(page: Page): Promise<void> {
+  await page.getByTestId("agent-modal-close").click();
+  await expect(page.getByTestId("agent-modal")).toHaveCount(0);
 }
 
-/** The agent the right pane says it is about (Steps surface). */
-const paneSubject = (page: Page) =>
-  page.getByTestId("right-panel-canvas").locator(".workflow-actions-name");
-
-/** The board document in the CENTRE (an agent entered from its map). */
-const centreBoard = (page: Page) =>
-  page.getByTestId("project-map-pane").locator(".canvas-iframe");
+/** Another agent on the map that is already showing: pick, Open agent. */
+async function openFromMap(page: Page, agent: string): Promise<void> {
+  await page.getByTestId(`map-agent-${agent}`).click();
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", agent);
+  await page.getByTestId("map-card-open-agent").click();
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", agent);
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/?mockFixtures=deep&mockStudioProjects=present");
@@ -62,96 +52,64 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });
 
-test.describe("the right pane follows the selected session's agent", () => {
-  test("switching sessions switches the agent; the session list does not move", async ({
-    page,
-  }) => {
-    test.fixme(true, NO_HOME.steps);
-    const ads = await chatWith(page, "ads");
-    await openSteps(page);
-    await expect(paneSubject(page)).toHaveText("ads");
-
-    const outreach = await chatWith(page, "outreach");
-    expect(outreach).not.toBe(ads);
-    await openSteps(page);
-    await expect(paneSubject(page)).toHaveText("outreach");
-
-    // One click back: the pane is the selected session's agent again.
-    await selectSession(page, ads);
-    await openSteps(page);
-    await expect(paneSubject(page)).toHaveText("ads");
-    await expect(page.getByTestId("agent-view")).toBeVisible();
-  });
-
+test.describe("the modal is about the agent it was opened on", () => {
   test("looking at another agent's board leaves the session alone", async ({
     page,
   }) => {
-    // Work on ads while reading outreach's board: the board is in the centre,
-    // entered from the map, and the selected session does not move.
-    const ads = await chatWith(page, "ads");
-    await openAgentCanvas(page, "polsia", "outreach");
-    await expect(centreBoard(page)).toHaveAttribute(
+    // Work in the selected session while reading outreach's board: the board
+    // is in a modal over the map, and the selected session does not move.
+    const selected = await activeSessionId(page);
+    expect(selected).toBeTruthy();
+    await openAgentModal(page, "polsia", "outreach");
+    await expect(modalBoard(page)).toHaveAttribute(
       "srcdoc",
       /outreach — mock agent board/,
     );
-    // The header names the project view, so the rail says which session is
-    // still selected, and one click brings it back.
-    await expect(page.getByTestId(`rail-session-${ads}`)).toHaveAttribute(
+    // The rail still says which session is selected, and one click brings it
+    // back once the modal is closed.
+    await expect(page.getByTestId(`rail-session-${selected}`)).toHaveAttribute(
       "data-selected",
       "true",
     );
-    await page.getByTestId(`rail-session-select-${ads}`).click();
-    await expect.poll(() => activeSessionId(page)).toBe(ads);
+    await closeModal(page);
+    await page.getByTestId(`rail-session-select-${selected}`).click();
+    await expect.poll(() => activeSessionId(page)).toBe(selected);
   });
 });
 
 test.describe("verb gating", () => {
-  test("a session bound to an undeployed agent disables Prod and Run, with the reason in aria-label AND data-tooltip", async ({
+  test("a modal on an undeployed agent disables Run, with the reason in aria-label AND data-tooltip", async ({
     page,
   }) => {
-    test.fixme(true, NO_HOME.verbs);
-    const mailer = await chatWith(page, "mailer");
-    const prod = page.getByTestId("session-step-prod");
+    await openAgentModal(page, "polsia", "mailer");
+    const prod = page.getByTestId("agent-modal-prod-run");
     await expect(prod).toBeEnabled();
-    await expect(prod).toHaveAccessibleName(
-      "Open mailer in the Sapiom dashboard",
-    );
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    await expect(page.getByTestId("session-step-run")).toBeEnabled();
-    await page.keyboard.press("Escape");
+    await expect(prod).toHaveAccessibleName("Run");
+    await closeModal(page);
 
-    await chatWith(page, "sender");
-    // Prod: disabled, and its reason readable from BOTH channels.
+    await openFromMap(page, "sender");
+    // Run (the cloud target): disabled, and its reason readable from BOTH
+    // channels.
     await expect(prod).toBeDisabled();
-    await expect(prod).toHaveAccessibleName("Prod: Not deployed yet");
-    await expect(prod).toHaveAttribute(
-      "data-tooltip",
-      "Prod: Not deployed yet",
-    );
+    await expect(prod).toHaveAccessibleName("Run: Not deployed yet");
+    await expect(prod).toHaveAttribute("data-tooltip", "Not deployed yet");
 
-    // Run (the cloud target): same.
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    const cloud = page.getByTestId("session-step-run");
-    await expect(cloud).toBeDisabled();
-    await expect(cloud).toHaveAccessibleName("Cloud: Not deployed yet");
-    await expect(cloud).toHaveAttribute("data-tooltip", "Not deployed yet");
-    await page.keyboard.press("Escape");
+    // Run locally and Deploy stay available: they are precisely what you CAN
+    // do to an undeployed agent.
+    await expect(page.getByTestId("agent-modal-run-local")).toBeEnabled();
+    await expect(page.getByTestId("agent-modal-deploy")).toBeEnabled();
 
-    // Test and Deploy stay available: they are precisely what you CAN do to an
-    // undeployed agent.
-    await expect(page.getByTestId("session-step-local")).toBeEnabled();
-    await expect(page.getByTestId("session-step-deploy")).toBeEnabled();
-
-    // Back on the mailer session the gate follows, rather than latching once.
-    await selectSession(page, mailer);
-    await expect(page.getByTestId("session-step-prod")).toBeEnabled();
+    // Back on mailer the gate follows, rather than latching once.
+    await closeModal(page);
+    await openFromMap(page, "mailer");
+    await expect(page.getByTestId("agent-modal-prod-run")).toBeEnabled();
   });
 
-  test("the run sheet opens on the session's agent", async ({ page }) => {
-    test.fixme(true, NO_HOME.verbs);
-    await chatWith(page, "mailer");
-    await chatWith(page, "sender");
-    await page.getByTestId("session-step-local").click();
+  test("the run sheet opens on the modal's agent", async ({ page }) => {
+    await openAgentModal(page, "polsia", "mailer");
+    await closeModal(page);
+    await openFromMap(page, "sender");
+    await page.getByTestId("agent-modal-run-local").click();
     await expect(
       page.getByRole("dialog", { name: "Run sender" }),
     ).toBeVisible();
@@ -163,16 +121,16 @@ test.describe("boards for agents with no session", () => {
     page,
   }) => {
     // No fixture session is rooted in polsia, so `gateway` has never had one.
-    // Entered from its map, its board is served from `sapiom.json` alone
+    // Opened from its map, its board is served from `sapiom.json` alone
     // (IA-01's workflow-keyed route), with no session started for it.
-    await openAgentCanvas(page, "polsia", "gateway");
+    await openAgentModal(page, "polsia", "gateway");
     // A document is really mounted — asserted from INSIDE the frame, so a
     // rendered empty state or a stranded skeleton cannot pass for a board.
     const frame = page
-      .getByTestId("project-map-pane")
+      .getByTestId("agent-modal-panel-canvas")
       .frameLocator(".canvas-iframe");
     await expect(frame.getByTestId("mock-workflow-board")).toBeVisible();
-    await expect(centreBoard(page)).toHaveAttribute(
+    await expect(modalBoard(page)).toHaveAttribute(
       "srcdoc",
       /gateway — mock agent board/,
     );
@@ -220,11 +178,11 @@ test.describe("boards for agents with no session", () => {
     };
 
     await seed("preparing", null);
-    await openAgentCanvas(page, "polsia", "gateway");
+    await openAgentModal(page, "polsia", "gateway");
     // A calm placeholder document, not an error panel.
     await expect(
       page
-        .getByTestId("project-map-pane")
+        .getByTestId("agent-modal-panel-canvas")
         .frameLocator(".canvas-iframe")
         .getByTestId("mock-workflow-message"),
     ).toContainText("Preparing your agent");
@@ -235,73 +193,106 @@ test.describe("boards for agents with no session", () => {
       "empty",
       "This agent has no sapiom.json, so there is no graph to render yet.",
     );
-    await page.getByTestId("project-map-back").click();
-    await page.getByTestId("map-agent-rollup").click();
-    await page.getByTestId("map-agent-open-canvas").click();
+    await closeModal(page);
+    await openFromMap(page, "rollup");
     await expect(page.getByTestId("canvas-empty-route-empty")).toContainText(
       "no sapiom.json",
     );
 
     await seed("error", "esbuild: could not resolve ./steps");
-    await page.getByTestId("project-map-back").click();
-    await page.getByTestId("map-agent-gateway").click();
-    await page.getByTestId("map-agent-open-canvas").click();
+    await closeModal(page);
+    await openFromMap(page, "gateway");
     await expect(page.getByTestId("canvas-empty-route-error")).toContainText(
       "could not resolve ./steps",
     );
   });
 });
 
+/** A board that echoes the run state the pane posts into it, so the test can
+ *  see which run the modal draws. */
+const ECHO_BOARD = `<!DOCTYPE html><html><body><script>
+window.addEventListener("message", function (e) {
+  var d = e && e.data;
+  if (d && d.type === "sapiom:run-state")
+    parent.postMessage({ type: "sapiom:run-state-received", status: d.status, target: d.target }, "*");
+});
+</script></body></html>`;
+
+/** Swap the modal's board for the echo board and count what it receives. */
+async function runStatesReceived(page: Page): Promise<() => Promise<number>> {
+  await page.evaluate(() => {
+    const win = window as unknown as { __RECEIPTS__: number };
+    win.__RECEIPTS__ = 0;
+    window.addEventListener("message", (e) => {
+      if ((e.data as { type?: string } | null)?.type === "sapiom:run-state-received")
+        win.__RECEIPTS__ += 1;
+    });
+  });
+  await page.evaluate((doc) => {
+    (document.querySelector(".agent-modal .canvas-iframe") as HTMLIFrameElement).srcdoc = doc;
+  }, ECHO_BOARD);
+  return () =>
+    page.evaluate(() => (window as unknown as { __RECEIPTS__: number }).__RECEIPTS__);
+}
+
 test.describe("run evidence", () => {
-  test("a run stops showing the moment the agent changes, and comes back with it", async ({
+  test("a run shows on its agent's board and on no other agent's", async ({
     page,
   }) => {
-    test.fixme(true, NO_HOME.runs);
-    // Evidence is attributed to the AGENT. The run announced for `mailer` must
-    // never draw over `sender`'s structure — a false account of what ran, in
-    // the surface whose whole job is to say what ran.
-    const mailer = await chatWith(page, "mailer");
-    await page.getByTestId("session-step-local").click();
-    await expect(
-      page.getByRole("dialog", { name: "Run mailer" }),
-    ).toBeVisible();
-    await page.getByTestId("run-sheet-submit").click();
-    await openSteps(page);
-    await expect(page.getByTestId("run-workspace")).toBeVisible();
-    await expect(page.getByTestId("canvas-run-chip")).toBeVisible();
+    // Evidence is attributed to the AGENT. A run of `leasing` (the session
+    // that started it is bound to it) must never draw over `gateway`'s
+    // structure, or any other agent's — a false account of what ran, in the surface whose whole job
+    // is to say what ran.
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "execution.started",
+        harnessSessionId: "sess-boot",
+        executionId: "exec-evidence-1",
+        target: "prod",
+      });
+    });
 
-    await chatWith(page, "sender");
-    await openSteps(page);
-    await expect(paneSubject(page)).toHaveText("sender");
-    await expect(page.getByTestId("canvas-run-chip")).toHaveCount(0);
-    await expect(page.getByTestId("run-workspace")).toHaveCount(0);
+    await openAgentModal(page, "polsia", "gateway");
+    await expect(modalBoard(page)).toBeVisible();
+    await expect(page.locator(".agent-modal .canvas-loading--overlay")).toHaveCount(0, { timeout: 8_000 });
+    const otherReceipts = await runStatesReceived(page);
+    await page.waitForTimeout(600);
+    expect(await otherReceipts()).toBe(0);
+    await closeModal(page);
 
-    // Still true, still `mailer`'s: the run was filtered out, never dropped.
-    await selectSession(page, mailer);
-    await openSteps(page);
-    await expect(page.getByTestId("canvas-run-chip")).toBeVisible();
+    // Still true, still `leasing`'s: the run was filtered out, never dropped.
+    await openAgentModal(page, "acme-app", "leasing");
+    await expect(modalBoard(page)).toBeVisible();
+    await expect(page.locator(".agent-modal .canvas-loading--overlay")).toHaveCount(0, { timeout: 8_000 });
+    const leasingReceipts = await runStatesReceived(page);
+    await expect.poll(leasingReceipts, { timeout: 10_000 }).toBeGreaterThan(0);
   });
 
   test("the run picker offers exactly the agent's runs", async ({ page }) => {
-    test.fixme(true, NO_HOME.runs);
     // The count in the picker's own accessible name is where the prototype's
     // unbounded merge surfaced ("309 observed" against a 200 window). The cap
     // itself needs 200+ runs and is pinned in `session-scope.test.ts`; what a
     // browser can prove is that the list is the AGENT's and no one else's.
-    await chatWith(page, "mailer");
-    for (const topic of ["one", "two"]) {
-      await page.getByTestId("session-step-local").click();
-      await page.getByLabel(/Topic/).fill(topic);
-      await page.getByTestId("run-sheet-submit").click();
-      await openSteps(page);
-      await expect(page.getByTestId("run-workspace")).toBeVisible();
-    }
+    const publish = (executionId: string): Promise<void> =>
+      page.evaluate((id) => {
+        (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
+          type: "execution.started",
+          harnessSessionId: "sess-boot",
+          executionId: id,
+          target: "prod",
+        });
+      }, executionId);
+    await publish("exec-picker-1");
+    await publish("exec-picker-2");
+
+    await openAgentModal(page, "acme-app", "leasing");
     await expect(page.getByTestId("canvas-run-chip")).toHaveAccessibleName(
       "Pick a run to inspect (2 observed)",
     );
+    await closeModal(page);
 
-    await chatWith(page, "sender");
-    await openSteps(page);
+    await openAgentModal(page, "polsia", "gateway");
+    await expect(modalBoard(page)).toBeVisible();
     await expect(page.getByTestId("canvas-run-chip")).toHaveCount(0);
   });
 });

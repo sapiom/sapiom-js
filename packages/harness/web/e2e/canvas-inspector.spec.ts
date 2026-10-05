@@ -1,33 +1,28 @@
 /**
- * Canvas step inspector: the bottom overview panel is selection-driven.
+ * The board in the agent modal: the bottom overview panel, and the small step
+ * card a board pick shows (flow-map-chat-overlay.md 4.2b.4).
  *
  * Contract under test:
  * - A board node pick (the document's {type:"sapiom-canvas:node"} answer)
- *   populates the bottom panel with that step's detail IN PLACE — the right
- *   pane stays on the Canvas tab; the Steps tab is only the inspector's
- *   explicit "Open step" drill.
- * - Deselect (Esc / empty board space / the panel's close) restores the
- *   general workflow overview unchanged.
- * - Height hugs the content up to half the canvas pane; taller content
- *   scrolls inside the panel.
- * - Dragging the panel's top edge sets a manual height (persisted in
- *   ui-prefs); double-clicking the handle resets to auto-hug.
- * - When a run has been observed, the selected step's inspector carries its
- *   run truth (status, duration) — the Studio surface is cost-free.
+ *   shows that step's small card IN PLACE, over the board; nothing navigates.
+ * - Deselect (the card's close, or empty board space) restores the general
+ *   workflow overview unchanged.
+ * - A tall step card scrolls inside itself.
+ * - Dragging the overview panel's top edge sets a manual height (persisted
+ *   in ui-prefs); double-clicking the handle resets to auto-hug.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { NO_HOME, openAgentCanvas } from "./mock-navigation";
+import { openAgentModal } from "./mock-navigation";
 
 /**
- * leasing's board on its entered page (the interim way into an agent). The
- * pane serves the agent's document through `srcdoc`; the bundled interactive
- * fixture board (the one that answers hit / pick / node) is swapped into that
- * same frame, so the pane's source-window guard sees exactly what a generated
- * board would send.
+ * leasing's board in its agent modal. The pane serves the agent's document
+ * through `srcdoc`; the bundled interactive fixture board (the one that
+ * answers hit / pick / node) is swapped into that same frame, so the pane's
+ * source-window guard sees exactly what a generated board would send.
  */
 const loadBoard = async (page: Page): Promise<void> => {
-  if ((await page.locator('[data-testid="project-map-pane"][data-view="agent"]').count()) === 0)
-    await openAgentCanvas(page, "acme-app", "leasing");
+  if ((await page.getByTestId("agent-modal").count()) === 0)
+    await openAgentModal(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   await page.evaluate(async () => {
     const html = await (await fetch("/canvas/sess-boot/index.html")).text();
@@ -59,7 +54,7 @@ test.beforeEach(async ({ page }) => {
   await loadBoard(page);
 });
 
-test("a board pick populates the inspector in place, with no tab switch", async ({ page }) => {
+test("a board pick shows the step's small card in place, over the board", async ({ page }) => {
   // The overview panel shows the workflow-level copy before any pick.
   const panel = page.getByTestId("canvas-overview");
   await expect(panel).toContainText("Overview");
@@ -75,26 +70,17 @@ test("a board pick populates the inspector in place, with no tab switch", async 
 
   await pickNode(page, "intake");
 
-  // Same panel, now the picked step's live detail — and the board stays on
-  // screen.
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
+  // The picked step's small card, and the board stays on screen: no step
+  // page, no inspector, no Steps surface (4.2b.4).
+  const card = page.getByTestId("step-card");
+  await expect(card.getByTestId("step-card-title")).toHaveText("intake");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
-  const inspector = page.getByTestId("canvas-step-inspector");
-  await expect(inspector).toContainText("Logs the incoming order");
-  await expect(page.getByTestId("canvas-inspector-close")).toHaveAttribute(
-    "aria-label",
-    "Back to the agent overview",
-  );
-  // Contract chips render from the posted graph.
-  await expect(inspector).toContainText("records.read");
-});
-
-test("the inspector's Open step drills into that step's row on the Steps surface", async ({ page }) => {
-  test.fixme(true, NO_HOME.steps);
-  await pickNode(page, "intake");
-  await page.getByTestId("canvas-inspector-open-steps").click();
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "steps");
-  await expect(page.getByTestId("canvas-step-expand-intake")).toContainText("Logs the incoming order");
+  await expect(card.getByTestId("step-card-desc")).toContainText("Logs the incoming order");
+  await expect(page.getByTestId("step-card-close")).toHaveAttribute("aria-label", "Close step");
+  await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
+  // The capability it calls comes from the posted graph.
+  await expect(card.getByTestId("step-card-calls")).toContainText("records.read");
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", "leasing");
 });
 
 test("a generic render failure names the agent graph", async ({ page }) => {
@@ -119,22 +105,24 @@ test("Retry runs a fresh deterministic render instead of reloading the failed do
     reason: "TypeScript extraction failed",
   });
 
+  // Retry is Visualize by path (4.4b): the modal re-reads the board, so the
+  // failed document is replaced, and no session macro runs.
   await page.getByTestId("canvas-error-retry").click();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __HARNESS_TEST__?: { lastMacroRun?: { id: string } };
-            }
-          ).__HARNESS_TEST__?.lastMacroRun?.id ?? null,
-      ),
-    )
-    .toBe("visualize");
+  await expect(page.getByTestId("agent-modal-progress")).toContainText("Render");
+  await expect(page.getByTestId("canvas-render-error")).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __HARNESS_TEST__?: { lastMacroRun?: { id: string } };
+          }
+        ).__HARNESS_TEST__?.lastMacroRun?.id ?? null,
+    ),
+  ).toBeNull();
 });
 
-test("a launched-agent node keeps its private identifiers and navigates to the agent", async ({ page }) => {
+test("a launched-agent node keeps its private identifiers and names the agent it launches", async ({ page }) => {
   await postFromCanvas(page, {
     type: "sapiom-canvas:graph",
     graph: {
@@ -170,40 +158,40 @@ test("a launched-agent node keeps its private identifiers and navigates to the a
 
   await postFromCanvas(page, { type: "sapiom:node-click", stepName: "rfq" });
 
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("rfq");
-  await expect(page.locator(".canvas-detail-kind")).toHaveText("Launched agent");
-  const openAgent = page.getByTestId("canvas-open-workflow-launch:rfq");
-  await expect(openAgent).toHaveText(/Open agent/);
-  await openAgent.click();
+  const card = page.getByTestId("step-card");
+  await expect(card.getByTestId("step-card-title")).toHaveText("rfq");
+  await expect(card).toHaveAttribute("data-step", "launch:rfq");
+  // The node's private id stays out of what the card shows.
+  await expect(card).not.toContainText("launch:rfq");
+  await expect(card.getByTestId("step-card-calls")).toContainText("Launches rfq");
 
-  // From an entered agent page, opening the launched agent enters ITS page:
-  // a look at the agent, so no session is started.
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
-  await expect(page.getByTestId("session-map-agent-chip")).toHaveText("rfq");
+  // MAP-CHAT.md: "A launched child agent opens in the same modal in its
+  // place". The Calls row carries the one door.
+  const open = card.getByTestId("step-card-open-agent");
+  await expect(open).toHaveAttribute("data-tooltip", "Open agent");
+  await expect(open.locator("svg.lucide-arrow-up-right")).toHaveCount(1);
+  await open.click();
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", "rfq");
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-tab", "canvas");
+  await expect(page.getByTestId("step-card")).toHaveCount(0);
 });
 
-test("deselect restores the overview: Esc, the panel's close, and empty board space", async ({ page }) => {
+test("deselect restores the overview: the card's close, and empty board space", async ({ page }) => {
   const panel = page.getByTestId("canvas-overview");
 
-  // Esc clears the selection back to the overview.
+  // The card's own close clears the pick back to the overview. The step
+  // card stands in for the whole bottom panel while it shows.
   await pickNode(page, "intake");
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
-  await expect(panel).toContainText("Handles lease applications end to end");
-  // The step/exit count lives on the canvas board itself now (not repeated in
-  // this overview card), so the panel shows the description, not "N steps".
-
-  // The panel's own close affordance does the same.
-  await pickNode(page, "intake");
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
-  await page.getByTestId("canvas-inspector-close").click();
+  await expect(page.getByTestId("step-card-title")).toHaveText("intake");
+  await expect(panel).toHaveCount(0);
+  await page.getByTestId("step-card-close").click();
+  await expect(page.getByTestId("step-card")).toHaveCount(0);
   await expect(panel).toContainText("Handles lease applications end to end");
 
   // Clicking empty board space deselects too. Hover the empty point first
   // so the document's hit answer (no node) lands before the click.
   await pickNode(page, "intake");
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
+  await expect(page.getByTestId("step-card-title")).toHaveText("intake");
   const board = await page.getByTestId("canvas-pan-layer").boundingBox();
   if (!board) throw new Error("board has no box");
   const emptyX = board.x + board.width - 12;
@@ -211,39 +199,36 @@ test("deselect restores the overview: Esc, the panel's close, and empty board sp
   await page.mouse.move(emptyX, emptyY, { steps: 2 });
   await expect(page.getByTestId("canvas-pan-layer")).not.toHaveAttribute("data-over-node", "true");
   await page.mouse.click(emptyX, emptyY);
-  await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
+  await expect(page.getByTestId("step-card")).toHaveCount(0);
   await expect(panel).toContainText("Handles lease applications end to end");
 });
 
-test("the panel hugs its content up to half the pane; taller content scrolls inside", async ({ page }) => {
-  // A short pane makes the 50% cap bite: the inspector's content for a
-  // contract-heavy step is taller than half the pane at this height. (The chat
-  // moved to its own toggled panel, so the inspector itself is shorter now —
-  // hence the shorter viewport to keep the cap biting.)
+test("the step card stays small over a short board; taller content scrolls inside it", async ({ page }) => {
+  // A short window makes the card's cap bite for a contract-heavy step.
   // Collapse the overview first so the whole cascade stays clickable.
-  await page.setViewportSize({ width: 1280, height: 400 });
-  await loadBoard(page);
+  await page.setViewportSize({ width: 1280, height: 420 });
   await page.getByTestId("canvas-overview-toggle").click();
   await pickNode(page, "credit-check");
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("credit-check");
+  await expect(page.getByTestId("step-card-title")).toHaveText("credit-check");
 
   const metrics = await page.evaluate(() => {
-    const panel = document.querySelector('[data-testid="canvas-overview"]') as HTMLElement;
-    const pane = panel.parentElement as HTMLElement;
-    const body = panel.querySelector(".canvas-overview-body") as HTMLElement;
+    const card = document.querySelector('[data-testid="step-card"]') as HTMLElement;
+    const panel = document.querySelector('[data-testid="agent-modal-panel-canvas"]') as HTMLElement;
+    const body = card.querySelector(".step-card-body") as HTMLElement;
+    const c = card.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
     return {
-      panel: panel.getBoundingClientRect().height,
-      pane: pane.getBoundingClientRect().height,
+      inside: c.top >= p.top && c.bottom <= p.bottom,
       scrollable: body.scrollHeight > body.clientHeight,
     };
   });
-  expect(metrics.panel).toBeLessThanOrEqual(metrics.pane * 0.5 + 2);
+  expect(metrics.inside).toBe(true);
   expect(metrics.scrollable).toBe(true);
 
   // Deselecting leaves the collapsed overview collapsed: the panel yields
   // to its ⓘ reopen affordance, exactly the pre-pick arrangement.
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
+  await page.getByTestId("step-card-close").click();
+  await expect(page.getByTestId("step-card")).toHaveCount(0);
   await expect(page.getByTestId("canvas-overview")).toHaveCount(0);
   await expect(page.getByTestId("canvas-overview-toggle")).toHaveAttribute(
     "aria-label",
@@ -312,33 +297,4 @@ test.describe("canvas overview drag-resize", () => {
     );
     expect(cleared).toBeNull();
   });
-});
-
-test("an observed run's truth reaches the selected step's inspector", async ({ page }) => {
-  test.fixme(true, NO_HOME.runs);
-  await page.evaluate(() => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-demo-1",
-      target: "prod",
-    });
-  });
-  // The run's cost reaches the steps header once the mock run-state poll
-  // lands; wait for it so the inspector below reads settled data.
-  await pickNode(page, "credit-check");
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("credit-check");
-  const run = page.getByTestId("canvas-inspector-run");
-  // The Studio is cost-free: the inspector carries the run's status and
-  // latency only (logs + pass/fail), never money.
-  await expect(run).toContainText("passed");
-  await expect(run).toContainText("1.9s");
-  await expect(run).not.toContainText("$");
-
-  // Another step carries the same run truth (status + latency).
-  await page.keyboard.press("Escape");
-  await pickNode(page, "intake");
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
-  await expect(page.getByTestId("canvas-inspector-run")).toContainText("passed");
-  await expect(page.getByTestId("canvas-inspector-run")).not.toContainText("$");
 });

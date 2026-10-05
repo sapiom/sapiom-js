@@ -4,7 +4,15 @@ import type { WorkflowInfo } from "@shared/types";
 
 import { askPlaceholder, type AskSubject } from "../lib/map-ask";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
+
+/** A picked node that is not a registered agent wears the map's own glyph
+ *  for its kind (`AgentMapCanvas` KIND_ICON); an agent wears the card's. */
+const NODE_ICON: Record<string, IconName> = {
+  resource: "Folder",
+  connector: "Plug",
+  artifact: "BookOpen",
+};
 
 /**
  * THE MAP'S FLOATING CARD (flow-map-chat-overlay.md 4.1 to 4.3; mock
@@ -26,6 +34,7 @@ import { Icon } from "./Icon";
 export function MapCard({
   projectLabel,
   subject,
+  nodeKind,
   agent,
   chat,
   canAsk,
@@ -37,6 +46,8 @@ export function MapCard({
   projectLabel: string;
   /** What the card is about: the pick, else the project itself. */
   subject: AskSubject;
+  /** The map's own kind for a picked node, for its glyph. */
+  nodeKind: string | null;
   /** The picked agent, when the pick is one. */
   agent: WorkflowInfo | null;
   /** The map chat, while it is open: its pane and its three header verbs. */
@@ -69,7 +80,9 @@ export function MapCard({
       data-kind={subject.kind}
       role="complementary"
       aria-label={chat ? `Map chat, ${projectLabel}` : subject.name}
-      {...trackingAttrs({ surface: "map_card" })}
+      // The card names the user's agents and nodes: tagged so analytics
+      // drops those names rather than promoting a label into $el_text.
+      {...trackingAttrs({ surface: "map_card", object: "agent" })}
     >
       {chat ? (
         <>
@@ -119,16 +132,7 @@ export function MapCard({
         <>
           {picked && (
             <div className="map-card-head">
-              <Icon
-                name={
-                  agent
-                    ? "Zap"
-                    : subject.kind === "resource"
-                      ? "Database"
-                      : "Workflow"
-                }
-                size={14}
-              />
+              <Icon name={agent ? "Zap" : (NODE_ICON[nodeKind ?? ""] ?? "Zap")} size={14} />
               <span
                 className="map-card-title"
                 data-testid="map-card-name"

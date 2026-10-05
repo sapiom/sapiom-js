@@ -172,52 +172,42 @@ test("a session has nothing beside it, bound to an agent or not, live or ended",
   await expectNothingBeside(page);
 });
 
-test("clicking an agent on the map opens its panel; Start chat makes a bound session at the top of the project and selects it", async ({
+test("clicking an agent on the map names it on the card, with its path, and no Sessions list or Start chat", async ({
   page,
 }) => {
   await page.getByTestId("project-select-acme-app").click();
-  await page.getByTestId("map-agent-leasing").click();
-  const panel = page.getByTestId("map-agent-panel");
-  await expect(panel).toHaveAttribute("data-agent", "leasing");
-  await expect(page.getByTestId("map-agent-panel-path")).toHaveText("/Users/demo/acme-app/leasing");
-  // Its sessions: the two bound to it, in rail order.
-  await expect(page.getByTestId("map-agent-session-sess-leasing-2")).toBeVisible();
-  await expect(page.getByTestId("map-agent-session-sess-boot")).toBeVisible();
-
   const before = await rowsOf(page, "acme-app");
-  await page.getByTestId("map-agent-start-chat").click();
-  await expect(page.getByTestId("agent-view")).toBeVisible();
-  await expect.poll(() => rowsOf(page, "acme-app")).toHaveLength(before.length + 1);
-  const after = await rowsOf(page, "acme-app");
-  const created = after[0]!;
-  expect(before).not.toContain(created);
-  await expect.poll(() => activeSession(page)).toBe(created);
-  // Bound to the agent, with nothing beside the session.
-  await expect(page.getByTestId(`rail-session-${created}`)).toHaveAttribute("data-agent", "leasing");
-  await expectNothingBeside(page);
+  await page.getByTestId("map-agent-leasing").click();
+  const card = page.getByTestId("map-card");
+  await expect(card).toHaveAttribute("data-subject", "leasing");
+  await expect(page.getByTestId("map-card-name")).toHaveAttribute(
+    "data-tooltip",
+    "/Users/demo/acme-app/leasing",
+  );
+  // Sessions are the rail's; the card neither lists nor starts one (4.2.2).
+  await expect(card).not.toContainText("Sessions");
+  await expect(page.getByTestId("map-agent-start-chat")).toHaveCount(0);
+  expect(await rowsOf(page, "acme-app")).toEqual(before);
 });
 
-test("a session in the agent panel opens that session; Open canvas enters the agent and back returns to the map", async ({
+test("Open agent opens the agent's modal over the map without moving the session; closing returns to the map", async ({
   page,
 }) => {
   await page.getByTestId("rail-session-select-sess-bg").click();
   await expect.poll(() => activeSession(page)).toBe("sess-bg");
   await page.getByTestId("project-select-acme-app").click();
   await page.getByTestId("map-agent-leasing").click();
-  await page.getByTestId("map-agent-open-canvas").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
-  await expect(page.getByTestId("session-map-agent-chip")).toHaveText("leasing");
+  await page.getByTestId("map-card-open-agent").click();
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", "leasing");
+  // The map stays the centre underneath; no entered page, no session view.
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "map");
   await expect(page.getByTestId("agent-view")).toHaveCount(0);
-  // Entering an agent is still the project view: the session did not move.
   await expect(page.getByTestId("rail-session-sess-bg")).toHaveAttribute("data-selected", "true");
 
-  await page.getByTestId("project-map-back").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "map");
-
-  await page.getByTestId("map-agent-leasing").click();
-  await page.getByTestId("map-agent-session-sess-leasing-2").click();
-  await expect.poll(() => activeSession(page)).toBe("sess-leasing-2");
-  await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+  await page.getByTestId("agent-modal-close").click();
+  await expect(page.getByTestId("agent-modal")).toHaveCount(0);
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", "leasing");
+  await expect(page.getByTestId("rail-session-sess-bg")).toHaveAttribute("data-selected", "true");
 });
 
 test("+ on a project header starts an unbound chat at the root, selected, with nothing beside it", async ({
@@ -294,54 +284,6 @@ test("a hidden session stays hidden across a reload, and History still lists it"
   await expect(page.getByTestId("rail-session-sess-leasing")).toHaveCount(0);
   await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("exited-session-sess-leasing")).toBeVisible();
-});
-
-test("Change location confirms with both paths, then moves the agent and its sessions follow", async ({
-  page,
-}) => {
-  await page.getByTestId("project-select-acme-app").click();
-  await page.getByTestId("map-agent-leasing").click();
-  await page.getByTestId("map-agent-change-location").click();
-  const field = page.getByTestId("map-agent-location-input");
-
-  // A destination inside the agent is refused under the field.
-  await field.fill("/Users/demo/acme-app/leasing/nested");
-  await expect(page.getByTestId("map-agent-location-error")).toContainText("inside itself");
-  await expect(page.getByTestId("map-agent-location-submit")).toBeDisabled();
-  await field.fill("relative/path");
-  await expect(page.getByTestId("map-agent-location-error")).toHaveText("Use an absolute path.");
-  // The move route keeps the folder name and lands inside an open project.
-  await field.fill("/Users/demo/acme-app/leasing-v2");
-  await expect(page.getByTestId("map-agent-location-error")).toContainText("Keep the folder name leasing");
-  await field.fill("/Users/demo/elsewhere/leasing");
-  await expect(page.getByTestId("map-agent-location-error")).toContainText("open projects");
-
-  await field.fill("/Users/demo/acme-app/agents/leasing");
-  await page.getByTestId("map-agent-location-submit").click();
-  const confirm = page.getByTestId("change-location-confirm");
-  await expect(confirm).toBeVisible();
-  await expect(page.getByTestId("change-location-old")).toHaveText("/Users/demo/acme-app/leasing");
-  await expect(page.getByTestId("change-location-new")).toHaveText("/Users/demo/acme-app/agents/leasing");
-  // Keep it here moves nothing.
-  await page.getByTestId("change-location-cancel").click();
-  await expect(confirm).toHaveCount(0);
-  expect(
-    await page.evaluate(
-      () => (window as unknown as { __HARNESS_TEST__?: { agentMoves?: unknown[] } }).__HARNESS_TEST__?.agentMoves ?? [],
-    ),
-  ).toEqual([]);
-
-  await page.getByTestId("map-agent-location-submit").click();
-  await page.getByTestId("change-location-confirm-move").click();
-  await expect(page.getByTestId("map-agent-panel-path")).toHaveText("/Users/demo/acme-app/agents/leasing");
-  expect(
-    await page.evaluate(
-      () => (window as unknown as { __HARNESS_TEST__?: { agentMoves?: unknown[] } }).__HARNESS_TEST__?.agentMoves ?? [],
-    ),
-  ).toEqual([{ from: "/Users/demo/acme-app/leasing", to: "/Users/demo/acme-app/agents/leasing" }]);
-  // The sessions bound to it followed it: still listed on its panel.
-  await expect(page.getByTestId("map-agent-session-sess-boot")).toBeVisible();
-  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute("data-agent", "leasing");
 });
 
 test("a project with no agents opens the new-agent screen from its header (D36)", async ({

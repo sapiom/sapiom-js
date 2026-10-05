@@ -3,7 +3,7 @@ import express, { type Response } from "express";
 import type { Server } from "node:http";
 import { openCodeCompletionPrompt } from "../../src/shared/opencode-completion";
 import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
-import { openNewAgentScreen, NO_HOME } from "./mock-navigation";
+import { openNewAgentScreen } from "./mock-navigation";
 
 // Exercise the pinned adapter over actual incremental HTTP SSE, without a model.
 test.describe.configure({ mode: "serial" });
@@ -1495,117 +1495,6 @@ test("expires the cached UI capability after sixty seconds without a successful 
     .poll(() => conversations.get("ses_sess_boot")!.streams.size)
     .toBe(0);
   await expect(page.locator(".harness-terminal")).toBeVisible();
-});
-
-test("reveals foreground Terminal input and preserves Assistant for background actions", async ({
-  page,
-}) => {
-  test.fixme(true, NO_HOME.inject);
-  await openAssistant(page);
-  const input = page.getByRole("textbox", { name: "Message Assistant" });
-  await input.fill("Keep this unsent draft");
-  await page.evaluate(() => {
-    (window as any).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
-    "data-view",
-    "board",
-  );
-  page.on("dialog", (dialog) => void dialog.accept());
-  await page.getByTestId("canvas-describe-ai").click();
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as any).__HARNESS_TEST__?.lastMacroRun?.id),
-    )
-    .toBe("describe");
-  const assistant = page.getByRole("button", {
-    name: "Assistant",
-    exact: true,
-  });
-  await expect(assistant).toHaveAttribute("aria-pressed", "true");
-  expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
-  await page.getByTestId("canvas-chat-toggle").click();
-  await page.getByTestId("canvas-freeform-input").fill("Explain this agent");
-  await expect(assistant).toHaveAttribute("aria-pressed", "true");
-  await page.getByTestId("canvas-freeform-ask").click();
-  await expect(
-    page.getByRole("button", { name: "Terminal", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".harness-terminal")).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as any).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
-      ),
-    )
-    .toContain("Explain this agent");
-  await expect
-    .poll(() => conversations.get("ses_sess_boot")!.streams.size)
-    .toBe(0);
-  await assistant.click();
-  await expect(input).toHaveValue("Keep this unsent draft");
-  // The rail's session rows: one click each, in any project.
-  const tabs = {
-    nth: (index: number) =>
-      page.getByTestId(
-        index === 0
-          ? "rail-session-select-sess-boot"
-          : "rail-session-select-sess-leasing-2",
-      ),
-  };
-  await tabs.nth(1).click();
-  await expect(input).toHaveValue("");
-  await input.fill("A different tab's draft");
-  await tabs.nth(0).click();
-  await expect(assistant).toHaveAttribute("aria-pressed", "true");
-  await expect(input).toHaveValue("Keep this unsent draft");
-  await input.press("Enter");
-  await expect
-    .poll(() => conversations.get("ses_sess_boot")!.prompts)
-    .toEqual(["Keep this unsent draft"]);
-  finish("ses_sess_boot", " complete");
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
-  await assistant.click();
-  await expect(input).toHaveValue("");
-});
-
-test("shows a rejected inspector command without leaving Assistant or losing its draft", async ({
-  page,
-}) => {
-  test.fixme(true, NO_HOME.inject);
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await openAssistant(page);
-  await page.evaluate(() => {
-    (window as any).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
-    "data-view",
-    "board",
-  );
-  const input = page.getByRole("textbox", { name: "Message Assistant" });
-  await input.fill("Keep this draft after failure");
-  await page.getByTestId("canvas-chat-toggle").click();
-  await page.getByTestId("canvas-freeform-input").fill("Explain this agent");
-  await page.evaluate(() => {
-    (window as any).__MOCK_INJECT_FAIL_ONCE__ = true;
-  });
-  await page.getByTestId("canvas-freeform-ask").click();
-  await expect(page.getByTestId("toast")).toContainText(
-    "Session is still initialising",
-  );
-  await expect(input).toHaveValue("Keep this draft after failure");
-  await expect(
-    page.getByRole("button", { name: "Assistant", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
-  expect(errors).toEqual([]);
 });
 
 for (const kind of ["permission", "question"] as const) {

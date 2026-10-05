@@ -4,11 +4,16 @@
    leaves the rail and a margin of the map visible, so the map you return to
    is on screen the whole time. */
 
-/* The scrim starts past the rail: the rail is not under the modal. Doubled
-   class: this file can load before styles.css, whose .modal-backdrop sets
-   inset: 0. */
+/* The scrim starts past the rail: the rail is not under the modal. It sits
+   on the popover rung (30) rather than the dialog rung (100), because the
+   board inside it opens menus (the run picker) that portal to the body at
+   30: at the same rung the later one in the document, the menu, paints on
+   top. Toasts, tooltips and the Run sheet still clear it. Doubled class: this
+   file can load before styles.css, whose .modal-backdrop sets inset and
+   z-index. */
 .modal-backdrop.agent-modal-backdrop {
   left: var(--agent-modal-left, 0px);
+  z-index: 30;
 }
 
 /* Absolute within the scrim, which already starts at the rail's edge. */
@@ -153,7 +158,10 @@
   margin-left: var(--sp2);
 }
 
+/* Positioned, so the step card is bounded by the board's panel and never
+   slides under the modal's header on a short window. */
 .agent-modal-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -199,7 +207,11 @@
   display: flex;
   flex-direction: column;
   width: min(23rem, calc(100% - var(--sp3) * 2));
-  max-height: min(24rem, calc(100% - var(--sp3) * 4));
+  /* Its bottom offset plus a top margin: it never reaches the panel's top. */
+  max-height: min(
+    24rem,
+    calc(100% - var(--sp3) * 3 - var(--control-h-xs) - var(--sp1) * 2)
+  );
   overflow: hidden;
   border: 1px solid var(--ui-line);
   border-radius: var(--radius-md);
@@ -295,6 +307,10 @@
   margin: 0;
   font-size: var(--type-meta);
   color: var(--text-faint);
+}
+
+.step-card-open {
+  margin-left: auto;
 }
 
 .step-card-pill {

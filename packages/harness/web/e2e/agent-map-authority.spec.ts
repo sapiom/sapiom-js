@@ -387,7 +387,8 @@ test("durable map ignores old graph events and opens the exact agent's panel wit
   await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000103").click();
   expect(await evidence(page)).toEqual(before);
   await page.getByTestId(`agent-map-node-${id}`).click();
-  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
+  await expect(page.getByTestId("map-card-open-agent")).toBeVisible();
   await expect(page.getByTestId("agent-map-frame")).toBeVisible();
   expect(await evidence(page)).toEqual(before);
   await page.getByTestId("project-select-acme-app").click();

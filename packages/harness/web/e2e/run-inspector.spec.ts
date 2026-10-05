@@ -1,6 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
-import { NO_HOME } from "./mock-navigation";
+
+/** The run workspace (timeline, attempt inspector, evidence tabs, Focus mode)
+ *  was hosted only by the Steps surface beside a bound session. The agent
+ *  modal holds Canvas and Secrets (flow-map-chat-overlay.md 4.2b.2) and
+ *  shows a run only as the board's step states; the workspace has no home. */
+const NO_HOME_IN_MODAL =
+  "SAP-3838: the run workspace lived only in the Steps surface; the agent modal has no home for it";
 
 
 async function loadSteps(page: Page): Promise<void> {
@@ -47,8 +53,8 @@ async function seedRun(
 }
 
 test.beforeEach(async ({ page }) => {
-  // Every test here inspects an observed run on the Steps surface.
-  test.fixme(true, NO_HOME.runs);
+  // Every test here inspects an observed run in the run workspace.
+  test.fixme(true, NO_HOME_IN_MODAL);
   await loadSteps(page);
 });
 

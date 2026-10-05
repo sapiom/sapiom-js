@@ -341,6 +341,7 @@ export function ProjectView({
     <MapCard
       projectLabel={projectLabel}
       subject={subject}
+      nodeKind={nodePick?.kind ?? null}
       agent={nodePick ? null : pickedAgent}
       canAsk={mapChat.canAsk}
       revealLabel={revealLabel()}

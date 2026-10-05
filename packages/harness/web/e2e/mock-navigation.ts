@@ -139,17 +139,3 @@ export async function openNewAgentInProject(
   await expect(composer).toBeVisible();
   await expect(page.getByTestId("new-agent-project")).toContainText(label);
 }
-
-// TEMPORARY (SAP-3838 re-pointing in progress): removed before the PR.
-export const openAgentCanvas = openAgentModal;
-export const NO_HOME = {
-  secrets: "SAP-3838",
-  steps: "SAP-3838",
-  verbs: "SAP-3838",
-  runs: "SAP-3838",
-  inject: "SAP-3838",
-} as const;
-export async function startChatWithAgent(): Promise<string> {
-  throw new Error("Start chat was removed from the card (flow 4.2.2)");
-}
-export const startChatWithRfq = startChatWithAgent;

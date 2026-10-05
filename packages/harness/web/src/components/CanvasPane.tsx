@@ -1147,7 +1147,10 @@ export function CanvasPane({
           detailStep={null}
           onBack={() => {}}
           onAskAgent={onInjectPrompt}
-          surface={surface}
+          /* The agent modal's board carries the run header the Steps surface
+             had (name, counts, the run chip and picker), as the mock's modal
+             does; elsewhere the board shows none. */
+          surface={stepCard ? "steps" : surface}
           stepsSummary={graph && graph.nodes.length > 0 ? formatGraphCounts(graph) : null}
           run={run}
           runTarget={runTarget}
@@ -1616,7 +1619,9 @@ export function CanvasPane({
               holds a selection \u2014 that step's live inspector. A selection
               shows the panel even when the overview was collapsed or the
               document posted no overview chrome. */}
-          {surface === "board" && stepCard && selectedNode && graph &&
+          {/* One card at a time in the board's corner: the chat panel names
+              the picked step itself, so the step card yields to it. */}
+          {surface === "board" && stepCard && selectedNode && graph && !chatOpen &&
             stepCard(selectedNode, graph, () => setSelectedNodeId(null))}
           {/* A step card stands in for the whole bottom panel while it
               shows; the overview returns when the pick is released. */}

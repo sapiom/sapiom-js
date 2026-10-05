@@ -147,10 +147,12 @@ export const App = (): JSX.Element => {
   const navGenerationRef = useRef(0);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
   /** The centre map's full view. Its own flag, so leaving the map always
-   *  lowers it; an agent's modal over the map leaves it as it was (I9). */
+   *  lowers it. An agent's modal lowers it too: the full view is a fixed
+   *  layer above the modal's (the modal shares the menu rung, so the board's
+   *  own menus can open over it). */
   const [mapExpanded, setMapExpanded] = useState(false);
   useEffect(() => {
-    if (view.kind === "session") setMapExpanded(false);
+    if (view.kind !== "project") setMapExpanded(false);
   }, [view.kind]);
   const agentMapEntry = useAgentMapEntry({
     projectId: viewProjectId,

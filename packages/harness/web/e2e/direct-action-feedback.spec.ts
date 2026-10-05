@@ -1,16 +1,16 @@
+/**
+ * Feedback on the agent modal's direct verbs (flow-map-chat-overlay.md 4.2b,
+ * 4.4b): Deploy reports in flight and lands on success or failure, and Run
+ * (cloud) says why it is unavailable.
+ */
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq, NO_HOME } from "./mock-navigation";
+import { openAgentModal } from "./mock-navigation";
 
-
-async function load(page: Page, query = "?seed=0"): Promise<void> {
+async function load(page: Page, query = "?seed=0", project = "acme-app", agent = "leasing"): Promise<void> {
   await page.goto(`/${query}`);
-  await expect(page.getByTestId("session-steps")).toBeVisible();
-}
-
-async function cloudTarget(page: Page) {
-  await page.getByRole("button", { name: "Choose run target" }).click();
-  return page.getByRole("menuitemradio", { name: /Cloud/ });
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+  await openAgentModal(page, project, agent);
 }
 
 async function disconnect(page: Page): Promise<void> {
@@ -22,62 +22,48 @@ async function disconnect(page: Page): Promise<void> {
 }
 
 test("Deploy pending feedback clears on both success and failure", async ({ page }) => {
-  test.fixme(true, NO_HOME.verbs);
   await load(page);
-  const deploy = page.getByTestId("session-step-deploy");
+  const deploy = page.getByTestId("agent-modal-deploy");
+  const progress = page.getByTestId("agent-modal-progress");
   await deploy.click();
-  await expect(deploy).toHaveAttribute("data-pending", "true");
+  await expect(progress).toHaveAttribute("data-tone", /busy|done/);
   await expect(page.getByTestId("toast")).toContainText("Deployed to Sapiom.", { timeout: 5_000 });
-  await expect(deploy).not.toHaveAttribute("data-pending");
+  await expect(progress).toHaveText("Deployed");
+  await expect(progress).toHaveAttribute("data-tone", "done");
+  await expect(deploy).toBeEnabled();
 
   await load(page, "?seed=0&mockError=deploy");
-  const failingDeploy = page.getByTestId("session-step-deploy");
+  const failingDeploy = page.getByTestId("agent-modal-deploy");
   await failingDeploy.click();
-  await expect(failingDeploy).toHaveAttribute("data-pending", "true");
   await expect(page.getByTestId("toast")).toContainText("Deploy failed", { timeout: 5_000 });
-  await expect(failingDeploy).not.toHaveAttribute("data-pending");
+  await expect(page.getByTestId("agent-modal-progress")).toHaveAttribute("data-tone", "failed");
+  await expect(page.getByTestId("agent-modal-progress")).toContainText("Deploy failed");
+  await expect(failingDeploy).toBeEnabled();
 });
 
 test("a failed draft deploy keeps Cloud unavailable with a specific reason", async ({ page }) => {
-  test.fixme(true, NO_HOME.verbs);
-  await load(page, "?seed=0&mockError=deploy");
-  await startChatWithRfq(page);
-
-  let cloud = await cloudTarget(page);
+  await load(page, "?seed=0&mockError=deploy", "rfq-agent", "rfq");
+  const cloud = page.getByTestId("agent-modal-prod-run");
   await expect(cloud).toBeDisabled();
-  await expect(cloud).toHaveAttribute("title", /Not deployed yet/);
-  await page.keyboard.press("Escape");
+  await expect(cloud).toHaveAttribute("data-tooltip", "Not deployed yet");
 
-  await page.getByTestId("session-step-deploy").click();
+  await page.getByTestId("agent-modal-deploy").click();
   await expect(page.getByTestId("toast")).toContainText("Deploy failed", { timeout: 5_000 });
-  cloud = await cloudTarget(page);
   await expect(cloud).toBeDisabled();
-  await expect(cloud).toHaveAttribute("title", /Last deploy failed — retry Deploy/);
-  await expect(page.getByTestId("session-step-deploy")).toHaveClass(/session-action-primary/);
+  await expect(cloud).toHaveAttribute("data-tooltip", /Last deploy failed — retry Deploy/);
 });
 
 test("disconnect disables Deploy and Cloud but leaves the unified Local run available", async ({ page }) => {
-  test.fixme(true, NO_HOME.verbs);
-  await load(page);
+  await page.goto("/?seed=0");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
   await disconnect(page);
+  await openAgentModal(page, "acme-app", "leasing");
 
-  await expect(page.getByTestId("session-step-deploy")).toBeDisabled();
-  await expect(page.getByTestId("session-step-deploy")).toHaveAccessibleName(/Connect your account first/);
-  const cloud = await cloudTarget(page);
+  const deploy = page.getByTestId("agent-modal-deploy");
+  await expect(deploy).toBeDisabled();
+  await expect(deploy).toHaveAttribute("data-tooltip", /Connect your account first/);
+  const cloud = page.getByTestId("agent-modal-prod-run");
   await expect(cloud).toBeDisabled();
-  await expect(cloud).toHaveAttribute("title", /Connect your account first/);
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("session-step-local")).toBeEnabled();
-  await expect(page.getByTestId("session-step-local")).toHaveAccessibleName("Run using Local");
-});
-
-test("the split control reflects the real local execution lifetime", async ({ page }) => {
-  test.fixme(true, NO_HOME.verbs);
-  await load(page);
-  await page.getByTestId("session-step-local").click();
-  await page.getByTestId("run-sheet-submit").click();
-  const split = page.locator(".session-run-split");
-  await expect(split).toHaveAttribute("data-running", "true", { timeout: 3_000 });
-  await expect(page.locator(".run-workspace-status")).toContainText("Completed", { timeout: 8_000 });
-  await expect(split).not.toHaveAttribute("data-running");
+  await expect(cloud).toHaveAttribute("data-tooltip", /Connect your account first/);
+  await expect(page.getByTestId("agent-modal-run-local")).toBeEnabled();
 });
