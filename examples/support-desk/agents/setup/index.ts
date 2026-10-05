@@ -26,7 +26,6 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
-import { z } from "zod/v4";
 
 import {
   ConfigSchemas,
@@ -289,10 +288,6 @@ export async function probeLinear(ctx: SlackCtx): Promise<{
   return { check: linearCheck(null, names.length, failures), linear };
 }
 
-const DatabaseOut = z.object({
-  database: z.custom<DatabaseReport>(),
-});
-
 const database = defineStep({
   name: "database",
   next: ["connectors"],
@@ -311,8 +306,9 @@ const database = defineStep({
 const connectors = defineStep({
   name: "connectors",
   terminal: true,
-  inputSchema: DatabaseOut,
-  async run({ database: db }, ctx) {
+  // No inputSchema: the payload is the database step's own report, and z.custom has no JSON
+  // Schema form, so the deploy build rejected it.
+  async run({ database: db }: { database: DatabaseReport }, ctx) {
     const slack = await withDb(ctx, (d) => probeSlack(ctx, d));
     const { check, linear } = await probeLinear(ctx);
     const checks = [...slack, check];
