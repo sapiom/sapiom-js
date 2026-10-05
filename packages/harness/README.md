@@ -68,9 +68,10 @@ Links:
 
 There is no separate Preview chip. Limits: dev-server links live in the page, so
 a reload forgets them until a session announces one again; a session that
-starts two dev servers lists only the latest; only a dev server Claude Code
-starts with its Bash tool is detected, not one started with `!` in the
-terminal.
+starts two dev servers lists only the latest. Detection reads the coding
+agent's tool calls (Claude Code or Codex): any `localhost:PORT` in a tool call's
+input or output becomes a link, even one that is not a server. A server started
+in the terminal outside a tool call (for example with `!`) is not detected.
 
 ### Map chat
 
