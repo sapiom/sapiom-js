@@ -162,3 +162,47 @@ test("no breadcrumbs: nothing in the modal renders a project view inside it (4.7
   // The map is still the one centre, exactly once, underneath.
   await expect(page.getByTestId("project-map-pane")).toHaveCount(1);
 });
+
+test("a launched child agent opened in the modal shows no crumb and no project view (4.7.6)", async ({
+  page,
+}) => {
+  await openAgentModal(page, "acme-app", "leasing");
+  const modal = page.getByTestId("agent-modal");
+  await expect(page.locator(".agent-modal .canvas-iframe")).toBeVisible();
+  // leasing's board posts a graph whose entry launches rfq, then a pick of
+  // the launched node: the same messages a generated board sends.
+  const post = (message: unknown): Promise<void> =>
+    page
+      .frameLocator(".agent-modal .canvas-iframe")
+      .locator("body")
+      .evaluate((_, payload) => window.parent.postMessage(payload, "*"), message);
+  await post({
+    type: "sapiom-canvas:graph",
+    graph: {
+      name: "leasing",
+      entry: "intake",
+      nodes: [
+        { id: "intake", kind: "entry", label: "intake", capabilities: [] },
+        { id: "launch:rfq", kind: "launched-workflow", label: "rfq", capabilities: [] },
+      ],
+      edges: [{ from: "intake", to: "launch:rfq", kind: "launch", label: "launch()" }],
+    },
+  });
+  await post({ type: "sapiom:node-click", stepName: "rfq" });
+  await page.getByTestId("step-card-open-agent").click();
+
+  // The child takes the modal's place: no crumb back to leasing or the
+  // project, and the map stays the one centre underneath.
+  await expect(modal).toHaveAttribute("data-agent", "rfq");
+  await expect(modal.locator("[data-testid^='canvas-trail']")).toHaveCount(0);
+  await expect(modal.getByRole("button", { name: "leasing", exact: true })).toHaveCount(0);
+  await expect(modal.getByRole("button", { name: "acme-app", exact: true })).toHaveCount(0);
+  await expect(modal.getByTestId("project-map-pane")).toHaveCount(0);
+  await expect(modal.getByTestId("session-context")).toHaveCount(0);
+  await expect(page.getByTestId("project-map-pane")).toHaveCount(1);
+  for (const tab of ["runs", "secrets", "canvas"]) {
+    await page.getByTestId(`agent-modal-tab-${tab}`).click();
+    await expect(modal.getByTestId("project-map-pane")).toHaveCount(0);
+    await expect(modal.locator("[data-testid^='canvas-trail']")).toHaveCount(0);
+  }
+});
