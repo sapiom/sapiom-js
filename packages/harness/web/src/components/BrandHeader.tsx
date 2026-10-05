@@ -58,7 +58,7 @@ export function BrandHeader({
           className="theme-toggle rail-toggle"
           data-testid="rail-collapse"
           aria-label="Collapse workspace panel"
-          title="Collapse workspace panel"
+          title="Collapse rail"
           onClick={onCollapse}
         >
           <Icon name="PanelLeftClose" size={14} />
