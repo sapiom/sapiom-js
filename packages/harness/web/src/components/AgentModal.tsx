@@ -42,12 +42,14 @@ const VERBS: { id: AgentVerb; label: string; icon: IconName }[] = [
 type Progress = { text: string; tone: "busy" | "done" | "failed" };
 
 /** Another dialog or popover is open above this modal (a secret's dialog, the
- *  Run sheet, a menu): Escape and outside presses belong to it, not here. */
+ *  Run sheet, the board's run picker): Escape and outside presses belong to
+ *  it, not here. A menu is not a dialog layer, so it is named separately. */
 function anotherLayerAbove(
   scrim: Element | null,
   surface: Element | null,
 ): boolean {
   if (!scrim) return false;
+  if (document.querySelector('[role="menu"], [role="listbox"]')) return true;
   return Array.from(document.querySelectorAll(DIALOG_LAYER_SELECTOR)).some(
     (layer) => layer !== scrim && layer !== surface && !layer.contains(scrim),
   );

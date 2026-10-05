@@ -286,9 +286,15 @@ test.describe("run evidence", () => {
     await publish("exec-picker-2");
 
     await openAgentModal(page, "acme-app", "leasing");
-    await expect(page.getByTestId("canvas-run-chip")).toHaveAccessibleName(
-      "Pick a run to inspect (2 observed)",
-    );
+    // Both announced runs are leasing's. The mock also records a demo run of
+    // its own for leasing, on its own schedule, so the count is not pinned.
+    const chip = page.getByTestId("canvas-run-chip");
+    await expect(chip).toHaveAccessibleName(/Pick a run to inspect \(\d+ observed\)/);
+    await chip.click();
+    const menu = page.getByTestId("canvas-run-menu");
+    await expect(menu.getByTestId("canvas-run-option-exec-picker-1")).toBeVisible();
+    await expect(menu.getByTestId("canvas-run-option-exec-picker-2")).toBeVisible();
+    await page.keyboard.press("Escape");
     await closeModal(page);
 
     await openAgentModal(page, "polsia", "gateway");
