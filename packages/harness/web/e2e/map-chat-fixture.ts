@@ -34,6 +34,8 @@ export interface FakeMapChat {
   hosts: () => string[];
   resets: () => number;
   aborts: () => number;
+  /** Hold every attach this long, as a slow host would. */
+  delayAttach: (ms: number) => void;
   close: () => Promise<void>;
 }
 
@@ -47,6 +49,7 @@ export async function serveMapChat(page: Page): Promise<FakeMapChat> {
   let resets = 0;
   let aborts = 0;
   let generation = 0;
+  let attachDelay = 0;
   // OpenCode's ids sort in creation order; the adapter orders by them.
   let sequence = 0;
   const nextId = (prefix: string) =>
@@ -111,7 +114,10 @@ export async function serveMapChat(page: Page): Promise<FakeMapChat> {
     const c = conversationFor(host);
     const id = c.id;
     const session = { id, title: "Map chat", time: { created: 1, updated: 1 } };
-    if (path === "attach") return void res.json({ conversationId: id });
+    if (path === "attach") {
+      setTimeout(() => res.json({ conversationId: id }), attachDelay);
+      return;
+    }
     if (path === "experimental/session") return void res.json([session]);
     if (path === `session/${id}`) return void res.json(session);
     if (path === `session/${id}/message`) return void res.json(c.turns);
@@ -218,6 +224,9 @@ export async function serveMapChat(page: Page): Promise<FakeMapChat> {
     hosts: () => [...hosts],
     resets: () => resets,
     aborts: () => aborts,
+    delayAttach: (ms) => {
+      attachDelay = ms;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const c of conversations.values())

@@ -64,6 +64,9 @@ interface AgentMapPaneProps {
   onNodePick: (node: MapNodePick | null) => void;
   /** A click on the empty map: the card returns to the project (4.2.5). */
   onClearPick: () => void;
+  /** The card's map chat is open: Escape closes it first (4.3.3), so the
+   *  map does not take Escape to clear its pick. */
+  chatOpen?: boolean;
   /** The floating card, over the board's bottom-right. It is out of flow, so
    *  nothing it shows changes the board's width (I1). */
   card: JSX.Element | null;
@@ -88,6 +91,7 @@ export function AgentMapPane({
   nodePick,
   onNodePick,
   onClearPick,
+  chatOpen = false,
   card,
   state,
   initialization,
@@ -283,7 +287,8 @@ export function AgentMapPane({
   useEffect(() => {
     if (!expanded) return;
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
+      // Another layer (the map chat, the card's pick) already took this key.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
       if (selected !== null) clearSelection();
@@ -354,6 +359,7 @@ export function AgentMapPane({
         pending={pending}
         openError={openError}
         onClearSelection={clearSelection}
+        chatOpen={chatOpen}
         onClearPick={() => {
           clearSelection();
           onClearPick();
@@ -441,6 +447,7 @@ function PopulatedAgentMap({
   openError,
   onClearSelection,
   onClearPick,
+  chatOpen,
 }: {
   viewportStore: GraphViewportStore;
   value: AgentMapWorkspaceResponse;
@@ -455,6 +462,7 @@ function PopulatedAgentMap({
   openError: string | null;
   onClearSelection: () => void;
   onClearPick: () => void;
+  chatOpen: boolean;
 }): JSX.Element {
   // A click on the empty board clears the pick, a drag pans it: only a press
   // that did not move counts as a click (4.2.5).
@@ -470,7 +478,7 @@ function PopulatedAgentMap({
       data-project-id={value.project.projectId}
       {...trackingAttrs({ surface: "agent_map" })}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || !selected) return;
+        if (event.key !== "Escape" || !selected || chatOpen) return;
         event.preventDefault();
         event.stopPropagation();
         onClearSelection();

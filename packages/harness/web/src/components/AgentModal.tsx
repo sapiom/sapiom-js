@@ -149,6 +149,9 @@ export function AgentModal({
     if (anotherLayerAbove(backdropRef.current, containerRef.current)) return;
     const press = pressRef.current;
     if (press && press !== backdropRef.current) return;
+    // Escape unwinds one layer: a picked step's card first (CanvasPane
+    // releases the pick on the same key), then the modal.
+    if (!press && containerRef.current?.querySelector(".step-card")) return;
     onClose();
   }, [onClose]);
   useDismissable(true, { onDismiss: dismiss, containerRef });

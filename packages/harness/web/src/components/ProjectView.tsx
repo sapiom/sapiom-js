@@ -18,7 +18,12 @@ import { DIALOG_LAYER_SELECTOR } from "../lib/dialog-focus";
 import { revealAgentFolder, revealLabel } from "../lib/desktop";
 import type { GraphViewportStore } from "../lib/graph-viewport";
 import { shownProjectId, type Centre } from "../lib/centre-pane";
-import { askKindForNode, askPrompt, type AskSubject } from "../lib/map-ask";
+import {
+  askKindForNode,
+  askPrompt,
+  parseAskPrompt,
+  type AskSubject,
+} from "../lib/map-ask";
 import {
   mapChatHostKey,
   mapChatTranscript,
@@ -290,9 +295,16 @@ export function ProjectView({
     }
   };
 
+  const revision = mapChat.revision(projectId);
+  const handoffKey = useCallback(
+    (callId: string) => `${projectId}:${revision}:${callId}`,
+    [projectId, revision],
+  );
   const handoffActions = useMemo<HandoffActions>(
     () => ({
-      sessionFor: mapChat.handoffSession,
+      // Tool call ids are the conversation's own: keyed by project and New
+      // chat revision, a fresh conversation's call never finds an old session.
+      sessionFor: (callId) => mapChat.handoffSession(handoffKey(callId)),
       // I6: the session is made and NOT selected; the centre stays the map
       // and the map chat stays open. Its rail row pulses once.
       start: async (callId, args) => {
@@ -302,7 +314,7 @@ export function ProjectView({
             "claude-code",
             { initialPrompt: args.prompt, select: false },
           );
-          mapChat.setHandoffSession(callId, session.id);
+          mapChat.setHandoffSession(handoffKey(callId), session.id);
           return session.id;
         } catch (error) {
           harness.showToast(errorMessage(error, "Couldn't start the session."));
@@ -311,7 +323,7 @@ export function ProjectView({
       },
       open: sessions.openSession,
     }),
-    [harness, mapChat, projectRoot, sessions],
+    [handoffKey, harness, mapChat, projectRoot, sessions],
   );
 
   const takePending = useCallback(
@@ -323,7 +335,11 @@ export function ProjectView({
       subject.kind === "project"
         ? "Ask about this project"
         : `Ask about ${subject.name}`,
-    composePrompt: (question) => askPrompt(question, subjectRef.current),
+    // A queued question already carries its context line (see onAsk).
+    composePrompt: (question) =>
+      parseAskPrompt(question).subject
+        ? question
+        : askPrompt(question, subjectRef.current),
     takePending,
   };
 
@@ -335,7 +351,9 @@ export function ProjectView({
       agent={nodePick ? null : pickedAgent}
       canAsk={mapChat.canAsk}
       revealLabel={revealLabel()}
-      onAsk={(question) => mapChat.ask(projectId, question)}
+      // The question carries the pick it was asked about: a pick made while
+      // the chat connects must not move it.
+      onAsk={(question) => mapChat.ask(projectId, askPrompt(question, subject))}
       onOpenAgent={(agent) => onOpenAgent(projectId, agent.path)}
       onReveal={(agent) => {
         void revealAgentFolder(agent.path).then((revealed) => {
@@ -400,6 +418,7 @@ export function ProjectView({
             if (node) onClosePanel();
           }}
           onClearPick={clearPick}
+          chatOpen={chatOpen}
           card={card}
           state={agentMapEntry.state.workspace}
           unavailable={agentMapEntry.state.unavailable}

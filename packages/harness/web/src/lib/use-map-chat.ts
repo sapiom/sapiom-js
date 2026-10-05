@@ -88,6 +88,19 @@ export function useMapChat({
     return () => abort.abort();
   }, [bootToken, authRevision]);
 
+  // Another account sees none of this one's map chats: their open state,
+  // unsent text, queued questions and hand-offs belong to the principal.
+  const authSeen = useRef(authRevision);
+  useEffect(() => {
+    if (authSeen.current === authRevision) return;
+    authSeen.current = authRevision;
+    drafts.current.clear();
+    pending.current.clear();
+    setOpenMap({});
+    setHandoffs({});
+    setPulse(null);
+  }, [authRevision]);
+
   const draft = useCallback((projectId: string): ChatDraft => {
     let entry = drafts.current.get(projectId);
     if (!entry) {
@@ -120,6 +133,8 @@ export function useMapChat({
       } catch {
         return false;
       }
+      // A new conversation starts with an empty composer.
+      drafts.current.delete(projectId);
       setRevisions((current) => ({
         ...current,
         [projectId]: (current[projectId] ?? 0) + 1,

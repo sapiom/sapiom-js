@@ -247,16 +247,88 @@ test("the map chat is not a session: nothing joins the rail, and every Enter ext
   expect(chat.prompts(projectId!)).toHaveLength(4);
 });
 
-test("New chat starts an empty map chat", async ({ page }) => {
+test("New chat starts an empty map chat, with an empty composer", async ({ page }) => {
   await ask(page, "What runs here?");
   await expect(questions(page)).toHaveCount(1);
+  await chatInput(page).fill("an unsent thought");
   await page.getByTestId("map-chat-new").click();
   await expect(card(page)).toHaveAttribute("data-state", "chat");
   await expect(questions(page)).toHaveCount(0);
   await expect(page.getByTestId("map-chat-empty")).toBeVisible();
+  await expect(chatInput(page)).toHaveValue("");
   expect(chat.resets()).toBe(1);
   await ask(page, "Fresh question");
   await expect(questions(page)).toHaveCount(1);
+});
+
+test("a hand-off in a new chat offers its own Start session, not the old one's", async ({ page }) => {
+  await ask(page, "Add a step that logs every call");
+  await page.getByTestId("chat-handoff-start").click();
+  await expect(page.getByTestId("chat-handoff-open")).toBeVisible();
+  await page.getByTestId("map-chat-new").click();
+  await expect(questions(page)).toHaveCount(0);
+  // The new conversation's first call reuses the old one's call id.
+  await ask(page, "Add a step that emails the owner");
+  const handoff = page.getByTestId("chat-card-handoff");
+  await expect(handoff.getByTestId("chat-handoff-start")).toBeVisible();
+  await expect(handoff).not.toHaveAttribute("data-session", /.+/);
+});
+
+test("a question asked while the chat connects keeps the pick it was asked about", async ({ page }) => {
+  const projectId = await page.getByTestId("agent-map-live").getAttribute("data-project-id");
+  chat.delayAttach(1500);
+  await pick(page, STOCK_RESEARCH, "leasing");
+  await cardInput(page).fill("What does it check?");
+  await cardInput(page).press("Enter");
+  // A different pick while the chat is still attaching.
+  await pick(page, RESEARCH_DB, "Research Database");
+  await expect(questions(page)).toHaveCount(1, { timeout: 8_000 });
+  await settled(page);
+  expect(chat.prompts(projectId!)).toEqual([
+    expect.stringMatching(/^Context: agent "leasing" at .+\n\nWhat does it check\?$/),
+  ]);
+  await expect(questions(page).first().getByTestId("chat-context-chip")).toHaveText(
+    "Asking about leasing · agent",
+  );
+});
+
+test("Escape with a resource picked closes the map chat first and keeps the pick", async ({ page }) => {
+  await pick(page, RESEARCH_DB, "Research Database");
+  await ask(page, "Who writes to it?");
+  // Focus on the map, where its own Escape would clear the pick.
+  await node(page, RESEARCH_DB).focus();
+  await page.keyboard.press("Escape");
+  await expect(card(page)).toHaveAttribute("data-state", "node");
+  await expect(card(page)).toHaveAttribute("data-subject", "Research Database");
+  await page.keyboard.press("Escape");
+  await expect(card(page)).toHaveAttribute("data-state", "project");
+});
+
+test("Escape in the expanded map closes the map chat and keeps the full view", async ({ page }) => {
+  await page.getByTestId("canvas-expand").click();
+  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
+  await ask(page, "What runs here?");
+  await page.keyboard.press("Escape");
+  await expect(card(page)).toHaveAttribute("data-state", "project");
+  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("agent-map-frame")).not.toHaveClass(/is-expanded/);
+});
+
+test("an agent opened from the expanded map shows its modal; the full view is lowered", async ({ page }) => {
+  await page.getByTestId("canvas-expand").click();
+  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
+  await node(page, STOCK_RESEARCH).dblclick();
+  const modal = page.getByTestId("agent-modal");
+  await expect(modal).toBeVisible();
+  await expect(page.getByTestId("agent-map-frame")).not.toHaveClass(/is-expanded/);
+  // On top: a click at its centre lands on the modal itself.
+  const box = (await modal.boundingBox())!;
+  const hit = await page.evaluate(
+    ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid="agent-modal"]') != null,
+    { x: box.x + box.width / 2, y: box.y + 40 },
+  );
+  expect(hit).toBe(true);
 });
 
 test("Stop interrupts a reply that is still streaming", async ({ page }) => {
@@ -438,6 +510,15 @@ test("a step picked in the modal shows its small card, and nothing navigates", a
   await stepCard.getByTestId("step-card-close").click();
   await expect(stepCard).toHaveCount(0);
   await expect(modal).toBeVisible();
+
+  // Escape unwinds one layer at a time: the step card, then the modal.
+  await page.mouse.click(at.x + at.width / 2, at.y + at.height / 2);
+  await expect(stepCard).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(stepCard).toHaveCount(0);
+  await expect(modal).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
 });
 
 test("Deploy runs by path from the modal's header: no session is made and the modal stays", async ({ page }) => {
