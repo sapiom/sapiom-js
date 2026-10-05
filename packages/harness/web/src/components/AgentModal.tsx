@@ -150,8 +150,10 @@ export function AgentModal({
     const press = pressRef.current;
     if (press && press !== backdropRef.current) return;
     // Escape unwinds one layer: a picked step's card first (CanvasPane
-    // releases the pick on the same key), then the modal.
-    if (!press && containerRef.current?.querySelector(".step-card")) return;
+    // releases the pick on the same key), then the modal. Only a card on
+    // screen counts: on the Secrets tab the board, and its card, are hidden.
+    const card = containerRef.current?.querySelector<HTMLElement>(".step-card");
+    if (!press && card && card.offsetParent !== null) return;
     onClose();
   }, [onClose]);
   useDismissable(true, { onDismiss: dismiss, containerRef });

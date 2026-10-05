@@ -519,6 +519,23 @@ test("a step picked in the modal shows its small card, and nothing navigates", a
   await expect(modal).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
+
+  // A pick left on the hidden Canvas tab does not hold the modal open: on
+  // Secrets, one Escape closes it.
+  await page.getByTestId("map-card-open-agent").click();
+  await expect(modal.locator(".canvas-iframe")).toBeAttached();
+  await page.evaluate(async () => {
+    const html = await (await fetch("/canvas/sess-boot/index.html")).text();
+    (document.querySelector(".agent-modal .canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+  });
+  await expect(step).toBeVisible();
+  await expect(page.getByTestId("canvas-zoom-reset")).not.toHaveText("100%");
+  const again = (await step.boundingBox())!;
+  await page.mouse.click(again.x + again.width / 2, again.y + again.height / 2);
+  await expect(stepCard).toBeVisible();
+  await page.getByTestId("agent-modal-tab-secrets").click();
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
 });
 
 test("Deploy runs by path from the modal's header: no session is made and the modal stays", async ({ page }) => {
