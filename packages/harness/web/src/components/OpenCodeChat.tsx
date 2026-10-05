@@ -86,13 +86,28 @@ interface RecoveryNotice {
 /** OpenCode's error name for an answer stopped by an abort. */
 const ABORTED = "MessageAbortedError";
 
-/** The latest answer was stopped by an abort (Stop), not failed. */
-function latestAnswerAborted(
-  messages: readonly { info?: { role: string; error?: unknown } }[],
+/** The latest turn's answer was stopped by an abort (Stop), not failed. Only
+ *  the answers after the latest question count: an earlier stopped answer
+ *  says nothing about this one. */
+function latestTurnAborted(
+  messages: readonly { info?: { role: string; agent?: string; error?: unknown } }[],
 ): boolean {
-  const answer = [...messages].reverse().find((message) => message.info?.role === "assistant");
-  const error = answer?.info?.error as { name?: unknown } | undefined;
-  return error?.name === ABORTED;
+  let start = -1;
+  messages.forEach((message, index) => {
+    if (
+      message.info?.role === "user" &&
+      message.info.agent !== finalResponseAgent &&
+      message.info.agent !== turnRecoveryAgent
+    )
+      start = index;
+  });
+  return messages
+    .slice(start + 1)
+    .some(
+      (message) =>
+        message.info?.role === "assistant" &&
+        (message.info.error as { name?: unknown } | undefined)?.name === ABORTED,
+    );
 }
 
 const reconnectNotice = (message: string): RecoveryNotice => ({
@@ -485,7 +500,7 @@ function ChatSurface({
   const handedOff = mapChat != null && latestTurnOffersHandoff(nativeMessages);
   // An answer the user stopped reads as Stopped, not Failed.
   const stopped =
-    nativeTurn.status === "failed" && latestAnswerAborted(nativeMessages);
+    nativeTurn.status === "failed" && latestTurnAborted(nativeMessages);
   const turn = handedOff
     ? {
         status:

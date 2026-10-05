@@ -183,9 +183,26 @@ export function AgentModal({
     runs.at(-1) ??
     null;
 
+  // A re-read that brings back no graph (an agent with nothing to render)
+  // posts no graph message: the progress line clears rather than spinning.
+  const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (renderTimer.current) clearTimeout(renderTimer.current);
+    },
+    [],
+  );
   const visualize = (): void => {
     setProgress({ text: "Rendering…", tone: "busy" });
     setBoardRevision((revision) => revision + 1);
+    if (renderTimer.current) clearTimeout(renderTimer.current);
+    renderTimer.current = setTimeout(
+      () =>
+        setProgress((current) =>
+          current?.text === "Rendering…" ? null : current,
+        ),
+      10_000,
+    );
   };
 
   // The same gate the run bar used, from the same inputs: the agent's own
