@@ -110,7 +110,7 @@ test("a generic render failure names the agent graph", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Ask coding agent to fix" })).toBeVisible();
 });
 
-test("Retry runs a fresh deterministic render instead of reloading the failed document", async ({
+test("Retry re-reads the agent's graph route: no macro, no session (flow 4.4b)", async ({
   page,
 }) => {
   await postFromCanvas(page, {
@@ -118,20 +118,49 @@ test("Retry runs a fresh deterministic render instead of reloading the failed do
     title: "leasing",
     reason: "TypeScript extraction failed",
   });
+  await expect(page.getByTestId("canvas-render-error")).toBeVisible();
+
+  // What the route answers NOW. Only a refetch can put it in the frame: the
+  // frame holds the swapped-in fixture board until the pane reads the route
+  // again. `preparing` because it is a status the pane keeps framed.
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __MOCK_WORKFLOW_GRAPH__?: Record<string, { status: string; reason: string | null }>;
+      }
+    ).__MOCK_WORKFLOW_GRAPH__ = {
+      "/Users/demo/acme-app/leasing": { status: "preparing", reason: "re-read from the graph route" },
+    };
+  });
+  const before = await page.evaluate(() => {
+    const t = (window as unknown as { __HARNESS_TEST__?: Record<string, unknown[] | undefined> })
+      .__HARNESS_TEST__;
+    return { created: t?.createSessionCalls?.length ?? 0, bound: t?.bindWorkflowCalls?.length ?? 0 };
+  });
 
   await page.getByTestId("canvas-error-retry").click();
   await expect
     .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __HARNESS_TEST__?: { lastMacroRun?: { id: string } };
-            }
-          ).__HARNESS_TEST__?.lastMacroRun?.id ?? null,
-      ),
+      page.locator(".canvas-iframe").evaluate((frame) => (frame as HTMLIFrameElement).srcdoc),
     )
-    .toBe("visualize");
+    .toContain("re-read from the graph route");
+
+  const after = await page.evaluate(() => {
+    const t = (
+      window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown> & {
+          createSessionCalls?: unknown[];
+          bindWorkflowCalls?: unknown[];
+        };
+      }
+    ).__HARNESS_TEST__;
+    return {
+      created: t?.createSessionCalls?.length ?? 0,
+      bound: t?.bindWorkflowCalls?.length ?? 0,
+      macro: t?.lastMacroRun ?? null,
+    };
+  });
+  expect(after).toEqual({ created: before.created, bound: before.bound, macro: null });
 });
 
 test("a launched-agent node keeps its private identifiers and navigates to the agent", async ({ page }) => {
