@@ -204,5 +204,10 @@ test("a launched child agent opened in the modal shows no crumb and no project v
     await page.getByTestId(`agent-modal-tab-${tab}`).click();
     await expect(modal.getByTestId("project-map-pane")).toHaveCount(0);
     await expect(modal.locator("[data-testid^='canvas-trail']")).toHaveCount(0);
+    await expect(modal.locator("nav[aria-label*='readcrumb' i]")).toHaveCount(0);
+    for (const name of ["leasing", "acme-app"]) {
+      await expect(modal.getByRole("button", { name, exact: true })).toHaveCount(0);
+      await expect(modal.getByRole("link", { name, exact: true })).toHaveCount(0);
+    }
   }
 });
