@@ -84,7 +84,7 @@ export function AgentMapPane({
   // inspector beside the map (flow-map-chat-overlay.md §5).
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
   // The agent node whose panel is open. Held apart from `selected`: a
-  // selection hides the panel, which then belongs to another node.
+  // selection releases it, so the panel shows only for the latest pick.
   const [picked, setPicked] = useState<PlanNodeId | null>(null);
   useEffect(() => {
     if (!agentPanel) setPicked(null);
@@ -181,6 +181,9 @@ export function AgentMapPane({
     setPending(null);
     setOpenError(null);
     setSelected(nodeId);
+    // The new pick replaces the agent's: clearing it later must not bring
+    // back a panel for a node the user has since moved off.
+    setPicked(null);
   };
 
   /** Resolve an agent node to its registry agent, then hand it to `open`. */
@@ -479,7 +482,7 @@ function PopulatedAgentMap({
           onEnterNode={onEnterNode}
           pendingNodeId={pending}
         />
-        {!selected && agentPanel}
+        {!selected && picked && agentPanel}
       </div>
       <p className="visually-hidden" aria-live="polite">
         {pending

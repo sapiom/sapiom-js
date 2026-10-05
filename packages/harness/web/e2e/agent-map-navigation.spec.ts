@@ -296,6 +296,26 @@ test("picking an agent node and a resource node leaves the board's size unchange
   expect(await calls(page)).toMatchObject({ targets: 1, writes: 0 });
 });
 
+test("picking a resource over an open agent panel releases it, and Escape does not bring it back", async ({
+  page,
+}) => {
+  await open(page);
+  await probe(page);
+  await node(page).click();
+  await expectPanel(page, LEASING);
+  // The panel floats over the map and may lie over the resource; the pick
+  // goes to the node itself either way.
+  await node(page, RESOURCE).dispatchEvent("click");
+  await expect(node(page, RESOURCE)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+  await page.getByTestId("agent-map-live").press("Escape");
+  await expect(node(page, RESOURCE)).toHaveAttribute("aria-pressed", "false");
+  // The last pick was the resource: clearing it leaves the map with no panel,
+  // not the agent picked before it.
+  await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+  await expect(node(page)).toHaveAttribute("aria-pressed", "false");
+});
+
 for (const [code, message] of [
   ["target_not_found", "isn't available locally"],
   ["target_ambiguous", "one implementation"],
