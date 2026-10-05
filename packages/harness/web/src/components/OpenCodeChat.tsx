@@ -83,6 +83,18 @@ interface RecoveryNotice {
   message: string;
   action: OpenCodeTransportAction;
 }
+/** OpenCode's error name for an answer stopped by an abort. */
+const ABORTED = "MessageAbortedError";
+
+/** The latest answer was stopped by an abort (Stop), not failed. */
+function latestAnswerAborted(
+  messages: readonly { info?: { role: string; error?: unknown } }[],
+): boolean {
+  const answer = [...messages].reverse().find((message) => message.info?.role === "assistant");
+  const error = answer?.info?.error as { name?: unknown } | undefined;
+  return error?.name === ABORTED;
+}
+
 const reconnectNotice = (message: string): RecoveryNotice => ({
   message,
   action: "reconnect",
@@ -308,7 +320,7 @@ function RuntimeChat({
             }
             const data = event.data as {
               type?: string;
-              properties?: { sessionID?: string };
+              properties?: { sessionID?: string; error?: { name?: string } };
             };
             // A terminal Studio error is valid only through the exact shared
             // host-generated shape above. Native/malformed lookalikes and
@@ -317,7 +329,10 @@ function RuntimeChat({
             if (data.type === "session.error") {
               if (data.properties?.sessionID !== conversationId) return;
               options?.onSseEvent?.(event);
-              setActionError(runError);
+              // Stop (and New chat) abort the answer on purpose: OpenCode
+              // reports that as a session error, but the conversation is
+              // fine and must stay usable (P2's abort route).
+              if (data.properties?.error?.name !== ABORTED) setActionError(runError);
               return;
             }
             options?.onSseEvent?.(event);
@@ -468,6 +483,9 @@ function ChatSurface({
   // real check). The card is the outcome, so it is neither shown as a
   // failure nor sent for a "final response" (design §4.4).
   const handedOff = mapChat != null && latestTurnOffersHandoff(nativeMessages);
+  // An answer the user stopped reads as Stopped, not Failed.
+  const stopped =
+    nativeTurn.status === "failed" && latestAnswerAborted(nativeMessages);
   const turn = handedOff
     ? {
         status:
@@ -475,7 +493,9 @@ function ChatSurface({
             ? ("finished" as const)
             : nativeTurn.status,
       }
-    : nativeTurn;
+    : stopped
+      ? { status: "stopped" as const }
+      : nativeTurn;
   const attempted = useRef(new Set<string>());
   const recoveryAbort = useRef<AbortController | null>(null);
   const [recovering, setRecovering] = useState(false);

@@ -268,6 +268,12 @@ test("Stop interrupts a reply that is still streaming", async ({ page }) => {
   await stop.click();
   await settled(page);
   expect(chat.aborts()).toBe(1);
+  // A Stop the user asked for is a stop, not a failure: the chat stays
+  // usable without a Reconnect.
+  await expect(page.getByRole("status", { name: "Assistant status" })).toHaveText("Stopped");
+  await expect(page.getByTestId("map-chat-overlay").getByRole("button", { name: "Reconnect" })).toHaveCount(0);
+  await ask(page, "And now a short one");
+  await expect(page.getByTestId("map-chat-overlay")).toContainText("Answer: And now a short one");
 });
 
 test("the hand-off card makes a session that does not navigate; Open session does (I6)", async ({ page }) => {

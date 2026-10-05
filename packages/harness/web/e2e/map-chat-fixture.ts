@@ -129,10 +129,18 @@ export async function serveMapChat(page: Page): Promise<FakeMapChat> {
       return;
     }
     if (path === `session/${id}/abort`) {
+      // What OpenCode does on abort: the answer ends with MessageAbortedError,
+      // a session.error says so, and the session goes idle.
       aborts++;
       const turn = c.turns.at(-1);
-      if (turn && turn.info.role === "assistant" && !turn.info.time.completed)
-        finish(c, turn, `${turn.parts[0]!.text} (stopped)`);
+      if (turn && turn.info.role === "assistant" && !turn.info.time.completed) {
+        const error = { name: "MessageAbortedError", data: { message: "Aborted" } };
+        turn.info.error = error;
+        turn.info.time.completed = Date.now();
+        emit(c, "message.updated", { info: turn.info });
+        emit(c, "session.error", { sessionID: id, error });
+      }
+      emit(c, "session.status", { sessionID: id, status: { type: "idle" } });
       res.json(true);
       return;
     }
