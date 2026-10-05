@@ -1,5 +1,11 @@
 # @sapiom/orchestration-runtime
 
+## 0.7.3
+
+### Patch Changes
+
+- 4646183: Manifest input validation no longer retains a compiled validator per call, so a long-lived process hosting `AgentRunnerCore` stops growing with every validated step.
+
 ## 0.7.2
 
 ### Patch Changes

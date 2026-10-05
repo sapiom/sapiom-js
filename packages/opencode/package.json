@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/opencode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Studio-managed headless OpenCode runtime with a private credential bridge.",
   "license": "MIT",
   "author": "Sapiom",
