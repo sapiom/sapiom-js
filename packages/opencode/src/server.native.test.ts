@@ -51,7 +51,25 @@ interface ModelRequest extends Record<string, unknown> {
   input?: Array<{ type?: string; [key: string]: unknown }>;
 }
 
-async function startSyntheticBridge(token: string) {
+interface SyntheticCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+async function startSyntheticBridge(
+  token: string,
+  call: (body: ModelRequest) => SyntheticCall | null = (body) =>
+    body.tools?.some(
+      (tool) => tool.type === "function" && tool.name === "execute",
+    )
+      ? {
+          name: "execute",
+          arguments: {
+            code: "return await tools.sapiom.probe_add({a:2,b:3})",
+          },
+        }
+      : null,
+) {
   const state = {
     valid: true,
     modelAuthorized: 0,
@@ -188,10 +206,7 @@ async function startSyntheticBridge(token: string) {
         text: "Synthetic reasoning",
       });
       emit("response.output_item.done", { output_index: 0, item: reason });
-      const tool = body.tools?.find(
-        (tool: { type: string; name: string }) =>
-          tool.type === "function" && tool.name === "execute",
-      );
+      const tool = call(body);
       const hasResult = body.input?.some(
         (item: { type?: string }) => item.type === "function_call_output",
       );
@@ -202,9 +217,7 @@ async function startSyntheticBridge(token: string) {
           type: "function_call",
           call_id: "call_once",
           name: tool.name,
-          arguments: JSON.stringify({
-            code: "return await tools.sapiom.probe_add({a:2,b:3})",
-          }),
+          arguments: JSON.stringify(tool.arguments),
           status: "completed",
         };
         emit("response.output_item.added", {
@@ -491,6 +504,12 @@ describe("pinned OpenCode 1.18.29", () => {
     ).toEqual([
       expect.objectContaining({ name: "probe_add", arguments: { a: 2, b: 3 } }),
     ]);
+    // Without handoffTool (a Studio session's Assistant) the tool is absent.
+    expect(
+      synthetic.state.modelRequests.flatMap((body) =>
+        (body.tools ?? []).map((tool) => tool.name),
+      ),
+    ).not.toContain("handoff");
     for (const body of synthetic.state.modelRequests) {
       expect(body).toMatchObject({
         model: "gpt-luna",
@@ -549,6 +568,133 @@ describe("pinned OpenCode 1.18.29", () => {
       expect.objectContaining({ text: "synthetic native reply" }),
     );
     expect(synthetic.state.rejected).toBeGreaterThanOrEqual(2);
+  }, 60_000);
+
+  it("offers the handoff plugin tool, records its call in history, and leaves no ask rule or shell for the map chat", async () => {
+    const token = "synthetic-bridge-grant";
+    const calls: SyntheticCall[] = [
+      {
+        name: "handoff",
+        arguments: {
+          title: "Build the pricing agent",
+          prompt: "Create an agent that checks competitor prices daily.",
+        },
+      },
+      { name: "handoff", arguments: { title: " ", prompt: "" } },
+    ];
+    let turn = 0;
+    const synthetic = await startSyntheticBridge(token, () => calls[turn]);
+    runtime = await startOpenCodeServer({
+      cwd: root,
+      stateRoot: join(root, "state"),
+      startupTimeoutMs: nativeStartupTimeoutMs,
+      handoffTool: true,
+      config: createSapiomOpenCodeConfig({
+        bridgeUrl: `${synthetic.origin}/runtime`,
+        runtimeToken: token,
+        neverAsk: true,
+        noShell: true,
+      }),
+    });
+
+    // OpenCode evaluates the last matching rule, so every default "ask" must
+    // be followed by a rule covering at least its pattern that does not ask.
+    const agents = await runtime.fetchJson<
+      Array<{
+        name: string;
+        permission: Array<{
+          permission: string;
+          pattern: string;
+          action: string;
+        }>;
+      }>
+    >("/agent");
+    expect(agents.length).toBeGreaterThan(0);
+    for (const agent of agents) {
+      const effectiveAsks = agent.permission.filter(
+        (rule, index) =>
+          rule.action === "ask" &&
+          !agent.permission
+            .slice(index + 1)
+            .some(
+              (later) =>
+                later.action !== "ask" &&
+                [rule.permission, "*"].includes(later.permission) &&
+                [rule.pattern, "*"].includes(later.pattern),
+            ),
+      );
+      expect(effectiveAsks, agent.name).toEqual([]);
+      const shell = [...agent.permission]
+        .reverse()
+        .find(
+          (rule) =>
+            ["bash", "*"].includes(rule.permission) && rule.pattern === "*",
+        );
+      expect(shell?.action, agent.name).toBe("deny");
+    }
+
+    const parts = [];
+    for (turn = 0; turn < calls.length; turn++) {
+      const session = await runtime.fetchJson<{ id: string }>("/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      await runtime.fetchJson(`/session/${session.id}/message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts: [{ type: "text", text: "build it" }] }),
+      });
+      const history = await runtime.fetchJson<
+        Array<{
+          parts: Array<{
+            type?: string;
+            tool?: string;
+            state?: { status?: string; input?: unknown; output?: string };
+          }>;
+        }>
+      >(`/session/${session.id}/message`);
+      parts.push(
+        history
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool"),
+      );
+    }
+    const offeredNames = new Set(
+      synthetic.state.modelRequests.flatMap((body) =>
+        (body.tools ?? []).map((tool) => tool.name),
+      ),
+    );
+    expect(offeredNames.has("bash")).toBe(false);
+    for (const kept of ["read", "apply_patch", "handoff"])
+      expect(offeredNames.has(kept), kept).toBe(true);
+    // Code mode collapses MCP tools into execute; a plugin tool stays native.
+    const offered = synthetic.state.modelRequests
+      .flatMap((body) => body.tools ?? [])
+      .find((tool) => tool.name === "handoff") as
+      | { parameters?: unknown }
+      | undefined;
+    expect(offered?.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        prompt: { type: "string" },
+      },
+      required: ["title", "prompt"],
+    });
+    expect(parts[0]).toMatchObject({
+      tool: "handoff",
+      state: {
+        status: "completed",
+        input: calls[0]!.arguments,
+        output:
+          "Offered a session card; nothing has started. Tell the user in one sentence that you offered a session they can start. Do not say a session was created or prepared, and do not start the work here.",
+      },
+    });
+    expect(parts[1]).toMatchObject({
+      tool: "handoff",
+      state: { status: "error" },
+    });
   }, 60_000);
 
   it("does not expose its isolated native home to a tool when caller HOME is absent", async () => {

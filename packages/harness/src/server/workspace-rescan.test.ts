@@ -114,6 +114,20 @@ describe("mid-session workflow rescan", () => {
         { timeout: 8_000, interval: 150 },
       );
 
+      // Rescans never bind (SAP-3834); bind explicitly so marker removal has a
+      // stale binding to clear.
+      const bind = await fetch(
+        `http://127.0.0.1:${port}/api/sessions/${session.id}/workflow`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Harness-Token": "test-token",
+          },
+          body: JSON.stringify({ workflowPath: join(cwd, "hn-story-images") }),
+        },
+      );
+      expect(bind.status).toBe(200);
       expect(server.sessionManager.get(session.id)?.boundWorkflowPath).toBe(
         join(cwd, "hn-story-images"),
       );

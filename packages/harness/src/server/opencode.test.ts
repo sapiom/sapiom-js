@@ -13,7 +13,9 @@ import { createOpenCodeRouter } from "./opencode.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { scopedOpenCodeEvent } from "./opencode-events.js";
 
+const mapKey = "map:project_018f0000-0000-4000-8000-000000000001";
 let root: string;
+let abortFails: boolean;
 let origin: string;
 let router: Router;
 let enabled: boolean;
@@ -30,6 +32,9 @@ const requests: {
 }[] = [];
 const ensure = vi.fn();
 const observe = vi.fn();
+const released = vi.fn();
+const hold = vi.fn(() => released);
+const forget = vi.fn();
 const close = vi.fn();
 async function listen(app: express.Express): Promise<string> {
   const server = createServer(app);
@@ -40,6 +45,7 @@ async function listen(app: express.Express): Promise<string> {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "studio-opencode-route-"));
   enabled = true;
+  abortFails = false;
   created = 0;
   requests.length = streams.length = 0;
   sessions.clear();
@@ -47,6 +53,9 @@ beforeEach(async () => {
   aborts.clear();
   close.mockReset();
   observe.mockReset();
+  released.mockReset();
+  hold.mockClear();
+  forget.mockReset();
   const engine = express();
   engine.use(express.json());
   engine.use((req, _res, next) => {
@@ -82,6 +91,11 @@ beforeEach(async () => {
   engine.post("/session/:id/prompt_async", (_req, res) => {
     res.status(204).end();
   });
+  engine.post("/session/:id/abort", (_req, res) => {
+    if (abortFails)
+      res.status(503).json({ error: "private native diagnostics" });
+    else res.json(true);
+  });
   engine.get(["/permission", "/question"], (_req, res) => {
     res.json([
       { sessionID: "ses_1", id: "own" },
@@ -94,8 +108,8 @@ beforeEach(async () => {
     streams.push(res);
   });
   const nativeOrigin = await listen(engine);
-  for (const id of ["studio-a", "studio-b"]) {
-    const stateRoot = join(root, id);
+  for (const id of ["studio-a", "studio-b", mapKey]) {
+    const stateRoot = join(root, id.replace(":", "-"));
     await mkdir(stateRoot);
     const abort = new AbortController();
     aborts.set(id, abort);
@@ -129,7 +143,10 @@ beforeEach(async () => {
       throw new OpenCodeAccessError("unavailable");
     return hosts.get(id)!;
   });
-  router = createOpenCodeRouter({ ensure, observe }, "boot-token");
+  router = createOpenCodeRouter(
+    { ensure, observe, hold, forget },
+    "boot-token",
+  );
   const app = express();
   app.use("/opencode", (req, res, next) => router(req, res, next));
   origin = await listen(app);
@@ -248,7 +265,10 @@ describe("Studio-scoped OpenCode transport", () => {
     expect(await attach("studio-b")).not.toBe(a);
     expect(created).toBe(2);
     hosts.set("studio-a", { ...hosts.get("studio-a")! });
-    router = createOpenCodeRouter({ ensure, observe }, "boot-token");
+    router = createOpenCodeRouter(
+      { ensure, observe, hold, forget },
+      "boot-token",
+    );
     expect(await attach()).toBe(a);
     expect(created).toBe(2);
   });
@@ -310,6 +330,10 @@ describe("Studio-scoped OpenCode transport", () => {
       system: expect.stringContaining("StudioAssistantResult/v2:"),
     });
     expect(native.body).not.toHaveProperty("format");
+    // A Studio session's Assistant keeps its shell and does its own work.
+    expect((native.body as { system: string }).system).not.toMatch(
+      /no shell|handoff/,
+    );
     expect(native.headers.authorization).toBe("Basic native-only");
     for (const name of ["x-harness-token", "cookie", "x-opencode-directory"])
       expect(native.headers[name]).toBeUndefined();
@@ -384,7 +408,10 @@ describe("Studio-scoped OpenCode transport", () => {
     const id = await attach();
     sessions.delete(id);
     observe.mockClear();
-    router = createOpenCodeRouter({ ensure, observe }, "boot-token");
+    router = createOpenCodeRouter(
+      { ensure, observe, hold, forget },
+      "boot-token",
+    );
     const missing = await request("studio-a/attach", { method: "POST" });
     expect(missing.status).toBe(410);
     expect(await missing.json()).toEqual({
@@ -545,6 +572,103 @@ describe("Studio-scoped OpenCode transport", () => {
     expect(terminal).toContain('"code":"authentication_required"');
     expect(terminal).not.toContain("private");
     expect(await reader.read()).toEqual({ done: true, value: undefined });
+  });
+});
+
+describe("map chat transport", () => {
+  it("proxies Stop for the attached conversation only and holds the host per request", async () => {
+    const id = await attach();
+    const stop = await request(`studio-a/session/${id}/abort`, {
+      method: "POST",
+    });
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toBe(true);
+    expect(requests.map((item) => item.path)).toContain(`/session/${id}/abort`);
+    expect((await request(`studio-a/session/${id}/abort`)).status).toBe(400);
+    expect(
+      (await request("studio-a/session/ses_secret/abort", { method: "POST" }))
+        .status,
+    ).toBe(403);
+    // attach, Stop, and the foreign Stop reach the host; GET is refused first.
+    expect(hold).toHaveBeenCalledTimes(3);
+    expect(released).toHaveBeenCalledTimes(3);
+  });
+
+  it("serves a project's map-chat key and resets only its conversation for New chat", async () => {
+    const first = await attach(mapKey);
+    const prompt = await request(`${mapKey}/session/${first}/prompt_async`, {
+      method: "POST",
+      body: JSON.stringify({ parts: [{ type: "text", text: "Long answer" }] }),
+    });
+    expect(prompt.status).toBe(204);
+    const sent = requests.find((item) =>
+      item.path.endsWith(`/session/${first}/prompt_async`),
+    )!.body as { system: string };
+    expect(sent.system).toContain("This chat has no shell");
+    observe.mockClear();
+    const reset = await request(`${mapKey}/reset`, { method: "POST" });
+    expect(reset.status).toBe(200);
+    const { conversationId: next } = await reset.json();
+    expect(next).toMatch(/^ses_/);
+    expect(next).not.toBe(first);
+    expect(requests.map((item) => item.path)).toContain(
+      `/session/${first}/abort`,
+    );
+    const hosted = hosts.get(mapKey)!;
+    expect(forget).toHaveBeenCalledWith(hosted);
+    expect(observe).toHaveBeenCalledWith(hosted, next);
+    expect(await attach(mapKey)).toBe(next);
+    expect((await request(`${mapKey}/session/${first}/message`)).status).toBe(
+      403,
+    );
+    // Persisted: a restarted Studio reopens the reset conversation.
+    router = createOpenCodeRouter(
+      { ensure, observe, hold, forget },
+      "boot-token",
+    );
+    expect(await attach(mapKey)).toBe(next);
+
+    expect((await request("studio-a/reset", { method: "POST" })).status).toBe(
+      400,
+    );
+    expect((await request(`${mapKey}/reset`)).status).toBe(400);
+    expect(
+      (await request("map:map:project/attach", { method: "POST" })).status,
+    ).toBe(400);
+  });
+
+  it("keeps the current conversation when New chat cannot confirm the old answer stopped", async () => {
+    const first = await attach(mapKey);
+    abortFails = true;
+    const reset = await request(`${mapKey}/reset`, { method: "POST" });
+    expect(reset.status).toBe(503);
+    expect(await reset.json()).toEqual({
+      error: openCodeTransportFailure("transport_unavailable"),
+    });
+    expect(forget).not.toHaveBeenCalled();
+    expect(await attach(mapKey)).toBe(first);
+    expect(created).toBe(1);
+    abortFails = false;
+    const retried = await request(`${mapKey}/reset`, { method: "POST" });
+    expect(retried.status).toBe(200);
+    expect((await retried.json()).conversationId).not.toBe(first);
+  });
+
+  it("starts a new conversation on reset when the saved history is missing", async () => {
+    const first = await attach(mapKey);
+    sessions.delete(first);
+    router = createOpenCodeRouter(
+      { ensure, observe, hold, forget },
+      "boot-token",
+    );
+    expect((await request(`${mapKey}/attach`, { method: "POST" })).status).toBe(
+      410,
+    );
+    const reset = await request(`${mapKey}/reset`, { method: "POST" });
+    expect(reset.status).toBe(200);
+    const { conversationId } = await reset.json();
+    expect(conversationId).not.toBe(first);
+    expect(await attach(mapKey)).toBe(conversationId);
   });
 });
 

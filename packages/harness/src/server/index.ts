@@ -28,7 +28,7 @@ import {
 } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { scaffold } from "@sapiom/agent-core";
@@ -183,7 +183,11 @@ import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-mi
 import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
-import { OpenCodeHost } from "../core/opencode-host.js";
+import {
+  OpenCodeHost,
+  authorizeMapChat,
+  mapChatProjectId,
+} from "../core/opencode-host.js";
 import { OpenCodeObserver } from "../core/opencode-observer.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
@@ -1800,34 +1804,8 @@ export const startServer = async (
         }),
       ),
     );
-    const after = workflowsCache;
-
-    // Auto-bind: if this session is still unbound, find the workflow at or
-    // directly under its cwd and bind it — same mechanism as
-    // PATCH /api/sessions/:id/workflow (setBoundWorkflowPath +
-    // writeSessionContext + renderCanvas). Only runs once: the guard
-    // `!session.boundWorkflowPath` is false on every subsequent rescan once
-    // the session is bound, so this is idempotent and never overrides an
-    // explicit/persisted binding.
-    if (!session.boundWorkflowPath) {
-      const cwdSep = session.cwd + sep;
-      const candidate =
-        after.find((w) => w.path === session.cwd) ??
-        after
-          .filter((w) => w.path.startsWith(cwdSep))
-          .sort((a, b) => a.path.length - b.path.length)[0] ??
-        null;
-      if (candidate) {
-        sessionManager.setBoundWorkflowPath(session.id, candidate.path);
-        // Re-read: setBoundWorkflowPath mutates the session object in place,
-        // so the session reference we already hold already carries the new
-        // binding — pass it directly, same as the PATCH handler does.
-        await writeSessionContext(session);
-        await autoRenderCanvas(session).catch((err: unknown) => {
-          console.error("[harness] auto-bind canvas render failed:", err);
-        });
-      }
-    }
+    // No auto-bind: an unbound project-root session never has an agent bound
+    // or rendered for it (design-map-chat.md I2). Binding is explicit.
   };
   const sharedWorkspaceWatchBroker = new SharedWorkspaceWatchBroker({
     // Desktop sessions can watch the profile itself. Eligibility checks take
@@ -1911,7 +1889,7 @@ export const startServer = async (
   // onStatusChange also fires on later status broadcasts (including the
   // bind/unbind frames setBoundWorkflowPath emits), so this guard keeps the
   // rescan to the FIRST transition to running — otherwise it re-fires on every
-  // bind change and would re-bind a session the user just unbound.
+  // bind change.
   const rescannedOnStart = new Set<string>();
 
   sessionManager.onStatusChange((session) => {
@@ -1922,19 +1900,17 @@ export const startServer = async (
       // The workspace watcher captures the workflows already present at start as
       // its baseline and only fires onChange on a LATER change — so a session
       // that starts in a folder where the workflow already exists (a
-      // cloned/deployed template) never triggers a rescan and never auto-binds.
-      // Run the rescan ONCE on start to cover that case; the watcher covers
-      // workflows that appear afterward. Auto-bind stays guarded by
-      // !boundWorkflowPath, so an already-bound/resumed session is untouched.
+      // cloned/deployed template) never triggers a rescan, so the rail never
+      // learns of it. Run the rescan ONCE on start to cover that case; the
+      // watcher covers workflows that appear afterward. It never binds.
       if (!rescannedOnStart.has(session.id)) {
         rescannedOnStart.add(session.id);
         void rescanWorkspaceForSession(session.id).catch((err: unknown) => {
           console.error("[harness] initial workspace rescan failed:", err);
         });
-        // A resumed/already-bound session skips the rescan's auto-bind render
-        // (guarded by !boundWorkflowPath), so render it here — a reopened
-        // workflow shows its diagram on start without any manual trigger, now
-        // that the empty-state render button is gone.
+        // A resumed/already-bound session renders here — a reopened workflow
+        // shows its diagram on start without any manual trigger, now that the
+        // empty-state render button is gone.
         if (session.boundWorkflowPath) {
           void autoRenderCanvas(session).catch((err: unknown) => {
             console.error("[harness] on-start canvas render failed:", err);
@@ -3301,6 +3277,10 @@ export const startServer = async (
     origin: () => `http://127.0.0.1:${actualPort}`,
     stateRoot: statePaths.root,
     authorize: async (id) => {
+      if (mapChatProjectId(id) !== null)
+        return authorizeMapChat(id, (projectId) =>
+          studioProjectCatalog.resolveIdentity(projectId),
+        );
       const session = sessionManager.get(id);
       if (!session || !(await isProjectSessionDispatchAuthorized({
         session,

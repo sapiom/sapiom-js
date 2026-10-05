@@ -126,3 +126,78 @@ it("distinguishes confirmed missing history from transient lookup failure withou
     JSON.parse(await readFile(join(root, "association.json"), "utf8")),
   ).toEqual({ version: 1, conversationId });
 });
+
+it("replaces the saved conversation on reset and serves it to later attachments", async () => {
+  root = await mkdtemp(join(tmpdir(), "studio-association-"));
+  let created = 0;
+  const abort = new AbortController();
+  const hosted: HostedOpenCode = {
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
+    harnessSessionId: "map:project_one",
+    cwd: root,
+    stateRoot: root,
+    signal: abort.signal,
+    isCurrent: () => !abort.signal.aborted,
+    server: {
+      pid: 123,
+      exited: new Promise<void>(() => {}),
+      close: vi.fn(),
+      fetch: vi.fn(async (path: string) =>
+        Response.json({ id: path.split("/").at(-1) }),
+      ),
+      async fetchJson<T>(): Promise<T> {
+        return { id: `ses_${++created}` } as T;
+      },
+    },
+  };
+  const associations = new OpenCodeAssociations();
+  const first = associations.ensure(hosted);
+  // A reset issued while the first attachment is still loading waits for it.
+  const reset = associations.reset(hosted);
+  expect(await first).toBe("ses_1");
+  expect(await reset).toBe("ses_2");
+  expect(await associations.ensure(hosted)).toBe("ses_2");
+  expect(
+    JSON.parse(await readFile(join(root, "association.json"), "utf8")),
+  ).toEqual({ version: 1, conversationId: "ses_2" });
+  // A restarted host reads the reset conversation, not the first.
+  expect(await new OpenCodeAssociations().ensure(hosted)).toBe("ses_2");
+  expect(created).toBe(2);
+});
+
+it("coalesces overlapping resets into one new conversation", async () => {
+  root = await mkdtemp(join(tmpdir(), "studio-association-"));
+  let created = 0;
+  const abort = new AbortController();
+  const hosted: HostedOpenCode = {
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
+    harnessSessionId: "map:project_one",
+    cwd: root,
+    stateRoot: root,
+    signal: abort.signal,
+    isCurrent: () => !abort.signal.aborted,
+    server: {
+      pid: 123,
+      exited: new Promise<void>(() => {}),
+      close: vi.fn(),
+      fetch: vi.fn(async (path: string) =>
+        Response.json({ id: path.split("/").at(-1) }),
+      ),
+      async fetchJson<T>(): Promise<T> {
+        return { id: `ses_${++created}` } as T;
+      },
+    },
+  };
+  const associations = new OpenCodeAssociations();
+  expect(await associations.ensure(hosted)).toBe("ses_1");
+  const [first, second] = await Promise.all([
+    associations.reset(hosted),
+    associations.reset(hosted),
+  ]);
+  expect(first).toBe("ses_2");
+  expect(second).toBe("ses_2");
+  expect(await associations.ensure(hosted)).toBe("ses_2");
+  // A later, separate New chat still starts another conversation.
+  expect(await associations.reset(hosted)).toBe("ses_3");
+  expect(created).toBe(3);
+});

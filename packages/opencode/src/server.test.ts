@@ -2,16 +2,24 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   evaluateTrackedClosure,
   evaluateWindowsCleanup,
+  executeHandoff,
   OpenCodeShutdownError,
   OpenCodeStartupError,
   startOpenCodeServer,
+  studioPluginSource,
   type OpenCodeServer,
 } from "./server.js";
-import { createSapiomOpenCodeConfig } from "./config.js";
+import { createSapiomOpenCodeConfig, deniedAskPermissions } from "./config.js";
+
+/** Actions the config grants each shell tool OpenCode 1.18.29 has. */
+const shellActions = (config: Record<string, unknown>) => {
+  const permission = (config.permission ?? {}) as Record<string, unknown>;
+  return ["bash"].map((tool) => permission[tool] ?? "allow (default)");
+};
 
 let directory: string;
 let server: OpenCodeServer | undefined;
@@ -359,6 +367,121 @@ describe("packaged OpenCode runtime", () => {
         entry.startsWith("launch-"),
       ),
     ).toEqual([]);
+  });
+
+  it("denies every ask rule only when the caller has no reply path", () => {
+    const options = {
+      bridgeUrl: "http://127.0.0.1:1234/opencode-runtime/runtime",
+      runtimeToken: "token",
+    };
+    expect(createSapiomOpenCodeConfig(options)).not.toHaveProperty(
+      "permission",
+    );
+    const config = createSapiomOpenCodeConfig({ ...options, neverAsk: true });
+    expect(config.permission).toEqual(deniedAskPermissions);
+    expect(JSON.stringify(config.permission)).not.toContain('"ask"');
+    // OpenCode 1.18.29's default ask rules, each overridden.
+    expect(config.permission).toMatchObject({
+      doom_loop: "deny",
+      external_directory: { "*": "deny" },
+      question: "deny",
+      read: { "*.env": "deny", "*.env.*": "deny" },
+    });
+  });
+
+  it("removes the shell only when asked, alongside the ask denials", () => {
+    const options = {
+      bridgeUrl: "http://127.0.0.1:1234/opencode-runtime/runtime",
+      runtimeToken: "token",
+    };
+    expect(shellActions(createSapiomOpenCodeConfig(options))).toEqual([
+      "allow (default)",
+    ]);
+    const mapChat = createSapiomOpenCodeConfig({
+      ...options,
+      neverAsk: true,
+      noShell: true,
+    });
+    expect(shellActions(mapChat)).toEqual(["deny"]);
+    expect(mapChat.permission).toMatchObject(deniedAskPermissions);
+    expect(
+      shellActions(createSapiomOpenCodeConfig({ ...options, noShell: true })),
+    ).toEqual(["deny"]);
+  });
+
+  it("generates a handoff tool that takes a title and a prompt and rejects empty input", async () => {
+    // Vitest only imports modules under the package root.
+    const local = await mkdtemp(
+      fileURLToPath(new URL("../.plugin-test-", import.meta.url)),
+    );
+    try {
+      const hook = join(local, "hook.mjs");
+      const plugin = join(local, "plugin.mjs");
+      await writeFile(
+        hook,
+        "export const createStudioCompletionHooks = () => ({});\n",
+      );
+      await writeFile(
+        plugin,
+        studioPluginSource({
+          hookUrl: pathToFileURL(hook).href,
+          readyPath: join(directory, "ready"),
+          toolHomeEnvironment: {},
+          handoffTool: true,
+        }),
+      );
+      // A Studio session's Assistant does its own work: no handoff tool.
+      const plain = join(local, "plain.mjs");
+      await writeFile(
+        plain,
+        studioPluginSource({
+          hookUrl: pathToFileURL(hook).href,
+          readyPath: join(directory, "plain-ready"),
+          toolHomeEnvironment: {},
+        }),
+      );
+      const plainHooks = await (
+        (await import(pathToFileURL(plain).href)) as {
+          SapiomCredentialIsolation: (
+            input: unknown,
+          ) => Promise<Record<string, unknown>>;
+        }
+      ).SapiomCredentialIsolation({ client: {} });
+      expect(plainHooks).not.toHaveProperty("tool");
+      const module = (await import(pathToFileURL(plugin).href)) as {
+        SapiomCredentialIsolation: (input: unknown) => Promise<{
+          tool: Record<
+            string,
+            {
+              args: Record<string, unknown>;
+              execute: (args: unknown) => Promise<string>;
+            }
+          >;
+        }>;
+      };
+      const hooks = await module.SapiomCredentialIsolation({ client: {} });
+      const handoff = hooks.tool.handoff!;
+      expect(Object.keys(hooks.tool)).toEqual(["handoff"]);
+      expect(Object.keys(handoff.args)).toEqual(["title", "prompt"]);
+      expect(handoff.args.title).toMatchObject({ type: "string" });
+      expect(handoff.args.prompt).toMatchObject({ type: "string" });
+      await expect(
+        handoff.execute({ title: "Build it", prompt: "Build the agent." }),
+      ).resolves.toBe(
+        "Offered a session card; nothing has started. Tell the user in one sentence that you offered a session they can start. Do not say a session was created or prepared, and do not start the work here.",
+      );
+      for (const args of [
+        {},
+        { title: "", prompt: "Build the agent." },
+        { title: "Build it", prompt: "   " },
+        { title: "x".repeat(61), prompt: "Build the agent." },
+        { title: 1, prompt: "Build the agent." },
+      ])
+        await expect(handoff.execute(args)).rejects.toThrow("handoff needs");
+      expect(() => executeHandoff(undefined)).toThrow("handoff needs");
+    } finally {
+      await rm(local, { recursive: true, force: true });
+    }
   });
 
   it.each([

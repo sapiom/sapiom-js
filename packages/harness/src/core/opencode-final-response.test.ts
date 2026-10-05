@@ -21,6 +21,7 @@ beforeEach(async () => {
   dispatch.mockReset().mockResolvedValue(new Response("{}"));
   hosted = {
     model: { providerID: "sapiom", modelID: "gpt-luna" },
+    harnessSessionId: "studio-a",
     stateRoot: await mkdtemp(join(tmpdir(), "opencode-final-")),
     signal: abort.signal,
     server: {
@@ -194,4 +195,31 @@ it("fences recovery until an already submitted user message is persisted", async
   expect((await sending).status).toBe(204);
   expect(recovery.isRunning(hosted)).toBe(false);
   expect(dispatch).toHaveBeenCalledOnce();
+});
+
+it("recovers a map chat turn with the map chat's hand-off rules and a session turn without them", async () => {
+  dispatch.mockImplementation(async () => new Response("{}"));
+  await new OpenCodeFinalResponse().recover(
+    { ...hosted, harnessSessionId: "studio-a" },
+    "ses_test",
+    "msg_empty",
+  );
+  const session = JSON.parse(dispatch.mock.calls[0]![1].body);
+  expect(session.system).not.toMatch(/handoff|no shell/);
+  await rm(hosted.stateRoot, { recursive: true, force: true });
+  hosted = {
+    ...hosted,
+    stateRoot: await mkdtemp(join(tmpdir(), "opencode-final-")),
+  };
+  await new OpenCodeFinalResponse().recover(
+    {
+      ...hosted,
+      harnessSessionId: "map:project_018f0000-0000-4000-8000-000000000001",
+    },
+    "ses_test",
+    "msg_empty",
+  );
+  const mapChat = JSON.parse(dispatch.mock.calls[1]![1].body);
+  expect(mapChat.system).toContain("This chat has no shell");
+  expect(mapChat.system).toContain("call the handoff tool");
 });
