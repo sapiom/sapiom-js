@@ -43,11 +43,11 @@ Click a project on the rail. The centre shows its Agent Map at full width. A
 card floats over the map's bottom-right corner; it never changes the map's
 width.
 
-| You pick                          | The card shows                                                                                                                                                                                 |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Nothing (the project)             | One composer, **Ask about this project**                                                                                                                                                       |
-| An agent                          | One row: the agent's name, **Deployed** or **Draft**, **Open agent** (↗), and **Open in Finder** (Windows: **Show in Explorer**; Linux: **Open folder**). Below it, **Ask about &lt;name&gt;** |
-| A resource, connector or artifact | The same row without the two buttons, and the composer                                                                                                                                         |
+| You pick                          | The card shows                                                                                                                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nothing (the project)             | One composer, **Ask about this project**                                                                                                                                                                         |
+| An agent                          | One row: the agent's name, **Deployed** or **Draft**, **Open agent** (↗ icon), and **Open in Finder** (folder icon; Windows: **Show in Explorer**; Linux: **Open folder**). Below it, **Ask about &lt;name&gt;** |
+| A resource, connector or artifact | The same row without the two buttons, and the composer                                                                                                                                                           |
 
 Escape or a click on the empty map returns the card to the project. Double-click
 an agent node to open it, the same as **Open agent**.
@@ -113,11 +113,13 @@ exactly as you left it: the same pick and the same map chat.
   ([docs/agent-canvas-graph.md](docs/agent-canvas-graph.md)). No session is
   needed. Click a step for a small card with its description, inputs, outputs,
   and what it calls; a launched child agent opens in place.
-- **Secrets** — the values this agent's runs receive, by name. Before the
-  agent is linked, values are held on this machine, injected into local runs,
-  and uploaded when it deploys.
-- Header: **Visualize** (re-render the graph), **Run locally**, **Run**
-  (production) and **Deploy**, with progress beside them. **Run** needs a
+- **Secrets** — the values this agent's runs receive, by name: **Add secret**
+  or **Import .env**. Values are write-only. Before the agent is linked, they
+  are held on this machine, injected into local runs, and uploaded when it
+  deploys.
+- Header icons (labelled on hover): **Visualize** (re-render the graph),
+  **Run locally**, **Run** (production) and **Deploy**, with progress beside
+  them. **Run** needs a
   signed-in account and a ready cloud build; **Deploy** needs a signed-in
   account. A disabled verb says why on hover. The run picker sits on the
   board's header.
