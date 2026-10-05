@@ -54,6 +54,44 @@ test.describe("project header grammar", () => {
     await expect(page.locator(".rail-list [data-testid^='project-create-agent-']")).toHaveCount(0);
   });
 
+  test("every rail tooltip names its action in at most 15 characters", async ({
+    page,
+  }) => {
+    // flow-map-chat-overlay.md 4.6: a tooltip names the action in one to
+    // three words; the aria-label carries the object's name. Eight strings
+    // had grown explanation clauses ("Hide from the rail (History keeps it)").
+    // The brand header is excluded: it is a separate component, not this
+    // rail's copy. Row `title`s that show a path are content, not tooltips.
+    await page.getByTestId("project-select-acme-app").click();
+    await expect(page.getByTestId("workspace-group-acme-app")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+    const tips = await page.locator(".rail-workflows").evaluate((rail) => [
+      ...[...rail.querySelectorAll("[data-tooltip]")]
+        .filter((el) => !el.closest(".brand-header"))
+        .map((el) => el.getAttribute("data-tooltip") ?? ""),
+      rail.querySelector("[data-testid='brand-identity']")?.getAttribute("title") ?? "",
+    ]);
+    // Session marks, both project-row verbs, Hide and End, Add project, Sort.
+    expect(new Set(tips)).toEqual(
+      new Set([
+        "Add project",
+        "Sort projects",
+        "Collapse",
+        "Agent Map",
+        "New chat",
+        "Remove",
+        "Live",
+        "Exited",
+        "End session",
+        "Hide",
+        "Demo mode",
+      ]),
+    );
+    expect(tips.filter((tip) => tip.length > 15)).toEqual([]);
+  });
+
   test("New chat is visible at rest; Remove only on hover", async ({ page }) => {
     // A project with no sessions shows its header and + and nothing else
     // (4.6.1), so a hover-only + would leave that row saying nothing.

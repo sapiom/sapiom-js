@@ -133,9 +133,7 @@ export function ProjectRow({
         title={root}
         aria-pressed={selected}
         aria-label={`Open Agent Map for ${label}`}
-        data-tooltip={
-          tooltip ?? (selected ? "Agent Map selected" : "Open Agent Map")
-        }
+        data-tooltip={tooltip ?? "Agent Map"}
       >
         <span className="tree-row-label">{label}</span>
       </button>
@@ -144,7 +142,15 @@ export function ProjectRow({
   );
 }
 
-const MARK_TITLE: Record<SessionMark, string> = {
+/** The tooltip is the one word (flow-map-chat-overlay.md 4.6); the
+ *  aria-label keeps what it means, since a screen reader cannot see the dot. */
+const MARK_TOOLTIP: Record<SessionMark, string> = {
+  live: "Live",
+  idle: "Idle",
+  exited: "Exited",
+};
+
+const MARK_LABEL: Record<SessionMark, string> = {
   live: "Live: the agent is working",
   idle: "Idle: running, quiet for a while",
   exited: "Exited: the process ended",
@@ -211,8 +217,8 @@ export function SessionRow({
           data-status={mark === "live" ? "running" : undefined}
           data-testid={`rail-session-mark-${session.id}`}
           role="img"
-          aria-label={MARK_TITLE[mark]}
-          data-tooltip={MARK_TITLE[mark]}
+          aria-label={MARK_LABEL[mark]}
+          data-tooltip={MARK_TOOLTIP[mark]}
         />
         <span className="tree-row-label">{name}</span>
         <span
@@ -227,9 +233,7 @@ export function SessionRow({
         className="workspace-row-action rail-session-close"
         data-testid={`rail-session-close-${session.id}`}
         aria-label={exited ? `Hide ${name} from the rail` : `End ${name}`}
-        data-tooltip={
-          exited ? "Hide from the rail (History keeps it)" : "End session"
-        }
+        data-tooltip={exited ? "Hide" : "End session"}
         onClick={onClose}
       >
         <Icon name="X" size={13} />

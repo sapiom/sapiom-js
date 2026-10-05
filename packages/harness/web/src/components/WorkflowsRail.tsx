@@ -188,7 +188,7 @@ function RemoveProjectButton({
       className="workspace-row-action project-row-remove"
       data-testid={`project-remove-${label}`}
       aria-label={`Remove ${label} from the rail`}
-      data-tooltip="Remove from the rail"
+      data-tooltip="Remove"
       onClick={() => onRemove(ref.current)}
     >
       <Icon name="X" size={13} />
@@ -606,7 +606,7 @@ export function WorkflowsRail({
           type="button"
           className="rail-nav-row"
           data-testid="palette-trigger"
-          aria-label="Search sessions, agents, and paths"
+          aria-label="Search"
           onClick={onOpenPalette}
         >
           <Icon name="Search" size={14} />
@@ -649,7 +649,7 @@ export function WorkflowsRail({
             className="theme-toggle rail-header-btn"
             data-testid="rail-add-project"
             aria-label="Add project"
-            data-tooltip="Add project: open a folder that already has agents"
+            data-tooltip="Add project"
             onClick={() => {
               closeOverlays();
               onAddProject();
@@ -909,7 +909,7 @@ export function WorkflowsRail({
                         className="workspace-row-action rail-project-new-chat"
                         data-testid={`project-new-chat-${project.label}`}
                         aria-label={`New chat in ${project.label}`}
-                        data-tooltip="New chat in this project"
+                        data-tooltip="New chat"
                         onClick={() => {
                           closeOverlays();
                           onNewChat(target);
@@ -1177,11 +1177,7 @@ function ProfileRow({
         data-testid="brand-identity"
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        title={
-          demo
-            ? "Static demo. No Sapiom account, server, or agent is connected."
-            : "Account"
-        }
+        title={demo ? "Demo mode" : "Account"}
         onClick={() => {
           // Opening the account menu collapses the settings card so the two
           // never stack — one section of the profile is open at a time.
