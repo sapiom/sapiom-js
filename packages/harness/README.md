@@ -24,29 +24,166 @@ Session tabs and retained-session rows show independent Assistant activity. Hove
 - **Terminal sessions** — your agent, your subscription, your machine; the
   Agent Studio only configures it. The `+` beside a project starts a session at
   that project root; the tab-strip `+` starts a sibling session. Sessions have
-  resumable chat history.
+  resumable chat history. See [Sessions](#sessions).
 - **Templates** — quick starts, the template gallery, and bundled starters use
   your selected coding agent.
-- **Agents rail** — agent projects (`sapiom.json`) discovered and
-  tracked, with one-click local test run, deploy, production run, and
-  open-in-Sapiom actions. How that discovery is rooted and bounded, how a
-  newly-created agent gets registered, and how a stale entry leaves:
-  [docs/agent-discovery.md](docs/agent-discovery.md).
-- **Canvas** — a live pane that renders static HTML your agent writes to
-  `.sapiom/canvas/` (visualize your agent, your docs, anything), plus a
-  preview mode for dev servers the agent starts.
+- **Rail** — agent projects (`sapiom.json`) discovered and tracked, each with
+  its sessions. Click a project to open its map. How that discovery is rooted
+  and bounded, how a newly-created agent gets registered, and how a stale entry
+  leaves: [docs/agent-discovery.md](docs/agent-discovery.md).
+- **Project view** — the project's Agent Map, a floating card for the picked
+  node, a per-project map chat, and an agent modal with the agent's Canvas,
+  Secrets, Run and Deploy. See [The project view](#the-project-view).
 - **Zero config mutation** — everything is injected per-session via flags;
   your global agent settings are never touched.
 
+## The project view
+
+Click a project on the rail. The centre shows its Agent Map at full width. A
+card floats over the map's bottom-right corner; it never changes the map's
+width.
+
+| You pick                          | The card shows                                                                                                                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nothing (the project)             | One composer, **Ask about this project**                                                                                                                                                                         |
+| An agent                          | One row: the agent's name, **Deployed** or **Draft**, **Open agent** (↗ icon), and **Open in Finder** (folder icon; Windows: **Show in Explorer**; Linux: **Open folder**). Below it, **Ask about &lt;name&gt;** |
+| A resource, connector or artifact | The same row without the two buttons, and the composer                                                                                                                                                           |
+
+Escape or a click on the empty map returns the card to the project. Double-click
+an agent node to open it, the same as **Open agent**.
+
+Open in Finder reveals the agent's folder in the OS file manager. In the desktop
+app it goes through the app's bridge; in a browser it calls
+`POST /api/fs/reveal`, which accepts only a registered agent folder.
+
+### Map chat
+
+Press Enter in the card's composer to ask the project's **map chat**. It is an
+Assistant conversation (OpenCode on `gpt-luna`, see [Assistant](#assistant))
+that belongs to the project:
+
+- It is not a session and never appears on the rail.
+- Every question extends the same conversation, across node picks and after
+  the card closes, until you press **New chat**. It survives a restart. Each
+  project has its own.
+- Each message carries a chip naming the selection it was asked about
+  ("Asking about …"); the node's name, kind and path go into the prompt.
+- The chat opens in the card, over the map. **Stop** (the send button while a
+  reply streams) interrupts the answer. **×** closes the chat back to the card
+  and keeps the conversation.
+- **Open in session** (the terminal-square icon) starts a new terminal session
+  at the project root whose first message points at an attached `map-chat.md`
+  holding the transcript and the selection, then shows that session.
+
+The map chat's OpenCode process starts on the first question in a project and
+stops after 15 minutes with no open request.
+
+**What the map chat can do.** Read the project, edit files inside it, and call
+the hosted Sapiom tools.
+
+**What it cannot do.**
+
+- It has no shell. The `bash` tool is removed from its tool list.
+- It never asks for a permission. Every rule that would ask (files outside the
+  project, `.env` reads, repeated identical tool calls, questions) is denied,
+  because the map chat has no way to reply to a prompt.
+- When a request needs any of those, or is real build work (building or
+  changing an agent, multi-file edits, a long run), it offers a **hand-off**
+  instead of doing it.
+
+### Hand-off card
+
+A hand-off is a card in the map chat with a title, the prompt the chat wrote
+for the job, and **Start session**. The map chat offers one on its own for the
+work above, and when you ask for it.
+
+**Start session** creates a Claude Code terminal session at the project root
+with that prompt as its first message. The session appears on the rail and its
+row pulses once. Nothing navigates: you stay on the map with the chat open. The
+card then shows **Open session**, which takes you to it.
+
+### Agent modal
+
+**Open agent** opens a modal over the map. The rail and a margin of the map stay
+visible. Closing it (×, Escape, or a click on the scrim) returns you to the map
+exactly as you left it: the same pick and the same map chat.
+
+- **Canvas** — the agent's step graph, rendered from source by the agent's path
+  through the session-free graph route
+  ([docs/agent-canvas-graph.md](docs/agent-canvas-graph.md)). No session is
+  needed. Click a step for a small card with its description, inputs, outputs,
+  and what it calls; a launched child agent opens in place.
+- **Secrets** — the values this agent's runs receive, by name: **Add secret**
+  or **Import .env**. Values are write-only. Before the agent is linked, they
+  are held on this machine, injected into local runs, and uploaded when it
+  deploys.
+- Header icons (labelled on hover): **Visualize** (re-render the graph),
+  **Run locally**, **Run** (production) and **Deploy**, with progress beside
+  them. **Run** needs a
+  signed-in account and a ready cloud build; **Deploy** needs a signed-in
+  account. A disabled verb says why on hover. The run picker sits on the
+  board's header.
+
+Every verb is addressed by the agent's path. No verb needs a session, starts
+one, or binds one. Runs are filed under the agent. The verbs that need a coding
+agent (Ask about a step, Ask to fix a render error, debug an attempt, Describe
+with AI) each start a new terminal session at the project root whose first
+message names the job and the agent, and open it.
+
+### Not in the UI yet
+
+These exist in the code and have no place in the current layout (SAP-3875):
+
+- the run workspace: timeline, artifact panel, attempt inspector, evidence
+  tabs, Focus mode;
+- integration snippets and the deploy banner;
+- the **Preview** chip for a dev server, the **App Link** chip, and the **Prod**
+  globe, which used to sit beside a session;
+- the session Canvas pane for static HTML under `.sapiom/canvas/`.
+
+A run started from a session's terminal (for example, the coding agent calling
+the local run tool) is not filed under an agent, so the modal's run picker does
+not list it.
+
+## Sessions
+
+A session is one Claude Code or Codex terminal, usually at a project root. Its
+view opens on **Terminal**. Studio does not bind a session to an agent (the
+one exception is the draft build that **Start from an idea** creates), and
+nothing about an agent sits beside a session: agent detail lives in the
+[agent modal](#agent-modal). The server no longer binds a new session to an
+agent it finds under the session's folder.
+
+To end a live session, press **×** on its rail row or **End session** in the
+session menu. It ends at once, with no confirmation. The row stays, marked
+exited; **×** on the exited row hides it, and History keeps it.
+
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
-Studio browser sign-in also stores a renewable user credential for internal
+## Assistant
+
+The Assistant is Studio's own chat view, an OpenCode conversation on Sapiom's
+`gpt-luna` model. It powers the [map chat](#map-chat) and the **Assistant**
+side of a session's **Terminal | Assistant** switch. It is separate from the
+Claude Code or Codex conversation in the terminal.
+
+**Who has it.** Access is currently gated by the PostHog flag
+`studio-opencode-assistant`, and the Sapiom backend also still requires an
+internal Sapiom account (a verified `@sapiom.ai` email in an internal
+organization). Opening it to every signed-in account, with the flag kept as a
+kill switch, is a backend change that has not shipped. You need a browser
+sign-in (not an API-key-only login) and harness 0.16 or later. Without access,
+the project card shows no composer and sessions show no switch; Terminal works
+as before. Each Assistant turn is `gpt-luna` spend on the signed-in account's
+organization.
+
+Studio browser sign-in also stores a renewable user credential for
 Assistant eligibility checks. Existing organization-only logins keep working for
 Terminal; sign out and sign in again to obtain the user credential. It stays in
 the shared local credential store and is never returned by Studio's browser auth
 API. Sign-out clears it locally and attempts to revoke its token family remotely.
 
-The Studio host refreshes the internal Assistant capability at most every 30
+The Studio host refreshes the Assistant capability at most every 30
 seconds and expires an enabled decision within 60 seconds. Missing identity,
 offline startup, unsupported backends, and unavailable flags leave it off.
 These access checks are independent of optional telemetry and never prevent
@@ -69,7 +206,7 @@ malformed/ambiguous response revokes the grant. Thus an offline first launch
 cannot invent eligibility, while a short outage does not interrupt an unchanged
 verified principal before the server-issued lease ends.
 
-Eligible internal users see a **Terminal | Assistant** switch, with Terminal
+Eligible users see a **Terminal | Assistant** switch, with Terminal
 selected initially. Assistant sends prompts and streams Sapiom responses in the
 selected project. Returning to a session reopens its OpenCode conversation;
 switching views detaches the display while execution continues. Connection errors
@@ -269,7 +406,8 @@ authority.
 
 Clicking a project name opens its durable Agent Map without creating, resuming,
 focusing, or prompting a session. Every tab represents one real session ID and
-opens that session's ordinary conversation and Canvas/Steps experience. Sessions
+opens that session's ordinary conversation; agent detail is in the
+[agent modal](#agent-modal), not beside the session. Sessions
 created before this change may still carry the **Plan Agents** title of the
 retired automatic first session; the title does not confer a role and can be
 renamed like any other session.
@@ -444,10 +582,10 @@ returns a path-free projection. `GET .../nodes/:nodeId/implementation` resolves
 the current exact local target for navigation. Both are uncached reads and do
 not start sessions, scans or another model pass.
 
-Click an agent or subagent node to open its linked agent’s step graph on Canvas,
-keeping the current conversation. Use the node’s Info button to inspect its plan.
-Other node kinds open the inspector directly. Unlinked, missing or ambiguous
-implementations keep the map open and show a recovery message in the inspector.
+Click an agent or subagent node to show it in the [project card](#the-project-view);
+**Open agent** or a double-click opens its linked agent in the agent modal. Other
+node kinds are only selected. Unlinked, missing or ambiguous implementations keep
+the map open and say why in the map header.
 
 Agent and subagent nodes show **Draft** until a ready hosted build is confirmed,
 then **Deployed**, including while idle or after local edits. Badges share the

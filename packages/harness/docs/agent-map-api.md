@@ -17,7 +17,8 @@ Use the exact project and node IDs when resolving an implementation. Missing,
 ambiguous or unavailable implementations remain unresolved. Viewing a project,
 retrying its identity, inspecting a node or navigating to an agent does not
 create, select, resume, bind or prompt a conversation. Explicit session tabs
-open their exact ordinary conversation and its independent Canvas/Steps.
+open their exact ordinary conversation. An agent's Canvas and Secrets open in
+the agent modal over the map, addressed by the agent's path, never by a session.
 
 When identity is unavailable, Studio preserves the selected project and
 conversation and offers **Reload projects**. An omitted catalog from an older
