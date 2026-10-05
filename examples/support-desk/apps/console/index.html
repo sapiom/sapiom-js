@@ -1139,13 +1139,24 @@
 
       /** Every result shows in the header for a few seconds, beside the controls. */
       let toastTimer;
+      // Set when the page's preview session is gone (a 401): every later request would fail the
+      // same way, so the page stops calling and keeps one message up instead.
+      let expired = false;
+      function sessionGone() {
+        if (expired) return;
+        expired = true;
+        log(
+          "Session expired FAILED: this Console page's session ended. Reopen the Console from its Sapiom link (apps.sapiom.ai/<org>/<console>) to keep working.",
+        );
+      }
       function log(line) {
+        if (expired && !/^Session expired/.test(line)) return;
         const t = $("toast");
         t.textContent = line;
         t.className = `toast ${/FAILED/.test(line) ? "bad" : "ok"}`;
         t.hidden = false;
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => (t.hidden = true), 8000);
+        if (!expired) toastTimer = setTimeout(() => (t.hidden = true), 8000);
       }
 
       // --- desks ---------------------------------------------------------------------------
@@ -1197,14 +1208,42 @@
         closeKbForm();
       };
 
+      /**
+       * fetch, except that a 401 ends the page's requests. No answer can be a dropped connection
+       * that comes back, so it shows a warning, polling goes on, and the next answer clears it.
+       */
+      let unreachable = false;
+      async function call(path, init) {
+        if (expired) throw new Error("session expired");
+        let r;
+        try {
+          r = await fetch(path, init);
+        } catch (err) {
+          unreachable = true;
+          log(
+            `Unreachable FAILED: the Console server did not answer (${err.message}); retrying`,
+          );
+          throw err;
+        }
+        if (unreachable) {
+          unreachable = false;
+          if (/^Unreachable/.test($("toast").textContent))
+            $("toast").hidden = true;
+        }
+        if (r.status === 401) {
+          sessionGone();
+          throw new Error("session expired");
+        }
+        return r;
+      }
       async function get(path) {
-        const r = await fetch(path, { cache: "no-store" });
+        const r = await call(path, { cache: "no-store" });
         const body = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(body.error || r.statusText);
         return body;
       }
       async function post(path, body, method = "POST") {
-        const r = await fetch(path, {
+        const r = await call(path, {
           method,
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body || {}),
