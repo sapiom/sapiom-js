@@ -35,14 +35,17 @@ export function mergeProjectAppLinks(
   deployed: ReadonlyArray<{ agent: WorkflowInfo; url: string }>,
   previews: readonly LocalPreview[],
 ): ProjectAppLink[] {
-  // Names are not unique across a project's agents: a repeat name gets a
-  // numbered id, so ids (React keys and test ids) stay one per link.
-  const named = new Map<string, number>();
+  // Names are not unique across a project's agents, and a numbered name can
+  // equal another agent's literal one: an id already taken gets the next free
+  // number, so ids (React keys and test ids) stay one per link.
+  const used = new Set<string>();
   const links: ProjectAppLink[] = deployed.map(({ agent, url }) => {
-    const seen = (named.get(agent.name) ?? 0) + 1;
-    named.set(agent.name, seen);
+    const base = `agent-${agent.name}`;
+    let id = base;
+    for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+    used.add(id);
     return {
-      id: seen === 1 ? `agent-${agent.name}` : `agent-${agent.name}-${seen}`,
+      id,
       label: displayAgentName(agent.name),
       url,
       deployed: true,

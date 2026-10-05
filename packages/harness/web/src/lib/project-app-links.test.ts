@@ -64,6 +64,20 @@ describe("mergeProjectAppLinks", () => {
     expect(links.map((link) => link.id)).toEqual(["agent-portal", "agent-portal-2"]);
   });
 
+  it("never reuses an id an agent's literal name already holds", () => {
+    const links = mergeProjectAppLinks(
+      [
+        { agent: agent("portal", "/p/a/portal"), url: "https://a.apps.sapiom.ai" },
+        { agent: agent("portal", "/p/b/portal"), url: "https://b.apps.sapiom.ai" },
+        { agent: agent("portal-2", "/p/c/portal-2"), url: "https://c.apps.sapiom.ai" },
+      ],
+      [],
+    );
+    const ids = links.map((link) => link.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids[0]).toBe("agent-portal");
+  });
+
   it("is empty with nothing deployed and nothing running", () => {
     expect(mergeProjectAppLinks([], [])).toEqual([]);
   });
