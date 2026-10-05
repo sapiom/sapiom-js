@@ -218,13 +218,39 @@ test.describe("unified run entry", () => {
   test("reuses the visible entry contract when extraction reports unavailable", async ({
     page,
   }) => {
-    // The fallback reads `useAgentVerbs`' visible-contract map, which nothing
-    // on main writes since the Steps pane went (SAP-3836); the modal's board
-    // publishes its graph only to its own progress line. src/off-limits here.
-    test.fixme(true, "SAP-3838: no surface publishes the visible entry contract to useAgentVerbs (use-agent-verbs.ts, SAP-3839)");
-    await expect(
-      page.getByTestId("agent-modal-panel-canvas").locator(".canvas-pane"),
-    ).toBeVisible();
+    // The fallback reads `useAgentVerbs`' visible-contract map, which the
+    // modal's board writes when its document posts its graph. The board
+    // posts one whose entry declares a `topic` with a default.
+    const frame = page.locator(".agent-modal .canvas-iframe");
+    await expect(frame).toBeVisible();
+    const board = await (await frame.elementHandle())!.contentFrame();
+    await board!.evaluate(() => {
+      parent.postMessage(
+        {
+          type: "sapiom-canvas:graph",
+          graph: {
+            name: "leasing",
+            entry: "intake",
+            nodes: [
+              {
+                id: "intake",
+                kind: "entry",
+                label: "intake",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    topic: { type: "string", default: "indie game development" },
+                  },
+                  required: ["topic"],
+                },
+              },
+            ],
+            edges: [],
+          },
+        },
+        "*",
+      );
+    });
     await page.evaluate(() => {
       (
         window as unknown as {
@@ -234,7 +260,7 @@ test.describe("unified run entry", () => {
     });
 
     await openLocalSheet(page);
-    await expect(page.getByLabel(/Topic/)).toHaveValue(
+    await expect(page.getByLabel(/topic/i)).toHaveValue(
       "indie game development",
     );
     await expect(

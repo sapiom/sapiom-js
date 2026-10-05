@@ -5,6 +5,7 @@ import type { AppState, WorkflowInfo } from "@shared/types";
 import { createApi } from "../lib/api";
 import { DIALOG_LAYER_SELECTOR } from "../lib/dialog-focus";
 import { relativeTimeLabel } from "../lib/relative-time";
+import { inputContractFromCanvasGraph } from "../lib/run-input";
 import { canvasSourceFor, lifecycleVerbGate } from "../lib/session-scope";
 import type { AgentVerbs } from "../lib/use-agent-verbs";
 import { useDialogBehavior } from "../lib/use-dialog-behavior";
@@ -460,7 +461,11 @@ export function AgentModal({
                whose first message names the job and this agent (4.4b). */
             onInjectPrompt={(text) => verbs.handleAskAgent(agent, text)}
             onDescribeWorkflow={verbs.handleDescribeWithAI}
-            onGraphChange={(path) => {
+            onGraphChange={(path, graph) => {
+              // The board's entry contract backs the Run sheet when a fresh
+              // extraction reports unavailable.
+              const contract = inputContractFromCanvasGraph(graph);
+              if (contract) verbs.rememberVisibleContract(path, contract);
               if (path === agent.path)
                 setProgress((current) =>
                   current?.text === "Rendering…"
