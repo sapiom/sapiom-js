@@ -88,6 +88,8 @@ interface WorkflowsRailProps {
   studioProjects: readonly StudioProjectSummary[] | undefined;
   /** The project whose Agent Map is the centre, if any. */
   shownProjectId: string | null;
+  /** The session a map chat's hand-off just made: its row pulses once. */
+  pulseSessionId?: string | null;
   /** A project header's name: its Agent Map takes the centre at full width,
    *  and the selected session is left alone (flow-navigation.md 4.3). */
   onSelectProject: (project: RailProject) => void;
@@ -298,6 +300,7 @@ export function WorkflowsRail({
   workspaceScopes,
   studioProjects,
   shownProjectId,
+  pulseSessionId = null,
   onSelectProject,
   onNewChat,
   onSelectSession,
@@ -943,6 +946,7 @@ export function WorkflowsRail({
                       )}
                       agentName={agentNameOf(session)}
                       selected={session.id === activeSessionId}
+                      pulsing={session.id === pulseSessionId}
                       onSelect={() => {
                         closeOverlays();
                         onSelectSession(session.id);

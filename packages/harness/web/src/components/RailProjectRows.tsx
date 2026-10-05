@@ -174,6 +174,7 @@ export function SessionRow({
   mark,
   agentName,
   selected,
+  pulsing = false,
   onSelect,
   onClose,
   now,
@@ -184,6 +185,10 @@ export function SessionRow({
   /** The agent this session is bound to, when it is. */
   agentName: string | null;
   selected: boolean;
+  /** A map chat's hand-off just made this session: the row pulses once, so
+   *  the user sees where it went without being taken there
+   *  (flow-map-chat-overlay.md 4.3.6). */
+  pulsing?: boolean;
   onSelect: () => void;
   onClose: () => void;
   now: number;
@@ -193,9 +198,11 @@ export function SessionRow({
     <div
       className={
         "workspace-row is-nested rail-session-row" +
-        (selected ? " is-selected" : "")
+        (selected ? " is-selected" : "") +
+        (pulsing ? " is-pulsing" : "")
       }
       data-testid={`rail-session-${session.id}`}
+      data-pulse={pulsing || undefined}
       data-mark={mark}
       data-agent={agentName ?? undefined}
       data-selected={selected || undefined}

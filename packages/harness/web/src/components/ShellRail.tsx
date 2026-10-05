@@ -29,6 +29,7 @@ export function ShellRail({
   railCollapsed,
   setRailCollapsed,
   shownProjectId,
+  pulseSessionId,
   sessionLabel,
   now,
   browseTemplates,
@@ -46,6 +47,8 @@ export function ShellRail({
   railCollapsed: boolean;
   setRailCollapsed: (collapsed: boolean) => void;
   shownProjectId: string | null;
+  /** The session a map chat's hand-off just made (I6): its row pulses. */
+  pulseSessionId: string | null;
   sessionLabel: (session: HarnessSession) => string;
   now: number;
   browseTemplates: () => void;
@@ -95,6 +98,7 @@ export function ShellRail({
         workspaceScopes={state.workspaceScopes}
         studioProjects={state.studioProjects}
         shownProjectId={dialogs.templatesOpen ? null : shownProjectId}
+        pulseSessionId={pulseSessionId}
         onSelectProject={projectActions.handleSelectProject}
         onNewChat={sessions.handleNewChat}
         onSelectSession={(id) => {

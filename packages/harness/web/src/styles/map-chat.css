@@ -262,3 +262,26 @@
   bottom: var(--sp3);
   max-height: calc(100% - var(--sp3) * 2);
 }
+
+/* A map chat's hand-off just made this session (4.3.6): the row's wash rises
+   and falls once, so you see where it went without being taken there.
+   Reduced motion keeps the attribute, no motion. */
+.rail-session-row.is-pulsing .tree-row {
+  animation: rail-row-pulse 1.6s var(--ease) 1;
+}
+
+@keyframes rail-row-pulse {
+  0%,
+  100% {
+    background: transparent;
+  }
+  35% {
+    background: var(--active-shade);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-session-row.is-pulsing .tree-row {
+    animation: none;
+  }
+}

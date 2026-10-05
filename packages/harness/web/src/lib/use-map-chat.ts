@@ -144,9 +144,20 @@ export function useMapChat({
     return prompt;
   }, []);
 
+  // The pulse is one rise and fall (1.6s in CSS); the flag outlives it a
+  // little, then clears, so the row is an ordinary row again.
+  const pulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (pulseTimer.current) clearTimeout(pulseTimer.current);
+    },
+    [],
+  );
   const setHandoffSession = useCallback((callId: string, sessionId: string) => {
     setHandoffs((current) => ({ ...current, [callId]: sessionId }));
     setPulse({ sessionId, at: Date.now() });
+    if (pulseTimer.current) clearTimeout(pulseTimer.current);
+    pulseTimer.current = setTimeout(() => setPulse(null), 2400);
   }, []);
 
   return useMemo(

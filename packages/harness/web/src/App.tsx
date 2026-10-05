@@ -376,6 +376,7 @@ export const App = (): JSX.Element => {
         railCollapsed={railCollapsed}
         setRailCollapsed={setRailCollapsed}
         shownProjectId={shownProject}
+        pulseSessionId={mapChat.pulse?.sessionId ?? null}
         sessionLabel={sessionLabel}
         now={now}
         browseTemplates={browseTemplates}

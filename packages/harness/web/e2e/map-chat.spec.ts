@@ -11,8 +11,8 @@
  *  - Enter asks the project's MAP CHAT, keyed `map:<projectId>`: not a
  *    session, never on the rail; every Enter extends it until New chat; ×
  *    keeps it; another project has its own (4.3.2, 4.3.3, I5).
- *  - The hand-off card makes a session without navigating; Open session
- *    navigates (4.3.6, I6). A turn that ended in a hand-off is not shown as
+ *  - The hand-off card makes a session without navigating, and its rail row
+ *    pulses once; Open session navigates (4.3.6, I6). A turn that ended in a hand-off is not shown as
  *    failed.
  *  - Open in session makes a session whose first message carries the
  *    transcript, and goes to it (4.3.7).
@@ -291,6 +291,10 @@ test("the hand-off card makes a session that does not navigate; Open session doe
   await expect(handoff.getByTestId("chat-handoff-open")).toBeVisible();
   const created = await newRow(page, before);
   await expect(handoff).toHaveAttribute("data-session", created);
+  // Its row pulses once, then is an ordinary row again.
+  const row = page.getByTestId(`rail-session-${created}`);
+  await expect(row).toHaveAttribute("data-pulse", "true");
+  await expect(row).not.toHaveAttribute("data-pulse", "true", { timeout: 5_000 });
   const call = (await createCalls(page)).at(-1)!;
   expect(call.req.initialPrompt).toContain("Task: Add a step that emails the applicant.");
   // Nothing navigated: the map, its card and the rail's selection stay.
