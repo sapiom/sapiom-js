@@ -12,28 +12,25 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 import {
-  NO_HOME,
   activeSessionId,
-  openAgentCanvas,
+  openAgentModal,
   openProjectMap,
-  selectSession,
-  startChatWithRfq,
 } from "./mock-navigation";
 
 /**
- * leasing's board on its entered page, the interim way into an agent
- * (SAP-3836 keeps it until the agent modal). With `fixture`, the bundled
- * interactive fixture board (it answers hit / pick / node and posts its size)
- * is swapped into the pane's own `srcdoc` frame, so the pane's source-window
- * guard sees exactly what a generated board would send.
+ * leasing's board in its agent modal over the map (flow-map-chat-overlay.md
+ * 4.2b). With `fixture`, the bundled interactive fixture board (it answers
+ * hit / pick / node and posts its size) is swapped into the modal's own
+ * `srcdoc` frame, so the pane's source-window guard sees exactly what a
+ * generated board would send.
  */
 async function openLeasingBoard(page: Page, fixture = true): Promise<void> {
-  await openAgentCanvas(page, "acme-app", "leasing");
-  await expect(page.locator(".canvas-iframe")).toBeVisible();
+  await openAgentModal(page, "acme-app", "leasing");
+  await expect(page.locator(".agent-modal .canvas-iframe")).toBeVisible();
   if (!fixture) return;
   await page.evaluate(async () => {
     const html = await (await fetch("/canvas/sess-boot/index.html")).text();
-    (document.querySelector(".canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+    (document.querySelector(".agent-modal .canvas-iframe") as HTMLIFrameElement).srcdoc = html;
   });
 }
 
@@ -326,60 +323,41 @@ test("creation IA: Add project is one folder question; a project's + starts a ch
   await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
 });
 
-test("the selected session's bound agent drives macro gating", async ({
+test("an agent's verbs are gated by its own deployment, in its modal", async ({
   page,
 }) => {
-  test.fixme(true, NO_HOME.verbs);
   // The rail lists sessions, not agents (flow-navigation.md Q3).
   await expect(page.locator(".rail-workflows [data-testid^='workflow-']")).toHaveCount(0);
 
-  // "leasing" is deployed (has a definitionId) and is the boot session's
-  // binding — action bar is live and Prod Run is enabled.
-  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
-    "data-agent",
-    "leasing",
-  );
-  await page.getByRole("button", { name: "Choose run target" }).click();
-  const prodRun = page.getByTestId("session-step-run");
+  // "leasing" is deployed (has a definitionId): every verb in its modal's
+  // header is live, Run (the cloud run) included.
+  await openAgentModal(page, "acme-app", "leasing");
+  const prodRun = page.getByTestId("agent-modal-prod-run");
   await expect(prodRun).toBeEnabled();
-  await page.keyboard.press("Escape");
-
-  // The open_prod button has been removed from the action bar (SAP-1899);
-  // the deployed pill (→ dashboard) now lives in the canvas tab bar for deployed workflows.
+  await expect(prodRun).toHaveAttribute("aria-label", "Run");
+  // Open prod is not a verb (SAP-1899; dropped from the modal, MAP-CHAT.md).
   await expect(page.getByTestId("macro-open_prod")).toHaveCount(0);
+  await page.getByTestId("agent-modal-close").click();
 
-  // Looking at "rfq" on its project's map starts nothing: the project view
-  // has no session, so there is no action bar to gate.
-  await openProjectMap(page, "rfq-agent");
-  await expect(prodRun).toHaveCount(0);
-
-  // Start chat binds a new session to rfq (undeployed) and brings the action
-  // bar live, gated with a reason distinct from "no workflow selected".
-  await startChatWithRfq(page);
-  await page.getByRole("button", { name: "Choose run target" }).click();
+  // "rfq" is a draft: its Run is gated with the deploy reason, while Run
+  // locally and Deploy stay available. No session is involved either way.
+  await openAgentModal(page, "rfq-agent", "rfq");
   await expect(prodRun).toBeDisabled();
-  await expect(prodRun).toHaveAttribute("title", "Not deployed yet");
-
-  // The gating reason is carried by the disabled Cloud target while Local
-  // remains the split control's available fallback.
-  await expect(page.getByTestId("session-step-local")).toHaveAccessibleName(
-    "Run using Local",
-  );
+  await expect(prodRun).toHaveAttribute("aria-label", "Run: Not deployed yet");
+  await expect(prodRun).toHaveAttribute("data-tooltip", "Not deployed yet");
+  await expect(page.getByTestId("agent-modal-run-local")).toBeEnabled();
+  await expect(page.getByTestId("agent-modal-deploy")).toBeEnabled();
   await page.screenshot({
     path: "web/e2e/screenshots/workflow-macros-gated.png",
   });
 });
 
-test("inject macros are enabled once the boot session and a deployed workflow are active", async ({
+test("a deployed agent's Run locally and Deploy are enabled in its modal", async ({
   page,
 }) => {
-  test.fixme(true, NO_HOME.verbs);
-  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
-    "data-agent",
-    "leasing",
-  );
-  await expect(page.getByTestId("session-step-local")).toBeEnabled();
-  await expect(page.getByTestId("session-step-deploy")).toBeEnabled();
+  await openAgentModal(page, "acme-app", "leasing");
+  await expect(page.getByTestId("agent-modal-run-local")).toBeEnabled();
+  await expect(page.getByTestId("agent-modal-deploy")).toBeEnabled();
 });
 
 test.describe("two-zone IA (Project › Sessions rail, one centre)", () => {
@@ -464,56 +442,6 @@ test.describe("two-zone IA (Project › Sessions rail, one centre)", () => {
       "sess-boot",
     );
     await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-  });
-
-  test("an agent with no session is one Start chat away on its project's map", async ({
-    page,
-  }) => {
-    // rfq has no live session. Its project's map lists it; its panel says it
-    // has none yet, and Start chat runs the create+bind path in rfq's OWN
-    // project (never borrowing the acme-app session).
-    await openProjectMap(page, "rfq-agent");
-    await page.getByTestId("map-agent-rfq").click();
-    await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", "rfq");
-    // The panel lists only rfq's own LIVE-or-recent bound sessions; the exited
-    // fixture session is unbound, so none.
-    await expect(page.getByTestId("map-agent-sessions-empty")).toBeVisible();
-
-    const id = await startChatWithRfq(page);
-    // The session gets the folder's next default title: the exited fixture
-    // session keeps "rfq-agent", so this one is "rfq-agent 2".
-    await expect(page.getByTestId("session-context-title")).toHaveText(
-      "rfq-agent 2",
-    );
-    await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId(`rail-session-${id}`)).toHaveAttribute("data-agent", "rfq");
-  });
-
-  test("the mapping invariant: selected session == its bound agent", async ({
-    page,
-  }) => {
-    // On load: boot is selected and bound to leasing.
-    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
-      "data-agent",
-      "leasing",
-    );
-    await expect(page.getByTestId("session-context-title")).toHaveText(
-      "acme-app",
-    );
-
-    // Start a chat with rfq: the selection and the binding move together to
-    // rfq.
-    const id = await startChatWithRfq(page);
-    await expect(page.getByTestId(`rail-session-${id}`)).toHaveAttribute("data-selected", "true");
-    await expect(page.getByTestId("rail-session-sess-boot")).not.toHaveAttribute(
-      "data-selected",
-      "true",
-    );
-    await expect(page.getByTestId("session-context-title")).toHaveText(
-      "rfq-agent 2",
-    );
-    // Still exactly one filled row.
-    await expect(page.locator(".rail-list .workspace-row.is-selected")).toHaveCount(1);
   });
 
   test("session naming: rename from the header menu, persisted across reloads", async ({
@@ -1044,61 +972,26 @@ test.describe("workflow actions", () => {
     expect(overflowing).toBe(false);
   });
 
-  test("action bar shows the unified split Run control; the Prod globe stays; the deployed pill links to the dashboard", async ({
+  test("an agent's verbs are four visible controls in its modal header, with no Open prod and no dashboard pill", async ({
     page,
   }) => {
-    test.fixme(true, NO_HOME.verbs);
-    // The main segment opens the last available target; the menu makes both
-    // Local and Cloud explicit without separate Test/Run buttons.
-    const localBtn = page.getByTestId("session-step-local");
-    await expect(localBtn).toBeVisible();
-    await expect(localBtn).toContainText("Run · Local");
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    await expect(
-      page.getByRole("menuitemradio", { name: /Local/ }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitemradio", { name: /Cloud/ }),
-    ).toBeEnabled();
-    await page.keyboard.press("Escape");
-
-    // Prod is a real destination (the globe shortcut), not a removed button.
-    await expect(page.getByTestId("session-step-prod")).toBeVisible();
-    // The old open_prod macro button is gone from the action bar.
+    // The verbs are visible controls, never a menu or a split target picker
+    // (flow-map-chat-overlay.md 4.2b; MAP-CHAT.md "Agent verbs").
+    await openAgentModal(page, "acme-app", "leasing");
+    const verbs = ["visualize", "run-local", "prod-run", "deploy"];
+    for (const verb of verbs)
+      await expect(page.getByTestId(`agent-modal-${verb}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Choose run target" })).toHaveCount(0);
+    // The old open_prod macro button stays gone.
     await expect(page.getByTestId("macro-open_prod")).toHaveCount(0);
-
-    // Rail workflow rows still carry no macro strips — the wizard owns them.
+    // Rail rows still carry no macro strips.
     await expect(page.getByTestId("workflow-macros")).toHaveCount(0);
-
-    // The deployed pill doubles as the dashboard link and sits in the canvas
-    // tab bar for deployed workflows. leasing is deployed (definitionId set) on load.
-    await page.getByTestId("right-tab-canvas").click();
-    const dashLink = page.getByTestId("workflow-dashboard-link");
-    await expect(dashLink).toBeVisible();
-    await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/agents\//);
-    await expect(dashLink).toHaveAttribute("target", "_blank");
+    // Deploy status detail (the dashboard pill) has no home in the modal; it
+    // was dropped with the right pane (MAP-CHAT.md, calls where rev 4 is
+    // silent).
+    await expect(page.getByTestId("workflow-dashboard-link")).toHaveCount(0);
   });
 
-});
-
-test("steps tab shows its own empty state (not canvas copy) before anything is rendered", async ({
-  page,
-}) => {
-  test.fixme(true, NO_HOME.steps);
-  // The second leasing session has no generated canvas content, so the Steps
-  // tab hits the same early-return state as the board — but must talk about
-  // steps. (The boot session opens on its board, which does post a step graph.)
-  await selectSession(page, "sess-leasing-2");
-  await page.getByTestId("right-tab-steps").click();
-  const empty = page.locator(".canvas-empty");
-  await expect(empty).toContainText("No steps yet");
-  await expect(empty).toContainText("Steps are read from the bound agent");
-  await expect(empty).not.toContainText("Nothing generated yet");
-  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
-
-  // The board keeps its own copy on the Canvas tab.
-  await page.getByTestId("right-tab-canvas").click();
-  await expect(empty).toContainText("Nothing generated yet");
 });
 
 test("the canvas is a single controlled surface — no separate preview tab or port suggestions", async ({
@@ -1145,7 +1038,7 @@ test("a stale enrichment renders with the 'stale — Refresh' chip in the served
       <p class="canvas-subtitle">Handles lease applications end to end</p>
     </div>
   </body></html>`;
-  // The entered page's board arrives as `srcdoc`; serve the stale document
+  // The modal's board arrives as `srcdoc`; serve the stale document
   // through that same frame.
   await openLeasingBoard(page, false);
   await page.evaluate((html) => {
@@ -1165,59 +1058,57 @@ test("a stale enrichment renders with the 'stale — Refresh' chip in the served
 test("a pending canvas load shows a skeleton over the iframe — never a blank pane", async ({
   page,
 }) => {
-  test.fixme(
-    true,
-    "the stall seam was the session's served /canvas/<id>/ document; the entered page's board arrives inline from the agent graph route, which mock mode cannot hold open (SAP-3838 re-points this at the agent modal)",
-  );
-  // Stall the canvas document so the load stays pending long enough to assert
-  // on the skeleton deterministically.
+  // The modal's board arrives inline (`srcdoc`) from the agent graph route,
+  // so the stall seam is a subresource the document waits on: the frame's
+  // load event, which lowers the skeleton, waits for it.
   let releaseCanvas = (): void => {};
   const gate = new Promise<void>((resolve) => {
     releaseCanvas = resolve;
   });
-  await page.route("**/canvas/sess-boot/**", async (route) => {
+  await page.route("**/stalled-canvas-asset.png", async (route) => {
     await gate;
-    await route.fulfill({
-      contentType: "text/html",
-      body: "<html><body>diagram</body></html>",
-    });
+    await route.fulfill({ status: 404, body: "" });
   });
-
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (message: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
+  await page.evaluate(async () => {
+    const modulePath = performance
+      .getEntriesByType("resource")
+      .find((entry) => new URL(entry.name).pathname === "/src/lib/api.ts")!.name;
+    const { MockApi } = await import(modulePath);
+    const read = MockApi.prototype.getWorkflowGraph;
+    MockApi.prototype.getWorkflowGraph = async function (path: string) {
+      const answer = await read.call(this, path);
+      return {
+        ...answer,
+        document:
+          '<html><body>diagram<img src="/stalled-canvas-asset.png"></body></html>',
+      };
+    };
   });
+  await openAgentModal(page, "acme-app", "leasing");
 
   // While the iframe document is in flight: shimmer skeleton visible (with
   // its a11y label).
-  await expect(page.getByTestId("canvas-loading")).toBeVisible();
-  await expect(page.getByTestId("canvas-loading")).toHaveAttribute(
-    "aria-label",
-    "Rendering diagram",
-  );
+  const loading = page.getByTestId("agent-modal").getByTestId("canvas-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toHaveAttribute("aria-label", "Rendering diagram");
 
   // Once loaded the skeleton fades out (kept mounted briefly with .is-fading)
   // and then unmounts.
   releaseCanvas();
-  await expect(page.getByTestId("canvas-loading")).toHaveCount(0, {
-    timeout: 5_000,
-  });
-  await expect(page.locator(".canvas-iframe")).toBeVisible();
+  await expect(loading).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator(".agent-modal .canvas-iframe")).toBeVisible();
 });
 
 test.describe("background-task canvas states", () => {
   // A board shows only its own session's tasks (CanvasPane filters on
-  // `sessionId`), and the entered page has no session.
+  // `sessionId`), and the agent modal's board has no session. Since SAP-3839
+  // no board action starts a background task either: Visualize re-reads the
+  // graph route and Describe is a session macro. Whether the activity view
+  // keeps a producer is a follow-up decision, so these wait on it.
   test.beforeEach(() => {
     test.fixme(
       true,
-      "background-task activity is filtered to the board's session; the entered page has none until tasks are keyed by agent path (SAP-3839) and shown in the agent modal (SAP-3838)",
+      "background-task activity is filtered to the board's session, the agent modal's board has none, and since SAP-3839 no board verb starts a background task: the activity view has no producer (follow-up)",
     );
   });
   const baseTask = {
@@ -1331,13 +1222,10 @@ test.describe("background-task canvas states", () => {
     await publish(page, { ...baseTask, id: "task-2", status: "running" });
     await expect(page.getByTestId("canvas-task-activity")).toBeVisible();
 
-    // ...and switching the subject mid-run (Start chat with rfq) hides it
-    // again: the rfq session's pane must not show leasing's enrichment
-    // progress.
-    await startChatWithRfq(page);
-    await expect(page.getByTestId("session-context-title")).toContainText(
-      "rfq",
-    );
+    // ...and switching the subject mid-run (rfq's modal) hides it again:
+    // rfq's board must not show leasing's enrichment progress.
+    await page.getByTestId("agent-modal-close").click();
+    await openAgentModal(page, "rfq-agent", "rfq");
     await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
   });
 
@@ -1490,118 +1378,79 @@ test.describe("background-task canvas states", () => {
   });
 });
 
-test.describe("agent action bar (status chip + right-anchored actions)", () => {
-  // Every test here drives the Run / Deploy controls beside a bound session.
-  test.beforeEach(() => {
-    test.fixme(true, NO_HOME.verbs);
-  });
-  test("deployed workflow: the split Run is primary, the deployed pill links out, and Cloud fires a direct prod run", async ({
-    page,
-  }) => {
-    // Boot session is bound to "leasing", which has a definitionId — the one
-    // durable signal the server proves; everything else is a repeatable action.
-    const bar = page.getByTestId("session-steps");
-    await expect(bar).toBeVisible();
-
-    // Deployed → the unified Run control is filled; the lifecycle pill lives once in the
-    // right-pane header (the deployed dashboard link), not in the action bar.
-    const run = page.getByTestId("session-step-local");
-    await expect(run).toBeEnabled();
-    await expect(run).toHaveClass(/session-action-primary/);
-    await page.getByTestId("right-tab-canvas").click();
-    await expect(page.getByTestId("workflow-dashboard-link")).toContainText(
-      "deployed",
-    );
-
-    // Actions sit right-anchored, in order split Run → Deploy.
-    const runBox = await run.boundingBox();
-    const deployBox = await page
-      .getByTestId("session-step-deploy")
-      .boundingBox();
-    expect(deployBox?.x ?? 0).toBeGreaterThan(runBox?.x ?? 0);
-
-    // Explicit Cloud opens the input sheet, then fires the DIRECT prod route.
-    // it records lastDirectAction, never lastMacroRun, and carries leasing's
-    // definitionId as the runs route wants it (a string).
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    await page.getByRole("menuitemradio", { name: /Cloud/ }).click();
-    await page.getByTestId("run-sheet-submit").click();
-    await page.waitForFunction(
+test.describe("agent verbs in the modal header (right-anchored, by agent path)", () => {
+  const lastDirectAction = (page: Page) =>
+    page.evaluate(
       () =>
         (
           window as unknown as {
-            __HARNESS_TEST__?: { lastDirectAction?: unknown };
+            __HARNESS_TEST__?: {
+              lastDirectAction?: { action: string; req: { definitionId?: string } };
+            };
           }
         ).__HARNESS_TEST__?.lastDirectAction,
     );
-    const lastDirect = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __HARNESS_TEST__: {
-              lastDirectAction?: {
-                action: string;
-                req: { definitionId?: string };
-              };
-            };
-          }
-        ).__HARNESS_TEST__.lastDirectAction,
-    );
-    expect(lastDirect?.action).toBe("run");
-    expect(lastDirect?.req?.definitionId).toBe("4821");
-  });
 
-  test("undeployed workflow: no deployed pill, Deploy is primary, and Run is gated with the deploy reason", async ({
+  test("deployed agent: verbs sit right-anchored in order, and Run fires a direct prod run", async ({
     page,
   }) => {
-    await startChatWithRfq(page);
-    await expect(page.getByTestId("session-context-title")).toContainText(
-      "rfq",
-    );
+    // leasing has a definitionId: the one durable signal the server proves.
+    await openAgentModal(page, "acme-app", "leasing");
+    await expect(page.getByTestId("agent-modal-state")).toHaveText("Deployed");
 
-    // A Draft has no lifecycle pill: the deployed dashboard link is absent, and
-    // Deploy is the filled primary CTA instead.
-    await page.getByTestId("right-tab-canvas").click();
+    // Right-anchored, in order: Visualize, Run locally, Run, Deploy, then ×.
+    const order = await page
+      .locator(".agent-modal-verbs [data-testid]")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+    expect(order).toEqual([
+      "agent-modal-visualize",
+      "agent-modal-run-local",
+      "agent-modal-prod-run",
+      "agent-modal-deploy",
+      "agent-modal-close",
+    ]);
+    const head = (await page.locator(".agent-modal-head").boundingBox())!;
+    const close = (await page.getByTestId("agent-modal-close").boundingBox())!;
+    expect(head.x + head.width - (close.x + close.width)).toBeLessThan(24);
+
+    // Run opens the input sheet, then fires the DIRECT prod route: it records
+    // lastDirectAction, never lastMacroRun, and carries leasing's
+    // definitionId as the runs route wants it (a string).
+    await page.getByTestId("agent-modal-prod-run").click();
+    await page.getByTestId("run-sheet-submit").click();
+    await expect.poll(async () => (await lastDirectAction(page))?.action).toBe("run");
+    expect((await lastDirectAction(page))?.req?.definitionId).toBe("4821");
+  });
+
+  test("undeployed agent: Draft, Deploy is primary, and Run is gated with the deploy reason", async ({
+    page,
+  }) => {
+    await openAgentModal(page, "rfq-agent", "rfq");
+    await expect(page.getByTestId("agent-modal-state")).toHaveText("Draft");
     await expect(page.getByTestId("workflow-dashboard-link")).toHaveCount(0);
-    await expect(page.getByTestId("session-step-deploy")).toHaveClass(
-      /session-action-primary/,
-    );
-
-    await expect(page.getByTestId("session-step-local")).toBeEnabled();
-    await expect(page.getByTestId("session-step-deploy")).toBeEnabled();
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    const run = page.getByTestId("session-step-run");
+    await expect(page.getByTestId("agent-modal-deploy")).toHaveClass(/is-primary/);
+    await expect(page.getByTestId("agent-modal-run-local")).toBeEnabled();
+    await expect(page.getByTestId("agent-modal-deploy")).toBeEnabled();
+    const run = page.getByTestId("agent-modal-prod-run");
     await expect(run).toBeDisabled();
-    await expect(run).toHaveAttribute("title", /Not deployed yet/);
-
+    await expect(run).toHaveAttribute("data-tooltip", "Not deployed yet");
     await page.screenshot({ path: "web/e2e/screenshots/session-steps.png" });
   });
 
-  test("narrow pane: the primary split Run keeps its target label", async ({
+  test("narrow window: icon-only verbs keep their accessible names and tooltips", async ({
     page,
   }) => {
-    // 820px squeezes the center pane to its 320px floor — under the bar's
-    // 580px container threshold, so secondary labels hide while icons stay.
     await page.setViewportSize({ width: 820, height: 720 });
-
-    const local = page.getByTestId("session-step-local");
-    await expect(local).toBeVisible();
-    await expect(local.locator(".session-step-label")).toBeVisible();
-    await expect(local).toContainText("Run · Local");
-
-    // Icon-only stays accessible: name + tooltip ride the button itself.
-    await expect(local).toHaveAttribute("aria-label", /.+/);
-    await expect(local).toHaveAttribute("data-tooltip", /.+/);
-
+    await openAgentModal(page, "acme-app", "leasing");
+    for (const verb of ["visualize", "run-local", "prod-run", "deploy"]) {
+      const button = page.getByTestId(`agent-modal-${verb}`);
+      await expect(button).toBeVisible();
+      await expect(button).toHaveAttribute("aria-label", /.+/);
+      await expect(button).toHaveAttribute("data-tooltip", /.+/);
+    }
     await page.screenshot({
       path: "web/e2e/screenshots/session-steps-icon-only.png",
     });
-
-    // At a wide width the session bar clears the 580px threshold and the
-    // secondary labels return (the center pane must exceed 580px, so the window
-    // needs to be well beyond the 3-pane split's narrow floors).
-    await page.setViewportSize({ width: 1800, height: 800 });
-    await expect(local.locator(".session-step-label")).toBeVisible();
   });
 });
 
@@ -1744,15 +1593,26 @@ test.describe("canvas iframe theme", () => {
   test("the canvas iframe carries the app's theme and flips on toggle", async ({
     page,
   }) => {
-    // The entered page's board is a `srcdoc` frame, which has no `?theme=`;
+    // The modal's board is a `srcdoc` frame, which has no `?theme=`;
     // the pane stamps the theme on the document's root instead.
     await openLeasingBoard(page, false);
-    const root = page.frameLocator(".canvas-iframe").locator("html");
+    const root = page
+      .frameLocator(".agent-modal .canvas-iframe")
+      .locator("html");
     await expect(root).toHaveAttribute("data-theme", "light");
 
-    await toggleTheme(page);
+    // The modal makes the rail (and its account menu) inert, so flip the
+    // theme through the app's own theme module: the board must re-theme
+    // live, without the modal closing.
+    await page.evaluate(async () => {
+      const modulePath = performance
+        .getEntriesByType("resource")
+        .find((entry) => new URL(entry.name).pathname === "/src/lib/theme.ts")!.name;
+      const { toggleTheme } = await import(modulePath);
+      toggleTheme();
+    });
     await expect(
-      page.frameLocator(".canvas-iframe").locator("html"),
+      page.frameLocator(".agent-modal .canvas-iframe").locator("html"),
     ).toHaveAttribute("data-theme", "dark");
   });
 });
@@ -1838,152 +1698,16 @@ test("canvas controls: the board widget zooms and fits", async ({
   await expect(controls.getByTestId("canvas-expand")).toHaveCount(0);
 });
 
-test("the canvas expand lifts the board to an overlay without remounting it", async () => {
-  test.fixme(
-    true,
-    "the board's expand control lived in the pane's tab bar beside a session; the entered page mounts the board with no expand (SAP-3838 gives the modal its own)",
-  );
-});
-
-test("steps tab drills into a step's real transitions and slides back", async ({
-  page,
-}) => {
-  test.fixme(true, NO_HOME.steps);
-  // The demo document posts its real graph ({type:"sapiom-canvas:graph"});
-  // load it via the same reload event the agent fires.
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  const frame = page.locator(".canvas-frame-wrap");
-  await expect(frame).toHaveAttribute("data-view", "board");
-
-  // Steps is a first-class right-pane tab, a projection of the same posted
-  // graph; the subheader names the workflow and the REAL step count.
-  await page.getByTestId("right-tab-steps").click();
-  await expect(frame).toHaveAttribute("data-view", "steps");
-  // One counting rule everywhere (graphCounts): pipeline steps exclude the
-  // two terminal exits, which are named separately.
-  await expect(page.getByTestId("canvas-steps-count")).toHaveText(
-    "4 steps · 2 exits",
-  );
-
-  // The step list is built from the posted graph, not guessed.
-  await expect(page.getByTestId("canvas-steps-list")).toBeVisible();
-  const approveRow = page.getByTestId("canvas-step-row-approve");
-  await expect(approveRow).toBeVisible();
-
-  // Row anatomy carries manifest truth: zero-padded index, name + role copy,
-  // and structural facts (input contract size, branch fan-out, timeout).
-  await expect(approveRow).toContainText("04");
-  await expect(approveRow).toContainText("1 input · 2 branches");
-  await expect(page.getByTestId("canvas-step-row-credit-check")).toContainText(
-    "30s limit",
-  );
-  // Grouped steps sit under their board band's label.
-  await expect(page.getByTestId("canvas-steps-list")).toContainText(
-    "intake & screening",
-  );
-
-  // Rows are an ACCORDION: clicking one expands its FULL detail INLINE — a
-  // dropdown, NOT a separate slide-in view (data-view stays "steps").
-  await approveRow.click();
-  const expand = page.getByTestId("canvas-step-expand-approve");
-  await expect(expand).toBeVisible();
-  await expect(frame).toHaveAttribute("data-view", "steps");
-
-  const detail = page.getByTestId("canvas-step-detail");
-  await expect(detail).toBeVisible();
-
-  // Real outgoing transitions with their branch conditions, both terminals.
-  await expect(detail).toContainText("draft-lease");
-  await expect(detail).toContainText("score ≥ 620");
-  await expect(detail).toContainText("manual-review");
-  await expect(detail).toContainText("declined");
-
-  // The Contract section renders the step's REAL declared input schema and the
-  // capabilities it calls.
-  const contract = detail.getByTestId("canvas-detail-input");
-  await expect(contract).toContainText("score");
-  await expect(contract).toContainText("number");
-  await expect(detail.getByTestId("canvas-detail-capabilities")).toContainText(
-    "rules.evaluate",
-  );
-
-  // Per-step coding-agent actions live in the dropdown (ported from the retired
-  // detail-pane header): "Ask coding agent" sends a step-scoped prompt (never a
-  // workflow-scoped one), and "Ask to modify" sends the modify prompt.
-  const askCodingAgent = detail.getByTestId("canvas-detail-ask");
-  await expect(askCodingAgent).toBeVisible();
-  await expect(askCodingAgent).toContainText("Ask coding agent");
-  await askCodingAgent.click();
-  await expect
-    .poll(async () =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __HARNESS_TEST__?: {
-                lastInjectInput?: { req: { text: string } };
-              };
-            }
-          ).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
-      ),
-    )
-    .toContain("step of this agent");
-  const askPrompt = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } };
-        }
-      ).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
-  );
-  expect(askPrompt.toLowerCase()).not.toContain("workflow");
-
-  await page.evaluate(() => {
-    const hook = (
-      window as unknown as { __HARNESS_TEST__?: Record<string, unknown> }
-    ).__HARNESS_TEST__;
-    if (hook) delete hook.lastInjectInput;
-  });
-  await detail.getByTestId("canvas-detail-modify").click();
-  await expect
-    .poll(async () =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __HARNESS_TEST__?: {
-                lastInjectInput?: { req: { text: string } };
-              };
-            }
-          ).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
-      ),
-    )
-    .toContain("step of this agent");
-
-  await page.screenshot({ path: "web/e2e/screenshots/canvas-step-detail.png" });
-
-  // Collapsing the row hides the detail again; the list stays put.
-  await approveRow.click();
-  await expect(page.getByTestId("canvas-step-detail")).toHaveCount(0);
-  await expect(frame).toHaveAttribute("data-view", "steps");
-  await page.getByTestId("right-tab-canvas").click();
-  await expect(frame).toHaveAttribute("data-view", "board");
-});
-
 test("canvas repair sends the coding agent an Agent-terminology prompt", async ({
   page,
 }) => {
-  test.fixme(true, NO_HOME.inject);
-  const canvasBody = page.frameLocator(".canvas-iframe").locator("body");
+  // The modal's board has no session to type into: the fix starts a NEW
+  // project-root session with the repair prompt as its first message
+  // (flow-map-chat-overlay.md 4.4b).
+  await openLeasingBoard(page, false);
+  const canvasBody = page
+    .frameLocator(".agent-modal .canvas-iframe")
+    .locator("body");
   await expect(canvasBody).toBeVisible();
   // POST UNTIL IT LANDS. The board is an srcdoc iframe the shell re-renders, so
   // a single postMessage can be aimed at a document that is replaced before it
@@ -2017,35 +1741,30 @@ test("canvas repair sends the coding agent an Agent-terminology prompt", async (
   await expect(page.getByTestId("canvas-render-error")).toBeVisible();
   await page.getByTestId("canvas-error-fix").click();
 
-  await expect
-    .poll(async () =>
-      page.evaluate(
-        () =>
+  const firstPrompt = () =>
+    page.evaluate(
+      () =>
+        (
           (
             window as unknown as {
               __HARNESS_TEST__?: {
-                lastInjectInput?: { req: { text: string } };
+                createSessionCalls?: Array<{ req: { initialPrompt?: string } }>;
               };
             }
-          ).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
-      ),
-    )
-    .toContain("agent graph extracts cleanly");
-  const prompt = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } };
-        }
-      ).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
-  );
-  expect(prompt.toLowerCase()).not.toContain("workflow");
+          ).__HARNESS_TEST__?.createSessionCalls ?? []
+        ).at(-1)?.req.initialPrompt ?? "",
+    );
+  await expect.poll(firstPrompt).toContain("agent graph extracts cleanly");
+  expect((await firstPrompt()).toLowerCase()).not.toContain("workflow");
 });
 
 test("a detected dev server surfaces a Preview chip on the action bar", async ({
   page,
 }) => {
-  test.fixme(true, NO_HOME.verbs);
+  test.fixme(
+    true,
+    "the session action bar (SessionStepsBar) is no longer mounted anywhere, and the agent modal carries no Preview / App Link chip or Prod globe: no home yet (SAP-3838 product gap, reported)",
+  );
   await expect(page.getByTestId("session-preview-chip")).toHaveCount(0);
   await page.evaluate(() => {
     (
@@ -2070,7 +1789,10 @@ test("a detected dev server surfaces a Preview chip on the action bar", async ({
 });
 
 test("an agent without an App Link gets no App Link chip", async ({ page }) => {
-  test.fixme(true, NO_HOME.verbs);
+  test.fixme(
+    true,
+    "the session action bar (SessionStepsBar) is no longer mounted anywhere, and the agent modal carries no Preview / App Link chip or Prod globe: no home yet (SAP-3838 product gap, reported)",
+  );
   // The linked boot agent's bar, at rest: the read answered "no App Link", so
   // the bar is exactly what it was before the chip existed (SAP-3255).
   await expect(page.getByTestId("session-step-prod")).toBeVisible();
@@ -2080,7 +1802,10 @@ test("an agent without an App Link gets no App Link chip", async ({ page }) => {
 test("a published App Link sits beside the Preview chip, told apart by word and icon", async ({
   page,
 }) => {
-  test.fixme(true, NO_HOME.verbs);
+  test.fixme(
+    true,
+    "the session action bar (SessionStepsBar) is no longer mounted anywhere, and the agent modal carries no Preview / App Link chip or Prod globe: no home yet (SAP-3838 product gap, reported)",
+  );
   // Pins anatomy only. Mock mode has no durable App Link, so `mockAppLink=live`
   // is a fixture opt-in, not evidence the read works (SAP-3255).
   await page.goto("/?seed=0&mockAppLink=live");
@@ -2122,105 +1847,9 @@ test("a published App Link sits beside the Preview chip, told apart by word and 
   expect(order).toEqual(["session-preview-chip", "session-app-link-chip", "session-step-prod"]);
 });
 
-test("an observed run renders per-step status and latency in the steps tab", async ({
-  page,
-}) => {
-  test.fixme(true, NO_HOME.runs);
-  // Load the demo document's graph first and WAIT for the board: lastMessage
-  // is a single slot, so back-to-back publishes in one tick would drop the
-  // reload. Then announce the run the way the server's ExecutionDetector does.
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
-    "data-view",
-    "board",
-  );
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "execution.started",
-      harnessSessionId: "sess-boot",
-      executionId: "exec-demo-1",
-      target: "prod",
-    });
-  });
-  await page.getByTestId("right-tab-steps").click();
-
-  // Run truth appears as chronological attempts with status + timing.
-  const introRow = page.getByRole("option", { name: /intake/ });
-  await expect(introRow.locator(".run-timeline-status")).toHaveAttribute(
-    "aria-label",
-    "passed",
-  );
-  await expect(introRow).toContainText("240ms");
-  await expect(
-    page.getByRole("option", { name: /credit-check/ }),
-  ).toContainText("1.9s");
-  // The chip and compact header carry status and Cloud target.
-  await expect(page.getByTestId("canvas-run-chip")).toContainText(
-    "prod run completed",
-  );
-  await expect(page.locator(".run-workspace-header")).toContainText("Cloud");
-
-  // Detail carries the same run truth in the shared attempt inspector.
-  await introRow.click();
-  const runSection = page.getByRole("region", { name: "intake attempt 1" });
-  await expect(runSection).toContainText("passed");
-  await expect(runSection).toContainText("240ms");
-});
-
-test("an observed run renders its real steps even before anything is visualized", async ({
-  page,
-}) => {
-  test.fixme(true, NO_HOME.runs);
-  // The second leasing session ships no bundled doc, so nothing is visualized
-  // for it (no graph). A run announcement alone must still surface real
-  // per-step truth in the Steps tab instead of "No steps yet". (The boot
-  // session opens on its board, which already posts a graph — the fallback is
-  // exactly this no-graph path.)
-  await selectSession(page, "sess-leasing-2");
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "execution.started",
-      harnessSessionId: "sess-leasing-2",
-      executionId: "exec-local-1",
-      target: "local",
-    });
-  });
-  await page.getByTestId("right-tab-steps").click();
-  const workspace = page.getByTestId("run-workspace");
-  await expect(workspace).toBeVisible();
-  await expect(page.getByRole("option", { name: /intake/ })).toContainText(
-    "240ms",
-  );
-  await expect(
-    page.getByRole("option", { name: /credit-check/ }),
-  ).toContainText("1.9s");
-  // The server declared this run local: the compact header carries the target. The
-  // Studio is cost-free, so no money renders anywhere on the run surface.
-  await expect(page.locator(".run-workspace-header")).toContainText("Local");
-  await expect(workspace).not.toContainText("$");
-});
-
 test("a second run never erases the first: the run picker recalls past runs", async ({
   page,
 }) => {
-  test.fixme(true, NO_HOME.runs);
   const publishRun = (executionId: string): Promise<void> =>
     page.evaluate((id) => {
       (
@@ -2235,27 +1864,15 @@ test("a second run never erases the first: the run picker recalls past runs", as
       });
     }, executionId);
 
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
-    "data-view",
-    "board",
-  );
+  // leasing's board in its modal; sess-boot is bound to leasing, so the runs
+  // it announces are the agent's.
+  await openLeasingBoard(page, false);
   await publishRun("exec-demo-1");
   // Second run: the first run's record survives the new execution.
   await publishRun("exec-demo-2");
 
   // The run chip becomes a picker with two observed runs: any past run is
   // one click away, refetched through the same run-state endpoint.
-  await page.getByTestId("right-tab-steps").click();
   const chip = page.getByTestId("canvas-run-chip");
   await expect(chip).toContainText("prod run completed");
   await chip.click();
@@ -2284,7 +1901,7 @@ test("board nodes get hover and selected states through the message contract", a
   // 1000px would fit at the 100% cap; 820 keeps both zooms in between.
   await page.setViewportSize({ width: 1280, height: 820 });
   await openLeasingBoard(page);
-  const boardFrame = page.frameLocator(".canvas-frame-wrap iframe");
+  const boardFrame = page.frameLocator(".agent-modal .canvas-frame-wrap iframe");
   // The intake node sits at the top of the cascade, safely above the
   // overview sheet that overlays the lower board.
   const intakeNode = boardFrame.locator('[data-node-id="intake"]');
@@ -2307,9 +1924,9 @@ test("board nodes get hover and selected states through the message contract", a
     "true",
   );
 
-  // A non-drag click on a node is a PICK: the bottom inspector populates in
-  // place (no tab switch — the Steps tab is its explicit "Open step"
-  // drill), and the board rings the selected node. Collapse the overview
+  // A non-drag click on a node is a PICK: the modal's small step card shows
+  // it in place (flow-map-chat-overlay.md 4.2b.4, no step page), and the
+  // board rings the selected node. Collapse the overview
   // sheet first so it can't overlay the lower nodes — the taller board
   // refits (larger zoom), so wait for that view to settle too.
   const zoomBeforeCollapse = await page
@@ -2330,10 +1947,8 @@ test("board nodes get hover and selected states through the message contract", a
     "data-view",
     "board",
   );
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText(
-    "approve?",
-  );
+  await expect(page.getByTestId("step-card-title")).toHaveText("approve?");
   await expect(approveNode).toHaveClass(/is-selected/);
-  await page.getByTestId("canvas-inspector-close").click();
+  await page.getByTestId("step-card-close").click();
   await expect(approveNode).not.toHaveClass(/is-selected/);
 });

@@ -88,14 +88,11 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     const sibling = testInfo.title.startsWith("a scaffolded sibling")
       ? "&mockCreatedSibling=1"
       : "";
-    const empty = testInfo.title.includes("without a live conversation")
-      ? "&mockNoLiveSessions=1"
-      : "";
     const restored = testInfo.title.includes("after restart")
       ? "&mockRestoredSessions=1"
       : "";
     await page.goto(
-      `/?seed=0&mockFixtures=deep&mockStudioProjects=present${sibling}${empty}${restored}`,
+      `/?seed=0&mockFixtures=deep&mockStudioProjects=present${sibling}${restored}`,
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
@@ -110,8 +107,8 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     expect(before.selectedSession).toBe("sess-boot");
     await openProjectMap(page, "acme-app");
     await page.getByTestId("map-agent-report-reviewer").click();
-    await expect(page.getByTestId("map-agent-panel")).toHaveAttribute(
-      "data-agent",
+    await expect(page.getByTestId("map-card")).toHaveAttribute(
+      "data-subject",
       "report-reviewer",
     );
     expect(await navigationEvidence(page)).toEqual(before);
@@ -119,7 +116,10 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openProjectMap(page, "acme-app");
     await page.getByTestId("map-agent-report-reviewer").click();
-    await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+    await expect(page.getByTestId("map-card")).toHaveAttribute(
+      "data-subject",
+      "report-reviewer",
+    );
     expect(await navigationEvidence(page)).toEqual(before);
   });
 
@@ -147,7 +147,10 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
 
       await openProjectMap(page, "acme-app");
       await page.getByTestId("map-agent-report-reviewer").click();
-      await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+      await expect(page.getByTestId("map-card")).toHaveAttribute(
+      "data-subject",
+      "report-reviewer",
+    );
       expect(await navigationEvidence(page)).toEqual(before);
 
       // The exact conversation comes back with the session, not with the map.
@@ -187,33 +190,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       injectInputCalls: 0,
       resumeSessionCalls: 0,
     });
-  });
-
-  test("a scaffolded sibling without a live conversation starts its chat at its creating project's root", async ({
-    page,
-  }) => {
-    await openProjectMap(page, "acme-app");
-    await page.getByTestId("map-agent-report-reviewer").click();
-    await page.getByTestId("map-agent-start-chat").click();
-    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
-    const calls = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __HARNESS_TEST__?: {
-              createSessionCalls?: Array<{ req: { cwd: string } }>;
-            };
-          }
-        ).__HARNESS_TEST__?.createSessionCalls ?? [],
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.req.cwd).toBe("/Users/demo/acme-app");
-    await expect(page.getByTestId("rail-project-report-reviewer")).toHaveCount(0);
-    const created = (await rowsOf(page, "acme-app"))[0]!;
-    await expect(page.getByTestId(`rail-session-${created}`)).toHaveAttribute(
-      "data-agent",
-      "report-reviewer",
-    );
   });
 
   test("a scaffolded sibling goes with its closed project", async ({ page }) => {

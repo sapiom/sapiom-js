@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
   await openProject(page, "acme-app");
 });
 
-test("each project's pan and zoom survive another project and an agent Canvas", async ({
+test("each project's pan and zoom survive another project and an agent's modal", async ({
   page,
 }) => {
   const initial = await transform(page);
@@ -40,15 +40,17 @@ test("each project's pan and zoom survive another project and an agent Canvas", 
 
   await openProject(page, "acme-app");
   await expect.poll(() => transform(page)).toBe(acmeView);
-  // An agent's Canvas in between, entered from the map and back again. The
+  // An agent's modal in between, opened from the map and closed again. The
   // pan may have taken the node offscreen, so the gesture is dispatched rather
   // than aimed, which would scroll the viewport and spoil the comparison.
   await page
     .getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101")
     .dispatchEvent("dblclick");
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  await page.getByTestId("project-map-back").click();
+  await expect(page.getByTestId("agent-modal")).toBeVisible();
+  // The map stays mounted under the modal (I9).
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(1);
+  await page.getByTestId("agent-modal-close").click();
+  await expect(page.getByTestId("agent-modal")).toHaveCount(0);
   await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
     "data-layout-state",
     "ready",

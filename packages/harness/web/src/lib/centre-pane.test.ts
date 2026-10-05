@@ -39,7 +39,7 @@ describe("centrePane: one View × session state, one kind", () => {
   const expected: Record<string, Record<string, Centre["kind"]>> = {
     session: { none: "no-session", live: "workbench", starting: "workbench", exited: "dead" },
     project: { none: "project-map", live: "project-map", starting: "project-map", exited: "project-map" },
-    agent: { none: "agent-canvas", live: "agent-canvas", starting: "agent-canvas", exited: "agent-canvas" },
+    agent: { none: "project-map", live: "project-map", starting: "project-map", exited: "project-map" },
   };
   for (const [viewName, view] of Object.entries(VIEWS)) {
     for (const [sessionName, session] of Object.entries(SESSIONS)) {
@@ -52,14 +52,14 @@ describe("centrePane: one View × session state, one kind", () => {
 
   it("a project view never shows the selected session's chat", () => {
     const centre = centrePane(base({ view: VIEWS.project!, session: SESSIONS.live! }));
-    expect(centre).toEqual({ kind: "project-map", projectId: "p1" });
+    expect(centre).toEqual({ kind: "project-map", projectId: "p1", agentPath: null });
   });
 
-  it("carries the agent path into the agent canvas", () => {
+  it("keeps the map under an agent's modal and names the agent (I9)", () => {
     expect(centrePane(base({ view: VIEWS.agent! }))).toEqual({
-      kind: "agent-canvas",
+      kind: "project-map",
       projectId: "p1",
-      path: "/p1/leasing",
+      agentPath: "/p1/leasing",
     });
   });
 
@@ -77,9 +77,9 @@ describe("centrePane: one View × session state, one kind", () => {
 });
 
 describe("shownProjectId", () => {
-  it("names the project only for the map and the agent canvas", () => {
-    expect(shownProjectId({ kind: "project-map", projectId: "p1" })).toBe("p1");
-    expect(shownProjectId({ kind: "agent-canvas", projectId: "p2", path: "/x" })).toBe("p2");
+  it("names the project only for the map, with or without a modal over it", () => {
+    expect(shownProjectId({ kind: "project-map", projectId: "p1", agentPath: null })).toBe("p1");
+    expect(shownProjectId({ kind: "project-map", projectId: "p2", agentPath: "/x" })).toBe("p2");
     expect(shownProjectId({ kind: "workbench", sessionId: "s1" })).toBeNull();
   });
 });

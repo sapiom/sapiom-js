@@ -1,0 +1,322 @@
+/* An agent's modal over the project map (flow-map-chat-overlay.md 4.2b; mock
+   agent-studio-v2 agent-modal.css): a header row (name, state, Canvas |
+   Secrets, progress, verbs, close), then the board or the secrets table. It
+   leaves the rail and a margin of the map visible, so the map you return to
+   is on screen the whole time. */
+
+/* The scrim starts past the rail: the rail is not under the modal. It sits
+   on the popover rung (30) rather than the dialog rung (100), because the
+   board inside it opens menus (the run picker) that portal to the body at
+   30: at the same rung the later one in the document, the menu, paints on
+   top. Toasts, tooltips and the Run sheet still clear it. Doubled class: this
+   file can load before styles.css, whose .modal-backdrop sets inset and
+   z-index. */
+.modal-backdrop.agent-modal-backdrop {
+  left: var(--agent-modal-left, 0px);
+  z-index: 30;
+}
+
+/* Absolute within the scrim, which already starts at the rail's edge. */
+.agent-modal {
+  position: absolute;
+  inset: var(--sp6);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-lg);
+  container: agentmodal / inline-size;
+  animation: pop-in var(--transition-fast) ease-out;
+}
+
+.agent-modal:focus-visible {
+  outline: none;
+}
+
+.agent-modal-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex-shrink: 0;
+  height: var(--pane-header-h);
+  padding: 0 var(--sp2) 0 var(--pane-pad-x);
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.agent-modal-head > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.agent-modal-name {
+  font-size: var(--type-label);
+  font-weight: var(--fw-strong);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.agent-modal-state {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.agent-modal-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  margin-left: var(--sp3);
+}
+
+/* Segment buttons: quiet at rest, a filled pill marks the active one. */
+.agent-modal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex: 0 0 auto;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.agent-modal-tab:hover {
+  color: var(--text-dim);
+  background: var(--surface-hover);
+}
+
+.agent-modal-tab.is-active {
+  color: var(--text);
+  background: var(--active-shade);
+}
+
+.agent-modal-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.agent-modal-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+}
+
+.agent-modal-progress[data-tone="failed"] {
+  color: var(--red-text);
+}
+
+.agent-modal-progress-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber-text);
+  animation: agent-modal-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes agent-modal-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-modal,
+  .agent-modal-progress-dot {
+    animation: none;
+  }
+}
+
+/* The verbs and the close, glued to the row's right edge. */
+.agent-modal-verbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.agent-modal-close {
+  margin-left: var(--sp2);
+}
+
+/* Positioned, so the step card is bounded by the board's panel and never
+   slides under the modal's header on a short window. */
+.agent-modal-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Canvas keep-alive: hidden rather than unmounted, so the board's state
+   survives a tab flip. */
+.agent-modal-panel.is-hidden {
+  display: none;
+}
+
+.agent-modal-panel > .canvas-pane {
+  flex: 1;
+  min-height: 0;
+}
+
+.agent-modal-panel > .secrets-pane,
+.agent-modal-panel > * {
+  min-height: 0;
+}
+
+/* The narrow modal sheds the tab labels before anything clips. */
+@container agentmodal (max-width: 640px) {
+  .agent-modal-tab span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* A picked step's detail (4.2b.4, Q8): a small card floating over the
+   board's bottom-right inside the modal, scrolling inside itself. */
+.step-card {
+  position: absolute;
+  right: var(--sp3);
+  bottom: calc(var(--sp3) * 2 + var(--control-h-xs) + var(--sp1) * 2);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: min(23rem, calc(100% - var(--sp3) * 2));
+  /* Its bottom offset plus a top margin: it never reaches the panel's top. */
+  max-height: min(
+    24rem,
+    calc(100% - var(--sp3) * 3 - var(--control-h-xs) - var(--sp1) * 2)
+  );
+  overflow: hidden;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-floating);
+  box-shadow: var(--shadow-soft);
+}
+
+.step-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex: 0 0 auto;
+  height: var(--pane-header-h);
+  padding: 0 var(--sp2) 0 var(--pane-pad-x);
+  color: var(--text);
+  font-size: var(--type-label);
+  font-weight: var(--fw-medium);
+}
+
+.step-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-card-role {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.step-card-close {
+  margin-left: auto;
+}
+
+.step-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp3);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp3) var(--pane-pad-x) var(--sp4);
+  font-size: var(--type-label);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.step-card-desc {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.step-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.step-card-label {
+  margin: 0;
+  font-size: var(--type-meta);
+  font-weight: var(--fw-strong);
+  color: var(--text-faint);
+}
+
+.step-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-half);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step-card-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  min-width: 0;
+}
+
+.step-card-list code {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--text);
+}
+
+.step-card-meta,
+.step-card-none {
+  margin: 0;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.step-card-open {
+  margin-left: auto;
+}
+
+.step-card-pill {
+  padding: 0 var(--sp1);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+}

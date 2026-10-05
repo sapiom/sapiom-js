@@ -1,29 +1,29 @@
 /**
  * Step-click debug macros e2e coverage (SAP-1900).
  *
- * Contract under test — the CanvasStepInspector (board bottom-panel) now
- * carries three debug-macro buttons and a free-form ask textarea, all
- * injecting into the active session's terminal via harness.injectInput.
+ * Contract under test — the board's chat panel (the 💬 toggle) in the agent
+ * modal carries three debug-macro buttons and a free-form ask textarea. Each
+ * is a macro (flow-map-chat-overlay.md 4.4b): it starts a NEW project-root
+ * session with a first message tuned to the job, the step as context, and
+ * opens it. Nothing is typed into an existing session.
  *
  * Coverage:
- *  - Picking a board node surfaces the macro bar in the inspector.
- *  - "Debug this step" calls injectInput with the step's context + question.
+ *  - Picking a board node surfaces the step macros in the chat.
+ *  - "Debug this step" starts a session whose first message is the step's
+ *    context + question.
  *  - "Why is this step slow / stuck?" and "Explain this step" do the same.
- *  - Free-form textarea + Ask button inject a custom question.
- *  - Cmd+Enter in the free-form textarea also triggers inject.
- *  - The injected payload contains the step name (from extractStepContext).
- *  - A prod-run step (with run data) includes its status in the payload.
- *  - No macro bar is rendered when the inspector is absent (no node picked).
+ *  - Free-form textarea + Ask button send a custom question.
+ *  - Cmd+Enter in the free-form textarea also sends.
+ *  - A step with run data includes its status in the first message.
  *
- * All tests run in mock mode (VITE_MOCK=1) against the sess-boot session
- * whose canvas document is bundled at public/canvas/sess-boot/. The
- * window.__HARNESS_TEST__.lastInjectInput escape hatch (same pattern as
- * direct-actions.spec.ts and snippet-panel.spec.ts) lets Playwright read
- * the inject call without a real PTY.
+ * All tests run in mock mode (VITE_MOCK=1). The bundled interactive board at
+ * public/canvas/sess-boot/ is swapped into the modal's frame, and
+ * window.__HARNESS_TEST__.createSessionCalls lets Playwright read the
+ * session the macro starts.
  */
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
-import { openAgentCanvas, NO_HOME } from "./mock-navigation";
+import { openAgentModal } from "./mock-navigation";
 
 
 // ---------------------------------------------------------------------------
@@ -31,20 +31,24 @@ import { openAgentCanvas, NO_HOME } from "./mock-navigation";
 // ---------------------------------------------------------------------------
 
 /**
- * Navigate to a clean slate with leasing's board on its entered page (the
- * interim way into an agent). The bundled interactive fixture board is
- * swapped into the pane's own `srcdoc` frame, so picks travel the same
+ * leasing's board in its agent modal. The bundled interactive fixture board
+ * is swapped into the pane's own `srcdoc` frame, so picks travel the same
  * gesture-layer / hit path a generated board answers.
  */
-const loadBoard = async (page: Page): Promise<void> => {
-  await page.goto("/?seed=0");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  await openAgentCanvas(page, "acme-app", "leasing");
+const openBoard = async (page: Page): Promise<void> => {
+  await openAgentModal(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   await page.evaluate(async () => {
     const html = await (await fetch("/canvas/sess-boot/index.html")).text();
     (document.querySelector(".canvas-iframe") as HTMLIFrameElement).srcdoc = html;
   });
+};
+
+/** A clean slate, then leasing's board. */
+const loadBoard = async (page: Page): Promise<void> => {
+  await page.goto("/?seed=0");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+  await openBoard(page);
 };
 
 /** Click a board node through the gesture layer to populate the inspector. */
@@ -65,27 +69,39 @@ const openChat = async (page: Page): Promise<void> => {
   await expect(page.getByTestId("canvas-chat-panel")).toBeVisible();
 };
 
-/** Poll for the last inject recorded by MockApi.injectInput (mock delay is ~180ms). */
-const lastInject = async (page: Page): Promise<{ id: string; req: { text: string; submit: boolean } }> => {
-  let result: { id: string; req: { text: string; submit: boolean } } | null = null;
-  await expect.poll(async () => {
-    result = await page.evaluate(() => {
-      const win = window as unknown as {
-        __HARNESS_TEST__?: { lastInjectInput?: { id: string; req: { text: string; submit: boolean } } };
-      };
-      return win.__HARNESS_TEST__?.lastInjectInput ?? null;
-    });
-    return result;
-  }, { timeout: 3000, message: "expected lastInjectInput to be set after mock delay" }).not.toBeNull();
-  return result!;
-};
+type CreateCall = { req: { cwd: string; initialPrompt?: string } };
 
-/** Clear the lastInjectInput slot so the next assertion is unambiguous. */
-const clearLastInject = (page: Page): Promise<void> =>
-  page.evaluate(() => {
-    const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-    if (win.__HARNESS_TEST__) delete win.__HARNESS_TEST__["lastInjectInput"];
-  });
+/** The sessions created so far (MockApi.createSession records each). */
+const createCalls = (page: Page): Promise<CreateCall[]> =>
+  page.evaluate(
+    () =>
+      ((window as unknown as { __HARNESS_TEST__?: { createSessionCalls?: unknown[] } })
+        .__HARNESS_TEST__?.createSessionCalls ?? []) as CreateCall[],
+  );
+
+/**
+ * The session a macro just started: a new one at the project ROOT whose first
+ * message is the macro's text, and the centre goes to it. Nothing was typed
+ * into an existing session.
+ */
+const lastAsk = async (page: Page): Promise<{ cwd: string; text: string }> => {
+  await expect
+    .poll(async () => (await createCalls(page)).length, {
+      timeout: 3000,
+      message: "expected the macro to start a session",
+    })
+    .toBeGreaterThan(0);
+  const req = (await createCalls(page)).at(-1)!.req;
+  await expect(page.getByTestId("agent-modal")).toHaveCount(0);
+  await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+  const injected = await page.evaluate(
+    () =>
+      (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: unknown } }).__HARNESS_TEST__
+        ?.lastInjectInput ?? null,
+  );
+  expect(injected).toBeNull();
+  return { cwd: req.cwd, text: req.initialPrompt ?? "" };
+};
 
 /** Publish a bus message via the test hook. */
 const publish = (page: Page, message: unknown): Promise<void> =>
@@ -130,7 +146,8 @@ test.describe("chat panel visibility", () => {
   test("picking a step surfaces the step macros in the chat", async ({ page }) => {
     await openChat(page);
     await pickNode(page, "intake");
-    await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
+    // The chat names the picked step itself; the step card yields the corner.
+    await expect(page.getByTestId("step-card")).toHaveCount(0);
 
     const macros = page.getByTestId("canvas-inspector-macros");
     await expect(macros.getByTestId("canvas-macro-debug")).toBeVisible();
@@ -139,17 +156,18 @@ test.describe("chat panel visibility", () => {
     await expect(macros.getByTestId("canvas-freeform-input")).toBeVisible();
   });
 
-  test("the chat closes on its own X — independent of the step inspector", async ({ page }) => {
+  test("the chat closes on its own X, and the pick's step card comes back", async ({ page }) => {
     await pickNode(page, "intake");
+    await expect(page.getByTestId("step-card")).toBeVisible();
     await openChat(page);
-    // Both open at once: the step inspector (info) AND the chat.
-    await expect(page.getByTestId("canvas-step-inspector")).toBeVisible();
+    // One card in the board's corner at a time: the chat, about the pick.
     await expect(page.getByTestId("canvas-chat-panel")).toBeVisible();
+    await expect(page.getByTestId("step-card")).toHaveCount(0);
 
-    // Closing the chat leaves the inspector untouched.
+    // Closing the chat keeps the pick, so its step card returns.
     await page.getByTestId("canvas-chat-close").click();
     await expect(page.getByTestId("canvas-chat-panel")).toHaveCount(0);
-    await expect(page.getByTestId("canvas-step-inspector")).toBeVisible();
+    await expect(page.getByTestId("step-card-title")).toHaveText("intake");
   });
 });
 
@@ -163,69 +181,58 @@ test.describe("debug macros — pre-run (no run data)", () => {
     await pickNode(page, "intake");
     await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
-    await clearLastInject(page);
   });
 
-  test("'Debug this step' injects the step context + question", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
+  test("'Debug this step' starts a session with the step context + question", async ({ page }) => {
     await page.getByTestId("canvas-macro-debug").click();
 
-    const inject = await lastInject(page);
+    const ask = await lastAsk(page);
     // The step name must appear in the context block.
-    expect(inject.req.text).toContain("Step: intake");
+    expect(ask.text).toContain("Step: intake");
     // The question must be appended.
-    expect(inject.req.text).toContain("Debug this step");
-    // Session id should be the active mock session.
-    expect(inject.id).toBe("sess-boot");
+    expect(ask.text).toContain("Debug this step");
+    // A new session at the project root, never one bound to the agent.
+    expect(ask.cwd).toBe("/Users/demo/acme-app");
   });
 
-  test("'Why is this step slow / stuck?' injects the right question", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
+  test("'Why is this step slow / stuck?' asks the right question", async ({ page }) => {
     await page.getByTestId("canvas-macro-slow").click();
 
-    const inject = await lastInject(page);
-    expect(inject.req.text).toContain("Step: intake");
-    expect(inject.req.text).toContain("Why is this step slow / stuck?");
+    const ask = await lastAsk(page);
+    expect(ask.text).toContain("Step: intake");
+    expect(ask.text).toContain("Why is this step slow / stuck?");
   });
 
-  test("'Explain this step' injects the right question", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
+  test("'Explain this step' asks the right question", async ({ page }) => {
     await page.getByTestId("canvas-macro-explain").click();
 
-    const inject = await lastInject(page);
-    expect(inject.req.text).toContain("Step: intake");
-    expect(inject.req.text).toContain("Explain this step");
+    const ask = await lastAsk(page);
+    expect(ask.text).toContain("Step: intake");
+    expect(ask.text).toContain("Explain this step");
   });
 
-  test("free-form Ask injects the typed question", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
+  test("free-form Ask sends the typed question", async ({ page }) => {
     const freeform = page.getByTestId("canvas-freeform-input");
     await freeform.fill("What does this step produce?");
-    await clearLastInject(page);
 
     // Ask button should be enabled now.
     const askBtn = page.getByTestId("canvas-freeform-ask");
     await expect(askBtn).toBeEnabled();
     await askBtn.click();
 
-    const inject = await lastInject(page);
-    expect(inject.req.text).toContain("Step: intake");
-    expect(inject.req.text).toContain("What does this step produce?");
-    // Textarea should clear after submit.
-    await expect(freeform).toHaveValue("");
+    const ask = await lastAsk(page);
+    expect(ask.text).toContain("Step: intake");
+    expect(ask.text).toContain("What does this step produce?");
   });
 
   test("Cmd+Enter in the free-form textarea submits", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
     const freeform = page.getByTestId("canvas-freeform-input");
     await freeform.fill("Any edge cases?");
-    await clearLastInject(page);
 
     await freeform.press("Meta+Enter");
 
-    const inject = await lastInject(page);
-    expect(inject.req.text).toContain("Any edge cases?");
-    await expect(freeform).toHaveValue("");
+    const ask = await lastAsk(page);
+    expect(ask.text).toContain("Any edge cases?");
   });
 
   test("Ask button is disabled when the freeform is empty", async ({ page }) => {
@@ -233,12 +240,11 @@ test.describe("debug macros — pre-run (no run data)", () => {
     await expect(askBtn).toBeDisabled();
   });
 
-  test("no $ cost appears in the injected context (cost-free contract)", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
+  test("no $ cost appears in the sent context (cost-free contract)", async ({ page }) => {
     await page.getByTestId("canvas-macro-debug").click();
-    const inject = await lastInject(page);
-    // The injected text must contain no dollar signs (no spend/cost data).
-    expect(inject.req.text).not.toContain("$");
+    const ask = await lastAsk(page);
+    // The first message must contain no dollar signs (no spend/cost data).
+    expect(ask.text).not.toContain("$");
   });
 });
 
@@ -251,44 +257,38 @@ test.describe("debug macros — prod run data enriches the context", () => {
     await loadBoard(page);
   });
 
-  test("the step's run status appears in the injected context", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
-    // Announce a prod run so the inspector carries run truth.
+  test("the step's run status appears in the first message", async ({ page }) => {
+    // A prod run of leasing (sess-boot is bound to it when the run starts),
+    // so its board, and the chat over it, carry run truth. The failed step is
+    // the observable signal that the run landed: its Debug macro turns
+    // primary.
+    await seedRunState(page, "exec-status-intake", {
+      executionId: "exec-status-intake",
+      status: "failed",
+      steps: [
+        { id: "intake", name: "intake", status: "failed" as const, error: "Validation error" },
+      ],
+    });
     await publish(page, {
       type: "execution.started",
       harnessSessionId: "sess-boot",
-      executionId: "exec-demo-1",
+      executionId: "exec-status-intake",
       target: "prod",
     });
 
-    // Navigate to the Steps tab to confirm the run landed (reliable chip location).
-    await page.getByTestId("right-tab-steps").click();
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("prod run completed", { timeout: 8000 });
-
-    // Back to the Canvas board and pick intake. No second loadBoard — the
-    // board is already loaded from beforeEach; re-triggering canvas.reload
-    // races with the node pick and clears the run from the inspector.
-    await page.getByTestId("right-tab-canvas").click();
     await pickNode(page, "intake");
     await openChat(page);
-    await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
-    // Run data is in state (chip confirmed above); inspector must show it.
-    await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });
-    await clearLastInject(page);
+    await expect(page.getByTestId("canvas-macro-debug")).toHaveClass(/btn-primary/, { timeout: 8000 });
 
     await page.getByTestId("canvas-macro-debug").click();
 
-    const inject = await lastInject(page);
-    // Run data from the prod run: status "passed" is in the context.
-    expect(inject.req.text).toContain("Step: intake");
-    expect(inject.req.text).toContain("Status: passed");
-    expect(inject.req.text).not.toContain("$");
+    const ask = await lastAsk(page);
+    expect(ask.text).toContain("Step: intake");
+    expect(ask.text).toContain("Status: failed");
+    expect(ask.text).not.toContain("$");
   });
 
   test("the 'Debug this step' button is styled primary on a failed step", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
     await seedRunState(page, "exec-fail-intake", {
       executionId: "exec-fail-intake",
       status: "failed",
@@ -304,25 +304,13 @@ test.describe("debug macros — prod run data enriches the context", () => {
       target: "prod",
     });
 
-    // Navigate to steps tab to confirm the run landed (run chip is always
-    // visible there regardless of canvas state).
-    await page.getByTestId("right-tab-steps").click();
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("failed", { timeout: 8000 });
-
-    // Back to the board to pick the failed step. No second loadBoard — the
-    // board is already loaded from beforeEach; re-triggering canvas.reload
-    // races with the node pick and clears the run from the inspector.
-    await page.getByTestId("right-tab-canvas").click();
+    // The run is the agent's, so it reaches the modal's board directly.
     await pickNode(page, "intake");
     await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
-    // Run data is in state (chip confirmed above); inspector must show it.
-    await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });
 
     // "Debug this step" should be btn-primary on a failed step.
-    await expect(page.getByTestId("canvas-macro-debug")).toHaveClass(/btn-primary/);
+    await expect(page.getByTestId("canvas-macro-debug")).toHaveClass(/btn-primary/, { timeout: 8000 });
     // The other macros stay ghost.
     await expect(page.getByTestId("canvas-macro-slow")).toHaveClass(/btn-ghost/);
     await expect(page.getByTestId("canvas-macro-explain")).toHaveClass(/btn-ghost/);
@@ -335,39 +323,34 @@ test.describe("debug macros — prod run data enriches the context", () => {
 
 test.describe("debug macros — offline stub run", () => {
   test("the macro bar appears after a local stub run and includes run status", async ({ page }) => {
-    test.fixme(true, NO_HOME.inject);
     await page.goto("/?seed=0");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("right-tab-steps").click();
 
-    // Trigger the local run.
-    const btn = page.getByTestId("session-step-local");
-    await expect(btn).toBeEnabled();
-    await btn.click();
+    // Run locally from leasing's modal header: the Run sheet, then launch.
+    await openAgentModal(page, "acme-app", "leasing");
+    await page.getByTestId("agent-modal-run-local").click();
     await page.getByTestId("run-sheet-submit").click();
+    await expect(page.getByRole("dialog", { name: /^Run / })).toHaveCount(0);
 
-    // Wait for the run to complete.
-    const chip = page.getByTestId("canvas-run-chip");
-    await expect(chip).toBeVisible({ timeout: 8000 });
-    await expect(chip).toContainText("local run completed", { timeout: 8000 });
+    // The mock's local stub run streams for about a second; let it finish so
+    // the board below is not re-rendered mid-pick.
+    await page.waitForTimeout(1500);
 
-    // Switch to the Canvas tab. The board is already mounted (mock auto-shows
-    // the frame for sess-boot); no need to re-trigger canvas.reload which would
-    // race with the node pick and clear the run from the inspector.
-    await page.getByTestId("right-tab-canvas").click();
+    // Back on leasing's board (the launch moves the centre to the session it
+    // ran in until runs are keyed by path, SAP-3839).
+    if ((await page.getByTestId("agent-modal").count()) > 0)
+      await page.getByTestId("agent-modal-close").click();
+    await openBoard(page);
     await pickNode(page, "intake");
     await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
-    // Run data is in state (chip confirmed above); inspector must show it.
-    await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });
-    await clearLastInject(page);
 
     await page.getByTestId("canvas-macro-debug").click();
 
-    const inject = await lastInject(page);
-    expect(inject.req.text).toContain("Step: intake");
+    const ask = await lastAsk(page);
+    expect(ask.text).toContain("Step: intake");
     // Local run sets status: "passed" for intake.
-    expect(inject.req.text).toContain("Status: passed");
-    expect(inject.req.text).not.toContain("$");
+    expect(ask.text).toContain("Status: passed");
+    expect(ask.text).not.toContain("$");
   });
 });
