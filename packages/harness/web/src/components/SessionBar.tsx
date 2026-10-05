@@ -9,6 +9,7 @@ import { basenameOf } from "../lib/paths";
 import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { Icon } from "./Icon";
+import { ProjectAppLinks, type ProjectAppLinkSources } from "./ProjectAppLinks";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** The workspace a session belongs to is its directory's basename — the
@@ -57,8 +58,9 @@ interface SessionBarProps {
   onToast: (message: string, tone?: ToastTone) => void;
   /**
    * Set while a project's Agent Map is the centre (flow-navigation.md 4.3).
-   * The header reads `project · Agent Map` and carries New agent (Q11), over
-   * the agents it adds to. An agent opens in a modal over the map
+   * The header reads `project · Agent Map`, then the project's App Links
+   * (flow-map-chat-overlay.md 4.7.3), and carries New agent (Q11), over the
+   * agents it adds to. An agent opens in a modal over the map
    * (flow-map-chat-overlay.md 4.2b), so the header never names one.
    */
   projectView?: ProjectViewHeader | null;
@@ -69,6 +71,8 @@ export interface ProjectViewHeader {
   onNewAgent: () => void;
   /** Full view for a drawn map; null when there is no map to enlarge. */
   onExpandMap: (() => void) | null;
+  /** The project's App Links, deployed and local (flow 4.7.3). */
+  appLinks: ProjectAppLinkSources;
 }
 
 /**
@@ -133,22 +137,26 @@ export function SessionBar({
         data-session-id={activeSession?.id ?? ""}
       >
         {projectView ? (
-          /* A project is selected: the centre is its Agent Map. */
-          <div className="session-current session-current-static">
-            <Icon name="Waypoints" size={14} />
-            <span
-              className="session-context-title"
-              data-testid="session-context-title"
-            >
-              {projectView.label}
-            </span>
-            <span
-              className="session-project-chip"
-              data-testid="session-project-map-chip"
-            >
-              Agent Map
-            </span>
-          </div>
+          /* A project is selected: the centre is its Agent Map, and the
+             project's App Links follow its name (4.7.3). */
+          <>
+            <div className="session-current session-current-static">
+              <Icon name="Waypoints" size={14} />
+              <span
+                className="session-context-title"
+                data-testid="session-context-title"
+              >
+                {projectView.label}
+              </span>
+              <span
+                className="session-project-chip"
+                data-testid="session-project-map-chip"
+              >
+                Agent Map
+              </span>
+            </div>
+            <ProjectAppLinks sources={projectView.appLinks} />
+          </>
         ) : overviewMode ? (
           <div className="session-current session-current-static">
             <Icon name="Radio" size={13} />

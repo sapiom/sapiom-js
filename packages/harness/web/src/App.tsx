@@ -338,6 +338,7 @@ export const App = (): JSX.Element => {
     agentMapEntry,
     projectActions,
     onExpandMap: () => setMapExpanded(true),
+    previewBySession: harness.previewBySession,
   });
 
   // Jump from the Studio to the real code, in the editor the user picked.

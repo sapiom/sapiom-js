@@ -1507,252 +1507,6 @@ button.rail-footer-card:hover {
   }
 }
 
-/* Agent action bar ------------------------------------------------------ */
-
-/* NOT a stepper: durable status chip left-anchored (Draft / Deployed — the
-   one thing the server can prove), repeatable ACTIONS right-anchored with
-   Deploy at the right edge as the primary. */
-.session-steps {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  flex: 0 0 auto;
-  height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
-  /* Narrow panes: trailing actions scroll into reach instead of clipping. */
-  overflow-x: auto;
-  scrollbar-width: none;
-  /* The bar is its own container: labels degrade with the PANE's width (a
-     narrow center pane in a wide window), not the viewport's. */
-  container-type: inline-size;
-}
-
-/* Chip words render as plain text at rest (display: contents keeps the flex
-   layout identical to the unwrapped text) and hide under space pressure. */
-.session-lifecycle-label,
-.session-preview-label {
-  display: contents;
-}
-
-/* Tight bar: SECONDARY buttons drop their labels first, keeping icons —
-   every one of them still carries aria-label + data-tooltip, so icon-only
-   stays legible. The primary Deploy keeps its label at every width:
-   the bar's one emphasized verb must never degrade to a bare cloud glyph.
-   Container queries measure the CONTENT box, so the thresholds below are
-   the intended 460px/380px bar widths minus its 2 × --pane-pad-x padding. */
-@container (max-width: 427px) {
-  .session-step:not(.session-action-primary) .session-step-label {
-    display: none;
-  }
-}
-
-/* Tighter still: the lifecycle chip keeps its cloud glyph and the Preview
-   chip keeps its port; only the words go. */
-@container (max-width: 347px) {
-  .session-lifecycle-label,
-  .session-preview-label {
-    display: none;
-  }
-}
-
-/* Draft/Deployed lifecycle: the flat .status-tag recipe (styles above) —
-   the cloud glyph carries the hue, no box. */
-.session-lifecycle-chip {
-  flex: 0 0 auto;
-}
-
-.session-lifecycle-chip[data-deployed="true"] {
-  color: var(--brand);
-}
-
-/* Deploy-failed affordance: the chip reads "Deploy failed" and uses the
-   warning hue — distinct from both the neutral Draft state and the brand
-   Deployed state. Uses the shared --text-warning token (amber) so it
-   respects the theme and prefers-reduced-motion is inherited from the
-   existing motion rules above. */
-.session-lifecycle-chip[data-deploy-error] {
-  color: var(--text-warning);
-}
-
-.session-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
-  margin-left: auto;
-}
-
-.session-run-split {
-  display: inline-flex;
-  align-items: stretch;
-  border-radius: var(--radius);
-}
-
-.session-run-split > .session-step {
-  border-radius: 0;
-}
-
-.session-run-main {
-  border-radius: var(--radius) 0 0 var(--radius) !important;
-  border-right-width: 0;
-}
-
-.session-run-menu-trigger {
-  width: 26px;
-  min-width: 26px;
-  padding: 0;
-  justify-content: center;
-  border-radius: 0 var(--radius) var(--radius) 0 !important;
-}
-
-.session-run-menu-trigger.session-action-primary {
-  border-left-color: color-mix(in srgb, var(--btn-ink) 20%, transparent);
-}
-
-.session-run-split[data-running] {
-  outline: 1px dashed var(--accent-border);
-  outline-offset: 1px;
-}
-
-.session-run-menu {
-  width: min(300px, calc(100vw - 16px));
-}
-
-.run-target-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 16px;
-  align-items: center;
-  gap: var(--sp2);
-  width: 100%;
-  min-height: 52px;
-  padding: var(--sp2) var(--sp3);
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-dim);
-  text-align: left;
-}
-
-.run-target-option:hover:not(:disabled),
-.run-target-option[data-selected] {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.run-target-option:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
-}
-
-.run-target-option:disabled { opacity: 0.46; }
-.run-target-copy { display: grid; gap: 2px; min-width: 0; }
-.run-target-option strong {
-  color: var(--text);
-  font-size: var(--type-label);
-  font-weight: 550;
-}
-
-.run-target-option small {
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-  line-height: 1.35;
-  white-space: normal;
-}
-
-.run-target-check { display: inline-flex; color: var(--brand); }
-
-/* Idle verbs are OUTLINED (a hairline box), so the filled CTA reads as the one
-   emphasized act. */
-.session-step {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  flex: 0 0 auto;
-  height: var(--control-h-xs);
-  padding: 0 var(--sp3);
-  border: 1px solid var(--ui-line);
-  background: transparent;
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  font-size: var(--type-label);
-  font-weight: 510;
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.session-step:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--ui-line-strong);
-  color: var(--text);
-}
-
-.session-step:disabled {
-  color: var(--text-faint);
-  opacity: 0.6;
-}
-
-.session-step:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-/* The one filled CTA (Deploy for a Draft, Run for a Deployed agent): the ink
-   button, not the brand — green stays reserved for state. */
-.session-action-primary {
-  color: var(--btn-ink);
-  background: var(--btn);
-  border-color: transparent;
-  box-shadow: var(--shadow-xs);
-}
-
-.session-action-primary:hover:not(:disabled) {
-  color: var(--btn-ink);
-  background: var(--ink-muted);
-}
-
-/* Prod is a quiet icon-only shortcut, not one of the three verbs — no box. */
-.session-action-prod {
-  border-color: transparent;
-  padding: 0 var(--sp1);
-  color: var(--text-dim);
-}
-.session-action-prod:hover {
-  border-color: transparent;
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-/* In flight: this action was handed to the agent but no durable signal has
-   landed yet — a dotted ring that breathes until the state flips. */
-.session-step[data-pending] {
-  outline: 1px dashed var(--accent-border);
-  outline-offset: 1px;
-  animation: session-step-pending 1.6s ease-in-out infinite;
-}
-
-@keyframes session-step-pending {
-  0%,
-  100% {
-    outline-color: var(--accent-border);
-  }
-  50% {
-    outline-color: var(--accent);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-step[data-pending] {
-    animation: none;
-  }
-}
-
-.session-step svg {
-  flex: 0 0 auto;
-}
-
 /* One fixed-position tooltip for the whole app — never cropped by panels
    or scrollers. Driven by TooltipLayer; text from data-tooltip / title. */
 .app-tooltip {
@@ -1835,12 +1589,6 @@ button.rail-footer-card:hover {
   display: flex;
   justify-content: center;
   margin-top: var(--sp2);
-}
-
-/* Build is informational (the session itself) — quiet disabled treatment;
-   gated macro steps keep the shared dim. */
-.session-step:disabled {
-  cursor: default;
 }
 
 .rail-empty {
@@ -2370,24 +2118,6 @@ button.rail-footer-card:hover {
   /* The bar measures its own width so the verbs can compact before the session
      queue starts clipping. */
   container-type: inline-size;
-}
-
-/* Tight bar (e.g. the 3-pane split): the secondary verbs drop their labels to
-   icons, handing the freed width to the session queue so every session stays
-   reachable. The filled CTA (Run/Deploy) keeps its word; accessible names stay
-   on every button. */
-@container (max-width: 580px) {
-  .session-bar .session-step:not(.session-action-primary) .session-step-label {
-    display: none;
-  }
-  /* Icon-only now: square the box (width = its --control-h-xs height) and drop
-     the horizontal padding, so a bordered control reads as a square icon button
-     rather than a wide rectangle. */
-  .session-bar .session-step:not(.session-action-primary) {
-    width: var(--control-h-xs);
-    padding: 0;
-    justify-content: center;
-  }
 }
 
 /* The session queue owns the header's flexible left side, keeping the action
@@ -4073,7 +3803,7 @@ button.rail-footer-card:hover {
   border-bottom: 1px solid var(--border);
   background: var(--surface-raised);
   /* Own container so the detail mode's Ask agent button can degrade to
-     icon-only with the PANE's width, same recipe as .session-steps. */
+     icon-only with the PANE's width. */
   container-type: inline-size;
 }
 
@@ -4819,27 +4549,6 @@ button.rail-footer-card:hover {
   font-weight: 560;
 }
 
-/* Action button, RUN in progress: a brand pulse tied to the real run status,
-   distinct from the dashed [data-pending] hand-off ring. */
-.session-step[data-running] {
-  animation: session-step-running 1.4s ease-in-out infinite;
-}
-@keyframes session-step-running {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 42%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .session-step[data-running] {
-    animation: none;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 30%, transparent);
-  }
-}
-
 /* Steps subheader run chip: the flat .status-tag recipe — run truth is a
    labeled fact ("prod run completed"), mono because it is data. */
 .canvas-run-chip {
@@ -4879,25 +4588,6 @@ button.rail-footer-card:hover {
   margin-left: auto;
   padding-left: var(--sp3);
   color: var(--text-faint);
-}
-
-/* Preview chip (port.detected): the session's running app, one click away.
-   Flat interactive tag (.status-tag .status-tag-action): brand ink names
-   the live surface; hover underlines, press deepens. */
-.session-preview-chip {
-  color: var(--brand);
-}
-
-.session-preview-chip:active {
-  color: var(--brand-hover);
-}
-
-/* App Link chip (SAP-3255): the durable URL beside the local preview. Same
-   flat interactive tag, dim ink rather than brand: brand stays on what this
-   session is serving right now, and two brand chips side by side read as one
-   control twice. The word and the Link icon carry the difference. */
-.session-app-link-chip {
-  color: var(--text-dim);
 }
 
 /* Step detail sub-view: back + name + kind chip, then role/description and
@@ -9943,6 +9633,65 @@ button.rail-footer-card:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The project's App Links (flow-map-chat-overlay.md 4.7.3), after the
+   project name and "Agent Map": flat link tags, Globe for deployed and Plug
+   for local. A narrow header sheds the local host text first; the tooltip
+   and accessible name keep it. */
+.project-app-links {
+  display: flex;
+  align-items: center;
+  gap: var(--sp3);
+  min-width: 0;
+  margin-left: var(--sp2);
+  overflow: hidden;
+  container-type: inline-size;
+  flex: 1 1 auto;
+}
+
+.project-app-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--brand);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  font-weight: 400;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.project-app-link:hover {
+  text-decoration: underline;
+}
+
+.project-app-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+.project-app-link > svg {
+  flex: 0 0 auto;
+}
+
+.project-app-link-label,
+.project-app-link-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-app-link-host {
+  color: var(--text-faint);
+}
+
+@container (max-width: 360px) {
+  .project-app-link-host {
+    display: none;
+  }
 }
 
 /* A pasted link is a source: same chip as a file, the globe says which. */
