@@ -1,9 +1,12 @@
 import type { OpenCodeTurnMessage } from "./opencode-turn.js";
 
 // OpenCode 1.18.29 cannot read persisted json_schema format messages through
-// its history API. Keep normal text and bind a result marker to each request.
-export function openCodeCompletionPrompt(options: { mapChat?: boolean } = {}) {
-  const token = globalThis.crypto.randomUUID();
+// its history API. Keep normal text and bind a result marker to the
+// conversation (see openCodeConversationToken).
+export function openCodeCompletionPrompt(
+  options: { mapChat?: boolean; token?: string } = {},
+) {
+  const token = options.token ?? globalThis.crypto.randomUUID();
   // Only the project map chat has the handoff tool and no shell (design I4,
   // §4.4); a Studio session's Assistant does the work itself.
   const mapChat = options.mapChat
@@ -12,6 +15,43 @@ export function openCodeCompletionPrompt(options: { mapChat?: boolean } = {}) {
   return {
     system: `StudioAssistantResult/v2:${token}\nComplete the user's requested work before ending the turn, including any requested explanation. Finish necessary tool calls and examine their results before writing the final answer. A promise or plan to do the work is not completion. For conversational requests, provide the requested reply without unnecessary tool calls.${mapChat}\nBegin your final answer with exactly one of these bookkeeping lines, then write the answer on the following line, outside code blocks:\n<!-- studio-result:${token}:finished -->\n<!-- studio-result:${token}:failed -->\nUse finished only when the request is fulfilled. If you cannot finish, use failed and explain what remains and why. Do not include a result line in progress messages or alongside tool calls. Studio removes this line from the displayed answer; keep the rest of your answer in the format the user requested.`,
   };
+}
+
+const systemToken = (system: string | undefined) =>
+  /^StudioAssistantResult\/v[12]:([a-f0-9-]{36})\n/.exec(system ?? "")?.[1];
+
+/**
+ * The token for the next request in this conversation. Models copy the marker
+ * from their own earlier answers, so a token minted per request turned those
+ * answers into missing ones (SAP-3876). Reuse the latest token this server
+ * minted that the model already echoes, else the conversation's first one; a
+ * token the model made up is never adopted.
+ */
+export function openCodeConversationToken(
+  messages: readonly OpenCodeTurnMessage[],
+) {
+  const minted = new Set<string>();
+  let first: string | undefined;
+  let echoed: string | undefined;
+  for (const message of messages) {
+    if (message.info?.role === "user") {
+      const token = systemToken(message.info.system);
+      if (token) minted.add(token);
+      first ??= token;
+    }
+    if (message.info?.role !== "assistant") continue;
+    const text = message.parts
+      .map((part) =>
+        part.type === "text" && !part.ignored && !part.synthetic
+          ? (part.text ?? "")
+          : "",
+      )
+      .join("");
+    // Only a declaration counts; a marker quoted in the body is not an echo.
+    for (const token of minted)
+      if (parseOpenCodeCompletion(text, token)) echoed = token;
+  }
+  return echoed ?? first;
 }
 
 export function openCodeCompletionTokens(
@@ -29,9 +69,7 @@ export function openCodeCompletionTokens(
           (part.synthetic && part.metadata?.compaction_continue === true),
       )
     ) {
-      current = /^StudioAssistantResult\/v[12]:([a-f0-9-]{36})\n/.exec(
-        message.info.system ?? "",
-      )?.[1];
+      current = systemToken(message.info.system);
     }
     tokens.set(message.info.id, current);
   }
