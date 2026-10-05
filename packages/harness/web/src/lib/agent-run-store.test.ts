@@ -84,6 +84,17 @@ describe("agent run store: runs keyed by agent path", () => {
     expect(shownRunIdByAgent(index).get(moved)).toBe("r1");
   });
 
+  it("a move onto a path that already has runs merges into its one key", () => {
+    const dest = "/work/proj/flows/intake";
+    let index = recordAgentRun(emptyAgentRunIndex(), `${dest}/`, "old");
+    index = recordAgentRun(index, A, "r1");
+    index = pickAgentRun(index, A, "r1");
+    index = moveAgentRuns(index, A, dest);
+    expect([...index.idsByAgent.keys()]).toEqual([`${dest}/`]);
+    expect(runIdsForAgent(index, dest)).toEqual(["old", "r1"]);
+    expect(shownRunIdByAgent(index).get(`${dest}/`)).toBe("r1");
+  });
+
   it("moving an agent with no runs returns the same index", () => {
     const index = recordAgentRun(emptyAgentRunIndex(), A, "r1");
     expect(moveAgentRuns(index, B, "/elsewhere/triage")).toBe(index);

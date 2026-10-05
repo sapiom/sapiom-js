@@ -80,16 +80,24 @@ export function moveAgentRuns(
   from: string,
   to: string,
 ): AgentRunIndex {
-  const move = <V>(map: Map<string, V>): Map<string, V> => {
+  // Lands on the destination's existing key when one is already there (runs
+  // filed under a path an earlier agent held), merged, so one agent never has
+  // two keys and `runIdsForAgent` sees every run.
+  const move = <V>(map: Map<string, V>, merge: (into: V, moved: V) => V): Map<string, V> => {
     const key = keyFor(map, from);
     if (!map.has(key)) return map;
     const next = new Map(map);
     const value = next.get(key) as V;
     next.delete(key);
-    return next.set(to, value);
+    const dest = keyFor(next, to);
+    const existing = next.get(dest);
+    return next.set(dest, existing === undefined ? value : merge(existing, value));
   };
-  const idsByAgent = move(index.idsByAgent);
-  const pickedByAgent = move(index.pickedByAgent);
+  const idsByAgent = move(index.idsByAgent, (into, moved) => [
+    ...into.filter((id) => !moved.includes(id)),
+    ...moved,
+  ]);
+  const pickedByAgent = move(index.pickedByAgent, (_into, moved) => moved);
   return idsByAgent === index.idsByAgent && pickedByAgent === index.pickedByAgent
     ? index
     : { idsByAgent, pickedByAgent };
