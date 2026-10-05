@@ -133,7 +133,8 @@ first message names the agent, and open it:
   this step, Why slow / stuck?, and Ask coding agent to fix on a render error)
   is sent as an **ask**: the session is told to answer from the agent's source
   and change no files unless you ask. Fix and debug are not told apart from an
-  ask, so tell the session to make the fix.
+  ask. Ask coding agent to fix still gets a fix, because its own text asks for
+  one; after Debug this step, tell the session to make the fix if you want it.
 - Describe with AI sends its own prompt, which edits the agent's descriptions.
 
 ### Not in the UI yet
