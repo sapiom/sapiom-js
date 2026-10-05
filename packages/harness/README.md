@@ -32,8 +32,9 @@ Session tabs and retained-session rows show independent Assistant activity. Hove
   and bounded, how a newly-created agent gets registered, and how a stale entry
   leaves: [docs/agent-discovery.md](docs/agent-discovery.md).
 - **Project view** — the project's Agent Map, a floating card for the picked
-  node, a per-project map chat, and an agent modal with the agent's Canvas,
-  Secrets, Run and Deploy. See [The project view](#the-project-view).
+  node, a per-project map chat, the project's App Links in its header, and an
+  agent modal with the agent's Canvas, Runs, Secrets, Run and Deploy. See
+  [The project view](#the-project-view).
 - **Zero config mutation** — everything is injected per-session via flags;
   your global agent settings are never touched.
 
@@ -55,6 +56,23 @@ an agent node to open it, the same as **Open agent**.
 Open in Finder reveals the agent's folder in the OS file manager. In the desktop
 app it goes through the app's bridge; in a browser it calls
 `POST /api/fs/reveal`, which accepts only a registered agent folder.
+
+### App Links in the project header
+
+After the project name and **Agent Map**, the header lists the project's App
+Links:
+
+- each linked agent's published App Link, labelled with the agent's name;
+- each dev server a live session of this project started, as
+  `localhost:PORT · not deployed`.
+
+There is no separate Preview chip. Limits: dev-server links live in the page, so
+a reload forgets them until a session announces one again; a session that
+starts two dev servers lists only the latest. Detection reads the coding
+agent's tool calls (Claude Code or Codex): any `localhost:PORT` in a tool call's
+input or output becomes a link, even one that is not a server, except Studio's
+own ports. A server started
+in the terminal outside a tool call (for example with `!`) is not detected.
 
 ### Map chat
 
@@ -111,23 +129,32 @@ card then shows **Open session**, which takes you to it.
 
 **Open agent** opens a modal over the map. The rail and a margin of the map stay
 visible. Closing it (×, Escape, or a click on the scrim) returns you to the map
-exactly as you left it: the same pick and the same map chat.
+exactly as you left it: the same pick and the same map chat. The modal has no
+breadcrumbs. Its tabs are **Canvas | Runs | Secrets**.
 
 - **Canvas** — the agent's step graph, rendered from source by the agent's path
   through the session-free graph route
   ([docs/agent-canvas-graph.md](docs/agent-canvas-graph.md)). No session is
   needed. Click a step for a small card with its description, inputs, outputs,
   and what it calls; a launched child agent opens in place.
+- **Runs** — the agent's runs, newest first. Pick one for its workspace:
+  timeline, result, and the attempt inspector for a picked attempt.
 - **Secrets** — the values this agent's runs receive, by name: **Add secret**
   or **Import .env**. Values are write-only. Before the agent is linked, they
   are held on this machine, injected into local runs, and uploaded when it
   deploys.
-- Header icons (labelled on hover): **Visualize** (re-render the graph),
+- Header: the agent's name and **Draft** or **Deployed** ("Deployed {when}"
+  only for a deploy watched in the current tab), then icons labelled on hover:
+  **`</>`** (integration snippets), **Visualize** (re-render the graph),
   **Run locally**, **Run** (production) and **Deploy**, with progress beside
   them. **Run** needs a
   signed-in account and a ready cloud build; **Deploy** needs a signed-in
   account. A disabled verb says why on hover. The run picker sits on the
   board's header.
+- **`</>`** — for a deployed agent with a ready cloud build, the integration
+  snippets (TypeScript SDK and cURL). Otherwise it says why, e.g. "Deploy
+  &lt;name&gt; first. Its snippets appear once it has a ready cloud build."
+  Escape closes it before the modal.
 
 Every verb is addressed by the agent's path. No verb needs a session, starts
 one, or binds one. Runs are filed under the agent. The actions that need a
@@ -144,18 +171,13 @@ first message names the agent, and open it:
 
 ### Not in the UI yet
 
-These exist in the code and have no place in the current layout (SAP-3875):
+- The session Canvas pane for static HTML under `.sapiom/canvas/` exists in the
+  code and has no place in the current layout.
 
-- the run workspace: timeline, artifact panel, attempt inspector, evidence
-  tabs, Focus mode;
-- integration snippets and the deploy banner;
-- the **Preview** chip for a dev server, the **App Link** chip, and the **Prod**
-  globe, which used to sit beside a session;
-- the session Canvas pane for static HTML under `.sapiom/canvas/`.
-
+The run workspace's Focus mode and the **Prod** globe were removed (SAP-3875).
 A run started from a session's terminal (for example, the coding agent calling
-the local run tool) is not filed under an agent, so the modal's run picker does
-not list it.
+the local run tool) is not filed under an agent, so neither the Runs tab nor the
+run picker lists it.
 
 ## Sessions
 
