@@ -1101,11 +1101,14 @@ test("a pending canvas load shows a skeleton over the iframe — never a blank p
 
 test.describe("background-task canvas states", () => {
   // A board shows only its own session's tasks (CanvasPane filters on
-  // `sessionId`), and the agent modal's board has no session.
+  // `sessionId`), and the agent modal's board has no session. Since SAP-3839
+  // no board action starts a background task either: Visualize re-reads the
+  // graph route and Describe is a session macro. Whether the activity view
+  // keeps a producer is a follow-up decision, so these wait on it.
   test.beforeEach(() => {
     test.fixme(
       true,
-      "background-task activity is filtered to the board's session; the agent modal's board has none until tasks are keyed by agent path (SAP-3839)",
+      "background-task activity is filtered to the board's session, the agent modal's board has none, and since SAP-3839 no board verb starts a background task: the activity view has no producer (follow-up)",
     );
   });
   const baseTask = {

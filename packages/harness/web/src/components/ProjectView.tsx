@@ -290,16 +290,6 @@ export function ProjectView({
     }
   };
 
-  /** Ask, fix and debug from an agent's board: a new project-root session
-   *  with that first message, opened on the Terminal (4.4b). */
-  const askInSession = (text: string): void => {
-    void sessions
-      .createSessionAt(projectRoot, "claude-code", { initialPrompt: text })
-      .catch((error: unknown) =>
-        harness.showToast(errorMessage(error, "Couldn't start a session.")),
-      );
-  };
-
   const handoffActions = useMemo<HandoffActions>(
     () => ({
       sessionFor: mapChat.handoffSession,
@@ -442,7 +432,6 @@ export function ProjectView({
             state={state}
             agent={modalAgent}
             verbs={verbs}
-            onAskInSession={askInSession}
             onOpenAgent={(path) => onOpenAgent(projectId, path)}
             onClose={() => onCloseAgent(projectId)}
           />

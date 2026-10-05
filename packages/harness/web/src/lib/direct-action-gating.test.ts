@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MacroDef, WorkflowInfo } from "@shared/types";
+import { agentVerbRoute } from "./agent-verb-route";
 import { macroDisabledReason } from "./macro-gating";
 import {
   isWorkflowRunnable,
@@ -196,28 +197,21 @@ describe("Fix 3 — Prod Run disabled-reason distinguishes deploy-failed from ne
 
 describe("Fix 1 — blocked direct actions produce a specific toast reason", () => {
   /**
-   * Models the App.tsx handleRunMacroForWorkflow direct-action branches.
-   * Returns the toast message that MUST be shown (never a silent return).
+   * The toast `handleRunMacroForWorkflow` shows for a direct action, read
+   * from the route it takes (agent-verb-route.ts). Null = it proceeds.
    */
   function directActionToastReason(
     kind: "deploy" | "prod-run" | "run-local",
     workflow: WorkflowInfo | null,
     lastDeployError: string | null,
   ): string | null {
-    if (kind === "deploy") {
-      return workflow ? null : "Select an agent first.";
-    }
-    if (kind === "prod-run") {
-      if (isWorkflowRunnable(workflow)) return null;
-      const state = workflow
-        ? workflowDeploymentState(workflow, lastDeployError)
-        : "draft";
-      return prodRunBlockedToast(state);
-    }
-    if (kind === "run-local") {
-      return workflow ? null : "Select an agent first.";
-    }
-    return null;
+    const id = { deploy: "deploy", "prod-run": "prod_run", "run-local": "run_local" }[kind];
+    const route = agentVerbRoute(
+      { id, label: id, icon: "Play", requiresWorkflow: true, action: { kind: "inject", text: "x" } },
+      workflow,
+      lastDeployError,
+    );
+    return route.kind === "refuse" ? route.reason : null;
   }
 
   it("deploy with no agent toasts 'Select an agent first.'", () => {

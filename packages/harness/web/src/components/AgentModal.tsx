@@ -73,7 +73,6 @@ export function AgentModal({
   state,
   agent,
   verbs,
-  onAskInSession,
   onOpenAgent,
   onClose,
 }: {
@@ -81,9 +80,6 @@ export function AgentModal({
   state: AppState;
   agent: WorkflowInfo;
   verbs: AgentVerbs;
-  /** Ask, fix and debug from the board: a new project-root session with this
-   *  first message (4.4b). */
-  onAskInSession: (text: string) => void;
   /** A launched child agent, opened in this modal in its place. */
   onOpenAgent: (path: string) => void;
   onClose: () => void;
@@ -91,7 +87,6 @@ export function AgentModal({
   const [tab, setTab] = useState<AgentModalTab>("canvas");
   const [boardRevision, setBoardRevision] = useState(0);
   const [progress, setProgress] = useState<Progress | null>(null);
-  const [pickedRun, setPickedRun] = useState<string | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -102,7 +97,6 @@ export function AgentModal({
   useEffect(() => {
     setTab("canvas");
     setProgress(null);
-    setPickedRun(null);
   }, [agent.path]);
 
   // The scrim starts past the rail: the rail stays visible and is not under
@@ -170,18 +164,16 @@ export function AgentModal({
     );
   }, [deploy]);
 
-  // The modal's runs are the agent's: every observed run attributed to it.
+  // The modal's runs are the agent's, from the store keyed by agent path:
+  // the shown one (latest, or the one picked) and every one observed.
   const runs = useMemo(
     () =>
-      [...harness.runsByExecution.values()]
-        .filter((observed) => observed.workflowPath === agent.path)
-        .sort((a, b) => a.observedAt - b.observedAt),
-    [harness.runsByExecution, agent.path],
+      (harness.runIdsByAgent.get(agent.path) ?? [])
+        .map((id) => harness.runsByExecution.get(id))
+        .filter((observed): observed is ObservedRun => observed != null),
+    [harness.runIdsByAgent, harness.runsByExecution, agent.path],
   );
-  const run: ObservedRun | null =
-    runs.find((observed) => observed.run.executionId === pickedRun) ??
-    runs.at(-1) ??
-    null;
+  const run: ObservedRun | null = harness.runsByAgent.get(agent.path) ?? null;
 
   // A re-read that brings back no graph (an agent with nothing to render)
   // posts no graph message: the progress line clears rather than spinning.
@@ -371,7 +363,7 @@ export function AgentModal({
             run={run?.run ?? null}
             runTarget={run?.target ?? null}
             runs={runs}
-            onSelectRun={setPickedRun}
+            onSelectRun={(executionId) => harness.selectRun(agent.path, executionId)}
             preview={null}
             deployState={deploy}
             onDismissDeploy={() => harness.dismissDeployState(agent.path)}
@@ -385,7 +377,9 @@ export function AgentModal({
               if (fired.id === "visualize") visualize();
               else verbs.handleRunMacroForWorkflow(agent, fired);
             }}
-            onInjectPrompt={onAskInSession}
+            /* Ask, fix and debug from the board: a new project-root session
+               whose first message names the job and this agent (4.4b). */
+            onInjectPrompt={(text) => verbs.handleAskAgent(agent, text)}
             onDescribeWorkflow={verbs.handleDescribeWithAI}
             onGraphChange={(path) => {
               if (path === agent.path)

@@ -1645,7 +1645,7 @@ export function CanvasPane({
               onDeselect={() => setSelectedNodeId(null)}
               onCollapse={() => setOverviewOpen(false)}
               onDescribeWithAI={
-                subjectWorkflow && sessionId && !sessionExited
+                subjectWorkflow && !sessionExited
                   ? () => onDescribeWorkflow(subjectWorkflow)
                   : undefined
               }
