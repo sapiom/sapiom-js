@@ -52,7 +52,6 @@ interface AgentMapCanvasProps {
    *  4.4, Q7). Single click has already fired twice underneath, which only
    *  re-opens the same panel. */
   onEnterNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
-  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   pendingNodeId: PlanNodeId | null;
 }
 
@@ -81,7 +80,6 @@ export function AgentMapCanvas({
   selectedNodeId,
   onSelectNode,
   onEnterNode,
-  onInspectNode,
   pendingNodeId,
 }: AgentMapCanvasProps): JSX.Element {
   const [view, setView] = useState<GraphView>(resetGraphView);
@@ -369,15 +367,13 @@ export function AgentMapCanvas({
             const owner = node.ownerAgentId
               ? nodesById.get(node.ownerAgentId)
               : null;
-            const opensAgent =
-              node.kind === "agent" || node.kind === "subagent";
             const deployment = deployments.get(node.id);
             // Every map-node name is user-authored. Keep the privacy marker
             // on a USER_NAMED_OBJECTS value even when node.kind is not agent.
             return (
               <div
                 key={node.id}
-                className={`agent-map-node-wrap${opensAgent ? " has-info" : ""}`}
+                className="agent-map-node-wrap"
                 style={
                   {
                     left: placed.x,
@@ -432,21 +428,6 @@ export function AgentMapCanvas({
                     {owner ? ` · owned by ${owner.name}` : ""}
                   </span>
                 </button>
-                {opensAgent && (
-                  <button
-                    type="button"
-                    className="theme-toggle agent-map-node-info"
-                    data-testid={`agent-map-info-${node.id}`}
-                    aria-label={`Inspect ${node.name}`}
-                    aria-expanded={selectedNodeId === node.id}
-                    {...trackingAttrs({ object: "agent" })}
-                    onClick={(event) =>
-                      onInspectNode(node.id, event.currentTarget)
-                    }
-                  >
-                    <Icon name="Info" size={14} />
-                  </button>
-                )}
               </div>
             );
           })}

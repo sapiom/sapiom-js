@@ -31,6 +31,7 @@ import type { Page } from "@playwright/test";
 
 import {
   activeSessionId,
+  NO_HOME,
   openAgentCanvas,
   selectSession,
   startChatWithAgent,
@@ -65,6 +66,7 @@ test.describe("the right pane follows the selected session's agent", () => {
   test("switching sessions switches the agent; the session list does not move", async ({
     page,
   }) => {
+    test.fixme(true, NO_HOME.steps);
     const ads = await chatWith(page, "ads");
     await openSteps(page);
     await expect(paneSubject(page)).toHaveText("ads");
@@ -107,6 +109,7 @@ test.describe("verb gating", () => {
   test("a session bound to an undeployed agent disables Prod and Run, with the reason in aria-label AND data-tooltip", async ({
     page,
   }) => {
+    test.fixme(true, NO_HOME.verbs);
     const mailer = await chatWith(page, "mailer");
     const prod = page.getByTestId("session-step-prod");
     await expect(prod).toBeEnabled();
@@ -145,6 +148,7 @@ test.describe("verb gating", () => {
   });
 
   test("the run sheet opens on the session's agent", async ({ page }) => {
+    test.fixme(true, NO_HOME.verbs);
     await chatWith(page, "mailer");
     await chatWith(page, "sender");
     await page.getByTestId("session-step-local").click();
@@ -252,6 +256,7 @@ test.describe("run evidence", () => {
   test("a run stops showing the moment the agent changes, and comes back with it", async ({
     page,
   }) => {
+    test.fixme(true, NO_HOME.runs);
     // Evidence is attributed to the AGENT. The run announced for `mailer` must
     // never draw over `sender`'s structure — a false account of what ran, in
     // the surface whose whole job is to say what ran.
@@ -278,6 +283,7 @@ test.describe("run evidence", () => {
   });
 
   test("the run picker offers exactly the agent's runs", async ({ page }) => {
+    test.fixme(true, NO_HOME.runs);
     // The count in the picker's own accessible name is where the prototype's
     // unbounded merge surfaced ("309 observed" against a 200 window). The cap
     // itself needs 200+ runs and is pinned in `session-scope.test.ts`; what a

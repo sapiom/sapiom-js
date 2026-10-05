@@ -4,7 +4,7 @@
  * files, and submit. The harness scaffolds the agent in the project first and
  * one ordinary session opens on it, seeded with the idea, the resources and
  * the planning instructions as setup. The screen then gives way to the
- * terminal, and the canvas stays hidden until it has content. All in mock
+ * terminal, with nothing beside it. All in mock
  * mode; the first turn is recorded on window.__HARNESS_TEST__.lastInitialInput.
  */
 import { expect, test } from "@playwright/test";
@@ -72,7 +72,7 @@ test("New project opens the screen with no terminal or canvas, and a chip prefil
 
   // No terminal, no canvas while composing.
   await expect(page.getByTestId("agent-view")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
+  await expect(page.locator(".right-pane")).toHaveCount(0);
 
   // A quick-idea chip prefills the box (editable), it doesn't submit.
   const input = page.getByTestId("composer-input");
@@ -600,28 +600,6 @@ for (const agent of [
     expect(await injectCallCount(page)).toBe(0);
   });
 }
-
-test("a new session's right pane is its new agent's, open or closed as the user left it", async ({
-  page,
-}) => {
-  // design.md I3: the pane's open/closed state is written only by the user.
-  // The old terminal-first auto-collapse (and the auto-reveal on content)
-  // overwrote that choice, so neither runs any more.
-  await page.getByTestId("composer-input").fill("Build a small thing.");
-  await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("agent-view")).toBeVisible();
-  const pane = page.locator(".right-pane");
-  await expect(pane).not.toHaveAttribute("data-absent", "true");
-  await expect(pane).not.toHaveClass(/is-collapsed/);
-  await page.getByTestId("right-collapse").click();
-  await expect(pane).toHaveClass(/is-collapsed/);
-  // The settle of the new session (mock running/ready promotion) does not
-  // reopen it.
-  await page.waitForTimeout(1500);
-  await expect(pane).toHaveClass(/is-collapsed/);
-  await page.getByTestId("right-expand").click();
-  await expect(pane).not.toHaveClass(/is-collapsed/);
-});
 
 test("the new chat lands in the rail under its project, bound to the new agent", async ({
   page,

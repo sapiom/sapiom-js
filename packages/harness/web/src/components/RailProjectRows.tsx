@@ -157,8 +157,9 @@ const MARK_TITLE: Record<SessionMark, string> = {
  * click to go from one to the other".
  *
  * The trailing `×` means two things, both said in its label: on a live row it
- * ENDS the session (behind the existing confirm), on an exited row it HIDES
- * the row (History keeps it). Q4 settled that close and end stay one action,
+ * ENDS the session at once (no confirm, flow-map-chat-overlay.md 4.5), on an
+ * exited row it HIDES the row (History keeps it). Q4 settled that close and
+ * end stay one action,
  * and a row with no process behind it has nothing left to end.
  */
 export function SessionRow({

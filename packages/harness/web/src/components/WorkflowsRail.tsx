@@ -18,7 +18,6 @@ import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
-import { EndSessionConfirm } from "./EndSessionConfirm";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { openHelpOverlay } from "./HelpOverlay";
 import { Icon } from "./Icon";
@@ -96,7 +95,7 @@ interface WorkflowsRailProps {
   onNewChat: (project: RailProject) => void;
   /** Selects a session: a rail row, or a past one from the history card. */
   onSelectSession: (id: string) => void;
-  /** `×` on a live row, after the confirm: the process ends (Q4). */
+  /** `×` on a live row: the process ends at once, no confirm (flow 4.5). */
   onEndSession: (id: string) => void;
   /** `×` on an exited row: hidden from the rail, kept in History (Q4). */
   onHideSession: (id: string) => void;
@@ -552,10 +551,6 @@ export function WorkflowsRail({
         session.boundWorkflowPath != null &&
         samePath(workflow.path, session.boundWorkflowPath),
     )?.name ?? null;
-  /* `×` on a LIVE row ends a real process, so it goes through the same confirm
-     End session… uses; `×` on an exited row only hides it and needs none. */
-  const [confirmingEnd, setConfirmingEnd] = useState<string | null>(null);
-  const endTriggerRef = useRef<HTMLElement | null>(null);
 
   // A first-run rail (no projects anywhere) promotes the New project CTA — the
   // one action that gets the user their first agent.
@@ -952,17 +947,11 @@ export function WorkflowsRail({
                         closeOverlays();
                         onSelectSession(session.id);
                       }}
-                      onClose={() => {
-                        if (session.status === "exited") {
-                          onHideSession(session.id);
-                          return;
-                        }
-                        endTriggerRef.current =
-                          document.activeElement instanceof HTMLElement
-                            ? document.activeElement
-                            : null;
-                        setConfirmingEnd(session.id);
-                      }}
+                      onClose={() =>
+                        session.status === "exited"
+                          ? onHideSession(session.id)
+                          : onEndSession(session.id)
+                      }
                       now={now}
                     />
                   ))}
@@ -1036,18 +1025,6 @@ export function WorkflowsRail({
           onSelectOverview={onSelectOverview}
         />
       </div>
-
-      {confirmingEnd && (
-        <EndSessionConfirm
-          triggerRef={endTriggerRef}
-          onCancel={() => setConfirmingEnd(null)}
-          onConfirm={() => {
-            const id = confirmingEnd;
-            setConfirmingEnd(null);
-            onEndSession(id);
-          }}
-        />
-      )}
     </aside>
   );
 }

@@ -74,21 +74,6 @@ const CASES: DialogCase[] = [
     opensFocusedOn: (page) => page.getByRole("button", { name: "Keep project" }),
     behind: (page) => page.getByTestId("rail-new-project"),
   },
-  {
-    name: "EndSessionConfirm",
-    open: async (page) => {
-      await page.goto("/");
-      await expect(page.locator(".rail-workflows")).toBeVisible();
-      await page.getByTestId("session-menu").click();
-      await page.getByTestId("session-end-btn").click();
-      await expect(page.getByTestId("end-session-confirm")).toBeVisible();
-    },
-    surface: (page) => page.getByTestId("end-session-confirm"),
-    trigger: (page) => page.getByTestId("session-menu"),
-    // The SAFE action: Enter keeps the session.
-    opensFocusedOn: (page) => page.getByRole("button", { name: "Keep session" }),
-    behind: (page) => page.getByTestId("rail-new-project"),
-  },
 ];
 
 /** Whether the element that currently has focus is inside the dialog. */

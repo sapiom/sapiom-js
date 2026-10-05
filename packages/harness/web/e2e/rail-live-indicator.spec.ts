@@ -23,7 +23,6 @@ import type { Page } from "@playwright/test";
 const endActiveSession = async (page: Page): Promise<void> => {
   await page.getByTestId("session-menu").click();
   await page.getByTestId("session-end-btn").click();
-  await page.getByTestId("end-session-confirm-btn").click();
 };
 
 test.beforeEach(async ({ page }) => {

@@ -7,12 +7,15 @@
  *    expanded. No agents, no Group axis, no tab strip (Q2, Q3, Q8).
  *  - One click from any session to any other, in any project (4.2.3).
  *  - A project header puts its Agent Map in the centre at full width, no chat,
- *    no right pane, and leaves the selected session alone (4.3).
+ *    and leaves the selected session alone (4.3).
+ *  - A session, bound to an agent or not, has nothing beside it: no agent pane
+ *    (flow-map-chat-overlay.md 4.4.1).
  *  - An agent on the map opens a panel in place: location with Change, its
  *    sessions, Start chat (4.4, Q7). Open canvas enters it in the same centre.
  *  - + on a project header is a new unbound chat at the root (4.5, Q11).
  *  - Cmd/Ctrl+1..9 is the Nth session of the selected project (Q2).
- *  - × ends a live session (behind the confirm) and hides an exited one (Q4).
+ *  - × ends a live session at once, no confirm, and hides an exited one
+ *    (flow-map-chat-overlay.md 4.5).
  *
  * What these exist to prevent coming back: switching project to reach a
  * session (the complaint), the map squeezed beside a chat, a project click
@@ -40,9 +43,14 @@ const rowsOf = async (page: Page, project: string): Promise<string[]> =>
       ),
     );
 
-/** The right pane is ON SCREEN: a bound session's agent, not closed. */
-const rightPaneShown = (page: Page) =>
-  page.locator(".right-pane:not(.is-collapsed):not([data-absent])");
+/** Nothing beside the session: no agent pane and no control to open one. */
+const expectNothingBeside = async (page: Page): Promise<void> => {
+  await expect(page.locator(".right-pane")).toHaveCount(0);
+  await expect(page.getByTestId("right-expand")).toHaveCount(0);
+  const app = await page.locator(".app").boundingBox();
+  const centre = await page.locator(".center-pane").boundingBox();
+  expect(centre!.width).toBeGreaterThan(app!.width - 2);
+};
 
 test("the rail is Project › Sessions: sessions under each project, newest first, no agents and no tab strip", async ({
   page,
@@ -116,11 +124,10 @@ test("one click moves between sessions in different projects, and the rail does 
   expect(await rowsOf(page, "scratch")).toEqual(before.scratch);
 });
 
-test("a project header puts its map in the centre at full width with no chat and no right pane, and leaves the session selected", async ({
+test("a project header puts its map in the centre at full width with no chat, and leaves the session selected", async ({
   page,
 }) => {
   await expect.poll(() => activeSession(page)).toBe("sess-boot");
-  await expect(rightPaneShown(page)).toBeVisible();
 
   await page.getByTestId("project-select-acme-app").click();
   const pane = page.getByTestId("project-map-pane");
@@ -129,11 +136,9 @@ test("a project header puts its map in the centre at full width with no chat and
   await expect(page.getByTestId("session-context-title")).toHaveText("acme-app");
   await expect(page.getByTestId("session-project-map-chip")).toHaveText("Agent Map");
   await expect(page.getByTestId("project-map-new-agent")).toBeVisible();
-  // No chat beside it, and no right pane at all.
+  // No chat beside it.
   await expect(page.getByTestId("agent-view")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
-  await expect(page.getByTestId("right-expand")).toHaveCount(0);
-  // Full width: the map spans the centre the session and its pane shared.
+  // Full width: the map spans the centre.
   const app = await page.locator(".app").boundingBox();
   const map = await pane.boundingBox();
   expect(map!.width).toBeGreaterThan(app!.width - 40);
@@ -141,38 +146,30 @@ test("a project header puts its map in the centre at full width with no chat and
   await expect(page.getByTestId("workspace-group-acme-app")).toHaveAttribute("data-selected", "true");
   await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute("data-selected", "true");
 
-  // One click brings the session back, chat and pane together.
+  // One click brings the session back.
   await page.getByTestId("rail-session-select-sess-boot").click();
   await expect(page.getByTestId("agent-view")).toBeVisible();
-  await expect(rightPaneShown(page)).toBeVisible();
   await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
 });
 
-test("the right pane is the session's bound agent, absent when unbound, and its closed state is the user's", async ({
+test("a session has nothing beside it, bound to an agent or not, live or ended", async ({
   page,
 }) => {
+  // sess-boot is bound to leasing: its agent's detail is the project view's.
   await expect.poll(() => activeSession(page)).toBe("sess-boot");
-  await expect(rightPaneShown(page)).toBeVisible();
-  await page.getByTestId("right-collapse").click();
-  await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute("data-agent", "leasing");
+  await expect(page.getByTestId("agent-view")).toBeVisible();
+  await expectNothingBeside(page);
 
-  // An unbound session has no pane at all: no reopen control either.
   await page.getByTestId("rail-session-select-sess-bg").click();
   await expect.poll(() => activeSession(page)).toBe("sess-bg");
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
-  await expect(page.getByTestId("right-expand")).toHaveCount(0);
+  await expectNothingBeside(page);
 
-  // Back on the bound session the user's choice held: still closed.
   await page.getByTestId("rail-session-select-sess-boot").click();
-  await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
-  await expect(page.locator(".right-pane")).not.toHaveAttribute("data-absent", "true");
-  await page.getByTestId("right-expand").click();
-  await expect(rightPaneShown(page)).toBeVisible();
-
-  // And open survives the same round trip.
-  await page.getByTestId("rail-session-select-sess-bg").click();
-  await page.getByTestId("rail-session-select-sess-boot").click();
-  await expect(rightPaneShown(page)).toBeVisible();
+  await page.getByTestId("session-menu").click();
+  await page.getByTestId("session-end-btn").click();
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await expectNothingBeside(page);
 });
 
 test("clicking an agent on the map opens its panel; Start chat makes a bound session at the top of the project and selects it", async ({
@@ -195,9 +192,9 @@ test("clicking an agent on the map opens its panel; Start chat makes a bound ses
   const created = after[0]!;
   expect(before).not.toContain(created);
   await expect.poll(() => activeSession(page)).toBe(created);
-  // Bound to the agent, so the right pane is that agent's.
+  // Bound to the agent, with nothing beside the session.
   await expect(page.getByTestId(`rail-session-${created}`)).toHaveAttribute("data-agent", "leasing");
-  await expect(rightPaneShown(page)).toBeVisible();
+  await expectNothingBeside(page);
 });
 
 test("a session in the agent panel opens that session; Open canvas enters the agent and back returns to the map", async ({
@@ -223,7 +220,7 @@ test("a session in the agent panel opens that session; Open canvas enters the ag
   await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
 });
 
-test("+ on a project header starts an unbound chat at the root, selected, with no right pane", async ({
+test("+ on a project header starts an unbound chat at the root, selected, with nothing beside it", async ({
   page,
 }) => {
   const before = await rowsOf(page, "rfq-agent");
@@ -235,7 +232,7 @@ test("+ on a project header starts an unbound chat at the root, selected, with n
   await expect.poll(() => activeSession(page)).toBe(created);
   await expect(page.getByTestId(`rail-session-${created}`)).not.toHaveAttribute("data-agent", /.+/);
   await expect(page.getByTestId(`rail-session-${created}`)).toHaveAttribute("data-mark", "live");
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
+  await expectNothingBeside(page);
 });
 
 test("Cmd/Ctrl+1..9 selects the Nth session of the selected project in rail order", async ({
@@ -258,7 +255,7 @@ test("Cmd/Ctrl+1..9 selects the Nth session of the selected project in rail orde
   await expect.poll(() => activeSession(page)).toBe("sess-rfq");
 });
 
-test("× on a live row ends it behind the confirm and it stays selected as exited; × on an exited row hides it and History keeps it", async ({
+test("× on a live row ends it at once, no confirm, and it stays selected as exited; × on an exited row hides it and History keeps it", async ({
   page,
 }) => {
   await page.getByTestId("rail-session-select-sess-leasing-2").click();
@@ -266,9 +263,10 @@ test("× on a live row ends it behind the confirm and it stays selected as exite
 
   await page.getByTestId("rail-session-sess-leasing-2").hover();
   await page.getByTestId("rail-session-close-sess-leasing-2").click();
-  await expect(page.getByTestId("end-session-confirm")).toBeVisible();
-  await page.getByTestId("end-session-confirm-btn").click();
+  // One press ends it: no dialog stands between the × and the process.
   await expect(page.getByTestId("rail-session-sess-leasing-2")).toHaveAttribute("data-mark", "exited");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByTestId("end-session-confirm")).toHaveCount(0);
   // Ending never jumps the centre to another session (D43).
   await expect.poll(() => activeSession(page)).toBe("sess-leasing-2");
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();

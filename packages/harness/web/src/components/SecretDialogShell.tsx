@@ -4,7 +4,7 @@
  * The design this is ported from builds its dialogs on Radix (`ui/dialog`),
  * which the harness does not have and should not gain for four modals. This is
  * the harness's own idiom instead — `modal-backdrop` > `modal` with
- * `useDismissable`, exactly as EndSessionConfirm does it — so Escape and a
+ * `useDismissable`, the same dismissal the shared `Dialog` gives — so Escape and a
  * backdrop click mean the same thing here as everywhere else in the app.
  *
  * Extracted rather than repeated four times: a dialog that dismissed

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq } from "./mock-navigation";
+import { startChatWithRfq, NO_HOME } from "./mock-navigation";
+
 
 type DirectAction = { action: string; req: Record<string, unknown> };
 type ProductEvent = { event: string; properties?: Record<string, unknown> };
@@ -63,6 +64,8 @@ async function productEvents(page: Page): Promise<ProductEvent[]> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Every test here launches or deploys from the Run / Deploy controls.
+  test.fixme(true, NO_HOME.verbs);
   await loadStudio(page);
 });
 

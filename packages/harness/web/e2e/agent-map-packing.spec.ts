@@ -227,8 +227,10 @@ test("keeps manual view and selection through unrelated updates and topology cha
   await arranged(page);
   const selected = fixture.nodes[33]!;
   await page.getByTestId(`agent-map-node-${selected.id}`).click();
-  // The inspector takes its slot beside the canvas; the viewport narrows.
-  await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
+  // Nothing takes a slot beside the canvas: the viewport keeps its width.
+  await expect(
+    page.getByTestId(`agent-map-node-${selected.id}`),
+  ).toHaveAttribute("aria-pressed", "true");
   await arranged(page);
   const inspectedAspect = await viewportAspect(page);
   await page.getByRole("button", { name: "Reset Agent Map view" }).click();
@@ -310,7 +312,7 @@ test("keeps manual view and selection through unrelated updates and topology cha
     })),
     6,
   );
-  await expect(page.getByTestId("agent-map-inspector")).toHaveCount(0);
+  await expect(page.getByTestId(`agent-map-node-${selected.id}`)).toHaveCount(0);
   await arranged(page);
   await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
   await page.getByRole("button", { name: "Reset Agent Map view" }).click();
@@ -331,7 +333,7 @@ test("keeps manual view and selection through unrelated updates and topology cha
 test("keeps auto-fit after selecting a visible node", async ({ page }) => {
   const fixture = await openPacking(page);
   await arranged(page);
-  await page.getByTestId(`agent-map-info-${fixture.nodes[0]!.id}`).click();
+  await page.getByTestId(`agent-map-node-${fixture.nodes[0]!.id}`).click();
   const larger = agentMapPackingFixture(undefined, 2);
   await delta(
     page,

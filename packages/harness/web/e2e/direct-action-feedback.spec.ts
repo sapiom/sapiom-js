@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq } from "./mock-navigation";
+import { startChatWithRfq, NO_HOME } from "./mock-navigation";
+
 
 async function load(page: Page, query = "?seed=0"): Promise<void> {
   await page.goto(`/${query}`);
@@ -21,6 +22,7 @@ async function disconnect(page: Page): Promise<void> {
 }
 
 test("Deploy pending feedback clears on both success and failure", async ({ page }) => {
+  test.fixme(true, NO_HOME.verbs);
   await load(page);
   const deploy = page.getByTestId("session-step-deploy");
   await deploy.click();
@@ -37,6 +39,7 @@ test("Deploy pending feedback clears on both success and failure", async ({ page
 });
 
 test("a failed draft deploy keeps Cloud unavailable with a specific reason", async ({ page }) => {
+  test.fixme(true, NO_HOME.verbs);
   await load(page, "?seed=0&mockError=deploy");
   await startChatWithRfq(page);
 
@@ -54,6 +57,7 @@ test("a failed draft deploy keeps Cloud unavailable with a specific reason", asy
 });
 
 test("disconnect disables Deploy and Cloud but leaves the unified Local run available", async ({ page }) => {
+  test.fixme(true, NO_HOME.verbs);
   await load(page);
   await disconnect(page);
 
@@ -68,6 +72,7 @@ test("disconnect disables Deploy and Cloud but leaves the unified Local run avai
 });
 
 test("the split control reflects the real local execution lifetime", async ({ page }) => {
+  test.fixme(true, NO_HOME.verbs);
   await load(page);
   await page.getByTestId("session-step-local").click();
   await page.getByTestId("run-sheet-submit").click();

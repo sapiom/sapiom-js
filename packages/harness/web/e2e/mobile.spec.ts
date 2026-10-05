@@ -1,15 +1,14 @@
 /**
- * Mobile shell (<=768px) — the three-pane layout folds to one column: the
- * center pane owns the viewport, the workspace rail opens as an overlay
- * drawer and the right pane as a bottom sheet, both reusing the desktop
- * collapse state. Same mock fixtures as smoke.spec.ts.
+ * Mobile shell (<=768px) — the layout folds to one column: the center pane
+ * owns the viewport and the workspace rail opens as an overlay drawer,
+ * reusing the desktop collapse state. Same mock fixtures as smoke.spec.ts.
  */
 import { expect, test } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 
 test.use({ viewport: { width: 375, height: 812 } });
 
-/** Geometry assertions must not race the 300ms drawer/sheet entrance —
+/** Geometry assertions must not race the 300ms drawer entrance —
  *  boundingBox() reads mid-flight transforms otherwise. */
 async function settled(el: Locator): Promise<void> {
   await el.evaluate((node) =>
@@ -22,20 +21,18 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".session-bar")).toBeVisible();
 });
 
-test("folds to one column: both side panes start collapsed and nothing overflows sideways", async ({
+test("folds to one column: the rail starts collapsed and nothing overflows sideways", async ({
   page,
 }) => {
-  // Collapsed panes surface their expand affordances in the session bar.
+  // The collapsed rail surfaces its expand affordance in the session bar.
   await expect(page.getByTestId("rail-expand")).toBeVisible();
-  await expect(page.getByTestId("right-expand")).toBeVisible();
-  // The rail unmounts when collapsed; the right pane only CSS-hides so a
-  // running Visualize enrichment survives (same contract as desktop).
+  // The rail unmounts when collapsed. Nothing sits beside the session, so
+  // there is no sheet to open (flow-map-chat-overlay.md 4.4.1).
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toBeHidden();
-  await expect(page.locator(".right-pane")).toHaveCount(1);
+  await expect(page.getByTestId("right-expand")).toHaveCount(0);
+  await expect(page.locator(".right-pane")).toHaveCount(0);
   // Drag handles are desktop-only — overlays have no boundary to drag.
   await expect(page.getByTestId("resize-handle-rail")).toHaveCount(0);
-  await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
 
   // The whole page fits 375 edge to edge — no horizontal scroll or clipping.
   const overflow = await page.evaluate(() => {
@@ -77,27 +74,6 @@ test("rail opens as a drawer and closes on selecting a session or a scrim tap", 
     .getByTestId("rail-drawer-scrim")
     .click({ position: { x: 360, y: 400 } });
   await expect(rail).toHaveCount(0);
-});
-
-test("right pane opens as a bottom sheet and dismisses from its own collapse control", async ({
-  page,
-}) => {
-  await page.getByTestId("right-expand").click();
-  const pane = page.locator(".right-pane");
-  await expect(pane).toBeVisible();
-  await settled(pane);
-  // Sheet anatomy: full width, anchored to the bottom, one header height of
-  // the page left visible above as context.
-  const box = await pane.boundingBox();
-  expect(box?.width).toBe(375);
-  expect((box?.y ?? 0) + (box?.height ?? 0)).toBe(812);
-  expect(box?.y ?? 0).toBeGreaterThan(0);
-  await page.screenshot({ path: "web/e2e/screenshots/mobile-sheet.png" });
-
-  await page.getByTestId("right-collapse").click();
-  await expect(pane).toBeHidden();
-  // Hidden, not unmounted — the keep-alive contract holds on mobile too.
-  await expect(pane).toHaveCount(1);
 });
 
 test("a project's Agent Map takes the whole centre on a phone, with no sheet and no chat", async ({

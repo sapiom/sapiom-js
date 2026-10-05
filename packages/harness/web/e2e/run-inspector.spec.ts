@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
+import { NO_HOME } from "./mock-navigation";
+
 
 async function loadSteps(page: Page): Promise<void> {
   await page.goto("/?seed=0");
@@ -45,6 +47,8 @@ async function seedRun(
 }
 
 test.beforeEach(async ({ page }) => {
+  // Every test here inspects an observed run on the Steps surface.
+  test.fixme(true, NO_HOME.runs);
   await loadSteps(page);
 });
 

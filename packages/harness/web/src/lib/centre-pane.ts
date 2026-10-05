@@ -77,17 +77,6 @@ export function centrePane(input: CentreInput): Centre {
   return input.hasProjects ? { kind: "no-session" } : { kind: "no-project" };
 }
 
-/**
- * Whether a right pane exists at all (design.md I3, flow 4.2.2). Only beside a
- * session, and only when that session is bound to an agent: the pane is the
- * agent's Canvas, Steps and Secrets, so with no agent there is nothing for it
- * to be about. Absent is not collapsed: the user's open/closed choice is left
- * alone, so it survives an unbound session for the next bound one.
- */
-export function hasRightPane(centre: Centre, boundAgent: boolean): boolean {
-  return (centre.kind === "workbench" || centre.kind === "dead") && boundAgent;
-}
-
 /** The project the centre is about, when it is a project view. */
 export function shownProjectId(centre: Centre): string | null {
   return centre.kind === "project-map" || centre.kind === "agent-canvas"

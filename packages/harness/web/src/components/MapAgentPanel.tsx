@@ -11,8 +11,9 @@ import { Icon } from "./Icon";
 /**
  * The agent, opened in place on the project's map (flow-navigation.md 4.4,
  * Q7): its name, where it lives with a Change action, its sessions, and
- * Start chat. Single click on the map opens this; double click enters the
- * agent's canvas, and Open canvas here is the same move for a keyboard.
+ * Start chat, floating over the map. Single click on the map opens this;
+ * double click enters the agent's canvas, and Open canvas here is the same
+ * move for a keyboard.
  *
  * This is where agents are managed now that the rail lists none (Q3). The ask
  * was "see my agents, and occasionally control the paths", so the path is the
@@ -257,7 +258,7 @@ export function MapAgentPanel({
  * The one confirm before an agent's directory moves on disk. It names both
  * paths, because "move this agent?" with no destination on screen is the
  * accidental move the rail's drag used to make (flow-navigation.md 4.4.3).
- * Same anatomy as EndSessionConfirm: focus opens on the safe action, and
+ * Same anatomy as RemoveProjectConfirm: focus opens on the safe action, and
  * Escape or a backdrop click keep the agent where it is.
  */
 function ChangeLocationConfirm({

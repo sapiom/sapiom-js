@@ -40,10 +40,24 @@ test("each project's pan and zoom survive another project and an agent Canvas", 
 
   await openProject(page, "acme-app");
   await expect.poll(() => transform(page)).toBe(acmeView);
-  // A session's agent Canvas in between: the session bound to leasing.
+  // An agent's Canvas in between, entered from the map and back again. The
+  // pan may have taken the node offscreen, so the gesture is dispatched rather
+  // than aimed, which would scroll the viewport and spoil the comparison.
+  await page
+    .getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101")
+    .dispatchEvent("dblclick");
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+  await page.getByTestId("project-map-back").click();
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-state",
+    "ready",
+  );
+  await expect.poll(() => transform(page)).toBe(acmeView);
+  // A session in between: the map leaves the centre entirely.
   await selectSession(page, "sess-boot");
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  await expect(page.getByTestId("right-panel-board")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toBeVisible();
   await openProject(page, "acme-app");
   await expect.poll(() => transform(page)).toBe(acmeView);
   await openProject(page, "polsia");

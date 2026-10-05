@@ -242,13 +242,13 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     const count = () =>
       evaluate<number>("document.querySelectorAll('.agent-map-node').length");
     assert.equal(await count(), 6);
-    await click(".agent-map-node-info");
-    await until("inspector", () =>
+    // A pick selects a node in place; no inspector opens beside the map.
+    await click('.agent-map-node[data-node-kind="resource"]');
+    await until("selection", () =>
       evaluate(
-        "Boolean(document.querySelector('[data-testid=agent-map-inspector]'))",
+        "Boolean(document.querySelector('.agent-map-node[aria-pressed=true]'))",
       ),
     );
-    await click(selector("agent-map-inspector-close"));
     await click('[aria-label="Zoom in"]');
     await evaluate(
       `document.querySelector('[data-testid=agent-map-viewport]').dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}))`,

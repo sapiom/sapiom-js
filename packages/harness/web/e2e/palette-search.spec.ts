@@ -94,11 +94,12 @@ test("the Actions tab lists the app's verbs, and Enter runs one", async ({ page 
     "Browse templates",
     "Toggle theme",
     "Hide workspace panel",
-    "Hide canvas panel",
     "New session in this folder",
   ]) {
     await expect(list.getByText(label)).toBeVisible();
   }
+  // No canvas panel to hide beside a session.
+  await expect(list.getByText("Hide canvas panel")).toHaveCount(0);
 
   // Running "Hide workspace panel" collapses the rail.
   await list.getByText("Hide workspace panel").click();

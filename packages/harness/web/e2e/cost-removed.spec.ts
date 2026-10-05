@@ -51,7 +51,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq } from "./mock-navigation";
+import { openAgentCanvas, startChatWithRfq, NO_HOME } from "./mock-navigation";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,12 +73,8 @@ function armNetworkSentinel(page: Page): { hits: string[] } {
 
 /** Load the board so the canvas overview panel renders. */
 async function loadBoard(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  // leasing's board on its entered page, the interim way into an agent.
+  await openAgentCanvas(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
 }
 
@@ -175,6 +171,7 @@ test.describe("cost-removed guard", () => {
   // /spend or /transactions call fired synchronously at page load is caught.
   // -------------------------------------------------------------------------
   test("no /spend or /transactions calls are made during a full run+inspect flow", async ({ page }) => {
+    test.fixme(true, NO_HOME.runs);
     // Arm the sentinel before navigation so page-load calls are captured.
     const sentinel = armNetworkSentinel(page);
     await page.goto("/?seed=0");
@@ -221,6 +218,7 @@ test.describe("cost-removed guard", () => {
   });
 
   test("workflow macro strip has no cost affordances", async ({ page }) => {
+    test.fixme(true, NO_HOME.verbs);
     // The agent action cluster kept its testid ("session-steps") but its CSS
     // class is now ".session-actions", so address it by testid.
     const stepsBar = page.getByTestId("session-steps");
@@ -259,6 +257,7 @@ test.describe("cost-removed guard", () => {
   // Surface 3: Canvas step inspector — board pick of a run-populated step
   // -------------------------------------------------------------------------
   test("canvas step inspector after a run carries status/latency only — no cost affordances", async ({ page }) => {
+    test.fixme(true, NO_HOME.runs);
     await loadBoard(page);
     await triggerRun(page);
 
@@ -301,6 +300,7 @@ test.describe("cost-removed guard", () => {
   // Surface 4: Steps accordion tab (pre-run and with run truth)
   // -------------------------------------------------------------------------
   test("steps tab has no cost affordances (empty state)", async ({ page }) => {
+    test.fixme(true, NO_HOME.steps);
     // A fresh chat bound to rfq: its agent has no board yet, so the Steps tab
     // is a clean empty state. (The right pane only exists beside a bound
     // session; an unbound one like scratch has none, design.md I3.)
@@ -314,6 +314,7 @@ test.describe("cost-removed guard", () => {
   });
 
   test("steps tab with a populated run has no cost affordances", async ({ page }) => {
+    test.fixme(true, NO_HOME.steps);
     // Must be on the boot session, bound to leasing, with its board loaded first
     await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute("data-agent", "leasing");
     await loadBoard(page);
@@ -341,6 +342,7 @@ test.describe("cost-removed guard", () => {
   // the deploy banner that reports the build that made the agent callable.
   // -------------------------------------------------------------------------
   test("snippet panel has no cost affordances", async ({ page }) => {
+    test.fixme(true, NO_HOME.steps);
     await page.getByTestId("right-tab-steps").click();
     await page.getByTestId("steps-snippets-toggle").click();
 
@@ -436,6 +438,7 @@ test.describe("cost-removed guard", () => {
   // /spend or /transactions call fired synchronously at page load is caught.
   // -------------------------------------------------------------------------
   test("full run+inspect flow surfaces no cost affordances and makes no cost calls", async ({ page }) => {
+    test.fixme(true, NO_HOME.runs);
     // Arm the sentinel before navigation so page-load calls are captured.
     const sentinel = armNetworkSentinel(page);
     await page.goto("/?seed=0");

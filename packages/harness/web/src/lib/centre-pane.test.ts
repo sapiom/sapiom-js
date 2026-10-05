@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   centrePane,
-  hasRightPane,
   shownProjectId,
   type Centre,
   type CentreInput,
@@ -74,30 +73,6 @@ describe("centrePane: one View × session state, one kind", () => {
   it("says no project when nothing is open, and no session when projects are", () => {
     expect(centrePane(base({ hasProjects: false })).kind).toBe("no-project");
     expect(centrePane(base({ hasProjects: true })).kind).toBe("no-session");
-  });
-});
-
-describe("hasRightPane: only beside a bound session", () => {
-  const kinds: Centre[] = [
-    { kind: "review" },
-    { kind: "composer" },
-    { kind: "project-map", projectId: "p1" },
-    { kind: "agent-canvas", projectId: "p1", path: "/p1/a" },
-    { kind: "dead", sessionId: "s1" },
-    { kind: "workbench", sessionId: "s1" },
-    { kind: "no-session" },
-    { kind: "no-project" },
-  ];
-
-  it("exists for a workbench or dead pane bound to an agent, and nowhere else", () => {
-    expect(kinds.filter((centre) => hasRightPane(centre, true)).map((c) => c.kind)).toEqual([
-      "dead",
-      "workbench",
-    ]);
-  });
-
-  it("is absent beside an unbound session", () => {
-    for (const centre of kinds) expect(hasRightPane(centre, false)).toBe(false);
   });
 });
 

@@ -136,9 +136,9 @@ test.describe("the two verbs", () => {
     await expect(
       page.getByTestId("rail-project-blank-slate").locator(".rail-session-row"),
     ).toHaveCount(0);
-    // No map and no right pane: nothing exists to project until submit.
+    // No map and no agent pane: nothing exists to project until submit.
     await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
-    await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
+    await expect(page.locator(".right-pane")).toHaveCount(0);
     // AND NO SESSION (Q5): the user types first.
     expect((await evidence(page)).createSessionCalls).toEqual([]);
   });
