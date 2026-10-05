@@ -1,5 +1,20 @@
 # @sapiom/harness
 
+## 0.19.1
+
+### Patch Changes
+
+- 69f0733: Agent Studio: the agent modal gets a Runs tab (the agent's runs, each run's timeline, result and attempt inspector) and a `</>` button with the integration snippets. The project header lists the project's App Links: deployed ones, and a dev server a project session started as a local link marked "not deployed". The Preview chip is gone. Escape now closes the modal from a Runs tab that shows a run.
+- 141751d: Assistant chats bind the result marker to the conversation instead of to each message. A model that repeats the marker from an earlier answer no longer has a finished answer read as missing, so it no longer triggers a hidden recovery turn or shows Stopped.
+- d017f36: Add the project map-chat engine: an OpenCode host per project (`map:<projectId>`) whose conversation persists across restarts, Stop and New chat routes, a `handoff` tool the model uses to offer a Claude Code session, and a `neverAsk` config option that denies every permission prompt. The map chat stops after 15 idle minutes. Sessions are no longer bound to an agent automatically when a rescan finds one under their folder.
+- 8cba884: The project map chat no longer edits files: `noShell` now also denies OpenCode's `edit`, `write` and `apply_patch` tools, and the map chat sends every change request to the `handoff` card instead. Studio session Assistants are unchanged. Adding a project to Studio now marks its folder trusted for Claude Code (`projects[<root>].hasTrustDialogAccepted` in Claude Code's global config, written under Claude Code's own config lock, only for that folder), and a Claude Code session started inside an added project makes sure of it before it launches, so hand-off and Open in session sessions start without the "trust this folder?" prompt.
+- adb6f36: The project view floats one card over the map: pick a node to see its name and state, open the agent, or reveal its folder, and type to ask the project's map chat. The map chat is not a session and never joins the rail; it keeps the conversation per project until New chat, offers a hand-off card when the work belongs in a session (Start session makes it without leaving the map), and Open in session carries the transcript into a terminal session. An agent opens in a modal over the map, with its Canvas and Secrets, its verbs in the header, and a small card for a picked step; closing it returns to the map exactly as it was.
+- 668b337: Keep resumable sessions available after account disconnect by restarting them without credentials. Studio sessions and projects no longer depend on the signed-in account: resume uses the session's saved project, and switching or disconnecting accounts no longer invalidates sessions, project setup, Agent Map access, or workspace selections.
+- cb53729: Sessions are terminals with nothing beside them: the agent pane that sat next to a session (Canvas, Steps, Secrets) is gone, and agent detail moves to the project view. Ending a live session from the rail or the session menu no longer asks for confirmation; the row stays as exited, and × hides it. The map's inspector panel is removed. Visualize, Run locally, Run and Deploy act on an agent by its path and never need, start or bind a session; runs are filed under the agent. Ask, fix, debug and Describe with AI start a new terminal session at the project root with a first message naming the job and the agent. Rail tooltips name the action in one to three words. The README documents the project view, the map chat and its limits, the hand-off card, the agent modal, and who has the Assistant.
+- Updated dependencies [d017f36]
+- Updated dependencies [8cba884]
+  - @sapiom/opencode@0.1.1
+
 ## 0.19.0
 
 ### Minor Changes
