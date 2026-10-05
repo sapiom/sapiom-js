@@ -58,8 +58,8 @@ export const useDeepLinks = ({
   );
   const coldDeepLinkRef = useRef<DeepLinkTarget | null>(deepLinkFromSearch());
   const coldDeepLinkHandledRef = useRef(false);
-  // A clone kicked off from a remote-only deep link: focus the agent once the
-  // workspace rescan surfaces it locally.
+  // A clone kicked off from a remote-only deep link, until the workspace rescan
+  // surfaces the agent locally.
   const pendingCloneFocusRef = useRef<string | null>(null);
 
   // Warm deep link: the desktop bridge pushes a target while the app is running.
@@ -80,8 +80,8 @@ export const useDeepLinks = ({
   }, [harness.loading]);
 
   // After a deep-link clone lands, the workspace rescan surfaces the agent with a
-  // matching definitionId — bind the cloning session to it then, without
-  // moving the centre off the chat that is doing the clone.
+  // matching definitionId: the clone is done. The centre stays on the chat
+  // that did it, and nothing is bound (design-map-chat.md I2).
   useEffect(() => {
     const wantId = pendingCloneFocusRef.current;
     if (wantId && focusClonedRef.current?.(wantId)) {
@@ -131,7 +131,8 @@ export const useDeepLinks = ({
   // Clone a remote-only deep-linked agent locally (confirmed): open a session in a
   // fresh folder and hand the coding agent the clone-by-definitionId prompt — the
   // same agent-driven path "Use template" uses. The workspace rescan then surfaces
-  // the cloned agent, and the pending-focus effect above displays it.
+  // the cloned agent on its project's map, and the pending-clone effect above
+  // marks the clone done.
   const handleCloneDefinition = async (
     target: DeepLinkAgentTarget,
   ): Promise<void> => {
