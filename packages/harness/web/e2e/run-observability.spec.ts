@@ -1,19 +1,19 @@
 /**
  * The unified run entry, opened from the agent modal's Run locally and Run
  * (flow-map-chat-overlay.md 4.2b, 4.4b): input collection, validation, the
- * exact payload, and the saved input.
+ * exact payload, and the saved input. The run it starts lands in the modal's
+ * Runs tab (4.7.1); a deploy reports in the header and `</>` holds the
+ * snippets (4.7.2).
  */
 import { expect, test, type Page } from "@playwright/test";
 
 import { openAgentModal } from "./mock-navigation";
 
-/** The run workspace (artifact, timeline, Dashboard) and the deploy banner
- *  with its Code integration were hosted only by the Steps surface beside a
- *  bound session. The agent modal holds Canvas and Secrets (4.2b.2); neither
- *  has a home there yet. */
-const NO_HOME_IN_MODAL =
-  "SAP-3838: the run workspace and the deploy banner lived only in the Steps surface; the agent modal has no home for them";
-
+/** The Runs tab: the run workspace for the agent's shown run. */
+async function openRuns(page: Page): Promise<void> {
+  await page.getByTestId("agent-modal-tab-runs").click();
+  await expect(page.getByTestId("agent-modal-panel-runs")).toBeVisible();
+}
 
 type DirectAction = { action: string; req: Record<string, unknown> };
 type ProductEvent = { event: string; properties?: Record<string, unknown> };
@@ -218,13 +218,39 @@ test.describe("unified run entry", () => {
   test("reuses the visible entry contract when extraction reports unavailable", async ({
     page,
   }) => {
-    // The fallback reads `useAgentVerbs`' visible-contract map, which nothing
-    // on main writes since the Steps pane went (SAP-3836); the modal's board
-    // publishes its graph only to its own progress line. src/off-limits here.
-    test.fixme(true, "SAP-3838: no surface publishes the visible entry contract to useAgentVerbs (use-agent-verbs.ts, SAP-3839)");
-    await expect(
-      page.getByTestId("agent-modal-panel-canvas").locator(".canvas-pane"),
-    ).toBeVisible();
+    // The fallback reads `useAgentVerbs`' visible-contract map, which the
+    // modal's board writes when its document posts its graph. The board
+    // posts one whose entry declares a `topic` with a default.
+    const frame = page.locator(".agent-modal .canvas-iframe");
+    await expect(frame).toBeVisible();
+    const board = await (await frame.elementHandle())!.contentFrame();
+    await board!.evaluate(() => {
+      parent.postMessage(
+        {
+          type: "sapiom-canvas:graph",
+          graph: {
+            name: "leasing",
+            entry: "intake",
+            nodes: [
+              {
+                id: "intake",
+                kind: "entry",
+                label: "intake",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    topic: { type: "string", default: "indie game development" },
+                  },
+                  required: ["topic"],
+                },
+              },
+            ],
+            edges: [],
+          },
+        },
+        "*",
+      );
+    });
     await page.evaluate(() => {
       (
         window as unknown as {
@@ -234,7 +260,7 @@ test.describe("unified run entry", () => {
     });
 
     await openLocalSheet(page);
-    await expect(page.getByLabel(/Topic/)).toHaveValue(
+    await expect(page.getByLabel(/topic/i)).toHaveValue(
       "indie game development",
     );
     await expect(
@@ -262,7 +288,6 @@ test.describe("unified run entry", () => {
 });
 
 test.describe("artifact-first completion", () => {
-  test.fixme(true, NO_HOME_IN_MODAL);
   test("closes the sheet, streams attempts, then leads with a rendered and copyable result", async ({
     page,
     context,
@@ -270,6 +295,8 @@ test.describe("artifact-first completion", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openLocalSheet(page);
     await page.getByTestId("run-sheet-submit").click();
+    await expect(page.getByRole("dialog", { name: "Run leasing" })).toHaveCount(0);
+    await openRuns(page);
 
     const workspace = page.getByTestId("run-workspace");
     await expect(workspace).toBeVisible();
@@ -297,6 +324,7 @@ test.describe("artifact-first completion", () => {
   }) => {
     await openLocalSheet(page);
     await page.getByTestId("run-sheet-submit").click();
+    await openRuns(page);
     await expect(page.getByTestId("run-artifact")).toBeVisible({
       timeout: 8_000,
     });
@@ -365,16 +393,20 @@ test.describe("artifact-first completion", () => {
       .toBe(2);
   });
 
-  test("Deploy still lands in Steps and links to the Code integration", async ({
+  test("Deploy reports in the header, and </> holds the integration snippets", async ({
     page,
   }) => {
-    await page.getByTestId("session-step-deploy").click();
-    await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-    const banner = page.getByTestId("deploy-status-banner");
-    await expect(banner).toHaveAttribute("data-phase", "ready", {
-      timeout: 6_000,
-    });
-    await page.getByTestId("deploy-open-code").click();
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    await page.getByTestId("agent-modal-deploy").click();
+    const progress = page.getByTestId("agent-modal-progress");
+    await expect(progress).toHaveText("Deployed", { timeout: 6_000 });
+    await expect(progress).toHaveAttribute("data-tone", "done");
+    // A deploy this tab watched says when (4.7.2).
+    await expect(page.getByTestId("agent-modal-state")).toHaveText(
+      "Deployed just now",
+    );
+    await page.getByTestId("agent-modal-snippets").click();
+    await expect(
+      page.getByTestId("agent-modal-snippets-popover").getByTestId("snippet-panel"),
+    ).toBeVisible();
   });
 });

@@ -36,6 +36,7 @@ import type { useAgentMapEntry } from "../lib/use-agent-map-entry";
 import type { HarnessStateHook } from "../lib/use-harness-state";
 import type { MapChatState } from "../lib/use-map-chat";
 import type { ProjectActions } from "../lib/use-project-actions";
+import type { LocalPreview } from "../lib/use-project-app-links";
 import type { SessionActions } from "../lib/use-session-actions";
 import type { OpenCodeTurnMessage } from "../../../src/shared/opencode-turn";
 import "../styles/map-chat.css";
@@ -43,8 +44,8 @@ import "../styles/map-chat.css";
 /**
  * What the project view needs from the shell before it renders: whether it
  * draws the map pane or the agent cards, and the header the session bar shows
- * in its place (the project, New agent, and the map's full view while a drawn
- * map is ready).
+ * in its place (the project, its App Links, New agent, and the map's full
+ * view while a drawn map is ready).
  */
 export function projectViewChrome({
   centre,
@@ -53,6 +54,7 @@ export function projectViewChrome({
   agentMapEntry,
   projectActions,
   onExpandMap,
+  previewBySession,
 }: {
   centre: Centre;
   state: AppState;
@@ -60,6 +62,8 @@ export function projectViewChrome({
   agentMapEntry: ReturnType<typeof useAgentMapEntry>;
   projectActions: ProjectActions;
   onExpandMap: () => void;
+  /** Dev servers detected per session (`port.detected`). */
+  previewBySession: ReadonlyMap<string, LocalPreview>;
 }) {
   const shownProject = shownProjectId(centre);
   const shownScope = shownProject ? projects.projectScope(shownProject) : null;
@@ -75,10 +79,29 @@ export function projectViewChrome({
           initialization: agentMapEntry.initialization,
         })
       : null;
+  // A locally running app is an App Link that is not deployed (4.7.3): the
+  // dev servers this project's LIVE sessions started. An exited session's
+  // server died with it.
+  const previews =
+    shownProject && shownScope
+      ? state.sessions.flatMap((session) => {
+          const preview = previewBySession.get(session.id);
+          return preview &&
+            session.status !== "exited" &&
+            samePath(projects.sessionRoot(session), shownScope.cwd)
+            ? [preview]
+            : [];
+        })
+      : [];
   const header =
     shownProject && shownScope
       ? {
           label: projects.projectLabelOf(shownProject),
+          appLinks: {
+            agents: projects.agentsInProject(shownProject),
+            previews,
+            authenticated: state.authenticated === true,
+          },
           onNewAgent: () =>
             projectActions.handleCreateAgentInProject(
               shownScope.cwd,

@@ -50,6 +50,14 @@ export const useAgentVerbs = ({
   const visibleInputContractsRef = useRef(
     new Map<string, WorkflowInputContractResponse>(),
   );
+  /** The entry contract a surface's board shows for an agent: the Run
+   *  sheet's fallback when a fresh extraction reports unavailable. */
+  const rememberVisibleContract = useCallback(
+    (workflowPath: string, contract: WorkflowInputContractResponse): void => {
+      visibleInputContractsRef.current.set(workflowPath, contract);
+    },
+    [],
+  );
   const loadRunInputContract = useCallback(
     async (workflowPath: string): Promise<WorkflowInputContractResponse> => {
       const fallback = visibleInputContractsRef.current.get(workflowPath);
@@ -232,6 +240,7 @@ export const useAgentVerbs = ({
     runRequest,
     setRunRequest,
     loadRunInputContract,
+    rememberVisibleContract,
     handleMoveAgent,
     locationRefusal,
     handleAskAgent,

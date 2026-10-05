@@ -1,18 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
 
-/** The run workspace (timeline, attempt inspector, evidence tabs, Focus mode)
- *  was hosted only by the Steps surface beside a bound session. The agent
- *  modal holds Canvas and Secrets (flow-map-chat-overlay.md 4.2b.2) and
- *  shows a run only as the board's step states; the workspace has no home. */
-const NO_HOME_IN_MODAL =
-  "SAP-3838: the run workspace lived only in the Steps surface; the agent modal has no home for it";
+import { openAgentModal } from "./mock-navigation";
 
-
-async function loadSteps(page: Page): Promise<void> {
+/** The run workspace (timeline, attempt inspector, evidence tabs) lives in
+ *  the agent modal's Runs tab (flow-map-chat-overlay.md 4.7.1). The boot
+ *  session is bound to leasing, so a run it announces is filed under
+ *  leasing's path and shows in leasing's Runs. */
+async function loadRuns(page: Page): Promise<void> {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await page.getByTestId("right-tab-steps").click();
+  await openAgentModal(page, "acme-app", "leasing");
+  await page.getByTestId("agent-modal-tab-runs").click();
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-tab", "runs");
 }
 
 async function seedRun(
@@ -53,9 +53,8 @@ async function seedRun(
 }
 
 test.beforeEach(async ({ page }) => {
-  // Every test here inspects an observed run in the run workspace.
-  test.fixme(true, NO_HOME_IN_MODAL);
-  await loadSteps(page);
+  // Every test here inspects an observed run in the Runs tab's workspace.
+  await loadRuns(page);
 });
 
 test("orders retries chronologically and exposes predictable, honest evidence tabs", async ({
@@ -470,90 +469,4 @@ test("puts attempts before the result and bounds long HTML until explicitly expa
   await expect(artifact.locator(".artifact-body")).toBeHidden();
   await disclosure.click();
   await expect(artifact.locator(".artifact-body")).toBeVisible();
-});
-
-test("Focus mode shows the timeline and shared inspector side by side", async ({
-  page,
-}) => {
-  await page.evaluate(() => {
-    document.documentElement.dataset.windowFrame = "macos";
-  });
-  await page.getByTestId("session-step-local").click();
-  await page.getByTestId("run-sheet-submit").click();
-  await expect(page.getByTestId("run-artifact")).toBeVisible({
-    timeout: 8_000,
-  });
-  const coveredTabsBox = await page.locator(".right-pane-tabs").boundingBox();
-  expect(coveredTabsBox).not.toBeNull();
-  const openFocus = page.getByRole("button", { name: "Open Focus mode" });
-  await openFocus.click();
-  const focusLayer = page.getByTestId("run-focus-layer");
-  await expect(focusLayer).toBeVisible();
-  await expect(focusLayer).toHaveAttribute("role", "dialog");
-  await expect(focusLayer).toHaveAttribute("aria-modal", "true");
-  await expect(
-    focusLayer.getByRole("button", { name: "Exit Focus mode" }),
-  ).toBeFocused();
-  expect(
-    await page.locator("#root").evaluate((root) => ({
-      inert: (root as HTMLElement).inert,
-      ariaHidden: root.getAttribute("aria-hidden"),
-    })),
-  ).toEqual({ inert: true, ariaHidden: "true" });
-  await expect(page.getByTestId("run-workspace")).toHaveClass(/is-focus/);
-  expect(
-    await focusLayer.evaluate(
-      (element) => element.parentElement === document.body,
-    ),
-  ).toBe(true);
-  const layerBox = await focusLayer.boundingBox();
-  expect(layerBox).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
-  expect(
-    await page
-      .locator(".run-focus-layer .run-workspace-header")
-      .evaluate((header) =>
-        Number.parseFloat(getComputedStyle(header).paddingLeft),
-      ),
-  ).toBeGreaterThanOrEqual(78);
-  expect(
-    await page.evaluate(
-      ({ x, y }) =>
-        Boolean(
-          document
-            .elementFromPoint(x, y)
-            ?.closest("[data-testid='run-focus-layer']"),
-        ),
-      {
-        x: coveredTabsBox!.x + coveredTabsBox!.width / 2,
-        y: coveredTabsBox!.y + coveredTabsBox!.height / 2,
-      },
-    ),
-  ).toBe(true);
-  await page.getByRole("option", { name: /screen/ }).click();
-  const timelineBox = await page.getByTestId("run-timeline").boundingBox();
-  const inspector = page.getByRole("region", { name: "screen attempt 1" });
-  const inspectorBox = await inspector.boundingBox();
-  expect(timelineBox).not.toBeNull();
-  expect(inspectorBox).not.toBeNull();
-  expect(timelineBox!.x).toBeLessThan(inspectorBox!.x);
-  const [headerBox, backBox] = await Promise.all([
-    page.locator(".run-focus-layer .run-workspace-header").boundingBox(),
-    inspector.getByRole("button", { name: "Back" }).boundingBox(),
-  ]);
-  expect(headerBox).not.toBeNull();
-  expect(backBox).not.toBeNull();
-  expect(backBox!.x).toBeGreaterThanOrEqual(78);
-  expect(backBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
-  await page.keyboard.press("Escape");
-  await expect(inspector).toHaveCount(0);
-  await expect(focusLayer).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(focusLayer).toHaveCount(0);
-  expect(
-    await page.locator("#root").evaluate((root) => ({
-      inert: (root as HTMLElement).inert,
-      ariaHidden: root.getAttribute("aria-hidden"),
-    })),
-  ).toEqual({ inert: false, ariaHidden: null });
-  await expect(openFocus).toBeFocused();
 });

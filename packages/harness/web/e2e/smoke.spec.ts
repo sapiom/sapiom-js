@@ -15,6 +15,7 @@ import {
   activeSessionId,
   openAgentModal,
   openProjectMap,
+  selectSession,
 } from "./mock-navigation";
 
 /**
@@ -1099,285 +1100,6 @@ test("a pending canvas load shows a skeleton over the iframe — never a blank p
   await expect(page.locator(".agent-modal .canvas-iframe")).toBeVisible();
 });
 
-test.describe("background-task canvas states", () => {
-  // A board shows only its own session's tasks (CanvasPane filters on
-  // `sessionId`), and the agent modal's board has no session. Since SAP-3839
-  // no board action starts a background task either: Visualize re-reads the
-  // graph route and Describe is a session macro. Whether the activity view
-  // keeps a producer is a follow-up decision, so these wait on it.
-  test.beforeEach(() => {
-    test.fixme(
-      true,
-      "background-task activity is filtered to the board's session, the agent modal's board has none, and since SAP-3839 no board verb starts a background task: the activity view has no producer (follow-up)",
-    );
-  });
-  const baseTask = {
-    id: "task-1",
-    macroId: "visualize",
-    label: "Visualize",
-    harnessSessionId: "sess-boot",
-    cwd: "/Users/demo/acme-app",
-    // The mock boot session's bound workflow (MOCK_WORKFLOWS "leasing") —
-    // enrichment tasks always carry the workflow they target.
-    workflowPath: "/Users/demo/acme-app/leasing" as string | null,
-    startedAt: new Date().toISOString(),
-    endedAt: null as string | null,
-    exitCode: null as number | null,
-    statusLines: [] as string[],
-    resultText: null as string | null,
-    errorTail: null as string | null,
-  };
-
-  const publish = (
-    page: import("@playwright/test").Page,
-    task: unknown,
-  ): Promise<void> =>
-    page.evaluate((t) => {
-      (
-        window as unknown as {
-          __HARNESS_TEST__: { publish: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__.publish({
-        type: "task.status",
-        task: t,
-      });
-    }, task);
-
-  test("a running task shows the live activity state, streaming status lines as they arrive", async ({
-    page,
-  }) => {
-    await publish(page, { ...baseTask, status: "running" });
-
-    const activity = page.getByTestId("canvas-task-activity");
-    await expect(activity).toBeVisible();
-    await expect(activity).toContainText("Visualize is running");
-    await expect(activity.locator(".canvas-task-icon")).toBeVisible();
-
-    await publish(page, {
-      ...baseTask,
-      status: "running",
-      statusLines: ["Agent started", "Read steps/route.ts"],
-    });
-    await expect(page.getByTestId("canvas-task-lines")).toContainText(
-      "Read steps/route.ts",
-    );
-
-    await page.screenshot({
-      path: "web/e2e/screenshots/canvas-task-activity.png",
-    });
-
-    // Completion clears the activity state; a canvas.reload for the written
-    // index.html (the real server fires one via the canvas watcher) swaps in
-    // the generated iframe.
-    await publish(page, {
-      ...baseTask,
-      status: "completed",
-      endedAt: new Date().toISOString(),
-      exitCode: 0,
-    });
-    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
-    await page.evaluate(() => {
-      (
-        window as unknown as {
-          __HARNESS_TEST__: { publish: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__.publish({
-        type: "canvas.reload",
-        harnessSessionId: "sess-boot",
-      });
-    });
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-  });
-
-  test("activity only shows on the pane of the session that triggered the task", async ({
-    page,
-  }) => {
-    await publish(page, {
-      ...baseTask,
-      harnessSessionId: "sess-bg",
-      status: "running",
-    });
-    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
-    // sess-boot's own pane still shows its ordinary board (its bound agent
-    // renders on first paint), not another session's activity.
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-  });
-
-  test("activity is scoped to the BOUND WORKFLOW — another workflow's task never bleeds into this pane", async ({
-    page,
-  }) => {
-    // Same session, but the task targets a workflow that is NOT the pane's
-    // current binding (sess-boot is bound to leasing) — hidden.
-    await publish(page, {
-      ...baseTask,
-      workflowPath: "/Users/demo/onboarding-flow",
-      status: "running",
-    });
-    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
-    // The pane keeps its ordinary board (leasing renders on first paint); the
-    // other workflow's task never bleeds in.
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-    // The bound workflow's own task shows, overlaid on the board...
-    await publish(page, { ...baseTask, id: "task-2", status: "running" });
-    await expect(page.getByTestId("canvas-task-activity")).toBeVisible();
-
-    // ...and switching the subject mid-run (rfq's modal) hides it again:
-    // rfq's board must not show leasing's enrichment progress.
-    await page.getByTestId("agent-modal-close").click();
-    await openAgentModal(page, "rfq-agent", "rfq");
-    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
-  });
-
-  test("enrichment running after content exists: iframe stays visible with the activity strip overlaid", async ({
-    page,
-  }) => {
-    // Bring up the canvas iframe first — simulates the deterministic render
-    // that fires immediately when the user clicks Visualize.
-    await page.route("**/canvas/sess-boot/**", async (route) => {
-      await route.fulfill({
-        contentType: "text/html",
-        body: "<html><body>diagram</body></html>",
-      });
-    });
-    await page.evaluate(() => {
-      (
-        window as unknown as {
-          __HARNESS_TEST__: { publish: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__.publish({
-        type: "canvas.reload",
-        harnessSessionId: "sess-boot",
-      });
-    });
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-    // Now the enrichment task starts (LLM annotating the diagram in the
-    // background). The iframe must stay in the DOM — the activity strip
-    // overlays it, not replaces it.
-    await publish(page, { ...baseTask, status: "running" });
-
-    const activity = page.getByTestId("canvas-task-activity");
-    await expect(activity).toBeVisible();
-    await expect(activity).toContainText("Visualize is running");
-    // Headline feature: the iframe is NOT hidden while enrichment runs.
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-    // The overlay class is applied so the strip sits on top of the iframe.
-    await expect(activity).toHaveClass(/canvas-task-activity--overlay/);
-
-    await page.screenshot({
-      path: "web/e2e/screenshots/canvas-enrichment-overlay.png",
-    });
-
-    // Status lines stream through normally.
-    await publish(page, {
-      ...baseTask,
-      status: "running",
-      statusLines: ["Reading steps/intake.ts"],
-    });
-    await expect(page.getByTestId("canvas-task-lines")).toContainText(
-      "Reading steps/intake.ts",
-    );
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-    // Task completes: activity strip disappears, iframe stays.
-    await publish(page, {
-      ...baseTask,
-      status: "completed",
-      endedAt: new Date().toISOString(),
-      exitCode: 0,
-    });
-    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-  });
-
-  test("failure view is full-screen (no iframe behind it) — unchanged from before", async ({
-    page,
-  }) => {
-    // Get an iframe up first, then trigger a failure.
-    await page.route("**/canvas/sess-boot/**", async (route) => {
-      await route.fulfill({
-        contentType: "text/html",
-        body: "<html><body>diagram</body></html>",
-      });
-    });
-    await page.evaluate(() => {
-      (
-        window as unknown as {
-          __HARNESS_TEST__: { publish: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__.publish({
-        type: "canvas.reload",
-        harnessSessionId: "sess-boot",
-      });
-    });
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-    await publish(page, {
-      ...baseTask,
-      status: "failed",
-      endedAt: new Date().toISOString(),
-      exitCode: 1,
-      errorTail: "Connection lost",
-    });
-
-    // Failure state replaces everything — iframe gone, failure panel shown.
-    await expect(page.getByTestId("canvas-task-failed")).toBeVisible();
-    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
-
-    await page.screenshot({
-      path: "web/e2e/screenshots/canvas-failure-fullscreen.png",
-    });
-  });
-
-  test("a failed task shows the error tail with retry and dismiss affordances", async ({
-    page,
-  }) => {
-    await publish(page, {
-      ...baseTask,
-      status: "failed",
-      endedAt: new Date().toISOString(),
-      exitCode: 1,
-      errorTail: "API connection lost",
-    });
-
-    const failed = page.getByTestId("canvas-task-failed");
-    await expect(failed).toBeVisible();
-    await expect(failed).toContainText("Visualize failed");
-    await expect(failed).toContainText("API connection lost");
-    await page.screenshot({
-      path: "web/e2e/screenshots/canvas-task-failed.png",
-    });
-
-    // Retry re-fires the same macro (MockApi records it for us to read back)
-    // — for an enrichment task that's the visualize force refresh.
-    await page.getByTestId("canvas-task-retry").click();
-    await page.waitForFunction(
-      () =>
-        (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } })
-          .__HARNESS_TEST__?.lastMacroRun,
-    );
-    const lastRun = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __HARNESS_TEST__: { lastMacroRun?: { id: string } };
-          }
-        ).__HARNESS_TEST__.lastMacroRun,
-    );
-    expect(lastRun?.id).toBe("visualize");
-    // The retry runs in the session already bound to the agent; it must not
-    // start a second session for it.
-    await expect.poll(() => activeSessionId(page)).toBe("sess-boot");
-
-    // Dismiss hides the failure panel and returns the pane to its usual state
-    // (the bound board, which sess-boot renders on first paint).
-    await page.getByTestId("canvas-task-dismiss").click();
-    await expect(page.getByTestId("canvas-task-failed")).toHaveCount(0);
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-  });
-});
-
 test.describe("agent verbs in the modal header (right-anchored, by agent path)", () => {
   const lastDirectAction = (page: Page) =>
     page.evaluate(
@@ -1398,11 +1120,13 @@ test.describe("agent verbs in the modal header (right-anchored, by agent path)",
     await openAgentModal(page, "acme-app", "leasing");
     await expect(page.getByTestId("agent-modal-state")).toHaveText("Deployed");
 
-    // Right-anchored, in order: Visualize, Run locally, Run, Deploy, then ×.
+    // Right-anchored, in order: </> (4.7.2), Visualize, Run locally, Run,
+    // Deploy, then ×.
     const order = await page
       .locator(".agent-modal-verbs [data-testid]")
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
     expect(order).toEqual([
+      "agent-modal-snippets",
       "agent-modal-visualize",
       "agent-modal-run-local",
       "agent-modal-prod-run",
@@ -1758,93 +1482,115 @@ test("canvas repair sends the coding agent an Agent-terminology prompt", async (
   expect((await firstPrompt()).toLowerCase()).not.toContain("workflow");
 });
 
-test("a detected dev server surfaces a Preview chip on the action bar", async ({
-  page,
-}) => {
-  test.fixme(
-    true,
-    "the session action bar (SessionStepsBar) is no longer mounted anywhere, and the agent modal carries no Preview / App Link chip or Prod globe: no home yet (SAP-3838 product gap, reported)",
+/** A dev server a session announced (`port.detected`), as the server does. */
+async function publishDevServer(
+  page: Page,
+  sessionId: string,
+  port: number,
+): Promise<void> {
+  await page.evaluate(
+    ([id, value]) => {
+      (
+        window as unknown as {
+          __HARNESS_TEST__: { publish: (m: unknown) => void };
+        }
+      ).__HARNESS_TEST__.publish({
+        type: "port.detected",
+        harnessSessionId: id,
+        port: value,
+        url: `http://localhost:${value}/`,
+      });
+    },
+    [sessionId, port] as const,
   );
-  await expect(page.getByTestId("session-preview-chip")).toHaveCount(0);
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "port.detected",
-      harnessSessionId: "sess-boot",
-      port: 5173,
-      url: "http://localhost:5173/",
-    });
-  });
-  const chip = page.getByTestId("session-preview-chip");
-  await expect(chip).toBeVisible();
-  await expect(chip).toContainText("Preview :5173");
-  await expect(chip).toHaveAttribute("href", "http://localhost:5173/");
-  await expect(chip).toHaveAttribute(
-    "data-tooltip",
-    "The coding agent is serving an app on port 5173. Opens http://localhost:5173/",
-  );
-});
+}
 
-test("an agent without an App Link gets no App Link chip", async ({ page }) => {
-  test.fixme(
-    true,
-    "the session action bar (SessionStepsBar) is no longer mounted anywhere, and the agent modal carries no Preview / App Link chip or Prod globe: no home yet (SAP-3838 product gap, reported)",
-  );
-  // The linked boot agent's bar, at rest: the read answered "no App Link", so
-  // the bar is exactly what it was before the chip existed (SAP-3255).
-  await expect(page.getByTestId("session-step-prod")).toBeVisible();
-  await expect(page.getByTestId("session-app-link-chip")).toHaveCount(0);
-});
-
-test("a published App Link sits beside the Preview chip, told apart by word and icon", async ({
-  page,
-}) => {
-  test.fixme(
-    true,
-    "the session action bar (SessionStepsBar) is no longer mounted anywhere, and the agent modal carries no Preview / App Link chip or Prod globe: no home yet (SAP-3838 product gap, reported)",
-  );
-  // Pins anatomy only. Mock mode has no durable App Link, so `mockAppLink=live`
-  // is a fixture opt-in, not evidence the read works (SAP-3255).
-  await page.goto("/?seed=0&mockAppLink=live");
-  const appLink = page.getByTestId("session-app-link-chip");
-  // Shown with no detected port: the link belongs to the definition.
-  await expect(page.getByTestId("session-preview-chip")).toHaveCount(0);
-  await expect(appLink).toBeVisible();
-  await expect(appLink).toHaveText("App Link");
-  await expect(appLink).toHaveAttribute("href", /^https:\/\/apps\.sapiom\.ai\/mock-org\//);
-  await expect(appLink).toHaveAttribute(
-    "data-tooltip",
-    /^Your published App Link\. It stays up after this session ends and starts when someone opens it\. Opens https:\/\/apps\.sapiom\.ai\/mock-org\//,
-  );
-  await expect(appLink).toHaveAttribute("aria-label", /^Open App Link apps\.sapiom\.ai\/mock-org\//);
-
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "port.detected",
-      harnessSessionId: "sess-boot",
-      port: 5173,
-      url: "http://localhost:5173/",
-    });
-  });
-  const preview = page.getByTestId("session-preview-chip");
-  await expect(preview).toContainText("Preview :5173");
-  await expect(appLink).toBeVisible();
-  // Preview first, then the App Link, then the Prod globe.
-  const order = await page
-    .getByTestId("session-steps")
-    .evaluate((bar) =>
-      Array.from(bar.querySelectorAll("[data-testid]"))
-        .map((el) => el.getAttribute("data-testid"))
-        .filter((id) => id === "session-preview-chip" || id === "session-app-link-chip" || id === "session-step-prod"),
+test.describe("App Links in the project header (flow 4.7.3)", () => {
+  test("a detected dev server is a local App Link in the header, never a Preview chip", async ({
+    page,
+  }) => {
+    await openProjectMap(page, "acme-app");
+    await expect(page.getByTestId("project-app-links")).toHaveCount(0);
+    // sess-boot is a live acme-app session.
+    await publishDevServer(page, "sess-boot", 5173);
+    const local = page.getByTestId("project-app-link-local-5173");
+    await expect(local).toBeVisible();
+    await expect(local).toHaveAttribute("data-deployed", "false");
+    await expect(local).toHaveAttribute("href", "http://localhost:5173/");
+    await expect(local).toHaveText("Dev server localhost:5173 · not deployed");
+    await expect(local).toHaveAttribute(
+      "aria-label",
+      "Open Dev server, localhost:5173 · not deployed",
     );
-  expect(order).toEqual(["session-preview-chip", "session-app-link-chip", "session-step-prod"]);
+    // No standalone Preview chip anywhere (4.7.3).
+    await expect(page.getByText(/Preview :\d+/)).toHaveCount(0);
+    // The session view carries no App Link or Preview either: they are the
+    // project's resources, in the project header only.
+    await selectSession(page, "sess-boot");
+    await expect(page.getByTestId("project-app-links")).toHaveCount(0);
+    await expect(page.getByText(/Preview :\d+/)).toHaveCount(0);
+  });
+
+  test("an agent without an App Link and no dev server: the header lists none", async ({
+    page,
+  }) => {
+    // The linked boot agent's read answered "no App Link".
+    await openProjectMap(page, "acme-app");
+    await expect(page.getByTestId("session-project-map-chip")).toBeVisible();
+    await expect(page.getByTestId("project-app-links")).toHaveCount(0);
+  });
+
+  test("deployed and local links sit side by side, told apart by word and icon", async ({
+    page,
+  }) => {
+    // Pins anatomy only. Mock mode has no durable App Link, so
+    // `mockAppLink=live` is a fixture opt-in, not evidence the read works
+    // (SAP-3255).
+    await page.goto("/?seed=0&mockAppLink=live");
+    await openProjectMap(page, "acme-app");
+    const deployed = page.getByTestId("project-app-link-agent-leasing");
+    await expect(deployed).toBeVisible();
+    await expect(deployed).toHaveAttribute("data-deployed", "true");
+    await expect(deployed).toHaveText("leasing");
+    await expect(deployed).toHaveAttribute(
+      "href",
+      /^https:\/\/apps\.sapiom\.ai\/mock-org\/leasing$/,
+    );
+    await expect(deployed).toHaveAttribute(
+      "aria-label",
+      /^Open leasing, https:\/\/apps\.sapiom\.ai\/mock-org\/leasing$/,
+    );
+
+    await publishDevServer(page, "sess-boot", 5173);
+    await expect(page.getByTestId("project-app-link-local-5173")).toBeVisible();
+    // Deployed first, then local.
+    const order = await page
+      .getByTestId("project-app-links")
+      .evaluate((group) =>
+        Array.from(group.querySelectorAll("[data-testid]")).map((el) =>
+          el.getAttribute("data-testid"),
+        ),
+      );
+    expect(order).toEqual([
+      "project-app-link-agent-leasing",
+      "project-app-link-local-5173",
+    ]);
+  });
+
+  test("only this project's LIVE sessions contribute local links", async ({
+    page,
+  }) => {
+    await openProjectMap(page, "acme-app");
+    // sess-leasing is an exited acme-app session: its server died with it.
+    await publishDevServer(page, "sess-leasing", 5180);
+    // sess-bg is a live session of another project (scratch).
+    await publishDevServer(page, "sess-bg", 5181);
+    // A second live acme-app session's server does show.
+    await publishDevServer(page, "sess-leasing-2", 5182);
+    await expect(page.getByTestId("project-app-link-local-5182")).toBeVisible();
+    await expect(page.getByTestId("project-app-link-local-5180")).toHaveCount(0);
+    await expect(page.getByTestId("project-app-link-local-5181")).toHaveCount(0);
+  });
 });
 
 test("a second run never erases the first: the run picker recalls past runs", async ({

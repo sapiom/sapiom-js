@@ -2,17 +2,28 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { CSSProperties, JSX } from "react";
 import type { AppState, WorkflowInfo } from "@shared/types";
 
+import { getByAgentPath } from "../lib/agent-path-lookup";
 import { createApi } from "../lib/api";
 import { DIALOG_LAYER_SELECTOR } from "../lib/dialog-focus";
+import { relativeTimeLabel } from "../lib/relative-time";
+import { inputContractFromCanvasGraph } from "../lib/run-input";
 import { canvasSourceFor, lifecycleVerbGate } from "../lib/session-scope";
 import type { AgentVerbs } from "../lib/use-agent-verbs";
 import { useDialogBehavior } from "../lib/use-dialog-behavior";
 import { useDismissable } from "../lib/use-dismissable";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import type { HarnessStateHook, ObservedRun } from "../lib/use-harness-state";
+import {
+  isWorkflowRunnable,
+  snippetsPendingSentence,
+  workflowDeploymentState,
+} from "../lib/workflow-deployment";
+import { AnchoredPopover } from "./AnchoredPopover";
 import { CanvasPane } from "./CanvasPane";
 import { Icon, type IconName } from "./Icon";
+import { RunsPanel } from "./RunsPanel";
 import { SecretsPanel } from "./SecretsPanel";
+import { SnippetPanel } from "./SnippetPanel";
 import { StepCard } from "./StepCard";
 import "../styles/agent-modal.css";
 
@@ -22,12 +33,21 @@ import "../styles/agent-modal.css";
  */
 const boardApi = createApi();
 
-export type AgentModalTab = "canvas" | "secrets";
+export type AgentModalTab = "canvas" | "runs" | "secrets";
 
 const TABS: Record<AgentModalTab, { label: string; icon: IconName }> = {
   canvas: { label: "Canvas", icon: "GitBranch" },
+  runs: { label: "Runs", icon: "Play" },
   secrets: { label: "Secrets", icon: "Shield" },
 };
+
+/**
+ * When a deploy from this tab reached `ready`, by agent path. WorkflowInfo
+ * carries no deployed-at, so the header can only say when for a deploy it
+ * watched; every other deployed agent reads "Deployed" (nothing absent is
+ * drawn). Module-level, so it outlives the modal closing.
+ */
+const deployedAtByPath = new Map<string, number>();
 
 /** A verb in the modal's header row (flow 4.4b). */
 type AgentVerb = "visualize" | "run_local" | "prod_run" | "deploy";
@@ -43,32 +63,39 @@ type Progress = { text: string; tone: "busy" | "done" | "failed" };
 
 /** Another dialog or popover is open above this modal (a secret's dialog, the
  *  Run sheet, the board's run picker): Escape and outside presses belong to
- *  it, not here. A menu is not a dialog layer, so it is named separately. */
+ *  it, not here. A menu is not a dialog layer, so it is named separately; a
+ *  listbox INSIDE the modal (the Runs tab's attempt timeline) is part of the
+ *  modal, not a layer above it. */
 function anotherLayerAbove(
   scrim: Element | null,
   surface: Element | null,
 ): boolean {
   if (!scrim) return false;
-  if (document.querySelector('[role="menu"], [role="listbox"]')) return true;
+  const menus = document.querySelectorAll('[role="menu"], [role="listbox"]');
+  if (Array.from(menus).some((menu) => !surface?.contains(menu))) return true;
   return Array.from(document.querySelectorAll(DIALOG_LAYER_SELECTOR)).some(
     (layer) => layer !== scrim && layer !== surface && !layer.contains(scrim),
   );
 }
 
 /**
- * THE AGENT MODAL (flow-map-chat-overlay.md 4.2b; mock `AgentModal.tsx`): one
- * agent's Canvas and Secrets over the project's map. Opened by the card's Open
+ * THE AGENT MODAL (flow-map-chat-overlay.md 4.2b, 4.7; mock `AgentModal.tsx`):
+ * one agent's Canvas, Runs and Secrets over the project's map. Opened by the card's Open
  * agent, a double click on the map, or the finder; closed by ×, Escape or the
  * scrim, which return to exactly the map that was left. The map, its pick and
  * its map chat stay mounted underneath and are never touched (I9).
  *
  * - It leaves the rail and a margin of the map visible (4.2b.3).
- * - Two tabs, Canvas and Secrets (4.2b.2). A step picked on the board shows a
- *   small card inside the modal (4.2b.4); no step page, no Steps tab.
- * - The header row carries the agent's verbs as visible controls, never a
- *   menu: Visualize (the board's re-read by path), Run locally, Run, Deploy.
- *   Deploy and Visualize need no session; Run opens the Run sheet, whose
- *   launch is `useAgentVerbs`' (by agent path once P4.2b lands).
+ * - Three tabs, Canvas, Runs and Secrets (4.2b.2, 4.7.1). A step picked on
+ *   the board shows a small card inside the modal (4.2b.4); no step page, no
+ *   Steps tab. Runs is the run workspace the old right pane had.
+ * - The header row (4.7.2) states Deployed (with when, if known) or Draft,
+ *   and carries `</>` (the integration snippets) and the agent's verbs as
+ *   visible controls, never a menu: Visualize (the board's re-read by path),
+ *   Run locally, Run, Deploy. None needs a session; Run opens the Run sheet,
+ *   whose launch is `useAgentVerbs`' by agent path.
+ * - No breadcrumbs (4.7.6): nothing in the modal navigates to a project
+ *   view. A launched child agent replaces the modal's subject, no crumb.
  */
 export function AgentModal({
   harness,
@@ -93,12 +120,15 @@ export function AgentModal({
   const containerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const snippetsRef = useRef<HTMLButtonElement>(null);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
   const deployed = agent.definitionId != null;
 
   // A child agent opened in place starts on its own Canvas, fresh.
   useEffect(() => {
     setTab("canvas");
     setProgress(null);
+    setSnippetsOpen(false);
   }, [agent.path]);
 
   // The scrim starts past the rail: the rail stays visible and is not under
@@ -131,12 +161,22 @@ export function AgentModal({
   // board opens (the run picker) portals to the body, outside the modal, and
   // choosing from it must not close the modal under it.
   const pressRef = useRef<EventTarget | null>(null);
+  // Whether a layer sat above this one when the last key went down, read in
+  // the capture phase, before any layer's own Escape handler runs. The layer
+  // above closes on that same Escape, and its state flush can land between
+  // the two bubble listeners: read after it, the modal would see no layer
+  // and close under it on the press that was the layer's.
+  const layerAtKeyRef = useRef(false);
   useEffect(() => {
     const onPress = (event: MouseEvent): void => {
       pressRef.current = event.target;
     };
     const onKey = (): void => {
       pressRef.current = null;
+      layerAtKeyRef.current = anotherLayerAbove(
+        backdropRef.current,
+        containerRef.current,
+      );
     };
     document.addEventListener("mousedown", onPress, true);
     document.addEventListener("keydown", onKey, true);
@@ -148,6 +188,7 @@ export function AgentModal({
   const dismiss = useCallback((): void => {
     if (anotherLayerAbove(backdropRef.current, containerRef.current)) return;
     const press = pressRef.current;
+    if (!press && layerAtKeyRef.current) return;
     if (press && press !== backdropRef.current) return;
     // Escape unwinds one layer: a picked step's card first (CanvasPane
     // releases the pick on the same key), then the modal. Only a card on
@@ -162,6 +203,8 @@ export function AgentModal({
   const deploy = harness.deployStateByPath.get(agent.path) ?? null;
   useEffect(() => {
     if (!deploy) return;
+    if (deploy.phase === "ready" && !deployedAtByPath.has(agent.path))
+      deployedAtByPath.set(agent.path, Date.now());
     setProgress(
       deploy.phase === "ready"
         ? { text: "Deployed", tone: "done" }
@@ -169,18 +212,31 @@ export function AgentModal({
           ? { text: deploy.message ?? "Deploy failed", tone: "failed" }
           : { text: "Deploying…", tone: "busy" },
     );
-  }, [deploy]);
+  }, [deploy, agent.path]);
+  // A new deploy starts a new "when".
+  useEffect(() => {
+    if (deploy && deploy.phase !== "ready") deployedAtByPath.delete(agent.path);
+  }, [deploy, agent.path]);
+  const deployedAt = deployed ? deployedAtByPath.get(agent.path) : undefined;
+
+  // What `</>` shows: the snippets for a ready cloud build, else why not yet.
+  const snippetsPending = !deployed
+    ? `Deploy ${agent.name} first. Its snippets appear once it has a ready cloud build.`
+    : isWorkflowRunnable(agent)
+      ? null
+      : snippetsPendingSentence(workflowDeploymentState(agent, null), agent.name);
 
   // The modal's runs are the agent's, from the store keyed by agent path:
   // the shown one (latest, or the one picked) and every one observed.
   const runs = useMemo(
     () =>
-      (harness.runIdsByAgent.get(agent.path) ?? [])
+      (getByAgentPath(harness.runIdsByAgent, agent.path) ?? [])
         .map((id) => harness.runsByExecution.get(id))
         .filter((observed): observed is ObservedRun => observed != null),
     [harness.runIdsByAgent, harness.runsByExecution, agent.path],
   );
-  const run: ObservedRun | null = harness.runsByAgent.get(agent.path) ?? null;
+  const run: ObservedRun | null =
+    getByAgentPath(harness.runsByAgent, agent.path) ?? null;
 
   // A re-read that brings back no graph (an agent with nothing to render)
   // posts no graph message: the progress line clears rather than spinning.
@@ -276,7 +332,11 @@ export function AgentModal({
             {agent.name}
           </span>
           <span className="agent-modal-state" data-testid="agent-modal-state">
-            {deployed ? "Deployed" : "Draft"}
+            {deployed
+              ? deployedAt != null
+                ? `Deployed ${relativeTimeLabel(deployedAt)}`
+                : "Deployed"
+              : "Draft"}
           </span>
           <div className="agent-modal-tabs" role="tablist" aria-label={agent.name}>
             {(Object.keys(TABS) as AgentModalTab[]).map((key) => (
@@ -308,6 +368,21 @@ export function AgentModal({
             </span>
           )}
           <div className="agent-modal-verbs">
+            <button
+              ref={snippetsRef}
+              type="button"
+              className={
+                "theme-toggle agent-modal-verb" + (snippetsOpen ? " is-active" : "")
+              }
+              data-testid="agent-modal-snippets"
+              aria-label="Integration snippets"
+              aria-haspopup="dialog"
+              aria-expanded={snippetsOpen}
+              data-tooltip="Snippets"
+              onClick={() => setSnippetsOpen((open) => !open)}
+            >
+              <Icon name="Code" size={16} />
+            </button>
             {VERBS.map((verb) => {
               const reason = verbDisabledReason(verb.id);
               return (
@@ -388,7 +463,11 @@ export function AgentModal({
                whose first message names the job and this agent (4.4b). */
             onInjectPrompt={(text) => verbs.handleAskAgent(agent, text)}
             onDescribeWorkflow={verbs.handleDescribeWithAI}
-            onGraphChange={(path) => {
+            onGraphChange={(path, graph) => {
+              // The board's entry contract backs the Run sheet when a fresh
+              // extraction reports unavailable.
+              const contract = inputContractFromCanvasGraph(graph);
+              if (contract) verbs.rememberVisibleContract(path, contract);
               if (path === agent.path)
                 setProgress((current) =>
                   current?.text === "Rendering…"
@@ -407,6 +486,21 @@ export function AgentModal({
             )}
           />
         </div>
+        {tab === "runs" && (
+          <div
+            className="agent-modal-panel"
+            data-testid="agent-modal-panel-runs"
+            role="tabpanel"
+          >
+            <RunsPanel
+              agent={agent}
+              runs={runs}
+              shown={run}
+              onSelectRun={(executionId) => harness.selectRun(agent.path, executionId)}
+              onAskAgent={(text) => verbs.handleAskAgent(agent, text)}
+            />
+          </div>
+        )}
         {tab === "secrets" && (
           <div
             className="agent-modal-panel"
@@ -421,6 +515,32 @@ export function AgentModal({
           </div>
         )}
       </div>
+      {/* Portalled to the body; a dialog layer, so the modal's Escape and
+          scrim leave it alone while it is open. */}
+      <AnchoredPopover
+        open={snippetsOpen}
+        anchorRef={snippetsRef}
+        onDismiss={() => setSnippetsOpen(false)}
+        placement="down-end"
+        className="agent-modal-snippets-popover"
+        role="dialog"
+        testid="agent-modal-snippets-popover"
+      >
+        {snippetsPending ? (
+          <p
+            className="agent-modal-snippets-pending"
+            data-testid="agent-modal-snippets-pending"
+          >
+            {snippetsPending}
+          </p>
+        ) : (
+          <SnippetPanel
+            key={agent.path}
+            boundWorkflow={agent}
+            agentsBaseUrl={state.agentsBaseUrl}
+          />
+        )}
+      </AnchoredPopover>
     </div>
   );
 }
