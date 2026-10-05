@@ -377,7 +377,7 @@ const send = defineStep({
             channel: triage,
             threadTs: issue.triageRootTs,
             text: `Follow-up on #${issue.number}: ${n.kind.replace(/_/g, " ")}`,
-            blocks: nudge(issue, n.kind, null, { triageChannel: triage }),
+            blocks: nudge(issue, n.kind),
             key: `nudge:${issue.id}:${n.key}`,
           });
           await emit(ctx, tx, "issue.nudged", {

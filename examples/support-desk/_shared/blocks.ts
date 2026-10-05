@@ -243,22 +243,17 @@ const NUDGE_TEXT: Record<string, string> = {
 
 /**
  * A controller ping in the triage thread. Mentions the owner if set; offers Take when unowned.
+ * `#n` stays plain text: the nudge already sits in the card's thread, and a link to the card made
+ * Slack attach a preview of it, a frozen copy whose status never updated and whose buttons did nothing.
  */
 export function nudge(
   issue: Issue,
   kind: string,
   ownerSlackId?: string | null,
-  opts: { triageChannel?: string } = {},
 ): Block[] {
   const owner = ownerSlackId ?? issue.ownerSlackId;
   const label = NUDGE_TEXT[kind] ?? kind;
-  const ref =
-    opts.triageChannel && issue.triageRootTs
-      ? mrkdwnLink(
-          permalink(opts.triageChannel, issue.triageRootTs),
-          `#${issue.number}`,
-        )
-      : `#${issue.number}`;
+  const ref = `#${issue.number}`;
   const blocks: Block[] = [
     {
       type: "section",
