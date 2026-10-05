@@ -53,7 +53,7 @@ export const useDeepLinks = ({
   const focusExistingRef = useRef<((definitionId: string) => boolean) | null>(
     null,
   );
-  const bindClonedRef = useRef<((definitionId: string) => boolean) | null>(
+  const focusClonedRef = useRef<((definitionId: string) => boolean) | null>(
     null,
   );
   const coldDeepLinkRef = useRef<DeepLinkTarget | null>(deepLinkFromSearch());
@@ -84,7 +84,7 @@ export const useDeepLinks = ({
   // moving the centre off the chat that is doing the clone.
   useEffect(() => {
     const wantId = pendingCloneFocusRef.current;
-    if (wantId && bindClonedRef.current?.(wantId)) {
+    if (wantId && focusClonedRef.current?.(wantId)) {
       pendingCloneFocusRef.current = null;
     }
   }, [harness.state?.workflows]);
@@ -105,20 +105,13 @@ export const useDeepLinks = ({
     if (projectId) openAgentCanvas(projectId, match.path);
     return true;
   };
-  // A cloned agent has landed: bind the session that cloned it.
-  if (booted) bindClonedRef.current = (definitionId: string): boolean => {
-    const match = state?.workflows.find(
+  // A cloned agent has landed: once found, it is marked done. Nothing binds
+  // the session that cloned it (design-map-chat.md I2); the agent is on its
+  // project's map, one Open agent away, and the clone session stays on screen.
+  if (booted) focusClonedRef.current = (definitionId: string): boolean =>
+    state?.workflows.some(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
-    );
-    if (!match) return false;
-    const activeSession =
-      state?.sessions.find((session) => session.id === harness.activeSessionId) ??
-      null;
-    if (activeSession && activeSession.status !== "exited") {
-      void harness.bindWorkflow(activeSession.id, match.path).catch(() => {});
-    }
-    return true;
-  };
+    ) ?? false;
 
   // Resolve a deep-link target. A template (`sapiom://templates/<id>`) opens the
   // templates browser on that template; an agent (`sapiom://agent/<id>`) opens

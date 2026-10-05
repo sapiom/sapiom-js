@@ -15,7 +15,6 @@ import type {
   HarnessKind,
   HarnessSession,
   SessionSummary,
-  WorkflowInfo,
 } from "@shared/types";
 
 import { errorMessage } from "./api";
@@ -165,13 +164,10 @@ export const useSessionActions = ({
    * even for a frame, as an unbound session (design.md I6: `POST /sessions`
    * takes no agent, so create and bind are two requests).
    */
-  const [pendingBindIds, setPendingBindIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  // Start chat is a one-at-a-time create/bind transaction. State renders the
-  // pending button; the ref closes React's same-frame double-click window.
-  const [startChatPending, setStartChatPending] = useState(false);
-  const startChatPendingRef = useRef(false);
+  // Nothing creates and then binds any more (Start chat left with the agent
+  // panel, design-map-chat.md I2), so no session waits on a binding. Kept as
+  // the empty set the rail and the shortcuts still read.
+  const [pendingBindIds] = useState<ReadonlySet<string>>(() => new Set());
   // User session renames (no server rename endpoint yet, so names persist
   // client-side with the rest of the UI arrangement). State
   // here so the rail and the header re-render together on a rename.
@@ -388,60 +384,6 @@ export const useSessionActions = ({
   };
 
   /**
-   * START CHAT on the map's agent panel (flow 4.4.2): a NEW session at the
-   * agent's project root, bound to the agent, at the top of the project's rows
-   * (newest activity) and selected. Always new: the panel lists the agent's
-   * existing sessions right above the button, so Start chat never quietly
-   * reuses one. Bound BEFORE it is shown (design.md I6): `POST /sessions`
-   * takes no agent, and selecting first would flash an unbound workbench.
-   */
-  const handleStartChat = (workflow: WorkflowInfo, projectId: string): void => {
-    if (!projects) return;
-    if (startChatPendingRef.current) return;
-    startChatPendingRef.current = true;
-    setStartChatPending(true);
-    const cwd =
-      projects.projectScope(projectId)?.cwd ??
-      projects.sessionCwdForAgent(workflow.path);
-    void (async () => {
-      let createdId: string | null = null;
-      try {
-        const session = await createSessionAt(cwd, selectedHarness, {
-          select: false,
-          onCreated: (created) => {
-            createdId = created.id;
-            setPendingBindIds((previous) => new Set(previous).add(created.id));
-          },
-        });
-        createdId = session.id;
-        try {
-          await harness.bindWorkflow(session.id, workflow.path);
-        } catch {
-          // Creation already succeeded. Keep that process alive and visible as
-          // an unbound session rather than rolling it back.
-          harness.showToast(
-            `Chat started, but couldn't attach it to ${workflow.name}.`,
-          );
-        }
-        openSession(session.id);
-      } catch (err) {
-        harness.showToast(errorMessage(err, "Couldn't start the chat."));
-      } finally {
-        if (createdId) {
-          const id = createdId;
-          setPendingBindIds((previous) => {
-            const next = new Set(previous);
-            next.delete(id);
-            return next;
-          });
-        }
-        startChatPendingRef.current = false;
-        setStartChatPending(false);
-      }
-    })();
-  };
-
-  /**
    * `×` on a live rail row (after the confirm) and End session… in the session
    * menu: the process ends and the row drops to the exited mark (Q4). The
    * selection stays where it is; if it was this session, the centre shows its
@@ -594,7 +536,6 @@ export const useSessionActions = ({
     harnessEntries,
     hiddenSessionIds,
     pendingBindIds,
-    startChatPending,
     setupBySession,
     sessionNames,
     renameSession,
@@ -604,7 +545,6 @@ export const useSessionActions = ({
     handleCreateSession,
     openSession,
     handleNewChat,
-    handleStartChat,
     handleEndSession,
     handleHideSession,
     reviewPastSession,
