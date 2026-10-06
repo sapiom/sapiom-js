@@ -129,7 +129,7 @@ naming the permission and the fields, for the agent to relay rather than retry.
 ## The agent map
 
 `sapiom_dev_map` returns the map Agent Studio draws, computed from code on every
-call; nothing is stored. Pass a project folder (`root`, default the working
+call; nothing about agents or edges is stored. Pass a project folder (`root`, default the working
 directory) and optionally a git `ref` (`HEAD`, a branch, a commit) to draw that
 version:
 
@@ -176,6 +176,19 @@ Each agent takes `slug` and optionally `path`, `description`, `deployed`,
 `steps` (`{ entry, steps: [{ id }], transitions: [{ from, to, kind }] }`),
 `calls` (`{ to, kind: "launch" | "signal" | "timer", evidence? }`), `emits`,
 `triggers` and `resources`. The same systems rule applies.
+
+**Labels.** Signed in, the tool asks Jev (`jev-1.13.0`, one batched
+`decisions.evaluate` call) for each described agent's `role` (intake, worker,
+orchestrator, reporter, monitor or utility) and for the `label` of each launch or
+event edge (hands work to, feeds data to or monitors). A label appears only when
+its probability `p` is at least 0.8. Answers are cached in
+`<root>/.sapiom/cache/map-labels.json` (ignored by git from inside the folder;
+in memory for a described map), keyed by a hash of the question's facts, so an
+unchanged agent is never re-asked and its label never flips. In a scanned
+project, when an agent changes, the label it showed stays unless the new answer
+differs and clears 0.8.
+Signed out, with `platform: false`, or when Jev fails or takes over 5 s, the map
+comes back with `labels: "unavailable"` and is otherwise the same.
 
 ## How capabilities fit in
 

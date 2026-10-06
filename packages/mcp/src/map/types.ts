@@ -94,6 +94,17 @@ export interface MapSystem {
   agents: string[];
 }
 
+/** A Jev label, present only when its probability clears the threshold (design §4). */
+export interface Label<Value extends string> {
+  value: Value;
+  /** Jev's probability for `value`, rounded to two places. */
+  p: number;
+}
+
+export type AgentRole = "intake" | "worker" | "orchestrator" | "reporter" | "monitor" | "utility";
+
+export type EdgeLabel = "hands work to" | "feeds data to" | "monitors";
+
 export interface MapAgent {
   slug: string;
   path: string;
@@ -104,6 +115,7 @@ export interface MapAgent {
   triggers: DescribedTrigger[];
   steps?: StepGraph;
   stepsUnavailable?: string;
+  role?: Label<AgentRole>;
 }
 
 export interface MapEdge {
@@ -115,6 +127,8 @@ export interface MapEdge {
   fromStep?: string;
   /** The event type, for an event edge. */
   eventType?: string;
+  /** Only on launch and event edges. */
+  label?: Label<EdgeLabel>;
 }
 
 export interface AgentMap {
@@ -125,6 +139,6 @@ export interface AgentMap {
   edges: MapEdge[];
   unresolved: Unresolved[];
   platform: PlatformState;
-  /** Jev labels arrive in a later change; until then the map is drawn without them. */
-  labels: "unavailable";
+  /** `buildMap` always says "unavailable"; `labelMap` says "ok" once Jev answered or the cache held every answer. */
+  labels: "ok" | "unavailable";
 }
