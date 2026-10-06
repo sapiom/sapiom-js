@@ -1,5 +1,12 @@
 # @sapiom/agent-studio
 
+## 0.1.37
+
+### Patch Changes
+
+- Updated dependencies [efef2da]
+  - @sapiom/harness@0.21.2
+
 ## 0.1.36
 
 ### Patch Changes
