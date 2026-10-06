@@ -129,3 +129,20 @@ describe("accountPlatform", () => {
     expect(listSchedules).toHaveBeenCalledWith({ definition: "award", status: "active" }, client);
   });
 });
+
+describe("accountPlatform cache", () => {
+  it("answers one account from cache for 30 s and never caches a failure", async () => {
+    const get = vi.fn().mockRejectedValueOnce(new Error("ECONNRESET")).mockResolvedValue([{ id: "1", name: "a" }]);
+    const client = { get } as unknown as GatewayClient;
+    const key = `test-${Math.random()}`;
+
+    await expect(accountPlatform(client, { cacheKey: key }).deployedSlugs()).rejects.toThrow("ECONNRESET");
+    await accountPlatform(client, { cacheKey: key }).deployedSlugs();
+    await accountPlatform(client, { cacheKey: key }).deployedSlugs();
+    expect(get).toHaveBeenCalledTimes(2);
+
+    await accountPlatform(client).deployedSlugs();
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+});
+

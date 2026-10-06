@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildMap } from "./build.js";
-import { checkSteps, describeProject, type PlatformSource, type StepSource } from "./scan-project.js";
+import { cachedCheckSteps, checkSteps, describeProject, type PlatformSource, type StepSource } from "./scan-project.js";
 import type { AgentMap } from "./types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -450,3 +450,30 @@ describe("ref snapshots", () => {
   });
 });
 
+
+describe("warm reads", () => {
+  it("reuses a manifest until the agent's sources change, and never caches a failure", async () => {
+    const root = await project({
+      "_shared/helper.ts": "export const X = 1;\n",
+      "award/index.ts": 'import { X } from "../_shared/helper";\nexport const y = X;\n',
+    });
+    let calls = 0;
+    let fail = true;
+    const steps = cachedCheckSteps(root, async () => {
+      calls++;
+      return fail ? { unavailable: "run npm install" } : { manifest: { entry: "a", steps: {} } };
+    });
+    const dir = path.join(root, "award");
+
+    await steps(dir);
+    fail = false;
+    await steps(dir);
+    await steps(dir);
+    expect(calls).toBe(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await fs.writeFile(path.join(root, "_shared", "helper.ts"), "export const X = 2;\n");
+    await steps(dir);
+    expect(calls).toBe(3);
+  });
+});
