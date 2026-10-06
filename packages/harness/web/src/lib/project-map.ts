@@ -43,6 +43,14 @@ export function agentDisplayName(agent: Pick<MapAgent, "slug" | "path">): string
   return folder || agent.slug;
 }
 
+/**
+ * The git ref the map draws, or null for the working copy. The tool names the working copy
+ * "working" in a git project and leaves ref out elsewhere; both mean the folders on disk.
+ */
+export function drawnRef(map: Pick<AgentMap, "ref">): string | null {
+  return map.ref && map.ref !== "working" ? map.ref : null;
+}
+
 /** Each agent's shown name; two agents whose folders share a name keep their full slugs. */
 export function displayNames(agents: readonly Pick<MapAgent, "slug" | "path">[]): Map<string, string> {
   const counts = new Map<string, number>();
@@ -205,6 +213,6 @@ export function canvasMapFor(map: AgentMap, agentPath: string): CanvasMapRequest
           return { from: edge.from, kind: kindOf(edge), ...(text ? { label: text } : {}) };
         }),
     },
-    atRef: Boolean(map.ref),
+    atRef: drawnRef(map) !== null,
   };
 }

@@ -5,6 +5,7 @@ import {
   agentDisplayName,
   agentRole,
   displayNames,
+  drawnRef,
   chipKind,
   chipLabel,
   deploymentLabel,
@@ -290,6 +291,15 @@ describe("display names", () => {
       { slug: "solo", path: "solo" },
     ]);
     expect([...names.values()]).toEqual(["a-worker", "b-worker", "solo"]);
+  });
+});
+
+describe("drawnRef", () => {
+  it("is null for the working copy, whether the tool says \"working\" or leaves ref out", () => {
+    expect(drawnRef({ ref: "working" })).toBeNull();
+    expect(drawnRef({})).toBeNull();
+    expect(drawnRef({ ref: "HEAD" })).toBe("HEAD");
+    expect(drawnRef({ ref: "feature/x" })).toBe("feature/x");
   });
 });
 

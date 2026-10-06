@@ -17,6 +17,7 @@ import {
   deploymentLabel,
   foldChips,
   displayNames,
+  drawnRef,
   edgeId,
   systemDisplayName,
   edgeTitle,
@@ -472,7 +473,7 @@ export function AgentMapCanvas({
                   title={agent.description || undefined}
                   {...trackingAttrs({ object: "agent" })}
                   aria-pressed={selected}
-                  aria-label={nodeLabel(agent, names.get(agent.slug) ?? agent.slug, map.ref)}
+                  aria-label={nodeLabel(agent, names.get(agent.slug) ?? agent.slug, drawnRef(map) ?? undefined)}
                   onClick={(event) => onSelectNode(agent.slug, event.currentTarget)}
                   onDoubleClick={(event) => onEnterNode(agent.slug, event.currentTarget)}
                 >
@@ -482,8 +483,8 @@ export function AgentMapCanvas({
                         className="agent-map-node-changed"
                         data-testid={`map-node-changed-${agent.slug}`}
                         role="img"
-                        aria-label={`Changed since ${map.ref ?? "HEAD"}`}
-                        title={`Changed since ${map.ref ?? "HEAD"}`}
+                        aria-label={`Changed since ${drawnRef(map) ?? "HEAD"}`}
+                        title={`Changed since ${drawnRef(map) ?? "HEAD"}`}
                       />
                     )}
                     <span className="agent-map-node-label" title={agent.slug}>
