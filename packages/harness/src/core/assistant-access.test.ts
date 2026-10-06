@@ -146,11 +146,12 @@ describe("Assistant access", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("turns off on 401/403 and on a malformed or denied answer", async () => {
+  it("turns off on 401/403, a malformed or denied answer, or another org's answer", async () => {
     for (const response of [
       new Response("", { status: 401 }),
       new Response("not json"),
       Response.json({ assistant: true }),
+      Response.json({ ...enabled, tenantId: "another-tenant" }),
     ]) {
       await access.refresh();
       expect(access.get()).not.toBeNull();

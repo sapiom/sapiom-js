@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessSession, SessionSummary } from "@shared/types";
 
@@ -93,10 +93,15 @@ export function SessionView({
 }): JSX.Element {
   const terminalRevision =
     harness.terminalRevealBySession.get(session.id) ?? 0;
-  // A session that just ended shows its ended pane first, not its chat.
+  // A session that ends while on screen shows its ended pane first, not its
+  // chat. Coming back to an ended session later keeps the view it was left on.
   const { setMode } = assistant;
+  const wasLive = useRef<{ id: string; live: boolean } | null>(null);
   useEffect(() => {
-    if (exited) setMode(session.id, "Terminal");
+    const previous = wasLive.current;
+    if (exited && previous?.id === session.id && previous.live)
+      setMode(session.id, "Terminal");
+    wasLive.current = { id: session.id, live: !exited };
   }, [exited, session.id, setMode]);
   if (exited) {
     return (

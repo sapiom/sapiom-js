@@ -63,6 +63,11 @@ export function useMapChat({
   const [pulse, setPulse] = useState<MapChatState["pulse"]>(null);
   const pending = useRef(new Map<string, string>());
   const drafts = useRef(new Map<string, ChatDraft>());
+  // Access turned off: the hosts are retired, so no map chat stays open.
+  useEffect(() => {
+    if (!canAsk) setOpenMap({});
+  }, [canAsk]);
+
   // Another account sees none of this one's map chats: their open state,
   // unsent text, queued questions and hand-offs belong to the principal.
   const authSeen = useRef(authRevision);

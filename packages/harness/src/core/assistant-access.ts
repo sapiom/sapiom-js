@@ -201,12 +201,14 @@ export class AssistantAccess {
     const result = (await response.json().catch(() => null)) as {
       assistant?: unknown;
       userId?: unknown;
+      tenantId?: unknown;
     } | null;
     if (
       !response.ok ||
       result?.assistant !== true ||
       typeof result.userId !== "string" ||
-      !result.userId
+      !result.userId ||
+      result.tenantId !== env.credentials.tenantId
     )
       return { failure: "access_denied" };
     return {

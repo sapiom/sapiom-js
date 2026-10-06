@@ -44,8 +44,7 @@ import "../styles/map-chat.css";
 /**
  * What the project view needs from the shell before it renders: whether it
  * draws the map pane or the agent cards, and the header the session bar shows
- * in its place (the project, its App Links, New agent, and the map's full
- * view while a drawn map is ready).
+ * in its place (the project, its App Links and New agent).
  */
 export function projectViewChrome({
   centre,

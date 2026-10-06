@@ -569,3 +569,10 @@ test("the card follows the server's access push: off at cold start, on when the 
   await node(page, STOCK_RESEARCH).click();
   await expect(cardInput(page)).toBeVisible();
 });
+
+test("turning access off closes an open map chat", async ({ page }) => {
+  await ask(page, "What runs here?");
+  await expect(page.getByTestId("map-chat-overlay")).toBeVisible();
+  await pushAccess(page, false, 1);
+  await expect(page.getByTestId("map-chat-overlay")).toHaveCount(0);
+});

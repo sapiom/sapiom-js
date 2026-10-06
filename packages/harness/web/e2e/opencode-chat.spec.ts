@@ -906,6 +906,13 @@ test("opens saved Assistant history when its Terminal session has exited", async
     page.getByRole("status", { name: "Assistant status" }),
   ).toHaveText("Finished");
   expect(conversations.get("ses_sess_boot")!.prompts).toHaveLength(1);
+
+  // Leaving and coming back keeps the ended session on its Assistant view.
+  await page.getByTestId("rail-session-select-sess-leasing-2").click();
+  await page.getByTestId("rail-session-select-sess-boot").click();
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Finished");
 });
 test.afterEach(async () => {
   server.closeAllConnections();
