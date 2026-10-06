@@ -514,22 +514,6 @@
     "reason": "Migration fixture proves deployed E2 history becomes role-neutral without data loss."
   },
   {
-    "id": "legacy-project-bootstrap-fixture",
-    "rule": "unified-agent-model",
-    "path": "packages/harness/src/core/project-bootstrap.test.ts",
-    "pattern": "map-planner",
-    "occurrences": 1,
-    "reason": "Migration fixture proves a durable pre-upgrade input FIFO is normalized without losing input or replaying bootstrap."
-  },
-  {
-    "id": "legacy-project-bootstrap-store-fixture",
-    "rule": "unified-agent-model",
-    "path": "packages/harness/src/core/project-bootstrap-store.test.ts",
-    "pattern": "map-planner",
-    "occurrences": 1,
-    "reason": "Migration fixture proves the stored bootstrap queue normalizes its pre-upgrade principal without losing accepted input."
-  },
-  {
     "id": "legacy-session-migration-fixtures",
     "rule": "unified-agent-model",
     "path": "packages/harness/src/core/session-manager.test.ts",
