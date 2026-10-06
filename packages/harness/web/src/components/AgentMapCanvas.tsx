@@ -16,7 +16,9 @@ import {
   chipLabel,
   deploymentLabel,
   foldChips,
+  agentDisplayName,
   edgeId,
+  systemDisplayName,
   edgeTitle,
   type AgentMap,
   type MapAgent,
@@ -63,7 +65,7 @@ const edgeTestId = (id: string) => `agent-map-edge-${id.split("\u0000").filter(B
 
 function nodeLabel(agent: MapAgent, ref: string | undefined): string {
   return [
-    agent.slug,
+    agentDisplayName(agent),
     "agent",
     deploymentLabel(agent),
     agentRole(agent),
@@ -403,7 +405,7 @@ export function AgentMapCanvas({
                 className="agent-map-system"
                 data-testid={`map-system-${system.id}`}
                 data-system-id={system.id}
-                data-group={system.name}
+                data-group={systemDisplayName(system, agentsBySlug)}
                 data-name-source={system.nameSource}
                 style={
                   {
@@ -414,10 +416,10 @@ export function AgentMapCanvas({
                   } satisfies CSSProperties
                 }
                 role="group"
-                aria-label={`System ${system.name}, ${system.agents.length} agents`}
+                aria-label={`System ${systemDisplayName(system, agentsBySlug)}, ${system.agents.length} agents`}
               >
                 <span className="agent-map-system-name">
-                  {system.name}
+                  {systemDisplayName(system, agentsBySlug)}
                   <span className="agent-map-system-count">
                     {system.agents.length === 1 ? "1 agent" : `${system.agents.length} agents`}
                   </span>
@@ -475,7 +477,9 @@ export function AgentMapCanvas({
                         title={`Changed since ${map.ref ?? "HEAD"}`}
                       />
                     )}
-                    <span className="agent-map-node-label">{agent.slug}</span>
+                    <span className="agent-map-node-label" title={agent.slug}>
+                      {agentDisplayName(agent)}
+                    </span>
                   </span>
                   {(deployed || role) && (
                     <span className="agent-map-node-meta">

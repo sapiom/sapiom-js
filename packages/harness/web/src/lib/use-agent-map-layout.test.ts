@@ -41,6 +41,22 @@ describe("agentMapGeometry", () => {
     edges: [edge("a", "b"), edge("b", "c"), edge("d", "e")],
   });
 
+  it("draws one line per pair of agents, whatever number of event types joins them", () => {
+    const input = agentMapGeometry(
+      "p",
+      mapOf({
+        systems: [{ id: "s", name: "s", nameSource: "default", agents: ["a", "b"] }],
+        agents: [agent("a"), agent("b")],
+        edges: [
+          edge("a", "b", { kind: "event", eventType: "issue.created" }),
+          edge("a", "b", { kind: "event", eventType: "issue.message_added" }),
+          edge("b", "a"),
+        ],
+      }),
+    );
+    expect(input.groups[0]!.edges.map(({ from, to }) => `${from}->${to}`)).toEqual(["a->b", "b->a"]);
+  });
+
   it("makes one group per system, holding its agents", () => {
     const input = agentMapGeometry("p", map);
     expect(input.id).toBe("p");
@@ -123,7 +139,7 @@ describe("agentMapGeometry", () => {
     expect(third).not.toHaveProperty("label");
   });
 
-  it("gives parallel edges of different kinds unique ids", () => {
+  it("keeps the first of parallel edges of different kinds as the pair's one line", () => {
     const input = agentMapGeometry(
       "p",
       mapOf({
@@ -136,9 +152,7 @@ describe("agentMapGeometry", () => {
         ],
       }),
     );
-    const ids = input.groups[0]!.edges.map(({ id }) => id);
-    expect(ids).toHaveLength(3);
-    expect(new Set(ids).size).toBe(3);
+    expect(input.groups[0]!.edges.map(({ id }) => id)).toEqual([edgeId(edge("a", "b"))]);
   });
 
   it("is deterministic", () => {

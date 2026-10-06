@@ -33,6 +33,26 @@ export function edgeLabel(edge: MapEdge): string | null {
   return typeof label?.value === "string" && label.value.trim() ? label.value : null;
 }
 
+/**
+ * The name a node shows: the agent's folder (`agents/intake` → `intake`). Fleets prefix
+ * every slug with the fleet's name, which truncates on the card and repeats on every node;
+ * the slug stays in the tooltip and the testids.
+ */
+export function agentDisplayName(agent: Pick<MapAgent, "slug" | "path">): string {
+  const folder = agent.path.split("/").filter(Boolean).pop();
+  return folder || agent.slug;
+}
+
+/** A default-named system is named after its most-connected agent: show that agent's name. */
+export function systemDisplayName(
+  system: { name: string; nameSource: "file" | "default" },
+  agents: ReadonlyMap<string, Pick<MapAgent, "slug" | "path">>,
+): string {
+  if (system.nameSource === "file") return system.name;
+  const hub = agents.get(system.name);
+  return hub ? agentDisplayName(hub) : system.name;
+}
+
 /** Stable id for an edge: one per (from, to, kind, event type). */
 export function edgeId(edge: MapEdge): string {
   return [edge.from, edge.to, edge.kind, edge.eventType ?? ""].join("\u0000");

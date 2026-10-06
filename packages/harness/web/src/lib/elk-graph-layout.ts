@@ -136,6 +136,9 @@ export function createElkGraph(input: ElkLayoutInput): ElkNode {
           "elk.direction": "DOWN",
           "elk.edgeRouting": "ORTHOGONAL",
           "elk.randomSeed": "1",
+          // Fan-out from one agent shares a trunk instead of drawing parallel lines.
+          "elk.layered.mergeEdges": "true",
+          "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
           "elk.spacing.nodeNode": "40",
           "elk.layered.spacing.nodeNodeBetweenLayers": "72",
           "elk.spacing.edgeNode": "24",

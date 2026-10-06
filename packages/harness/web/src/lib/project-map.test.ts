@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentFolder,
+  agentDisplayName,
   agentRole,
   chipKind,
   chipLabel,
   deploymentLabel,
   edgeId,
   edgeLabel,
+  systemDisplayName,
   edgeTitle,
   foldChips,
   mapStructureKey,
@@ -269,3 +271,16 @@ describe("chipKind", () => {
     expect(chipKind("bare")).toBeNull();
   });
 });
+
+describe("display names", () => {
+  it("names an agent by its folder, falling back to its slug", () => {
+    expect(agentDisplayName({ slug: "support-desk-intake", path: "agents/intake" })).toBe("intake");
+    expect(agentDisplayName({ slug: "solo", path: "" })).toBe("solo");
+  });
+  it("names a default system after its hub agent's folder, and keeps a name from map.json", () => {
+    const agents = new Map([["support-desk-controller", { slug: "support-desk-controller", path: "agents/controller" }]]);
+    expect(systemDisplayName({ name: "support-desk-controller", nameSource: "default" }, agents)).toBe("controller");
+    expect(systemDisplayName({ name: "Support desk", nameSource: "file" }, agents)).toBe("Support desk");
+  });
+});
+

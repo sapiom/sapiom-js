@@ -80,6 +80,11 @@ export function agentMapGeometry(projectId: string, map: AgentMap): ElkLayoutInp
         edges: map.edges
           // An agent calling itself has no line to draw between two cards.
           .filter((edge) => edge.from !== edge.to && members.has(edge.from) && members.has(edge.to))
+          // One line per pair: two event types from intake to copilot are one hand-off on the map.
+          .filter(
+            (edge, index, all) =>
+              all.findIndex((other) => other.from === edge.from && other.to === edge.to) === index,
+          )
           .map((edge) => {
             const text = edgeLabel(edge);
             return {
