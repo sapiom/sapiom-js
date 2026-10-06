@@ -5,7 +5,6 @@ import { canonicalGraphPath, refreshCanonicalGraphPath } from "@sapiom/agent-map
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
-import { hasAuthoredAgentMap } from "@sapiom/agent-map/node/agent-map-initialization-record";
 /**
  * Harness server — integration point for every workstream.
  *
@@ -15,13 +14,7 @@ import { hasAuthoredAgentMap } from "@sapiom/agent-map/node/agent-map-initializa
  * src/shared/types.ts for the full protocol contract.
  */
 
-import { SubsessionCoordinatorStore, type SubsessionCoordinatorStoreEvent } from "../core/subsession-coordinator-store.js";
-import { SubsessionCoordinator, type SubsessionCoordinatorEvent } from "../core/subsession-coordinator.js";
-import { codexRuntimeMarker } from "../core/collector/codex-runtime-marker.js";
 import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
-import { AgentBriefService } from "../core/agent-brief-service.js";
-import { BuildPlanStore } from "../core/build-plan-store.js";
-import { BuildPlanService } from "../core/build-plan-service.js";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -50,10 +43,7 @@ import type {
 } from "../shared/types.js";
 import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
-import type {
-  ProjectBootstrapLifecycleEvent,
-  ProjectAgentSession,
-} from "@sapiom/agent-map";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import {
   projectRoots,
   projectSessionRoot,
@@ -181,8 +171,6 @@ import {
 import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import { isProjectSessionDispatchAuthorized } from "../core/project-session.js";
-import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-migration.js";
-import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import {
@@ -382,8 +370,8 @@ export interface HarnessServerOptions {
     ) => void | Promise<void>;
   };
   /** Internal deterministic seam for post-listen startup-failure tests. */
-  projectBootstrapTestHooks?: {
-    afterListenBeforeRecovery?: (port: number) => void | Promise<void>;
+  startupTestHooks?: {
+    afterListen?: (port: number) => void | Promise<void>;
   };
 }
 
@@ -637,12 +625,10 @@ function createDefaultBuildLaunchOpts(
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
-    if (context?.focusedContext && !context.agentMapIdentity)
-      throw new Error("Focused project context requires a project-agent identity");
     const appendices = [
       viaSystemPrompt ? brief : null,
       context?.agentMapIdentity
-        ? projectAgentPromptAppendix(context.focusedContext)
+        ? projectAgentPromptAppendix()
         : null,
       context?.promptAppendix,
     ]
@@ -734,9 +720,8 @@ export const startServer = async (
   const statePaths = resolveStatePaths(options.stateRoot);
   const codexRolloutBroker = new CodexRolloutBroker(options.codexHomeDir);
   // A NEW PROJECT IS ONLY A PROJECT (flow-creation.md §4.1 step 3, Q5). Minting
-  // one in the catalog schedules nothing: no bootstrap intent, no outbox
-  // marker, no automatic first session. The user types first. This reverses
-  // the automatic "Plan Agents" bootstrap from #824 to #826 and #834.
+  // one in the catalog schedules nothing and starts no session. The user
+  // types first.
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
   );
@@ -984,7 +969,6 @@ export const startServer = async (
   // binding before SessionManager itself can be instantiated.
   // eslint-disable-next-line prefer-const
   let sessionManager!: SessionManager;
-  let projectBootstrap: ProjectBootstrapCoordinator | null = null;
   let agentMapInitialization: AgentMapInitializationCoordinator | null = null;
   let scheduleMapInitializations: (() => Promise<void>) | null = null;
   const pendingProjectCwds = new Set<string>();
@@ -1488,14 +1472,6 @@ export const startServer = async (
     );
     return result;
   };
-  const closeCoordinatorOwnedSubsession: {
-    current?: (marker: {
-      projectId: string;
-      parentSessionId: string;
-      bindingId: string;
-      sessionId: string;
-    }) => Promise<void>;
-  } = {};
   const resolveProjectSessionIdentity = async (
     sessionId: string,
     cwd: string,
@@ -1550,9 +1526,6 @@ export const startServer = async (
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
-    onSubsessionUserClosed: async (marker) => {
-      await closeCoordinatorOwnedSubsession.current?.(marker);
-    },
     buildLaunchOpts,
     currentCredentialGeneration: () =>
       apiKeyProvider.snapshot().generation,
@@ -1566,8 +1539,8 @@ export const startServer = async (
     migrateAgentMapIdentity: (sessionId, cwd) =>
       resolveProjectSessionIdentity(sessionId, cwd, { mayMintForCwd: false }),
     // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
-    // session is an ordinary session: no bootstrap claim, no "Plan Agents"
-    // title, no metadata that would make its first turn the coordinator's.
+    // session is an ordinary session with no metadata that would make its
+    // first turn special.
     prepareProjectSession: async (_identity, request) => {
       // A Claude Code session waits for its project's trust record, so the
       // dialog cannot win a race with the add-time write, and a project added
@@ -1586,8 +1559,6 @@ export const startServer = async (
         }, () => {});
       return {};
     },
-    onTerminalInput: (sessionId, context) =>
-      projectBootstrap?.onTerminalInput(sessionId, context),
     onRuntimeEpochTransition: async (session, runtimeEpoch) => {
       if (adapters[session.harness]?.eventSource === "transcript-tail") {
         if (runtimeEpoch) {
@@ -1596,32 +1567,18 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Date.now(),
-            ...(sessionManager.getSubsessionBinding(session.id)
-              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
         } else {
           codexRolloutBroker.releaseSession(session.id);
         }
       }
-      if (!session.projectBootstrap) return;
-      if (!projectBootstrap) {
-        throw new Error("project bootstrap coordinator unavailable");
-      }
-      await projectBootstrap.transitionRuntimeEpoch(session, runtimeEpoch);
     },
     onProjectAgentIdentityMigration: (event) => {
       projectIdentityMigrationEvents.push(event);
     },
-    onProjectBootstrapSession: async (session, mode, runtimeEpoch) => {
-      await projectBootstrap?.register(session, {
-        emptyProject: true,
-        mode,
-      }, runtimeEpoch);
-    },
     onAgentMapSessionExit: async (sessionId) => {
       agentMapCapabilities.revokeSession(sessionId);
       await agentMapMcp?.revokeSession(sessionId);
-      await projectBootstrap?.releaseSessionClaim(sessionId);
     },
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
@@ -2725,55 +2682,6 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
-  const emitProjectBootstrapLifecycle = (
-    event: ProjectBootstrapLifecycleEvent,
-  ): void => {
-    const session = sessionManager.get(event.sessionId);
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next(event.sessionId),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: event.sessionId,
-      // Bootstrap lifecycle correlation uses the server-owned harness session.
-      // Provider session identity is unnecessary and may originate in a hook.
-      agentSessionId: null,
-      harness: session?.harness ?? "claude-code",
-      type: event.name,
-      payload: {
-        project_id: event.projectId,
-        ...("queueDepth" in event
-          ? {
-              queue_depth: Math.max(0, Math.min(10_000, event.queueDepth)),
-            }
-          : {}),
-        ...("attemptId" in event && event.attemptId
-          ? { attempt_id: event.attemptId }
-          : {}),
-        ...("retryOrdinal" in event
-          ? { retry_ordinal: event.retryOrdinal }
-          : {}),
-        ...("retryable" in event
-          ? {
-              error_code: event.errorCode,
-              retryable: event.retryable,
-            }
-          : {}),
-        ...("reason" in event ? { reason: event.reason } : {}),
-        ...("inputId" in event
-          ? {
-              input_id: event.inputId,
-              error_code: event.errorCode,
-            }
-          : {}),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-
   for (const migration of projectIdentityMigrationEvents.splice(0)) {
     const migrationEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -2896,121 +2804,6 @@ export const startServer = async (
         bus.publish({ type: "agent-map.proposal.changed", delta }),
     },
   );
-  const buildPlanStore = new BuildPlanStore(agentMapWorkspaceStore);
-  const buildPlanService = new BuildPlanService(
-    buildPlanStore,
-    {
-      onOutcome: (event) => {
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(event.sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: event.sessionId,
-          agentSessionId: null,
-          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
-          type: "build_plan.operation",
-          payload: {
-            project_id: event.projectId,
-            operation: event.operation,
-            outcome: event.outcome,
-            plan_version: event.version,
-            diagnostic_count: Math.max(0, Math.min(64, event.diagnosticCount)),
-            affected_count: Math.max(0, Math.min(256, event.affectedCount)),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
-  const agentBriefService = new AgentBriefService(
-    buildPlanStore,
-    {
-      onOutcome: (event) => {
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(event.sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: event.sessionId,
-          agentSessionId: null,
-          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
-          type: "agent_brief.refresh",
-          payload: {
-            project_id: event.projectId,
-            outcome: event.outcome,
-            created_count: Math.min(128, event.createdCount),
-            new_version_count: Math.min(128, event.newVersionCount),
-            unchanged_count: Math.min(128, event.unchangedCount),
-            retired_count: Math.min(128, event.retiredCount),
-            impacted_workstream_count: Math.min(256, event.impactedWorkstreamCount),
-            diagnostic_category: event.diagnosticCategory,
-            projection_exact_count: Math.min(128, event.projectionExactCount),
-            projection_truncated_count: Math.min(128, event.projectionTruncatedCount),
-            projection_rejected_count: Math.min(128, event.projectionRejectedCount),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
-  const emitSubsessionEvent = (
-    event: SubsessionCoordinatorEvent | SubsessionCoordinatorStoreEvent,
-  ): void => {
-    const eventSessionId =
-      "sessionId" in event && event.sessionId
-        ? event.sessionId
-        : `subsession-${event.projectId}`;
-    if (event.name === "subsession.kickoff_submitted" &&
-      sessionManager.get(eventSessionId)?.harness === "codex") {
-      // An idle fresh Codex may have outlived the initial discovery window.
-      // Submission creates its rollout; restart collection, never the kickoff.
-      void startCodexTailerFor(eventSessionId).catch(() => {
-        console.error("[harness] codex kickoff transcript discovery failed");
-      });
-    }
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next(eventSessionId),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: eventSessionId,
-      agentSessionId: null,
-      harness: sessionManager.get(eventSessionId)?.harness ?? "claude-code",
-      type: event.name,
-      payload: {
-        project_id: event.projectId,
-        ...("count" in event && event.count !== undefined
-          ? { count: Math.max(0, Math.min(16, event.count)) }
-          : {}),
-        ...("code" in event && event.code ? { error_code: event.code } : {}),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-  const subsessionCoordinatorStore = new SubsessionCoordinatorStore(
-    statePaths.agentMap,
-    { onEvent: emitSubsessionEvent },
-  );
-  closeCoordinatorOwnedSubsession.current = async (marker) => {
-    await subsessionCoordinatorStore.closeOwnedBinding(marker);
-  };
-  const subsessionCoordinator = new SubsessionCoordinator({
-    store: subsessionCoordinatorStore,
-    sessionManager,
-    planningStore: buildPlanStore,
-    eventReader: eventStore,
-    onEvent: emitSubsessionEvent,
-  });
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -3040,9 +2833,6 @@ export const startServer = async (
   agentMapMcp = createAgentMapMcpRouter({
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
-    buildPlanService,
-    agentBriefService,
-    subsessionCoordinator,
     hostContextFor: async (scope) => {
       const assertScope = () => {
         const session = sessionManager.get(scope.sessionId);
@@ -3194,52 +2984,6 @@ export const startServer = async (
     void operation.then(settled, settled);
     return operation;
   };
-  const isMeaningfullyEmptyProject = async (projectId: string): Promise<boolean> => {
-    const aggregate = await agentMapWorkspaceStore.readAggregate(projectId);
-    return !hasAuthoredAgentMap(aggregate) && aggregate.current.buildPlan === null;
-  };
-  projectBootstrap = new ProjectBootstrapCoordinator({
-    root: statePaths.projectBootstrap,
-    legacyStateRoot: legacyProjectSessionStateRoot(statePaths.root),
-    sessionManager,
-    canDispatch: (session) =>
-      isProjectSessionDispatchAuthorized({
-        session,
-        resolveProject: (projectId) =>
-          studioProjectCatalog.resolveIdentity(projectId),
-      }),
-    isMeaningfullyEmpty: isMeaningfullyEmptyProject,
-    claimMapGeneration: (projectId) => agentMapInitialization!.reserveForBootstrap(projectId),
-    onEvent: emitProjectBootstrapLifecycle,
-  });
-  // The coordinator stays for the sessions that ALREADY carry bootstrap
-  // metadata (installs that opened projects before this change): they resume
-  // as ordinary sessions, their queued input is still owned, their events are
-  // still redacted. No new project ever enrols.
-  for (const session of sessionManager.list()) {
-    if (!session.projectBootstrap) continue;
-    let emptyProject = true;
-    try {
-      emptyProject = await isMeaningfullyEmptyProject(
-        session.projectBootstrap.projectId,
-      );
-    } catch {
-      // Registration still recovers generating state and preserves its FIFO;
-      // the project route will surface any unavailable workspace later.
-    }
-    await projectBootstrap
-      .register(session, { emptyProject, mode: "boot" }, null)
-      .catch(() => {
-        // Session IDs and storage/provider errors stay out of logs. The
-        // coordinator emits its bounded lifecycle classification separately.
-        console.error("[harness] project bootstrap registration failed");
-      });
-  }
-  sessionManager.onStatusChange((session, { runtimeEpoch }) => {
-    void projectBootstrap!.onSessionStatus(session, runtimeEpoch).catch(() => {
-      console.error("[harness] project bootstrap status transition failed");
-    });
-  });
   /**
    * OPENING A FOLDER MINTS ITS PROJECT AND STOPS (flow-creation.md §4.1 step
    * 3, §4.5). The catalog is reconciled so the durable Studio project exists
@@ -3263,40 +3007,14 @@ export const startServer = async (
   };
 
   // One ordinary-session input authority serves the canonical REST endpoint
-  // and its bounded planner-era compatibility alias. Bootstrap FIFO ownership
-  // stays behind this boundary so neither transport can invent eligibility,
-  // preemption, or dispatch semantics of its own.
+  // and its bounded planner-era compatibility alias.
   const submitSessionInput = async (
     sessionId: string,
     text: string,
     submit: boolean,
-    requestId?: string,
-  ): Promise<SessionInputSubmissionResult> => {
-    const bootstrapCoordinator = projectBootstrap;
-    if (bootstrapCoordinator?.ownsInput(sessionId, requestId)) {
-      if (submit) {
-        const result = await bootstrapCoordinator.enqueueWithReceipt(
-          sessionId,
-          text,
-          requestId,
-        );
-        return { ok: true, receipt: result.receipt };
-      }
-      // A user-owned draft must also win over automatic bootstrap, but it
-      // must remain editable rather than entering the durable submit FIFO.
-      // Retire lifecycle ownership and clear any background text staged
-      // before Enter, then preserve ordinary submit:false semantics.
-      const runtimeEpoch = sessionManager.getRuntimeEpoch(sessionId);
-      if (runtimeEpoch !== null) {
-        bootstrapCoordinator.onTerminalInput(sessionId, {
-          runtimeEpoch,
-          blockingPrompt: false,
-        });
-      }
-      sessionManager.preemptBackgroundInput(sessionId);
-    }
-    return { ok: await sessionManager.submitInput(sessionId, text, submit) };
-  };
+  ): Promise<SessionInputSubmissionResult> => ({
+    ok: await sessionManager.submitInput(sessionId, text, submit),
+  });
 
   const openCodeHost = new OpenCodeHost({
     access: assistantAccess,
@@ -3754,10 +3472,6 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
-    decorateEvent: (event, runtimeEpoch) =>
-      projectBootstrap!.decorateLocalEvent(event, runtimeEpoch),
-    projectTelemetryEvent: (event) =>
-      projectBootstrap!.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
@@ -3790,12 +3504,6 @@ export const startServer = async (
         .catch(() => {
           console.error("[harness] created agent registration failed");
         });
-      void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
-        console.error("[harness] project bootstrap completion failed");
-      });
-      void subsessionCoordinator.onEventPersisted(event, runtimeEpoch).catch(() => {
-        console.error("[harness] subsession acknowledgement failed");
-      });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);
       // The normal end of a session: the SessionEnd hook's event is in the
@@ -3847,8 +3555,6 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Number.isNaN(sinceMs) ? Date.now() : sinceMs,
-            ...(sessionManager.getSubsessionBinding(session.id)
-              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
       if (claim.outcome === "claimed")
         return { path: claim.path, ambiguous: false };
@@ -4030,7 +3736,6 @@ export const startServer = async (
       unsubscribeAssistant();
       openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
-      const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
       scheduleMapInitializations = null;
@@ -4073,7 +3778,6 @@ export const startServer = async (
       // wait leaves the existing writes intact; it never reopens admission.
       const drainsSettled = (async () => {
         await settle(() => initializationDiscovery ?? Promise.resolve());
-        await bootstrapClosing;
         await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
@@ -4149,9 +3853,7 @@ export const startServer = async (
     void assistantAccess.refresh();
     // Covers the ephemeral `port: 0` case where only the bound address is real.
     portDetector.addExcludedPort(actualPort);
-    await options.projectBootstrapTestHooks?.afterListenBeforeRecovery?.(
-      actualPort,
-    );
+    await options.startupTestHooks?.afterListen?.(actualPort);
 
     // Discovery owns scheduling; browser navigation only observes status. Resume queued work after listen.
     initializationDiscovery = initialWorkflowScan.then(async () => {

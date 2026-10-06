@@ -46,8 +46,6 @@ describe("deployed E2 actor migration isolation", () => {
     for (const live of [
       "../../../agent-map/src/core/agent-map-proposal-service.ts",
       "../../../agent-map/src/core/agent-map-version.ts",
-      "build-plan-service.ts",
-      "subsession-coordinator.ts",
     ]) {
       await expect(readFile(join(core, live), "utf8")).resolves.not.toContain(
         "parseLegacyE2ProposalActor",

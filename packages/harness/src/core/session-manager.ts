@@ -6,16 +6,13 @@ import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
  * server restarts, even though the ptys themselves do not.
  */
 
-import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   chmod,
   mkdir,
-  open,
   readFile,
   rename,
-  rm,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -31,10 +28,7 @@ import {
   type LaunchOpts,
   type SpawnSpec,
 } from "../shared/types.js";
-import type {
-  ProjectAgentSession,
-  ProjectBootstrapMetadata,
-} from "@sapiom/agent-map";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import { samePath } from "@sapiom/agent-map/paths";
 import {
   migratePersistedProjectIdentity,
@@ -59,8 +53,6 @@ import {
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
-  SubsessionBindingMismatchError,
-  SubsessionFreshRestartForbiddenError,
   UnknownSessionError,
 } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
@@ -78,8 +70,6 @@ export {
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
-  SubsessionBindingMismatchError,
-  SubsessionFreshRestartForbiddenError,
   UnknownSessionError,
 } from "./errors.js";
 
@@ -108,49 +98,6 @@ function sameProjectAgent(
   return (
     left.projectId === right.projectId &&
     left.sessionId === right.sessionId
-  );
-}
-
-function parseTrustedSubsessionBindingMarker(
-  value: unknown,
-  expectedSessionId?: string,
-): TrustedSubsessionBindingMarker | null {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).sort().join(",") !==
-      "bindingId,incarnation,parentSessionId,projectId,sessionId,spawnEpoch" ||
-    ![value.projectId, value.parentSessionId, value.bindingId, value.sessionId].every(
-      (entry) =>
-        typeof entry === "string" &&
-        entry.length > 0 &&
-        entry.length <= 256 &&
-        ![...entry].some((character) => {
-          const point = character.codePointAt(0) ?? 0;
-          return point <= 0x1f || point === 0x7f;
-        }),
-    ) ||
-    (expectedSessionId !== undefined && value.sessionId !== expectedSessionId) ||
-    !Number.isSafeInteger(value.incarnation) ||
-    (value.incarnation as number) < 1 ||
-    !Number.isSafeInteger(value.spawnEpoch) ||
-    (value.spawnEpoch as number) < 1
-  ) {
-    return null;
-  }
-  return structuredClone(value) as TrustedSubsessionBindingMarker;
-}
-
-function sameSubsessionBinding(
-  left: TrustedSubsessionBindingMarker,
-  right: TrustedSubsessionBindingMarker,
-): boolean {
-  return (
-    left.projectId === right.projectId &&
-    left.parentSessionId === right.parentSessionId &&
-    left.bindingId === right.bindingId &&
-    left.sessionId === right.sessionId &&
-    left.incarnation === right.incarnation &&
-    left.spawnEpoch === right.spawnEpoch
   );
 }
 
@@ -320,9 +267,6 @@ const BRACKETED_PASTE_END = "\x1b[201~";
 const AGENT_SESSION_OWNER_FILE_VERSION = 1;
 const AGENT_SESSION_OWNER_MAX_ENTRIES = 50_000;
 const AGENT_SESSION_OWNER_MAX_BYTES = 4 * 1024 * 1024;
-const SUBSESSION_BINDING_FILE_VERSION = 1;
-const SUBSESSION_BINDING_MAX_ENTRIES = 8_192;
-const SUBSESSION_BINDING_MAX_BYTES = 2 * 1024 * 1024;
 /** See `recordActivity()`: minimum gap between two `onActivity` broadcasts
  *  for the same session — pty.onData fires per chunk (often many times a
  *  second for a busy TUI), but the SPA's busy indicator only needs "this
@@ -424,7 +368,6 @@ export type LaunchOptsBuilder = (
   >,
   context?: {
     promptAppendix?: string;
-    focusedContext?: FocusedSessionContextProjection;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: ProjectAgentSession;
@@ -492,21 +435,12 @@ export interface SessionManagerOptions {
     request: CreateSessionRequest,
   ) => Promise<{
     initialTitle?: string;
-    projectBootstrap?: ProjectBootstrapMetadata;
   }>;
-  /** Synchronous notification before a real terminal write crosses the PTY. */
-  onTerminalInput?: (sessionId: string, context: TerminalInputContext) => void;
   /** Content-free observability for persisted identity normalization. */
   onProjectAgentIdentityMigration?: (event: {
     sessionId: string;
     outcome: "migrated" | "rejected" | "dropped";
   }) => void;
-  /** Registers only sessions that carry a durable bootstrap lifecycle. */
-  onProjectBootstrapSession?: (
-    session: HarnessSession,
-    mode: "created" | "resumed",
-    runtimeEpoch: string,
-  ) => Promise<void> | void;
   /**
    * Serializes coordinator ownership before a PTY generation is published.
    * `null` retracts a prepared epoch when pre-publication setup fails.
@@ -514,10 +448,6 @@ export interface SessionManagerOptions {
   onRuntimeEpochTransition?: (
     session: HarnessSession,
     runtimeEpoch: string | null,
-  ) => Promise<void> | void;
-  /** Mirrors an explicit user close into the coordinator-owned aggregate. */
-  onSubsessionUserClosed?: (
-    marker: TrustedSubsessionBindingMarker,
   ) => Promise<void> | void;
   /** Revokes launch capabilities/transports after every exit path. */
   onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
@@ -528,11 +458,6 @@ export interface SessionManagerOptions {
   writeSessionRegistry?: (file: string, serialized: string) => Promise<void>;
   /** Test seam for faults after the private identity ledger becomes durable. */
   writeAgentSessionOwnerRegistry?: (
-    file: string,
-    serialized: string,
-  ) => Promise<void>;
-  /** Fault-injection seam for the private coordinator ownership sidecar. */
-  writeSubsessionBindingRegistry?: (
     file: string,
     serialized: string,
   ) => Promise<void>;
@@ -586,29 +511,13 @@ export interface TrustedSessionCreateOptions {
   initialTitle?: string;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
-  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
-  focusedContext?: (sessionId: string) => FocusedSessionContextProjection;
   /** Server-authored native CLI orientation for a newly created session. */
   sessionStartSystemMessage?: (sessionId: string) => string;
-  /** Server-owned coordinator predecessor. This may differ from the older
-   * history record used to build the rehydration brief. */
-  handoffFromSessionId?: string;
-  /** Internal auto-create guard. Ordinary/user-requested creates omit this and
-   * remain valid even when the project's first-session lifecycle already has
-   * an owner. */
-  requireProjectBootstrapClaim?: boolean;
 }
 
 export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
-  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
-  focusedContext?: FocusedSessionContextProjection;
-  /** Private two-sided coordinator transition, never accepted by REST. */
-  subsessionBindingTransition?: Readonly<{
-    expected: TrustedSubsessionBindingMarker;
-    next: TrustedSubsessionBindingMarker;
-  }>;
 }
 
 interface PtyHandle {
@@ -706,30 +615,11 @@ export interface SessionStatusContext {
 }
 
 
-export interface TerminalInputContext {
-  /** Server-owned identity of the exact PTY receiving these bytes. */
-  runtimeEpoch: string;
-  /** The current adapter screen is a recognized trust/login/setup blocker. */
-  blockingPrompt: boolean;
-}
-
-
 export type TrackedSessionInputResult = Readonly<{
   accepted: boolean;
   phase: SessionInputWritePhase;
   error?: unknown;
 }>;
-
-/** Server-private half of a coordinator/session ownership proof. */
-export type TrustedSubsessionBindingMarker = Readonly<{
-  projectId: string;
-  parentSessionId: string;
-  bindingId: string;
-  sessionId: string;
-  incarnation: number;
-  spawnEpoch: number;
-}>;
-
 
 export type SessionInputWritePhase =
   | "not-written"
@@ -929,7 +819,7 @@ export class SessionManager {
       targets.map(async ({ id, runtimeEpoch }) => {
         const session = this.sessions.get(id);
         let resumable = false;
-        if (session?.agentSessionId && !this.subsessionBindings.has(id)) {
+        if (session?.agentSessionId) {
           try {
             resumable = await this.getAdapter(session.harness).canResume(
               session.agentSessionId,
@@ -1085,12 +975,6 @@ export class SessionManager {
   private readonly retiredRuntimeEpochs = new Map<string, string>();
 
   private readonly onRuntimeEpochTransition: SessionManagerOptions["onRuntimeEpochTransition"];
-  private readonly onSubsessionUserClosed: SessionManagerOptions["onSubsessionUserClosed"];
-
-  private readonly onTerminalInput: (
-    sessionId: string,
-    context: TerminalInputContext,
-  ) => void;
 
   private readonly loadSpawnPty: () => Promise<PtySpawnFn>;
 
@@ -1107,8 +991,6 @@ export class SessionManager {
    * accepted by a HarnessSession. Keeping this outside sessions.json avoids
    * leaking historical aliases through the browser DTO. */
   private readonly agentSessionOwnersPath: string;
-  /** Never projected through REST; public session fields are not ownership. */
-  private readonly subsessionBindingsPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly currentCredentialGeneration:
@@ -1125,9 +1007,6 @@ export class SessionManager {
     | ((file: string, serialized: string) => Promise<void>)
     | undefined;
   private readonly writeAgentSessionOwnerRegistry:
-    | ((file: string, serialized: string) => Promise<void>)
-    | undefined;
-  private readonly writeSubsessionBindingRegistry:
     | ((file: string, serialized: string) => Promise<void>)
     | undefined;
   private readonly writeWorkspaceContext: (
@@ -1158,18 +1037,11 @@ export class SessionManager {
    * state only after the candidate was published or rejected. */
   private sessionRegistryIdentityFence: Promise<void> | null = null;
   private readonly agentSessionOwners = new Map<string, string>();
-  private readonly subsessionBindings = new Map<
-    string,
-    TrustedSubsessionBindingMarker
-  >();
-  private readonly userClosedSubsessions = new Set<string>();
   /** Serializes the full authorize -> reserve -> pointer commit transition.
    * A file-level atomic rename alone is insufficient when two starts race the
    * in-memory ownership check before either write begins. */
   private agentSessionIdentityQueue: Promise<void> = Promise.resolve();
   private agentSessionOwnerWriteSeq = 0;
-  private subsessionBindingWriteSeq = 0;
-  private subsessionBindingQueue: Promise<void> = Promise.resolve();
   private initialized = false;
 
   constructor(options: SessionManagerOptions) {
@@ -1184,7 +1056,6 @@ export class SessionManager {
       options.sessionsPath ?? HARNESS_PATHS.sessions,
     );
     this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
-    this.subsessionBindingsPath = `${this.sessionsPath}.subsession-bindings.json`;
     this.spawnPty = options.spawnPty;
     this.loadSpawnPty = options.loadSpawnPty ?? loadDefaultSpawn;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
@@ -1193,19 +1064,14 @@ export class SessionManager {
     this.migrateAgentMapIdentity = options.migrateAgentMapIdentity;
     this.prepareProjectSession = options.prepareProjectSession;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
-    this.onTerminalInput = options.onTerminalInput ?? (() => {});
     this.onProjectAgentIdentityMigration =
       options.onProjectAgentIdentityMigration;
-    this.onProjectBootstrapSession = options.onProjectBootstrapSession;
     this.onRuntimeEpochTransition = options.onRuntimeEpochTransition;
-    this.onSubsessionUserClosed = options.onSubsessionUserClosed;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
     this.writeAgentSessionOwnerRegistry =
       options.writeAgentSessionOwnerRegistry;
-    this.writeSubsessionBindingRegistry =
-      options.writeSubsessionBindingRegistry;
     this.writeWorkspaceContext =
       options.writeWorkspaceContext ?? (async () => {});
     this.prepareWorkspaceContext =
@@ -1249,13 +1115,8 @@ export class SessionManager {
         if (migration.identity) {
           session.agentMapIdentity = structuredClone(migration.identity);
         }
-        if (migration.bootstrap) {
-          session.projectBootstrap = structuredClone(migration.bootstrap);
-        } else {
-          delete session.projectBootstrap;
-        }
-        // Planner-era metadata is never live authority after normalization.
-        // Its on-disk input queue is migrated by ProjectBootstrapCoordinator.
+        // Planner-era and bootstrap metadata is never live authority after
+        // normalization.
         removeLegacyProjectSessionMetadata(session);
         dirty = true;
       }
@@ -1320,7 +1181,6 @@ export class SessionManager {
       this.sessions.set(session.id, session);
     }
     dirty = (await this.loadAgentSessionOwners(persisted)) || dirty;
-    await this.loadSubsessionBindings();
     if (dirty) await this.persist();
   }
 
@@ -1567,34 +1427,6 @@ export class SessionManager {
     if (this.ptys.has(id)) {
       throw new SessionAlreadyLiveError(id);
     }
-    const bindingTransition = trusted.subsessionBindingTransition;
-    if (bindingTransition) {
-      const expected = parseTrustedSubsessionBindingMarker(
-        bindingTransition.expected,
-        id,
-      );
-      const next = parseTrustedSubsessionBindingMarker(
-        bindingTransition.next,
-        id,
-      );
-      const current = this.subsessionBindings.get(id);
-      if (
-        !expected ||
-        !next ||
-        !current ||
-        (!sameSubsessionBinding(current, expected) &&
-          !sameSubsessionBinding(current, next)) ||
-        next.projectId !== expected.projectId ||
-        next.parentSessionId !== expected.parentSessionId ||
-        next.bindingId !== expected.bindingId ||
-        next.sessionId !== expected.sessionId ||
-        next.incarnation !== expected.incarnation + 1 ||
-        next.spawnEpoch <= expected.spawnEpoch ||
-        this.userClosedSubsessions.has(id)
-      ) {
-        throw new SubsessionBindingMismatchError();
-      }
-    }
     const adapter = this.getAdapter(session.harness);
     // Pre-flight against the agent's OWN store before touching the record.
     // Holding an agentSessionId only means our SessionStart hook fired once;
@@ -1618,23 +1450,6 @@ export class SessionManager {
       session.cwd,
       session.agentMapIdentity,
     );
-    if (bindingTransition && agentMapIdentity.projectId !== bindingTransition.next.projectId) {
-      throw new ProjectSessionScopeUnavailableError(id);
-    }
-    if (bindingTransition) {
-      const current = this.subsessionBindings.get(id)!;
-      // A failed spawn may leave the exact next marker durably committed.
-      // Retrying that same transition must not require the old marker again.
-      if (!sameSubsessionBinding(current, bindingTransition.next)) {
-        this.subsessionBindings.set(id, bindingTransition.next);
-        try {
-          await this.persistSubsessionBindings();
-        } catch (error) {
-          this.subsessionBindings.set(id, current);
-          throw error;
-        }
-      }
-    }
     session.agentMapIdentity = structuredClone(agentMapIdentity);
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
@@ -1653,9 +1468,6 @@ export class SessionManager {
       const built = await this.buildLaunchOpts(id, session, {
         ...(trusted.promptAppendix
           ? { promptAppendix: trusted.promptAppendix }
-          : {}),
-        ...(trusted.focusedContext
-          ? { focusedContext: trusted.focusedContext }
           : {}),
         agentMapIdentity,
         resume: true,
@@ -1687,13 +1499,6 @@ export class SessionManager {
             agentMapIdentity,
           ),
       );
-      if (session.projectBootstrap) {
-        const runtimeEpoch = this.getRuntimeEpoch(session.id);
-        if (runtimeEpoch === null) throw new Error("session runtime unavailable");
-        await Promise.resolve(
-          this.onProjectBootstrapSession?.(session, "resumed", runtimeEpoch),
-        ).catch(() => {});
-      }
     } catch (err) {
       // Same best-effort reconciliation as create(): the first persist can be
       // the failure, and a failed repair must not replace that original error.
@@ -1709,94 +1514,12 @@ export class SessionManager {
     return session;
   }
 
-  /** Server-only same-ID resume fenced by the coordinator's private marker. */
-  resumeBound(
-    id: string,
-    expected: TrustedSubsessionBindingMarker,
-    next: TrustedSubsessionBindingMarker,
-    trusted: Omit<TrustedSessionResumeOptions, "subsessionBindingTransition"> = {},
-  ): Promise<HarnessSession> {
-    return this.resume(id, {
-      ...trusted,
-      subsessionBindingTransition: { expected, next },
-    });
-  }
-
   /**
-   * Close the session and durably record a user-closed delegated binding.
-   * Termination starts before storage writes, so a persistence failure cannot
-   * leave its PTY running. Failed closure bookkeeping retains a tombstone that
-   * prevents automatic recovery and can be retried by a later close.
-   *
-   * Await this operation and handle rejection: binding persistence and the
-   * coordinator callback can fail, and their completion has no time bound.
-   * On success, returns kill()'s result: whether a live or stale session was
-   * transitioned to exited.
+   * Close the session at the user's request. Returns kill()'s result: whether
+   * a live or stale session was transitioned to exited.
    */
   async close(id: string): Promise<boolean> {
-    const binding = this.subsessionBindings.get(id);
-    if (binding) {
-      this.userClosedSubsessions.add(id);
-    }
-    // Start termination before persistence so a sidecar fsync failure cannot
-    // leave a delegated PTY running after the user closes its tab. Keep the
-    // in-memory tombstone on failure and let a later close retry persistence.
-    const termination = this.kill(id);
-    let persistenceError: unknown;
-    let coordinatorCloseRecorded = false;
-    if (binding) {
-      try {
-        await this.persistSubsessionBindings();
-      } catch (error) {
-        persistenceError = error;
-      }
-      try {
-        if (this.onSubsessionUserClosed) {
-          await this.onSubsessionUserClosed(binding);
-          coordinatorCloseRecorded = true;
-        }
-      } catch (error) {
-        persistenceError ??= error;
-      }
-    }
-    const killed = await termination;
-    if (binding && persistenceError === undefined && coordinatorCloseRecorded) {
-      const current = this.subsessionBindings.get(id);
-      if (current && sameSubsessionBinding(current, binding)) {
-        this.subsessionBindings.delete(id);
-        this.userClosedSubsessions.delete(id);
-        try {
-          await this.persistSubsessionBindings();
-        } catch (error) {
-          this.subsessionBindings.set(id, binding);
-          this.userClosedSubsessions.add(id);
-          persistenceError = error;
-        }
-      }
-    }
-    if (persistenceError !== undefined) throw persistenceError;
-    return killed;
-  }
-
-  /** Close only when the caller proves the exact coordinator-owned binding. */
-  async closeBound(expected: TrustedSubsessionBindingMarker): Promise<boolean> {
-    const parsed = parseTrustedSubsessionBindingMarker(
-      expected,
-      expected.sessionId,
-    );
-    if (!parsed) throw new SubsessionBindingMismatchError();
-    const operation = async (): Promise<boolean> => {
-      const current = this.subsessionBindings.get(parsed.sessionId);
-      if (!current || !sameSubsessionBinding(current, parsed))
-        throw new SubsessionBindingMismatchError();
-      return this.close(parsed.sessionId);
-    };
-    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
-    this.subsessionBindingQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.kill(id);
   }
 
   /**
@@ -1932,23 +1655,6 @@ export class SessionManager {
       throw new SessionInputIsolationError();
     }
     const session = this.sessions.get(id);
-    if (session && session.status !== "exited") {
-      try {
-        const adapter = this.adapters[session.harness];
-        const blockingPrompt = Boolean(
-          adapter?.detectBlockingPrompt &&
-          (this.hasCurrentBlockingPrompt(adapter, handle) ||
-            this.hasRetainedBlockingPrompt(adapter, handle)),
-        );
-        this.onTerminalInput(id, {
-          runtimeEpoch: handle.runtimeEpoch,
-          blockingPrompt,
-        });
-      } catch {
-        // Input priority is local correctness; lifecycle telemetry/persistence
-        // callbacks are best effort and cannot block a person's terminal.
-      }
-    }
     this.terminalInputEpochs.set(
       id,
       (this.terminalInputEpochs.get(id) ?? 0) + 1,
@@ -2685,21 +2391,6 @@ export class SessionManager {
     this.emitStatus(session);
   }
 
-  /** Persist a coordinator-owned metadata projection before exposing it. */
-
-
-  /** Persist the neutral project-bootstrap projection before exposing it. */
-  async setProjectBootstrapMetadata(
-    id: string,
-    metadata: ProjectBootstrapMetadata,
-  ): Promise<void> {
-    const session = this.sessions.get(id);
-    if (!session) throw new UnknownSessionError(id);
-    session.projectBootstrap = structuredClone(metadata);
-    await this.persist();
-    this.emitStatus(session);
-  }
-
   /**
    * Whether `id` should be treated as ready to receive programmatic input
    * right now. A real/fallback `session.ready` signal normally suffices; an
@@ -2897,7 +2588,6 @@ export class SessionManager {
       await Promise.all([...this.credentialRemovalRelaunches]);
     }
     await this.agentSessionIdentityQueue;
-    await this.subsessionBindingQueue;
     await this.writeQueue;
   }
 
@@ -3437,99 +3127,6 @@ export class SessionManager {
     await rename(tmpPath, this.agentSessionOwnersPath);
   }
 
-  private async loadSubsessionBindings(): Promise<void> {
-    let decoded: unknown;
-    try {
-      const raw = await readFile(this.subsessionBindingsPath, "utf8");
-      if (Buffer.byteLength(raw, "utf8") > SUBSESSION_BINDING_MAX_BYTES)
-        throw new Error("subsession binding registry exceeds its size limit");
-      decoded = JSON.parse(raw) as unknown;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    if (
-      !isRecord(decoded) ||
-      Object.keys(decoded).sort().join(",") !==
-        "closedSessionIds,markers,version" ||
-      decoded.version !== SUBSESSION_BINDING_FILE_VERSION ||
-      !isRecord(decoded.markers) ||
-      !Array.isArray(decoded.closedSessionIds) ||
-      decoded.closedSessionIds.length > SUBSESSION_BINDING_MAX_ENTRIES ||
-      !decoded.closedSessionIds.every(
-        (sessionId) => typeof sessionId === "string",
-      )
-    ) {
-      throw new Error("subsession binding registry is malformed");
-    }
-    const entries = Object.entries(decoded.markers);
-    if (entries.length > SUBSESSION_BINDING_MAX_ENTRIES)
-      throw new Error("subsession binding registry exceeds its entry limit");
-    const bindingIds = new Set<string>();
-    for (const [sessionId, value] of entries) {
-      const marker = parseTrustedSubsessionBindingMarker(value, sessionId);
-      if (!marker || bindingIds.has(marker.bindingId))
-        throw new Error("subsession binding registry is malformed");
-      bindingIds.add(marker.bindingId);
-      this.subsessionBindings.set(sessionId, marker);
-    }
-    for (const sessionId of decoded.closedSessionIds) {
-      if (!this.subsessionBindings.has(sessionId))
-        throw new Error("subsession binding registry is malformed");
-      this.userClosedSubsessions.add(sessionId);
-    }
-  }
-
-  private async persistSubsessionBindings(): Promise<void> {
-    const markers = Object.fromEntries(
-      [...this.subsessionBindings.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([sessionId, marker]) => [sessionId, marker]),
-    );
-    const serialized = `${JSON.stringify(
-      {
-        version: SUBSESSION_BINDING_FILE_VERSION,
-        markers,
-        closedSessionIds: [...this.userClosedSubsessions].sort(),
-      },
-      null,
-      2,
-    )}\n`;
-    if (Buffer.byteLength(serialized, "utf8") > SUBSESSION_BINDING_MAX_BYTES)
-      throw new Error("subsession binding registry exceeds its size limit");
-    if (this.writeSubsessionBindingRegistry) {
-      await this.writeSubsessionBindingRegistry(
-        this.subsessionBindingsPath,
-        serialized,
-      );
-      return;
-    }
-    const directory = dirname(this.subsessionBindingsPath);
-    await mkdir(directory, { recursive: true });
-    const temporary = `${this.subsessionBindingsPath}.tmp-${process.pid}-${
-      this.subsessionBindingWriteSeq++
-    }`;
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(temporary, "wx", 0o600);
-      await handle.writeFile(serialized, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await rename(temporary, this.subsessionBindingsPath);
-      await chmod(this.subsessionBindingsPath, 0o600);
-      const directoryHandle = await open(directory, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
-    } finally {
-      await handle?.close().catch(() => {});
-      await rm(temporary, { force: true }).catch(() => {});
-    }
-  }
-
   private persistIdentityCandidate(candidate: HarnessSession): Promise<void> {
     const current = this.list();
     const index = current.findIndex((session) => session.id === candidate.id);
@@ -3587,27 +3184,13 @@ export class SessionManager {
 
   private readonly prepareProjectSession: SessionManagerOptions["prepareProjectSession"];
 
-  private readonly onProjectBootstrapSession: SessionManagerOptions["onProjectBootstrapSession"];
-
-  /** Publish project sessions in claim order so the first durable/visible row
-   * is also the one that owns the first-session lifecycle. */
+  /** Publish a project's sessions in creation order. */
   private readonly projectCreateQueues = new Map<string, Promise<void>>();
 
   private readonly pendingCreates = new Map<
     string,
     Pick<HarnessSession, "cwd" | "agentMapIdentity">
   >();
-
-
-  /** Read-only vendor-history probe used before a coordinator claims recovery. */
-  async canResumeSession(id: string): Promise<boolean> {
-    const session = this.sessions.get(id);
-    if (!session?.agentSessionId) return false;
-    return this.getAdapter(session.harness).canResume(
-      session.agentSessionId,
-      session.cwd,
-    );
-  }
 
 
   private serializeProjectCreate<T>(
@@ -3636,98 +3219,12 @@ export class SessionManager {
     return [...this.pendingCreates.values()];
   }
 
-  /**
-   * Server-only reserved-ID create. The private marker is committed before a
-   * session row or process can exist, closing the row-before-binding crash
-   * window while preserving the ordinary writable create path.
-   */
-  async createReserved(
-    reservedSessionId: string,
-    req: CreateSessionRequest,
-    markerInput: TrustedSubsessionBindingMarker,
-    trusted: TrustedSessionCreateOptions,
-  ): Promise<HarnessSession> {
-    const marker = parseTrustedSubsessionBindingMarker(
-      markerInput,
-      reservedSessionId,
-    );
-    if (!marker) throw new SubsessionBindingMismatchError();
-    const operation = async (): Promise<HarnessSession> => {
-      const existingMarker = this.subsessionBindings.get(reservedSessionId);
-      const existingSession = this.sessions.get(reservedSessionId);
-      if (existingMarker) {
-        if (!sameSubsessionBinding(existingMarker, marker))
-          throw new SubsessionBindingMismatchError();
-        if (this.userClosedSubsessions.has(reservedSessionId))
-          throw new SubsessionFreshRestartForbiddenError();
-        if (existingSession) return existingSession;
-      } else {
-        if (existingSession) throw new SubsessionBindingMismatchError();
-        this.subsessionBindings.set(reservedSessionId, marker);
-        try {
-          await this.persistSubsessionBindings();
-        } catch (error) {
-          if (this.subsessionBindings.get(reservedSessionId) === marker)
-            this.subsessionBindings.delete(reservedSessionId);
-          throw error;
-        }
-      }
-      return this.createWithId(reservedSessionId, req, trusted, marker);
-    };
-    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
-    this.subsessionBindingQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
-
-  getSubsessionBinding(
-    sessionId: string,
-  ): TrustedSubsessionBindingMarker | null {
-    const marker = this.subsessionBindings.get(sessionId);
-    return marker ? structuredClone(marker) : null;
-  }
-
-  matchesSubsessionBinding(
-    expected: TrustedSubsessionBindingMarker,
-  ): boolean {
-    const parsed = parseTrustedSubsessionBindingMarker(
-      expected,
-      expected.sessionId,
-    );
-    const current = parsed
-      ? this.subsessionBindings.get(parsed.sessionId)
-      : undefined;
-    return Boolean(parsed && current && sameSubsessionBinding(current, parsed));
-  }
-
-  wasSubsessionClosedByUser(
-    expected: TrustedSubsessionBindingMarker,
-  ): boolean {
-    return (
-      this.matchesSubsessionBinding(expected) &&
-      this.userClosedSubsessions.has(expected.sessionId)
-    );
-  }
-
   private async createWithId(
     id: string,
     req: CreateSessionRequest,
     trusted: TrustedSessionCreateOptions,
-    expectedSubsessionBinding?: TrustedSubsessionBindingMarker,
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
-    const marker = this.subsessionBindings.get(id);
-    if (
-      (marker !== undefined || expectedSubsessionBinding !== undefined) &&
-      (!marker ||
-        !expectedSubsessionBinding ||
-        !sameSubsessionBinding(marker, expectedSubsessionBinding))
-    ) {
-      throw new SubsessionBindingMismatchError();
-    }
-    if (this.sessions.has(id)) throw new SubsessionBindingMismatchError();
     const adapter = this.getAdapter(req.harness);
     const agentMapIdentity = await this.resolveAgentMapIdentity(
       id,
@@ -3736,8 +3233,8 @@ export class SessionManager {
     );
     const createResolved = async (): Promise<HarnessSession> => {
       // A project create may have been waiting behind another publication
-      // when shutdown closed admission. Refuse it before claiming bootstrap,
-      // issuing capabilities, or writing generated session state.
+      // when shutdown closed admission. Refuse it before issuing
+      // capabilities or writing generated session state.
       if (this.closing) throw new SessionManagerClosingError();
       let preparedProjectSession:
         | Awaited<
@@ -3753,22 +3250,12 @@ export class SessionManager {
         preparedProjectSession = this.prepareProjectSession
           ? await this.prepareProjectSession(agentMapIdentity, req)
           : undefined;
-        if (
-          trusted.requireProjectBootstrapClaim &&
-          !preparedProjectSession?.projectBootstrap
-        ) {
-          throw new ProjectBootstrapClaimUnavailableError();
-        }
-        // Retain only AFTER claiming first-session ownership. Advertising the
-        // root earlier could start an automatic session ahead of this request.
         this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
         const promptAppendix = trusted.promptAppendix?.(id);
-        const focusedContext = trusted.focusedContext?.(id);
         const sessionStartSystemMessage =
           trusted.sessionStartSystemMessage?.(id);
         const built = await this.buildLaunchOpts(id, req, {
           ...(promptAppendix ? { promptAppendix } : {}),
-          ...(focusedContext ? { focusedContext } : {}),
           ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
           agentMapIdentity,
         });
@@ -3780,14 +3267,12 @@ export class SessionManager {
         });
         spec = adapter.launch(opts);
       } catch (error) {
-        // Scope resolution may already have claimed bootstrap ownership, and
-        // launch preparation may already have issued a capability. Revoke both
+        // Launch preparation may already have issued a capability. Revoke it
         // for every setup failure, including prompt composition/config writes,
         // while preserving the original actionable error.
         await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
         throw error;
       }
-      const projectBootstrap = preparedProjectSession?.projectBootstrap;
       const session: HarnessSession = {
         id,
         agentSessionId: null,
@@ -3803,19 +3288,13 @@ export class SessionManager {
         lastActiveAt: this.now(),
         exitCode: null,
         boundWorkflowPath: null,
-        // Ordinary callers record only what the builder actually rehydrated.
-        // A trusted planner replacement records its exact FIFO predecessor even
-        // when the brief came from an older recorded ancestor in that chain.
-        rehydratedFrom:
-          trusted.handoffFromSessionId ?? opts.rehydratedFrom ?? null,
+        // Record only what the builder actually rehydrated.
+        rehydratedFrom: opts.rehydratedFrom ?? null,
         // Persisted so resume() regenerates the same ANSI base — otherwise a
         // resumed session would fall back to the server default and its dim text
         // could lose contrast against a differently-themed terminal.
         ...(req.theme ? { theme: req.theme } : {}),
         ready: false,
-        ...(projectBootstrap
-          ? { projectBootstrap: structuredClone(projectBootstrap) }
-          : {}),
         agentMapIdentity: structuredClone(agentMapIdentity),
       };
       this.sessions.set(id, session);
@@ -3840,13 +3319,6 @@ export class SessionManager {
               agentMapIdentity,
             ),
         );
-        if (session.projectBootstrap) {
-          const runtimeEpoch = this.getRuntimeEpoch(session.id);
-          if (runtimeEpoch === null) throw new Error("session runtime unavailable");
-          await Promise.resolve(
-            this.onProjectBootstrapSession?.(session, "created", runtimeEpoch),
-          ).catch(() => {});
-        }
       } catch (err) {
         // The first persist may itself be the failure, so reconciliation is
         // best-effort: always repair the in-memory record to "exited", attempt
@@ -3866,156 +3338,4 @@ export class SessionManager {
       this.pendingCreates.delete(id);
     }
   }
-
-  /**
-   * Narrow recovery for an exact coordinator-owned row that exited before its
-   * first turn and has no resumable vendor conversation. The Harness ID stays
-   * fixed; the private marker advances before a fresh PTY can be admitted.
-   */
-  async restartFreshBound(
-    id: string,
-    expected: TrustedSubsessionBindingMarker,
-    nextInput: TrustedSubsessionBindingMarker,
-    trusted: TrustedSessionCreateOptions,
-    hasRecordedTurns: (sessionId: string) => Promise<boolean>,
-  ): Promise<HarnessSession> {
-    if (this.closing) throw new SessionManagerClosingError();
-    const currentExpected = parseTrustedSubsessionBindingMarker(expected, id);
-    const next = parseTrustedSubsessionBindingMarker(nextInput, id);
-    const current = this.subsessionBindings.get(id);
-    const session = this.sessions.get(id);
-    if (
-      !currentExpected ||
-      !next ||
-      !current ||
-      !session ||
-      (current.projectId !== currentExpected.projectId ||
-        current.parentSessionId !== currentExpected.parentSessionId ||
-        current.bindingId !== currentExpected.bindingId ||
-        current.sessionId !== currentExpected.sessionId) ||
-      next.projectId !== currentExpected.projectId ||
-      next.parentSessionId !== currentExpected.parentSessionId ||
-      next.bindingId !== currentExpected.bindingId ||
-      next.sessionId !== currentExpected.sessionId ||
-      next.incarnation !== currentExpected.incarnation + 1 ||
-      next.spawnEpoch <= currentExpected.spawnEpoch ||
-      this.ptys.has(id) ||
-      session.status !== "exited"
-    ) {
-      throw new SubsessionBindingMismatchError();
-    }
-    if (this.userClosedSubsessions.has(id))
-      throw new SubsessionFreshRestartForbiddenError();
-    // A retry may observe the already-advanced marker after the sidecar write
-    // committed but before the fresh process existed.
-    if (
-      !sameSubsessionBinding(current, currentExpected) &&
-      !sameSubsessionBinding(current, next)
-    ) {
-      throw new SubsessionBindingMismatchError();
-    }
-    const adapter = this.getAdapter(session.harness);
-    if (
-      (session.agentSessionId !== null &&
-        (await adapter.canResume(session.agentSessionId, session.cwd))) ||
-      (await hasRecordedTurns(id))
-    ) {
-      throw new SubsessionFreshRestartForbiddenError();
-    }
-
-    if (!sameSubsessionBinding(current, next)) {
-      this.subsessionBindings.set(id, next);
-      try {
-        await this.persistSubsessionBindings();
-      } catch (error) {
-        this.subsessionBindings.set(id, current);
-        throw error;
-      }
-    }
-
-    const agentMapIdentity = await this.resolveAgentMapIdentity(
-      id,
-      session.cwd,
-      trusted.agentMapIdentity?.(id),
-    );
-    if (
-      agentMapIdentity.projectId !== next.projectId ||
-      agentMapIdentity.sessionId !== id
-    ) {
-      throw new ProjectSessionScopeUnavailableError(id);
-    }
-
-    const lastActiveBeforeRestart = session.lastActiveAt;
-    session.status = "starting";
-    session.exitCode = null;
-    session.exitTail = null;
-    session.agentSessionId = null;
-    session.agentMapIdentity = structuredClone(agentMapIdentity);
-    session.lastActiveAt = this.now();
-    let spec: SpawnSpec;
-    let mcpCredentialLaunch: McpCredentialLaunch | undefined;
-    try {
-      const promptAppendix = trusted.promptAppendix?.(id);
-      const focusedContext = trusted.focusedContext?.(id);
-      const sessionStartSystemMessage =
-        trusted.sessionStartSystemMessage?.(id);
-      const context = {
-        ...(promptAppendix ? { promptAppendix } : {}),
-        ...(focusedContext ? { focusedContext } : {}),
-        ...(sessionStartSystemMessage
-          ? { sessionStartSystemMessage }
-          : {}),
-        agentMapIdentity,
-      };
-      const built = await this.buildLaunchOpts(id, session, context);
-      let opts: LaunchOpts;
-      ({ mcpCredentialLaunch, ...opts } = {
-        harnessSessionId: id,
-        cwd: session.cwd,
-        ...built,
-      });
-      spec = adapter.launch(opts);
-    } catch (error) {
-      session.status = "exited";
-      session.lastActiveAt = lastActiveBeforeRestart;
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
-    try {
-      await this.persist();
-      this.emitStatus(session);
-      await this.writeWorkspaceContext(session);
-      await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(
-        session,
-        spec,
-        mcpCredentialLaunch,
-        () =>
-          this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
-      );
-      return session;
-    } catch (error) {
-      session.lastActiveAt = lastActiveBeforeRestart;
-      await this.transitionExited(session, null, {
-        stampLastActive: false,
-      }).catch(() => {});
-      throw error;
-    }
-  }
-}
-
-
-
-/** An automatic first-session create lost the project bootstrap claim. */
-export class ProjectBootstrapClaimUnavailableError extends Error {
-  readonly code = "PROJECT_BOOTSTRAP_CLAIM_UNAVAILABLE";
-
-  constructor() {
-    super("the project bootstrap claim is already owned by another session");
-    this.name = "ProjectBootstrapClaimUnavailableError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

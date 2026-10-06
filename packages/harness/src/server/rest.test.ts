@@ -1031,37 +1031,16 @@ describe("createRestRouter", () => {
     });
 
     it("forwards submitted and editable input through the injected canonical authority exactly once", async () => {
-      const submitSessionInput = vi.fn(
-        async (
-          _sessionId: string,
-          _text: string,
-          _submit: boolean,
-          requestId?: string,
-        ) =>
-          requestId
-            ? {
-                ok: true as const,
-                receipt: {
-                  requestId,
-                  inputId: "input-1",
-                  status: "queued" as const,
-                  acceptedAt: "2026-09-04T00:00:00.000Z",
-                },
-              }
-            : true,
-      );
+      const submitSessionInput = vi.fn(async () => true);
       start({ submitSessionInput });
 
       const [submitted, editable] = await Promise.all([
-        fetch(`${baseUrl}/sessions/bootstrap-owned/input`, {
+        fetch(`${baseUrl}/sessions/sess-1/input`, {
           method: "POST",
           headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "build now",
-            requestId: "request-build-now",
-          }),
+          body: JSON.stringify({ text: "build now" }),
         }),
-        fetch(`${baseUrl}/sessions/bootstrap-owned/input`, {
+        fetch(`${baseUrl}/sessions/sess-1/input`, {
           method: "POST",
           headers: { ...TOKEN_HEADER, "content-type": "application/json" },
           body: JSON.stringify({ text: "draft", submit: false }),
@@ -1070,102 +1049,10 @@ describe("createRestRouter", () => {
 
       expect(submitted.status).toBe(200);
       expect(editable.status).toBe(200);
-      expect(await submitted.json()).toEqual({
-        ok: true,
-        receipt: {
-          requestId: "request-build-now",
-          inputId: "input-1",
-          status: "queued",
-          acceptedAt: "2026-09-04T00:00:00.000Z",
-        },
-      });
+      expect(await submitted.json()).toEqual({ ok: true });
       expect(submitSessionInput).toHaveBeenCalledTimes(2);
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "build now",
-        true,
-        "request-build-now",
-      );
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "draft",
-        false,
-        undefined,
-      );
-    });
-
-    it("returns the durable request-id conflict from the canonical input authority", async () => {
-      const conflict = Object.assign(
-        new Error(
-          "project bootstrap request id was reused with different input",
-        ),
-        { code: "project_bootstrap_request_id_reused" },
-      );
-      const submitSessionInput = vi.fn(async () => {
-        throw conflict;
-      });
-      start({ submitSessionInput });
-
-      const response = await fetch(
-        `${baseUrl}/sessions/bootstrap-owned/input`,
-        {
-          method: "POST",
-          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "changed payload",
-            requestId: "request-reused",
-          }),
-        },
-      );
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({
-        error: conflict.message,
-        code: conflict.code,
-      });
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "changed payload",
-        true,
-        "request-reused",
-      );
-    });
-
-    it("returns bounded durable-input capacity from the canonical input authority", async () => {
-      const capacity = Object.assign(
-        new Error(
-          "project bootstrap input receipt capacity is temporarily full",
-        ),
-        { code: "project_bootstrap_input_capacity" },
-      );
-      const submitSessionInput = vi.fn(async () => {
-        throw capacity;
-      });
-      start({ submitSessionInput });
-
-      const response = await fetch(
-        `${baseUrl}/sessions/bootstrap-owned/input`,
-        {
-          method: "POST",
-          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "new logical request",
-            requestId: "request-at-capacity",
-          }),
-        },
-      );
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({
-        error: capacity.message,
-        code: capacity.code,
-      });
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "new logical request",
-        true,
-        "request-at-capacity",
-      );
+      expect(submitSessionInput).toHaveBeenCalledWith("sess-1", "build now", true);
+      expect(submitSessionInput).toHaveBeenCalledWith("sess-1", "draft", false);
     });
 
     it("400s a malformed body (missing text)", async () => {

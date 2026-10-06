@@ -14,9 +14,6 @@ import {
   type ResolvedAgentMapCapability,
 } from "../core/agent-map-capability-registry.js";
 import type { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
-import type { BuildPlanService } from "../core/build-plan-service.js";
-import type { AgentBriefService } from "../core/agent-brief-service.js";
-import type { SubsessionCoordinator } from "../core/subsession-coordinator.js";
 import { createAgentMapToolServer, type AgentMapMcpToolsOptions } from "./agent-map-mcp-tools.js";
 
 interface BoundTransport {
@@ -30,9 +27,6 @@ export interface AgentMapMcpRouterOptions
   extends Omit<AgentMapMcpToolsOptions, "readSnapshot"> {
   capabilities: AgentMapCapabilityRegistry;
   service: AgentMapProposalService;
-  buildPlanService: BuildPlanService;
-  agentBriefService: AgentBriefService;
-  subsessionCoordinator: SubsessionCoordinator;
   readSnapshotFor?: (identity: ResolvedAgentMapCapability["identity"]) => Promise<object>;
   /** Verifies current Studio scope before disclosing the private state root. */
   hostContextFor?: (identity: ResolvedAgentMapCapability["identity"]) => Promise<{ stateRoot: string }>;
@@ -193,8 +187,7 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
       const sessionId = transport.sessionId;
       if (sessionId) sessions.delete(sessionId);
     };
-    const server = createToolServer(capability.identity, options.service, options.buildPlanService,
-      options.agentBriefService, options.subsessionCoordinator, {
+    const server = createToolServer(capability.identity, options.service, {
       onEvent: options.onEvent,
       ...(options.readSnapshotFor
         ? {
