@@ -2,11 +2,15 @@ import { createClient } from "../client.js";
 import { createStubClient, type StubCallRecord } from "../stub/index.js";
 import { Transport } from "../_client/index.js";
 import {
-  managedBrowserApi,
+  managedSessionLifecycle,
   runManagedSession,
   type ManagedBrowserSession,
+  type ManagedSessionLifecycle,
 } from "./managed.js";
 import { BrowserAutomationHttpError } from "./errors.js";
+
+const HANG = Symbol("hang");
+type FixtureResponse = Response | typeof HANG;
 
 const createPath = "/v1/browser/sessions";
 const recoveryPath = (key: string) =>
@@ -22,7 +26,7 @@ const failure = (status: number, body: Record<string, unknown> = {}) =>
     { status },
   );
 
-function fixture(routes: Record<string, Response[]>) {
+function fixture(routes: Record<string, FixtureResponse[]>) {
   const queues = Object.fromEntries(
     Object.entries(routes).map(([key, responses]) => [key, [...responses]]),
   );
@@ -30,6 +34,7 @@ function fixture(routes: Record<string, Response[]>) {
     method: string;
     path: string;
     headers: Headers;
+    signal?: AbortSignal | null;
     body?: unknown;
   }> = [];
   const fetch = jest.fn(
@@ -45,6 +50,7 @@ function fixture(routes: Record<string, Response[]>) {
         method,
         path,
         headers: new Headers(init?.headers),
+        signal: init?.signal,
         body:
           init?.body === undefined
             ? undefined
@@ -54,14 +60,23 @@ function fixture(routes: Record<string, Response[]>) {
       const queue = queues[key];
       if (!queue?.length) throw new Error(`Unexpected request: ${key}`);
       const response = queue.length === 1 ? queue[0] : queue.shift()!;
+      if (response === HANG) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) return;
+          const abort = () =>
+            reject(
+              new DOMException("The operation was aborted.", "AbortError"),
+            );
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        });
+      }
       return response.clone();
     },
   );
   const transport = new Transport({ apiKey: "test-key", fetch });
-  const sessions = managedBrowserApi(
-    "https://fixture.test",
-    transport,
-  ).sessions;
+  const sessions = managedSessionLifecycle("https://fixture.test", transport);
   return { fetch, requests, sessions };
 }
 
@@ -155,6 +170,115 @@ it("retries uncertain creation with the same key and input", async () => {
   expect(creates[1].headers.get("idempotency-key")).toBe(
     creates[0].headers.get("idempotency-key"),
   );
+});
+
+it("times out a hanging close request and reports the pending close", async () => {
+  const { requests, sessions } = fixture({
+    [`POST ${createPath}`]: [sessionCreated()],
+    [`DELETE ${closePath(session.sessionId)}`]: [HANG],
+  });
+  const onPendingClose = jest.fn();
+  const promise = runManagedSession(
+    sessions,
+    { recording: false },
+    async () => "result",
+    { onPendingClose },
+  );
+  await jest.advanceTimersByTimeAsync(100_000);
+  expect(await promise).toBe("result");
+  const deletes = requests.filter(({ method }) => method === "DELETE");
+  expect(deletes.length).toBeGreaterThan(1);
+  expect(deletes.every(({ signal }) => signal instanceof AbortSignal)).toBe(
+    true,
+  );
+  expect(onPendingClose).toHaveBeenCalledTimes(1);
+  expect(onPendingClose).toHaveBeenCalledWith(session.sessionId);
+});
+
+it("races close timeouts against lifecycle methods that ignore their signal", async () => {
+  const closeManaged = jest.fn(
+    (_sessionId: string, _signal?: AbortSignal) =>
+      new Promise<never>(() => undefined),
+  );
+  const sessions: ManagedSessionLifecycle = {
+    createManaged: async () => session,
+    recover: async () => ({ status: "unknown", sessions: [] }),
+    closeManaged,
+  };
+  const onPendingClose = jest.fn();
+  const promise = runManagedSession(
+    sessions,
+    { recording: false },
+    async () => "result",
+    { onPendingClose },
+  );
+  await jest.advanceTimersByTimeAsync(100_000);
+  expect(await promise).toBe("result");
+  expect(closeManaged).toHaveBeenCalledTimes(3);
+  expect(onPendingClose).toHaveBeenCalledTimes(1);
+  expect(onPendingClose).toHaveBeenCalledWith(session.sessionId);
+});
+
+it("times out and retries a hanging creation request", async () => {
+  const { requests, sessions } = fixture({
+    [`POST ${createPath}`]: [HANG, sessionCreated()],
+    [`DELETE ${closePath(session.sessionId)}`]: [completedClose()],
+  });
+  const promise = runManagedSession(
+    sessions,
+    { recording: false },
+    async () => "created",
+  );
+  await jest.advanceTimersByTimeAsync(32_000);
+  expect(await promise).toBe("created");
+  const creates = requests.filter(
+    ({ method, path }) => method === "POST" && path === createPath,
+  );
+  expect(creates).toHaveLength(2);
+  expect(creates[0].body).toEqual(creates[1].body);
+  expect(creates[0].headers.get("idempotency-key")).toBe(
+    creates[1].headers.get("idempotency-key"),
+  );
+  expect(creates[0].signal).toBeInstanceOf(AbortSignal);
+});
+
+it("recovers after an uncertain create followed by a definite error", async () => {
+  const key = "create-key";
+  const { requests, sessions } = fixture({
+    [`POST ${createPath}`]: [failure(502), failure(409)],
+    [`GET ${recoveryPath(key)}`]: [
+      success({
+        status: "cleanup_only",
+        sessions: [{ sessionId: "lost-1", status: "active", tags: [] }],
+      }),
+    ],
+    [`DELETE ${closePath("lost-1")}`]: [completedClose()],
+  });
+  const fn = jest.fn(async () => "unused");
+  const promise = runManagedSession(
+    sessions,
+    { recording: false, idempotencyKey: key },
+    fn,
+  );
+  const rejected = expect(promise).rejects.toMatchObject({ status: 409 });
+  await jest.advanceTimersByTimeAsync(2_000);
+  await rejected;
+  expect(
+    requests.filter(
+      ({ method, path }) => method === "POST" && path === createPath,
+    ),
+  ).toHaveLength(2);
+  expect(
+    requests.filter(
+      ({ method, path }) => method === "GET" && path === recoveryPath(key),
+    ),
+  ).toHaveLength(1);
+  expect(
+    requests.filter(
+      ({ method, path }) => method === "DELETE" && path === closePath("lost-1"),
+    ),
+  ).toHaveLength(1);
+  expect(fn).not.toHaveBeenCalled();
 });
 
 it("recovers and closes a session after creation remains uncertain, then rethrows the creation error", async () => {

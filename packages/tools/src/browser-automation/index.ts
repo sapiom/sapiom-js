@@ -24,7 +24,11 @@
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
-import { managedBrowserApi, runManagedSession } from "./managed.js";
+import {
+  managedBrowserApi,
+  managedSessionLifecycle,
+  runManagedSession,
+} from "./managed.js";
 import type {
   ManagedBrowserSession,
   WithManagedSessionInput,
@@ -652,10 +656,15 @@ export async function withSession<T>(
  * Create a managed session, run `fn`, and attempt to close the session afterward.
  * If `idempotencyKey` is omitted, one is generated. Uncertain creation outcomes are
  * retried with the same key and input; the close is retried until settlement
- * completes. If creation remains uncertain, any session left by that creation is
- * closed before the creation error is rethrown. The session is closed in `finally`,
- * even when `fn` throws; close problems do not replace `fn`'s result or error.
- * `onPendingClose` receives the session ID when a close has not completed.
+ * completes. Each request has its own timeout; a request that never answers is
+ * treated like a network failure. If creation remains uncertain, any session left
+ * by that creation is closed before the creation error is rethrown. The session is
+ * closed in `finally`, even when `fn` throws; close problems do not replace `fn`'s
+ * result or error. `onPendingClose` receives the session ID when a close has not
+ * completed. If creation never confirms and recovery still reports no browser,
+ * `withManagedSession` throws. To reconcile later with `sessions.recover`, pass your
+ * own `idempotencyKey` and store it first; recovery accepts only the API key that
+ * sent the original request.
  *
  * @example
  * const title = await sapiom.browserAutomation.withManagedSession(
@@ -673,7 +682,7 @@ export function withManagedSession<T>(
   transport?: Transport,
 ): Promise<T> {
   return runManagedSession(
-    managedBrowserApi(DEFAULT_BASE_URL, transport).sessions,
+    managedSessionLifecycle(DEFAULT_BASE_URL, transport),
     input,
     fn,
     options,

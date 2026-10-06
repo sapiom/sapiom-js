@@ -240,11 +240,15 @@ const title = await browser.withManagedSession(
 
 If you omit `idempotencyKey`, the helper generates one. It retries uncertain
 creation outcomes with the same key and input, and retries the close until
-settlement completes. If creation remains uncertain, it checks for and closes any
-session left behind before rethrowing the creation error. It closes the session in
-`finally`, even when your callback throws; close problems never replace the
-callback's result or error. `onPendingClose` receives the session ID when a close
-has not completed.
+settlement completes. Each request has its own timeout; a request that never
+answers is treated like a network failure. If creation remains uncertain, it
+checks for and closes any session left behind before rethrowing the creation error.
+It closes the session in `finally`, even when your callback throws; close problems
+never replace the callback's result or error. `onPendingClose` receives the session
+ID when a close has not completed. If creation never confirms and recovery still
+reports no browser, `withManagedSession` throws. To reconcile later with
+`sessions.recover`, pass your own `idempotencyKey` and store it first; recovery
+accepts only the API key that sent the original request.
 
 ### Control with your own model and driver
 

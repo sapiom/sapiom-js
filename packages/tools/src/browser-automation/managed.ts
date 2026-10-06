@@ -154,8 +154,7 @@ function pathOf({ template, ids }: Route): string {
   });
 }
 
-/** Internal binding shared by the named namespace and an explicit client. */
-export function managedBrowserApi(baseUrl: string, transport?: Transport) {
+function browserRequests(baseUrl: string, transport?: Transport) {
   const send = async (path: Route, init: RequestInit, errorPrefix: string) =>
     ensureOk(
       await (transport ?? defaultTransport()).fetch(
@@ -170,6 +169,7 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
     path: Route,
     body?: unknown,
     key?: string,
+    signal?: AbortSignal,
   ): Promise<T> {
     if (
       key !== undefined &&
@@ -192,11 +192,19 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
             : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(signal !== undefined ? { signal } : {}),
       },
       "Browser request failed",
     );
     return ((await response.json()) as { data: T }).data;
   }
+  return { send, call };
+}
+
+/** Internal binding shared by the named namespace and an explicit client. */
+export function managedBrowserApi(baseUrl: string, transport?: Transport) {
+  const { send, call } = browserRequests(baseUrl, transport);
+  const lifecycle = managedSessionLifecycleFromCall(call);
   /** POST the input as the body, sending its idempotency key as a header. */
   const post = <T>(
     path: "/sessions" | "/profiles" | "/tasks",
@@ -227,24 +235,16 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
     sessions: {
       /** Create a session for CDP control or managed tasks. Defaults: idle 5 minutes, maximum 20 minutes. Existing sessions.create remains unchanged. */
       createManaged: (input: ManagedSessionInput) =>
-        post<ManagedBrowserSession>("/sessions", input),
+        lifecycle.createManaged(input),
       get: (sessionId: string) =>
         call<BrowserSessionInfo>(
           "GET",
           route("/sessions/:sessionId", { sessionId }),
         ),
       /** Recover with the original API key and creation key. Never creates or pays again. */
-      recover: (idempotencyKey: string) =>
-        call<BrowserCreationRecovery>(
-          "GET",
-          route("/sessions/recovery/:idempotencyKey", { idempotencyKey }),
-        ),
+      recover: (idempotencyKey: string) => lifecycle.recover(idempotencyKey),
       /** Close only sessions created with createManaged. Retry when settlement is pending. */
-      closeManaged: (sessionId: string) =>
-        call<ManagedSessionSettlement>(
-          "DELETE",
-          route("/sessions/:sessionId", { sessionId }),
-        ),
+      closeManaged: (sessionId: string) => lifecycle.closeManaged(sessionId),
     },
     profiles: {
       /** Save an unrecorded session without protected inputs. Close it to finish the save. */
@@ -320,6 +320,65 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
 /** The managed sessions, tasks, profiles, and recordings API bound to one transport. */
 export type ManagedBrowserApi = ReturnType<typeof managedBrowserApi>;
 
+export interface ManagedSessionLifecycle {
+  createManaged(
+    input: ManagedSessionInput,
+    signal?: AbortSignal,
+  ): Promise<ManagedBrowserSession>;
+  recover(
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserCreationRecovery>;
+  closeManaged(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedSessionSettlement>;
+}
+
+type BrowserCall = <T>(
+  method: string,
+  path: Route,
+  body?: unknown,
+  key?: string,
+  signal?: AbortSignal,
+) => Promise<T>;
+
+function managedSessionLifecycleFromCall(
+  call: BrowserCall,
+): ManagedSessionLifecycle {
+  return {
+    createManaged: (input, signal) => {
+      const { idempotencyKey, ...body } = input;
+      return call("POST", route("/sessions", {}), body, idempotencyKey, signal);
+    },
+    recover: (idempotencyKey, signal) =>
+      call(
+        "GET",
+        route("/sessions/recovery/:idempotencyKey", { idempotencyKey }),
+        undefined,
+        undefined,
+        signal,
+      ),
+    closeManaged: (sessionId, signal) =>
+      call(
+        "DELETE",
+        route("/sessions/:sessionId", { sessionId }),
+        undefined,
+        undefined,
+        signal,
+      ),
+  };
+}
+
+/** @internal Session lifecycle requests for withManagedSession; each accepts an abort signal. */
+export function managedSessionLifecycle(
+  baseUrl: string,
+  transport?: Transport,
+): ManagedSessionLifecycle {
+  const { call } = browserRequests(baseUrl, transport);
+  return managedSessionLifecycleFromCall(call);
+}
+
 export type WithManagedSessionInput = Omit<
   ManagedSessionInput,
   "idempotencyKey"
@@ -330,11 +389,6 @@ export interface WithManagedSessionOptions {
   onPendingClose?: (sessionId: string) => void | Promise<void>;
 }
 
-type ManagedSessionLifecycle = Pick<
-  ManagedBrowserApi["sessions"],
-  "createManaged" | "recover" | "closeManaged"
->;
-
 const CREATE_RETRY_WINDOW_MS = 90_000;
 const CREATE_RETRY_INITIAL_DELAY_MS = 2_000;
 const CREATE_RETRY_MAX_DELAY_MS = 10_000;
@@ -342,9 +396,39 @@ const RECOVERY_WINDOW_MS = 120_000;
 const RECOVERY_INTERVAL_MS = 10_000;
 const CLOSE_WINDOW_MS = 90_000;
 const CLOSE_INTERVAL_MS = 5_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function withRequestTimeout<T>(
+  deadline: number,
+  op: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const { signal } = controller;
+  let rejectTimeout!: (error: Error) => void;
+  const timeout = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const onAbort = () => {
+    const error = new Error("Browser request timed out");
+    error.name = "TimeoutError";
+    rejectTimeout(error);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()),
+  );
+
+  try {
+    return await Promise.race([op(signal), timeout]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+  }
+}
 
 function isUncertain(error: unknown): boolean {
   return (
@@ -363,7 +447,9 @@ async function closeWithRetry(
   const deadline = Date.now() + CLOSE_WINDOW_MS;
   while (Date.now() <= deadline) {
     try {
-      const result = await sessions.closeManaged(sessionId);
+      const result = await withRequestTimeout(deadline, (signal) =>
+        sessions.closeManaged(sessionId, signal),
+      );
       if (result.settlement === "completed") return;
       if (Date.now() + CLOSE_INTERVAL_MS > deadline) break;
     } catch (error) {
@@ -399,17 +485,24 @@ export async function runManagedSession<T>(
   const createDeadline = Date.now() + CREATE_RETRY_WINDOW_MS;
   let delay = CREATE_RETRY_INITIAL_DELAY_MS;
   let session: ManagedBrowserSession | undefined;
-  let creationError: unknown;
+  let sawUncertain = false;
+  let lastUncertain: unknown;
+  let definiteError: unknown;
 
   while (session === undefined) {
     try {
-      session = await sessions.createManaged(createInput);
+      session = await withRequestTimeout(createDeadline, (signal) =>
+        sessions.createManaged(createInput, signal),
+      );
     } catch (error) {
-      if (!isUncertain(error)) throw error;
-      if (Date.now() + delay > createDeadline) {
-        creationError = error;
+      if (!isUncertain(error)) {
+        if (!sawUncertain) throw error;
+        definiteError = error;
         break;
       }
+      sawUncertain = true;
+      lastUncertain = error;
+      if (Date.now() + delay > createDeadline) break;
       await sleep(delay);
       delay = Math.min(delay * 2, CREATE_RETRY_MAX_DELAY_MS);
     }
@@ -421,7 +514,9 @@ export async function runManagedSession<T>(
       while (Date.now() <= recoveryDeadline) {
         let recovery;
         try {
-          recovery = await sessions.recover(createInput.idempotencyKey);
+          recovery = await withRequestTimeout(recoveryDeadline, (signal) =>
+            sessions.recover(createInput.idempotencyKey, signal),
+          );
         } catch (error) {
           if (!isUncertain(error)) break;
           if (Date.now() + RECOVERY_INTERVAL_MS > recoveryDeadline) break;
@@ -445,7 +540,7 @@ export async function runManagedSession<T>(
     } catch {
       /* Preserve the creation error. */
     }
-    throw creationError;
+    throw definiteError ?? lastUncertain;
   }
 
   try {
