@@ -1,5 +1,12 @@
 # @sapiom/mcp
 
+## 0.19.1
+
+### Patch Changes
+
+- Updated dependencies [45c2846]
+  - @sapiom/agent-map@0.4.0
+
 ## 0.19.0
 
 ### Minor Changes
