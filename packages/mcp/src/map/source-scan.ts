@@ -445,7 +445,7 @@ function matchingParen(content: string, open: number): number {
   return content.length;
 }
 
-interface StepBlock {
+export interface StepBlock {
   /** Index of the `(` opening the `defineStep(` call. */
   start: number;
   /** Index of the matching `)`. */
@@ -457,9 +457,9 @@ interface StepBlock {
 /** The brace-balanced extent of each `defineStep(...)` call whose declared
  *  `name` is a known step — so a call can be attributed to the step it sits in,
  *  not the nearest preceding `name:` (which mis-binds trailing helpers). */
-function stepBlockRanges(
+export function stepBlockRanges(
   content: string,
-  knownStepIds: ReadonlySet<string>,
+  knownStepIds: ReadonlySet<string> | null,
 ): StepBlock[] {
   const blocks: StepBlock[] = [];
   for (const match of content.matchAll(DEFINE_STEP_PATTERN)) {
@@ -469,7 +469,8 @@ function stepBlockRanges(
     for (const nameMatch of content
       .slice(open, end)
       .matchAll(STEP_NAME_PATTERN)) {
-      if (knownStepIds.has(nameMatch[2]!)) {
+      // null: no manifest to check against, so the block's first `name:` names it.
+      if (!knownStepIds || knownStepIds.has(nameMatch[2]!)) {
         stepId = nameMatch[2]!;
         break;
       }
@@ -480,7 +481,7 @@ function stepBlockRanges(
 }
 
 /** The step whose block contains `index`, or null (top-level / shared helper). */
-function attributeTo(
+export function attributeTo(
   blocks: readonly StepBlock[],
   index: number,
 ): string | null {
@@ -547,12 +548,12 @@ export interface WorkflowSourceScan {
   complete: boolean;
 }
 
-interface SupportedNamespaces {
+export interface SupportedNamespaces {
   current: ReadonlySet<string>;
   legacy: ReadonlySet<string>;
 }
 
-function collectSupportedNamespaces(
+export function collectSupportedNamespaces(
   sourceFile: ts.SourceFile,
 ): SupportedNamespaces {
   const current = new Set<string>();
@@ -586,7 +587,7 @@ function collectSupportedNamespaces(
   return { current, legacy };
 }
 
-function unwrapExpression(expression: ts.Expression): ts.Expression {
+export function unwrapExpression(expression: ts.Expression): ts.Expression {
   if (
     ts.isParenthesizedExpression(expression) ||
     ts.isAsExpression(expression) ||
@@ -599,7 +600,7 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
   return expression;
 }
 
-function propertyAccessChain(expression: ts.Expression): string[] | null {
+export function propertyAccessChain(expression: ts.Expression): string[] | null {
   const current = unwrapExpression(expression);
   if (ts.isIdentifier(current)) return [current.text];
   if (!ts.isPropertyAccessExpression(current) || current.questionDotToken) {
@@ -668,7 +669,7 @@ function functionBodyDeclaresVar(
 /** Import aliases are proven only while they still refer to that import. This
  * syntax-only scope check covers lexical declarations and parameters without
  * escalating to a Program or TypeChecker. */
-function isImportedNamespaceShadowed(
+export function isImportedNamespaceShadowed(
   call: ts.CallExpression,
   name: string,
   sourceFile: ts.SourceFile,
@@ -731,7 +732,7 @@ function isImportedNamespaceShadowed(
   return false;
 }
 
-function invocationMode(
+export function invocationMode(
   call: ts.CallExpression,
   namespaces: SupportedNamespaces,
   sourceFile: ts.SourceFile,

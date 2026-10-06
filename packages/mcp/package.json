@@ -31,6 +31,10 @@
     "./auth": {
       "types": "./dist/auth-api.d.ts",
       "default": "./dist/auth-api.js"
+    },
+    "./map": {
+      "types": "./dist/map/index.d.ts",
+      "default": "./dist/map/index.js"
     }
   },
   "bin": {
@@ -44,7 +48,7 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "test": "vitest run && node --test scripts/capabilities.test.mjs",
+    "test": "vitest run && vitest run --config vitest.perf.config.ts && node --test scripts/capabilities.test.mjs",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -60,7 +64,8 @@
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/sandbox-preview": "workspace:^",
     "zod": "^3.25.0",
-    "@sapiom/agent-map": "workspace:^"
+    "@sapiom/agent-map": "workspace:^",
+    "typescript": "^5.4.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
@@ -68,7 +73,6 @@
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
-    "typescript": "^5.4.2",
     "vitest": "^3.0.0"
   },
   "engines": {

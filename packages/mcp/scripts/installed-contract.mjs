@@ -144,12 +144,13 @@ try {
     try {
       await stdio.connect(transport, { timeout: 8_000 });
       const tools = (await stdio.listTools()).tools;
-      assert.equal(tools.length, 26);
+      assert.equal(tools.length, 27);
       assert.equal(new Set(tools.map((tool) => tool.name)).size, tools.length);
-      assert(
-        !tools.some((tool) => /(?:agent_map|sapiom_dev_map)/.test(tool.name)),
-      );
-      assert(!/sapiom_dev_(?:agent_)?map/.test(stdio.getInstructions() ?? ""));
+      // The map is one read-only tool computed from code; the stored-map authoring tools
+      // (`agent_map_*`) stay private to Studio until they are deleted.
+      assert(tools.some((tool) => tool.name === "sapiom_dev_map"));
+      assert(!tools.some((tool) => /agent_map/.test(tool.name)));
+      assert(!/sapiom_dev_agent_map/.test(stdio.getInstructions() ?? ""));
       assert.equal(unavailableWarning, mode === "unavailable-studio");
     } finally {
       await stdio.close();

@@ -681,6 +681,9 @@ importers:
       '@sapiom/sandbox-preview':
         specifier: workspace:^
         version: link:../sandbox-preview
+      typescript:
+        specifier: ^5.4.2
+        version: 5.9.3
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -700,9 +703,6 @@ importers:
       prettier:
         specifier: ^3.2.5
         version: 3.8.4
-      typescript:
-        specifier: ^5.4.2
-        version: 5.9.3
       vitest:
         specifier: ^3.0.0
         version: 3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(tsx@4.23.0)(yaml@2.9.1)
@@ -1286,7 +1286,7 @@ packages:
     engines: {node: '>=12'}
 
   '@electron/node-gyp@https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2':
-    resolution: {gitHosted: true, integrity: sha512-MXgzlTDEEndJB3TBbvd5uFQO/8gaINo1Hfen8vef5rq/VHVPeB63uuv/uO5+8GFsAJ/rauu6XB79S6K4+aXc+w==, tarball: https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2}
     version: 10.2.0-electron.1
     engines: {node: '>=12.13.0'}
     hasBin: true
