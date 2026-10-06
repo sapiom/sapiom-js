@@ -9,9 +9,10 @@ import { pipeline } from "node:stream/promises";
 import express, { type Request, type Response, type Router } from "express";
 import rateLimit, { MemoryStore } from "express-rate-limit";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
-import type {
-  AssistantAccess,
-  AssistantGrant,
+import {
+  samePrincipal,
+  type AssistantAccess,
+  type AssistantGrant,
 } from "../core/assistant-access.js";
 import {
   fetchOpenCodeModelResponse,
@@ -30,13 +31,6 @@ export interface OpenCodeBridgeCredential {
   revoke(): void;
 }
 const digest = (value: string) => createHash("sha256").update(value).digest();
-const sameAuthority = (a: AssistantGrant, b: AssistantGrant) =>
-  a.userId === b.userId &&
-  a.tenantId === b.tenantId &&
-  a.identityRevision === b.identityRevision &&
-  a.environment.name === b.environment.name &&
-  a.environment.apiURL === b.environment.apiURL &&
-  a.environment.credentials?.apiKey === b.environment.credentials?.apiKey;
 
 type BridgeErrorType =
   | "authentication_error"
@@ -183,7 +177,7 @@ export class OpenCodeBridge {
     this.unsubscribe = access.subscribe(() => {
       const grant = access.get();
       for (const [id, entry] of this.registrations) {
-        if (!grant || !sameAuthority(entry.grant, grant)) this.revoke(id);
+        if (!grant || !samePrincipal(entry.grant, grant)) this.revoke(id);
       }
     });
     // Share the peer-IP budget across both routes so rotating runtime IDs cannot
@@ -271,7 +265,7 @@ export class OpenCodeBridge {
       });
       return;
     }
-    if (!grant || !sameAuthority(entry.grant, grant)) {
+    if (!grant || !samePrincipal(entry.grant, grant)) {
       this.revoke(req.params.id!);
       res.locals.assistantRuntimeAuthenticationFailed = true;
       sendBridgeError(res, 403, {

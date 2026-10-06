@@ -5,11 +5,12 @@
   height: 100%;
   min-height: 0;
 }
+/* The session header's Terminal / Assistant switch, at its right edge. */
 .studio-conversation-switch {
   display: flex;
+  flex: 0 0 auto;
   gap: var(--sp1);
-  padding: var(--sp2) var(--sp3);
-  border-bottom: 1px solid var(--line);
+  margin-left: auto;
 }
 .studio-conversation-switch button[aria-pressed="true"] {
   background: var(--active-shade);

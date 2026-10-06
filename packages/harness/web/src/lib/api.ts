@@ -1983,7 +1983,23 @@ export class MockApi implements HarnessApi {
     const telemetryOptIn =
       mockConsentSource === "prompted" ? true : this.settings.telemetryOptIn;
     const studioProjects = this.studioProjects();
+    // The Assistant is on for every account, so the mock boots with it on.
+    // e2e can set `__MOCK_ASSISTANT__` before load, and push later changes as
+    // `assistant.state` through `__HARNESS_TEST__.publish`.
+    const mockAssistant =
+      typeof window !== "undefined"
+        ? (window as unknown as {
+            __MOCK_ASSISTANT__?: { enabled: boolean; authorityRevision?: string };
+          }).__MOCK_ASSISTANT__
+        : undefined;
     return {
+      assistant: {
+        hostInstanceId: "mock-host",
+        authorityRevision: mockAssistant?.authorityRevision ?? "mock-authority",
+        revision: 0,
+        enabled: mockAssistant?.enabled ?? true,
+        sessions: [],
+      },
       version: "0.0.1-mock",
       authenticated: true,
       userId: "user_mock",

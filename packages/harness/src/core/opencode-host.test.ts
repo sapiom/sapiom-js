@@ -89,8 +89,6 @@ beforeEach(async () => {
   grant = {
     userId: "user",
     tenantId: "tenant",
-    identityRevision: "revision",
-    expiresAt: Date.now() + 60000,
     environment: {
       name: "production",
       appURL: "https://app.sapiom.ai",

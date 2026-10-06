@@ -568,3 +568,31 @@ test("each project has its own map chat", async ({ page }) => {
   expect(hosts).toContain(`map:${first}`);
   expect(chat.prompts(first!)).toHaveLength(1);
 });
+
+/** The server's `assistant.state` push, as the host sends it on any change. */
+async function pushAccess(page: Page, enabled: boolean, revision: number) {
+  await page.evaluate(
+    ([enabled, revision]) =>
+      (window as any).__HARNESS_TEST__.publish({
+        type: "assistant.state",
+        snapshot: {
+          hostInstanceId: "mock-host",
+          authorityRevision: "map-chat",
+          revision,
+          enabled,
+          sessions: [],
+        },
+      }),
+    [enabled, revision] as const,
+  );
+}
+
+test("the card follows the server's access push: off at cold start, on when the check lands", async ({ page }) => {
+  // A cold start: the host has not finished its first check yet.
+  await pushAccess(page, false, 1);
+  await expect(card(page)).toHaveCount(0);
+  await pushAccess(page, true, 2);
+  await expect(cardInput(page)).toBeVisible();
+  await node(page, STOCK_RESEARCH).click();
+  await expect(cardInput(page)).toBeVisible();
+});

@@ -11,6 +11,7 @@ import { AnchoredPopover } from "./AnchoredPopover";
 import { Icon } from "./Icon";
 import { ProjectAppLinks, type ProjectAppLinkSources } from "./ProjectAppLinks";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+import type { ConversationMode } from "./SessionView";
 
 /** The workspace a session belongs to is its directory's basename — the
  *  same label the rail's workspace group carries. */
@@ -64,6 +65,11 @@ interface SessionBarProps {
    * (flow-map-chat-overlay.md 4.2b), so the header never names one.
    */
   projectView?: ProjectViewHeader | null;
+  /** The session's Terminal / Assistant switch, while the Assistant is on. */
+  conversation?: {
+    mode: ConversationMode;
+    onChange: (mode: ConversationMode) => void;
+  } | null;
 }
 
 export interface ProjectViewHeader {
@@ -102,6 +108,7 @@ export function SessionBar({
   editorLabel,
   onToast,
   projectView = null,
+  conversation = null,
 }: SessionBarProps): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -369,6 +376,26 @@ export function SessionBar({
             </button>
           )}
         </AnchoredPopover>
+      )}
+
+      {conversation && activeSession && !projectView && (
+        <div
+          className="studio-conversation-switch"
+          role="group"
+          aria-label="Conversation view"
+        >
+          {(["Terminal", "Assistant"] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              className="btn-ghost"
+              aria-pressed={conversation.mode === view}
+              onClick={() => conversation.onChange(view)}
+            >
+              {view}
+            </button>
+          ))}
+        </div>
       )}
 
       {projectView && (

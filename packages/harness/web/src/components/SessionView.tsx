@@ -6,6 +6,8 @@ import { AssistantPane } from "./AssistantPane";
 import { DeadSessionPane } from "./DeadSessionPane";
 import { Icon } from "./Icon";
 import type { ChatDraftStore } from "./OpenCodeChat";
+
+export type ConversationMode = "Terminal" | "Assistant";
 import { Terminal } from "./Terminal";
 import { SETUP_CARD } from "../lib/creation-entry";
 import { errorMessage } from "../lib/api";
@@ -17,9 +19,27 @@ import type { HarnessStateHook } from "../lib/use-harness-state";
  * back.
  */
 export function useAssistantDrafts(harness: HarnessStateHook) {
-  const [authorityRevision, setAuthorityRevision] = useState<
-    string | null
-  >(null);
+  const snapshot = harness.assistant.snapshot;
+  const enabled = snapshot?.enabled === true;
+  const authorityRevision = snapshot?.authorityRevision ?? null;
+  // Terminal or Assistant, per session. The header's switch sets it; losing
+  // access or another account signing in puts every session back on Terminal.
+  const [modes, setModes] = useState<
+    Readonly<Record<string, ConversationMode>>
+  >({});
+  useEffect(() => setModes({}), [enabled, authorityRevision]);
+  const modeFor = useCallback(
+    (sessionId: string): ConversationMode =>
+      enabled ? (modes[sessionId] ?? "Terminal") : "Terminal",
+    [enabled, modes],
+  );
+  const setMode = useCallback(
+    (sessionId: string, mode: ConversationMode) =>
+      setModes((current) =>
+        current[sessionId] === mode ? current : { ...current, [sessionId]: mode },
+      ),
+    [],
+  );
   // Draft text belongs to a principal + Studio session, not to whichever
   // centre-pane branch happens to be mounted. An auth barrier replaces this
   // whole store; an app reload intentionally drops it rather than persisting
@@ -42,7 +62,7 @@ export function useAssistantDrafts(harness: HarnessStateHook) {
       harness.showToast(errorMessage(error, "Could not start sign-in."));
     });
   }, [harness.showToast, harness.startAuth]);
-  return { drafts, authorityRevision, setAuthorityRevision, signIn };
+  return { drafts, enabled, authorityRevision, signIn, modeFor, setMode };
 }
 
 /**
@@ -73,15 +93,21 @@ export function SessionView({
 }): JSX.Element {
   const terminalRevision =
     harness.terminalRevealBySession.get(session.id) ?? 0;
+  // A session that just ended shows its ended pane first, not its chat.
+  const { setMode } = assistant;
+  useEffect(() => {
+    if (exited) setMode(session.id, "Terminal");
+  }, [exited, session.id, setMode]);
   if (exited) {
     return (
       <AssistantPane
         sessionId={session.id}
         bootToken={harness.bootToken}
-        authRevision={harness.authRevision}
+        enabled={assistant.enabled}
+        mode={assistant.modeFor(session.id)}
+        onModeChange={(mode) => assistant.setMode(session.id, mode)}
         drafts={assistant.drafts}
         authorityRevision={assistant.authorityRevision}
-        onAuthorityRevision={assistant.setAuthorityRevision}
         onSignIn={assistant.signIn}
         onOpenSettings={onOpenSettings}
         terminalRevision={terminalRevision}
@@ -130,10 +156,11 @@ export function SessionView({
         <AssistantPane
           sessionId={session.id}
           bootToken={harness.bootToken}
-          authRevision={harness.authRevision}
+          enabled={assistant.enabled}
+          mode={assistant.modeFor(session.id)}
+          onModeChange={(mode) => assistant.setMode(session.id, mode)}
           drafts={assistant.drafts}
           authorityRevision={assistant.authorityRevision}
-          onAuthorityRevision={assistant.setAuthorityRevision}
           onSignIn={assistant.signIn}
           onOpenSettings={onOpenSettings}
           terminalRevision={terminalRevision}

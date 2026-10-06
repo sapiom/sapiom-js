@@ -132,6 +132,7 @@ export const App = (): JSX.Element => {
   const mapChat = useMapChat({
     bootToken: harness.bootToken,
     authRevision: harness.authRevision,
+    canAsk: harness.assistant.snapshot?.enabled === true,
   });
   /**
    * The clock the rail's marks and relative times read. A session quiet for ten
@@ -452,6 +453,17 @@ export const App = (): JSX.Element => {
                 railCollapsed ? () => setRailCollapsed(false) : null
               }
               projectView={projectViewHeader}
+              conversation={
+                assistant.enabled &&
+                conversationSession &&
+                (centre.kind === "workbench" || centre.kind === "dead")
+                  ? {
+                      mode: assistant.modeFor(conversationSession.id),
+                      onChange: (mode) =>
+                        assistant.setMode(conversationSession.id, mode),
+                    }
+                  : null
+              }
             />
 
             {sessionBarSession &&

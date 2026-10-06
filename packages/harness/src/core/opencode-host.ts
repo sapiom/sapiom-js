@@ -7,11 +7,12 @@ import {
   startOpenCodeServer,
   type OpenCodeServer,
 } from "@sapiom/opencode";
-import type {
-  AssistantAccess,
-  AssistantAccessFailureCode,
-  AssistantGrant,
-  AssistantAccessProjection,
+import {
+  samePrincipal,
+  type AssistantAccess,
+  type AssistantAccessFailureCode,
+  type AssistantGrant,
+  type AssistantAccessProjection,
 } from "./assistant-access.js";
 import {
   openCodeStartupReasons,
@@ -57,7 +58,7 @@ export interface HostedOpenCode extends OpenCodeWorkspace {
 }
 interface Managed {
   workspace: OpenCodeWorkspace;
-  authority: string;
+  grant: AssistantGrant;
   abort: AbortController;
   ready?: Promise<HostedOpenCode>;
   hosted?: HostedOpenCode;
@@ -128,20 +129,6 @@ export async function authorizeMapChat(
   return root ? { harnessSessionId: id, cwd: root } : null;
 }
 
-const authority = (grant: AssistantGrant) =>
-  createHash("sha256")
-    .update(
-      JSON.stringify([
-        grant.userId,
-        grant.tenantId,
-        grant.identityRevision,
-        grant.environment.name,
-        grant.environment.apiURL,
-        grant.environment.credentials?.apiKey,
-      ]),
-    )
-    .digest("hex");
-
 /** Owned by startServer, not by React mounts or browser connections. */
 export class OpenCodeHost {
   private readonly hostInstanceId = randomUUID();
@@ -177,7 +164,7 @@ export class OpenCodeHost {
       const grant = options.access.get();
       this.syncAssistantAccess();
       for (const [id, entry] of this.entries) {
-        if (!grant || authority(grant) !== entry.authority)
+        if (!grant || !samePrincipal(grant, entry.grant))
           void this.retire(
             id,
             grant
@@ -385,7 +372,7 @@ export class OpenCodeHost {
     });
     const { cwd } = workspace;
     const current = this.options.access.get();
-    if (this.closed || !current || authority(current) !== authority(grant))
+    if (this.closed || !current || !samePrincipal(current, grant))
       throw new OpenCodeAccessError(
         "Assistant access changed. Please retry.",
         current ? "access_denied" : this.options.access.getFailureCode(),
@@ -394,7 +381,7 @@ export class OpenCodeHost {
     if (
       existing &&
       existing.workspace.cwd === cwd &&
-      existing.authority === authority(grant)
+      samePrincipal(existing.grant, grant)
     ) {
       existing.lastActive = this.now();
       return existing.ready!;
@@ -414,7 +401,7 @@ export class OpenCodeHost {
     if (racing) return this.ensure(id);
     const entry: Managed = {
       workspace: { harnessSessionId: id, cwd },
-      authority: authority(grant),
+      grant,
       abort: new AbortController(),
       holds: 0,
       lastActive: this.now(),
@@ -487,7 +474,7 @@ export class OpenCodeHost {
       this.closed ||
       entry.abort.signal.aborted ||
       !grant ||
-      authority(grant) !== entry.authority
+      !samePrincipal(grant, entry.grant)
     )
       throw new OpenCodeAccessError(
         "Assistant access changed. Please retry.",
@@ -576,7 +563,7 @@ export class OpenCodeHost {
             !entry.abort.signal.aborted &&
             this.entries.get(entry.workspace.harnessSessionId) === entry &&
             !!current &&
-            authority(current) === entry.authority
+            samePrincipal(current, entry.grant)
           );
         },
       };

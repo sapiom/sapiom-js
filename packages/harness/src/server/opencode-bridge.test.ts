@@ -36,8 +36,6 @@ beforeEach(async () => {
   grant = {
     userId: "user",
     tenantId: "tenant",
-    identityRevision: "identity",
-    expiresAt: Date.now() + 60000,
     environment: {
       name: "test",
       appURL: apiURL,
@@ -671,7 +669,7 @@ describe("Studio OpenCode credential bridge", () => {
     await expect(reader.read()).rejects.toThrow();
     expect((await request()).status).toBe(401);
     expect(() => bridge.issue()).toThrow("unavailable");
-    grant = { ...previous, identityRevision: "new-login" };
+    grant = { ...previous, userId: "user-after-login" };
     const next = bridge.issue();
     expect(next.token).not.toBe(credential.token);
     next.revoke();

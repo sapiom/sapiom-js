@@ -40,20 +40,18 @@ export interface MapChatState {
   pulse: { sessionId: string; at: number } | null;
   /** The chat composer's unsent text, per project. */
   draft: (projectId: string) => ChatDraft;
-  /**
-   * Whether this account may use the Assistant (`/api/assistant/access`).
-   * Only a definite "no" hides the card's composer; an unanswered check
-   * leaves it, since the host enforces its own grant on every request.
-   */
+  /** The server's pushed `assistant.state`: this account has the Assistant. */
   canAsk: boolean;
 }
 
 export function useMapChat({
   bootToken,
   authRevision,
+  canAsk,
 }: {
   bootToken: string | null;
   authRevision: number;
+  canAsk: boolean;
 }): MapChatState {
   const [open, setOpenMap] = useState<Readonly<Record<string, boolean>>>({});
   const [revisions, setRevisions] = useState<Readonly<Record<string, number>>>(
@@ -65,29 +63,6 @@ export function useMapChat({
   const [pulse, setPulse] = useState<MapChatState["pulse"]>(null);
   const pending = useRef(new Map<string, string>());
   const drafts = useRef(new Map<string, ChatDraft>());
-  const [allowed, setAllowed] = useState<boolean | null>(null);
-  useEffect(() => {
-    const abort = new AbortController();
-    setAllowed(null);
-    void fetch("/api/assistant/access", {
-      headers: { "X-Harness-Token": bootToken ?? "" },
-      credentials: "omit",
-      cache: "no-store",
-      signal: abort.signal,
-    })
-      .then(async (response) => {
-        if (response.status === 401 || response.status === 403) return false;
-        if (!response.ok) return null;
-        const { enabled } = (await response.json()) as { enabled?: unknown };
-        return typeof enabled === "boolean" ? enabled : null;
-      })
-      .catch(() => null)
-      .then((value) => {
-        if (!abort.signal.aborted) setAllowed(value);
-      });
-    return () => abort.abort();
-  }, [bootToken, authRevision]);
-
   // Another account sees none of this one's map chats: their open state,
   // unsent text, queued questions and hand-offs belong to the principal.
   const authSeen = useRef(authRevision);
@@ -187,14 +162,14 @@ export function useMapChat({
       setHandoffSession,
       pulse,
       draft,
-      canAsk: allowed !== false,
+      canAsk,
     }),
     [
       open,
       revisions,
       handoffs,
       pulse,
-      allowed,
+      canAsk,
       setOpen,
       reset,
       ask,

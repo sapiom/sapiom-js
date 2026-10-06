@@ -448,14 +448,6 @@ describe("Studio-scoped OpenCode transport", () => {
       error: openCodeTransportFailure("authentication_required"),
     });
     ensure.mockRejectedValueOnce(
-      new OpenCodeAccessError("private authority detail", "access_expired"),
-    );
-    const expired = await request("studio-a/attach", { method: "POST" });
-    expect(expired.status).toBe(403);
-    expect(await expired.json()).toEqual({
-      error: openCodeTransportFailure("access_expired"),
-    });
-    ensure.mockRejectedValueOnce(
       new OpenCodeTransportError(
         openCodeTransportFailure(
           "runtime_start_failed",
