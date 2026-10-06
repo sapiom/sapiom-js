@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as os from "node:os";
 
 import { z } from "zod";
@@ -128,10 +127,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         const client =
           platform === false ? undefined : await gatewayClient(env);
         const credentials = client ? await readCredentials(env.name) : null;
+        // The account and key ids name the cache; the key itself never enters it.
         const cacheKey = credentials
-          ? createHash("sha256")
-              .update(`${env.apiURL}\0${credentials.apiKey}`)
-              .digest("hex")
+          ? `${env.apiURL}\0${credentials.tenantId}\0${credentials.apiKeyId}`
           : undefined;
         const description = await describeProject({
           // Node does not expand `~`; callers (and the README) use it.
