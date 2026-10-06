@@ -75,8 +75,6 @@ interface SessionBarProps {
 export interface ProjectViewHeader {
   label: string;
   onNewAgent: () => void;
-  /** Full view for a drawn map; null when there is no map to enlarge. */
-  onExpandMap: (() => void) | null;
   /** The project's App Links, deployed and local (flow 4.7.3). */
   appLinks: ProjectAppLinkSources;
 }
@@ -411,18 +409,6 @@ export function SessionBar({
           >
             <Icon name="Plus" size={13} /> New agent
           </button>
-          {projectView.onExpandMap && (
-            <button
-              type="button"
-              className="theme-toggle"
-              data-testid="canvas-expand"
-              aria-label="Expand Agent Map"
-              title="Expand Agent Map"
-              onClick={projectView.onExpandMap}
-            >
-              <Icon name="Maximize2" size={15} />
-            </button>
-          )}
         </div>
       )}
     </div>
