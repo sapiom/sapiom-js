@@ -4,6 +4,7 @@ import {
   type GatewayClient,
 } from "@sapiom/agent-core";
 
+import type { Evaluate } from "./labels.js";
 import type { PlatformSource } from "./scan-project.js";
 import type { DescribedTrigger } from "./types.js";
 
@@ -78,4 +79,9 @@ export function accountPlatform(
         });
       }),
   };
+}
+
+/** Jev through the signed-in account's API key, the same route the hosted capability uses. */
+export function accountEvaluate(client: GatewayClient): Evaluate {
+  return (request) => client.postAtHostRoot("/v1/capabilities/decisions.evaluate", request);
 }

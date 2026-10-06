@@ -2,10 +2,11 @@ import * as os from "node:os";
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { AgentOperationError, type GatewayClient } from "@sapiom/agent-core";
+import { AgentOperationError } from "@sapiom/agent-core";
 
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
 import {
+  accountEvaluate,
   accountPlatform,
   buildMap,
   describeProject,
@@ -13,17 +14,12 @@ import {
   labelMap,
   MapInputError,
   memoryLabelCache,
-  type Evaluate,
 } from "../map/index.js";
 import { registerTool } from "../register-tool.js";
 import { fail, gatewayClient, ok } from "./shared.js";
 
-export { accountPlatform };
+export { accountEvaluate, accountPlatform };
 
-/** Jev through the signed-in account's API key, the same route the hosted capability uses. */
-export function accountEvaluate(client: GatewayClient): Evaluate {
-  return (request) => client.postAtHostRoot("/v1/capabilities/decisions.evaluate", request);
-}
 
 const evidenceSchema = z.object({
   file: z.string(),
