@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   preferredProjectRoot,
+  projectRootConflict,
   projectRoots,
   projectSessionRoot,
   projectToOpen,
@@ -227,5 +228,87 @@ describe("shared project-root resolution", () => {
         }),
       ),
     ).toEqual(["/workspace"]);
+  });
+
+  it("keeps only the outer root when two chosen roots are newly nested", () => {
+    expect(
+      projectRoots(
+        sources({
+          recentDirs: ["/a/one", "/a/one/services/workers"],
+          agentPaths: ["/a/one/x", "/a/one/services/workers/y"],
+        }),
+      ),
+    ).toEqual(["/a/one"]);
+  });
+
+  it("keeps a pinned outer root instead of a chosen inner root", () => {
+    expect(
+      projectRoots(
+        sources({
+          recentDirs: ["/a/one", "/a/one/services/workers"],
+          pinnedRoots: ["/a/one"],
+        }),
+      ),
+    ).toEqual(["/a/one"]);
+  });
+
+  it("keeps a pinned inner root instead of a chosen outer root", () => {
+    expect(
+      projectRoots(
+        sources({
+          recentDirs: ["/a/one", "/a/one/services/workers"],
+          pinnedRoots: ["/a/one/services/workers"],
+        }),
+      ),
+    ).toEqual(["/a/one/services/workers"]);
+  });
+
+  it("preserves nested roots when both are pinned", () => {
+    expect(
+      projectRoots(
+        sources({
+          recentDirs: ["/a/one", "/a/one/services/workers"],
+          pinnedRoots: ["/a/one", "/a/one/services/workers"],
+        }),
+      ),
+    ).toEqual(["/a/one", "/a/one/services/workers"]);
+  });
+});
+
+describe("projectRootConflict", () => {
+  const roots = [
+    { cwd: "/workspace/project", label: "Project" },
+    { cwd: "/workspace/project/nested", label: "Nested" },
+  ];
+
+  it("allows reopening an exact existing root", () => {
+    expect(projectRootConflict("/workspace/project", roots)).toBeNull();
+  });
+
+  it("reports the deepest existing root containing the request", () => {
+    expect(
+      projectRootConflict("/workspace/project/nested/src", roots),
+    ).toEqual({
+      kind: "inside",
+      root: "/workspace/project/nested",
+      label: "Nested",
+    });
+  });
+
+  it("reports the shallowest existing root contained by the request", () => {
+    expect(
+      projectRootConflict("/workspace", [
+        { cwd: "/workspace/project/nested", label: "Nested" },
+        { cwd: "/workspace/project", label: "Project" },
+      ]),
+    ).toEqual({
+      kind: "contains",
+      root: "/workspace/project",
+      label: "Project",
+    });
+  });
+
+  it("returns no conflict for an unrelated request", () => {
+    expect(projectRootConflict("/other", roots)).toBeNull();
   });
 });

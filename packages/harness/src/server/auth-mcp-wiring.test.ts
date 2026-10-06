@@ -336,6 +336,22 @@ describe("Agent Studio MCP authentication wiring", () => {
     });
   }
 
+  async function openedProjectId(cwd: string): Promise<string> {
+    const response = await fetch(
+      `http://127.0.0.1:${server!.port}/api/state`,
+      { headers: { "x-harness-token": "test-token" } },
+    );
+    expect(response.status).toBe(200);
+    const state = (await response.json()) as {
+      workspaceScopes?: Array<{ cwd: string; projectId: string }>;
+    };
+    const scope = state.workspaceScopes?.find(
+      (candidate) => candidate.cwd === cwd,
+    );
+    expect(scope).toBeDefined();
+    return scope!.projectId;
+  }
+
   it("injects a credential obtained through Studio login into the next session", async () => {
     await boot();
 
@@ -355,6 +371,7 @@ describe("Agent Studio MCP authentication wiring", () => {
 
   it("resumes a Studio project session with its persisted identity after switching accounts", async () => {
     authFixture.credential = credential("key-a");
+    await rm(join(projectRoot, "sapiom.json"));
     await boot({
       machineId: "machine-test",
       identity: {
@@ -365,7 +382,6 @@ describe("Agent Studio MCP authentication wiring", () => {
         source: "cached",
       },
     });
-    await rm(join(projectRoot, "sapiom.json"));
     const settings = await fetch(
       `http://127.0.0.1:${server!.port}/api/settings`,
       {
@@ -378,16 +394,7 @@ describe("Agent Studio MCP authentication wiring", () => {
       },
     );
     expect(settings.status).toBe(200);
-    const createdProject = await post("/api/projects", {
-      displayName: "Resume after reconnect",
-    });
-    expect(createdProject.status).toBe(201);
-    const project = (await createdProject.json()) as { projectId: string };
-    const boundRoot = await post(
-      `/api/projects/${project.projectId}/root-bindings`,
-      { root: projectRoot },
-    );
-    expect(boundRoot.status, await boundRoot.text()).toBe(201);
+    const projectId = await openedProjectId(projectRoot);
 
     const session = await server!.sessionManager.create({
       cwd: projectRoot,
@@ -395,7 +402,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     });
     const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
     expect(session.agentMapIdentity).toMatchObject({
-      projectId: project.projectId,
+      projectId,
       userId: "local:machine-test",
     });
     // Existing sessions retain their recorded attribution across account
@@ -454,8 +461,8 @@ describe("Agent Studio MCP authentication wiring", () => {
   });
 
   it("rejects a persisted session when a nested project takes ownership of its cwd", async () => {
-    await boot({ machineId: "machine-test" });
     await rm(join(projectRoot, "sapiom.json"));
+    await boot({ machineId: "machine-test" });
     const settings = await fetch(
       `http://127.0.0.1:${server!.port}/api/settings`,
       {
@@ -468,18 +475,7 @@ describe("Agent Studio MCP authentication wiring", () => {
       },
     );
     expect(settings.status).toBe(200);
-    const createdProject = await post("/api/projects", {
-      displayName: "Outer resume project",
-    });
-    expect(createdProject.status).toBe(201);
-    const outerProject = (await createdProject.json()) as {
-      projectId: string;
-    };
-    const outerBinding = await post(
-      `/api/projects/${outerProject.projectId}/root-bindings`,
-      { root: projectRoot },
-    );
-    expect(outerBinding.status).toBe(201);
+    const outerProjectId = await openedProjectId(projectRoot);
 
     const nestedRoot = join(projectRoot, "nested");
     await mkdir(nestedRoot);
@@ -487,7 +483,7 @@ describe("Agent Studio MCP authentication wiring", () => {
       cwd: nestedRoot,
       harness: "claude-code",
     });
-    expect(session.agentMapIdentity?.projectId).toBe(outerProject.projectId);
+    expect(session.agentMapIdentity?.projectId).toBe(outerProjectId);
     await server!.sessionManager.setAgentSessionId(
       session.id,
       "agent-session-nested-project",
@@ -496,13 +492,28 @@ describe("Agent Studio MCP authentication wiring", () => {
     await server!.sessionManager.flush();
     const persistedIdentity = structuredClone(session.agentMapIdentity);
 
-    const catalog = new StudioProjectCatalog(
-      resolveStatePaths(root).studioProjects,
-    );
+    const catalogPath = resolveStatePaths(root).studioProjects;
+    const catalog = new StudioProjectCatalog(catalogPath);
     const nestedProject = await catalog.create("Nested resume project");
-    await catalog.addRootBinding(nestedProject.projectId, nestedRoot);
+    await catalog.addRootBinding(
+      nestedProject.projectId,
+      join(root, "provisional-nested-project"),
+    );
+    const persisted = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+      projects: Array<{
+        projectId: string;
+        rootBindings: Array<{ localRootRef: string }>;
+      }>;
+    };
+    const nestedRecord = persisted.projects.find(
+      (candidate) => candidate.projectId === nestedProject.projectId,
+    );
+    expect(nestedRecord?.rootBindings).toHaveLength(1);
+    nestedRecord!.rootBindings[0]!.localRootRef = nestedRoot;
+    writeFileSync(catalogPath, JSON.stringify(persisted));
+    const legacyCatalog = new StudioProjectCatalog(catalogPath);
     expect(
-      (await catalog.resolveIdentityForPath(nestedRoot))?.projectId,
+      (await legacyCatalog.resolveIdentityForPath(nestedRoot))?.projectId,
     ).toBe(nestedProject.projectId);
 
     const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");

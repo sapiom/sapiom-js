@@ -174,7 +174,7 @@ describe("buildProjectTree", () => {
     ]);
   });
 
-  it("names a project opened inside another by its path from the parent", () => {
+  it("labels a pre-existing nested project by its path from the parent", () => {
     const nested = `${ROOT}/agents`;
     const [outer, inner] = buildProjectTree(
       [agent(`${nested}/ads`)],
@@ -925,13 +925,13 @@ describe("projectRoots", () => {
       ).toEqual(["/a/one"]);
     });
 
-    it("keeps a nested root alongside its parent when BOTH were chosen: two contexts", () => {
+    it("drops a newly chosen nested root because the outer project already shows it", () => {
       expect(
         roots({
           recentDirs: ["/a/one", "/a/one/services/workers"],
           agentPaths: ["/a/one/x", "/a/one/services/workers/y"],
         }),
-      ).toEqual(["/a/one", "/a/one/services/workers"]);
+      ).toEqual(["/a/one"]);
     });
   });
 });

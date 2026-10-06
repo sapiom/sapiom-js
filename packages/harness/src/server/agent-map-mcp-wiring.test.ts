@@ -657,6 +657,29 @@ it("opening a new project mints it and starts no session (flow-creation.md Q5)",
       ),
     ).toBe(true);
   });
+  const projectsBeforeNestedOpen = (
+    await (await request("/state")).json()
+  ).studioProjects.map((project: { projectId: string }) => project.projectId);
+  const nestedRoot = path.join(projectRoot, "nested-project");
+  await fs.mkdir(nestedRoot);
+  const nestedOpened = await request("/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      recentDirs: [nestedRoot, freshRoot, projectRoot],
+    }),
+  });
+  expect(nestedOpened.status).toBe(200);
+  await vi.waitFor(async () => {
+    const visibleState = await request("/state");
+    const state = await visibleState.json();
+    expect(
+      state.studioProjects
+        .map((project: { projectId: string }) => project.projectId)
+        .sort(),
+    ).toEqual([...projectsBeforeNestedOpen].sort());
+  });
+  const savedSettings = await request("/settings");
+  expect((await savedSettings.json()).recentDirs).toContain(nestedRoot);
   // ... and nothing was started for it, then or later.
   await new Promise((resolve) => setTimeout(resolve, 250));
   expect(server.sessionManager.list()).toEqual([]);

@@ -16,7 +16,11 @@ import type {
   WorkspaceScopeSummary,
 } from "../shared/workspace-scope.js";
 import { matchProjectRootForPath } from "../shared/project-roots.js";
-import { pathComparisonKey } from "../shared/paths.js";
+import {
+  isWithinDir,
+  pathComparisonKey,
+  pathSegmentDepth,
+} from "../shared/paths.js";
 import {
   canonicalGraphPath,
   refreshCanonicalGraphPath,
@@ -589,6 +593,33 @@ export class StudioProjectCatalog {
     });
   }
 
+  private rootBindingOverlaps(
+    projects: readonly StudioProjectIdentity[],
+    root: string,
+  ): Array<{
+    project: StudioProjectIdentity;
+    binding: ProjectRootBinding;
+    requestedRootIsInside: boolean;
+  }> {
+    const rootKey = pathComparisonKey(root);
+    const overlaps: Array<{
+      project: StudioProjectIdentity;
+      binding: ProjectRootBinding;
+      requestedRootIsInside: boolean;
+    }> = [];
+    for (const project of projects) {
+      for (const binding of project.rootBindings) {
+        if (pathComparisonKey(binding.localRootRef) === rootKey) continue;
+        if (isWithinDir(binding.localRootRef, root)) {
+          overlaps.push({ project, binding, requestedRootIsInside: true });
+        } else if (isWithinDir(root, binding.localRootRef)) {
+          overlaps.push({ project, binding, requestedRootIsInside: false });
+        }
+      }
+    }
+    return overlaps;
+  }
+
   /**
    * Reconciles existing allow-listed roots and allocates an identity only for
    * roots not already known by private binding or migration alias.
@@ -675,7 +706,19 @@ export class StudioProjectCatalog {
 
       const reconciledScopes: WorkspaceScopeSummary[] = [];
       const createdProjects: StudioProjectIdentity[] = [];
-      for (const { canonical, scope, aliasTrusted } of dedupedScopes.values()) {
+      const scopesToReconcile = [...dedupedScopes.values()].sort(
+        (left, right) =>
+          pathSegmentDepth(left.canonical) -
+            pathSegmentDepth(right.canonical) ||
+          (pathComparisonKey(left.canonical) <
+          pathComparisonKey(right.canonical)
+            ? -1
+            : pathComparisonKey(left.canonical) >
+                pathComparisonKey(right.canonical)
+              ? 1
+              : 0),
+      );
+      for (const { canonical, scope, aliasTrusted } of scopesToReconcile) {
         const bindsRoot = (candidate: StudioProjectIdentity): boolean =>
           candidate.rootBindings.some(
             (binding) =>
@@ -703,6 +746,38 @@ export class StudioProjectCatalog {
             left.projectId.localeCompare(right.projectId),
         )[0];
         if (!project) {
+          const overlaps = this.rootBindingOverlaps(next, canonical);
+          const containing = overlaps.filter(
+            (overlap) => overlap.requestedRootIsInside,
+          );
+          if (containing.length > 0) {
+            const deepestDepth = Math.max(
+              ...containing.map(({ binding }) =>
+                pathSegmentDepth(binding.localRootRef),
+              ),
+            );
+            const deepestProjects = new Set(
+              containing
+                .filter(
+                  ({ binding }) =>
+                    pathSegmentDepth(binding.localRootRef) === deepestDepth,
+                )
+                .map(({ project: owner }) => owner.projectId),
+            );
+            if (deepestProjects.size !== 1) continue;
+            const containingProject = next.find(
+              (candidate) =>
+                candidate.projectId === deepestProjects.values().next().value,
+            );
+            if (!containingProject) continue;
+            reconciledScopes.push({
+              ...scope,
+              projectId: containingProject.projectId,
+            });
+            continue;
+          }
+          if (overlaps.some(({ requestedRootIsInside }) => !requestedRootIsInside))
+            continue;
           const timestamp = this.timestamp();
           project = {
             projectId: `project_${randomUUID()}`,
@@ -724,6 +799,20 @@ export class StudioProjectCatalog {
           createdProjects.push(project);
           changed = true;
         } else {
+          const matchedProjectId = project.projectId;
+          let binding = project.rootBindings.find(
+            (candidate) =>
+              pathComparisonKey(candidate.localRootRef) ===
+              pathComparisonKey(canonical),
+          );
+          if (
+            !binding &&
+            this.rootBindingOverlaps(next, canonical).some(
+              ({ project: owner }) => owner.projectId !== matchedProjectId,
+            )
+          ) {
+            continue;
+          }
           let projectChanged = false;
           if (
             aliasTrusted &&
@@ -732,11 +821,6 @@ export class StudioProjectCatalog {
             project.legacyWorkspaceKeys.push(scope.workspaceKey);
             projectChanged = true;
           }
-          let binding = project.rootBindings.find(
-            (candidate) =>
-              pathComparisonKey(candidate.localRootRef) ===
-              pathComparisonKey(canonical),
-          );
           if (!binding) {
             binding = {
               id: `root_${randomUUID()}`,
@@ -844,6 +928,9 @@ export class StudioProjectCatalog {
         throw new StudioProjectCatalogError("malformed_state");
       }
       if (
+        this.rootBindingOverlaps(next, canonical).some(
+          ({ project: candidate }) => candidate.projectId !== projectId,
+        ) ||
         next.some(
           (candidate) =>
             candidate.projectId !== projectId &&
@@ -898,6 +985,9 @@ export class StudioProjectCatalog {
       }
       const canonical = canonicalGraphPath(root);
       if (
+        this.rootBindingOverlaps(next, canonical).some(
+          ({ project: candidate }) => candidate.projectId !== projectId,
+        ) ||
         next.some(
           (candidate) =>
             candidate.projectId !== projectId &&

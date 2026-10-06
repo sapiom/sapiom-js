@@ -224,16 +224,8 @@ test.describe("round trip: removed, then back", () => {
     ).toEqual([]);
   });
 
-  /**
-   * THE HOLE THE EQUAL-ENTRY RULE LEAVES. Remove `~/demo/acme-app`, then open
-   * `~/demo` ABOVE it. `~/demo` is not itself closed so its row renders, and
-   * the nested-project rescue does not apply (it needs an open root STRICTLY
-   * INSIDE the closed one) — so `leasing` sits inside a project the user has
-   * open and is rendered nowhere at all. `openProject` therefore drops every
-   * tombstone inside the folder being opened: you cannot open a folder as a
-   * project and keep part of it removed.
-   */
-  test("opening a folder ABOVE a removed project un-hides what is inside it", async ({
+  /** A closed project's durable scope still blocks a new overlapping root. */
+  test("rejects opening a folder that contains a removed project", async ({
     page,
   }) => {
     await page.getByTestId("project-remove-acme-app").click();
@@ -244,19 +236,10 @@ test.describe("round trip: removed, then back", () => {
     await page.getByTestId("folder-field-input").fill("/Users/demo");
     await page.getByTestId("project-folder-continue").click();
 
-    await expect(page.getByTestId("workspace-group-demo")).toBeVisible();
-    /* ONE row, and the hole is still closed. The invariant this test exists for
-       is that `leasing` is rendered SOMEWHERE once `~/demo` is open, and it is:
-       under `~/demo`.
-       It asserted 2 before, on the rule that an agent files under every root
-       that contains it. That rule is intact, but it takes two CHOSEN roots, and
-       after the removal above `acme-app` is not one: the user closed it, and it
-       survives only as the cwd of some exited sessions. Rendering it again as a
-       project would resurrect a folder they just removed, and print its agent
-       twice to do it. */
-    await expect(
-      (await agentCardsOn(page, "demo")).filter({ hasText: "/Users/demo/acme-app/leasing" }),
-    ).toHaveCount(1);
+    await expect(page.getByTestId("project-folder-error")).toHaveText(
+      "That folder contains the project rfq-agent. Projects can't be nested.",
+    );
+    await expect(page.getByTestId("workspace-group-demo")).toHaveCount(0);
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
     expect(
       await page.evaluate(
@@ -269,6 +252,6 @@ test.describe("round trip: removed, then back", () => {
             }
           ).closedProjects ?? [],
       ),
-    ).toEqual([]);
+    ).toContain("/Users/demo/acme-app");
   });
 });

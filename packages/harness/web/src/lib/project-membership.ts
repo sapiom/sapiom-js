@@ -65,12 +65,13 @@ export function agentNeedsOwnProject(
  * project whose agents stay behind as strays, or whose session cwds come back
  * as child rows, has been renamed rather than removed.
  *
- * The one exception is a project the user opened SEPARATELY inside it —
- * `~/polsia` and `~/polsia/services/workers` are two real contexts, and
- * closing the outer one must not take the inner one with it. Hence STRICTLY
- * inside: an `openRoots` entry equal to the closed root is the very entry
- * removal is about to drop (and, on the next boot, whatever re-recorded it),
- * so it cannot be what un-closes it. Only a deliberate reopen does that.
+ * The one exception is a pre-existing durable project strictly inside it —
+ * `~/polsia` and `~/polsia/services/workers` may remain separate legacy
+ * contexts, and closing the outer one must not take the inner one with it.
+ * Hence STRICTLY inside: an `openRoots` entry equal to the closed root is the
+ * very entry removal is about to drop (and, on the next boot, whatever
+ * re-recorded it), so it cannot be what un-closes it. Only a deliberate reopen
+ * does that.
  *
  * `openRoots` is the explicitly-opened list — `recentDirs` plus folders
  * mid-creation. Session cwds are deliberately NOT claims here: a session that
