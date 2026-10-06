@@ -24,7 +24,16 @@
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
-import { managedBrowserApi } from "./managed.js";
+import {
+  managedBrowserApi,
+  managedSessionLifecycle,
+  runManagedSession,
+} from "./managed.js";
+import type {
+  ManagedBrowserSession,
+  WithManagedSessionInput,
+  WithManagedSessionOptions,
+} from "./managed.js";
 import { ensureOk, BrowserAutomationHttpError } from "./errors.js";
 
 export { BrowserAutomationHttpError };
@@ -485,7 +494,7 @@ export async function createSessionWithIdentity(
 /**
  * Close a session and settle its billing. Returns a `SessionSettlement` with
  * `capturedAmountUsd` (the amount captured on successful settlement) and `creditsUsed`.
- * Settlement can fail if usage exceeds the payment authorization. Session expiry does not
+ * Settlement captures reported usage up to the payment authorization. Session expiry does not
  * guarantee settlement. Failed requests throw {@link BrowserAutomationHttpError}.
  */
 export async function closeSession(
@@ -641,6 +650,43 @@ export async function withSession<T>(
       () => undefined,
     );
   }
+}
+
+/**
+ * Create a managed session, run `fn`, and attempt to close the session afterward.
+ * If `idempotencyKey` is omitted, one is generated. Uncertain creation outcomes are
+ * retried with the same key and input; the close is retried until settlement
+ * completes. Each request has its own timeout; a request that never answers is
+ * treated like a network failure. If creation remains uncertain, any session left
+ * by that creation is closed before the creation error is rethrown. The session is
+ * closed in `finally`, even when `fn` throws; close problems do not replace `fn`'s
+ * result or error. `onPendingClose` receives the session ID when a close has not
+ * completed. If creation never confirms and recovery still reports no browser,
+ * `withManagedSession` throws. To reconcile later with `sessions.recover`, pass your
+ * own `idempotencyKey` and store it first; recovery accepts only the API key that
+ * sent the original request.
+ *
+ * @example
+ * const title = await sapiom.browserAutomation.withManagedSession(
+ *   { recording: false },
+ *   async (session) => {
+ *     const browser = await chromium.connectOverCDP(session.cdpUrl);
+ *     return browser.contexts()[0].pages()[0].title();
+ *   },
+ * );
+ */
+export function withManagedSession<T>(
+  input: WithManagedSessionInput,
+  fn: (session: ManagedBrowserSession) => Promise<T>,
+  options?: WithManagedSessionOptions,
+  transport?: Transport,
+): Promise<T> {
+  return runManagedSession(
+    managedSessionLifecycle(DEFAULT_BASE_URL, transport),
+    input,
+    fn,
+    options,
+  );
 }
 
 // ----- Namespace exports -----

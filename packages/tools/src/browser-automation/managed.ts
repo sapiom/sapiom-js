@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Transport, defaultTransport } from "../_client/index.js";
 import { BrowserAutomationHttpError, ensureOk } from "./errors.js";
 
@@ -153,8 +154,7 @@ function pathOf({ template, ids }: Route): string {
   });
 }
 
-/** Internal binding shared by the named namespace and an explicit client. */
-export function managedBrowserApi(baseUrl: string, transport?: Transport) {
+function browserRequests(baseUrl: string, transport?: Transport) {
   const send = async (path: Route, init: RequestInit, errorPrefix: string) =>
     ensureOk(
       await (transport ?? defaultTransport()).fetch(
@@ -169,6 +169,7 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
     path: Route,
     body?: unknown,
     key?: string,
+    signal?: AbortSignal,
   ): Promise<T> {
     if (
       key !== undefined &&
@@ -191,11 +192,19 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
             : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(signal !== undefined ? { signal } : {}),
       },
       "Browser request failed",
     );
     return ((await response.json()) as { data: T }).data;
   }
+  return { send, call };
+}
+
+/** Internal binding shared by the named namespace and an explicit client. */
+export function managedBrowserApi(baseUrl: string, transport?: Transport) {
+  const { send, call } = browserRequests(baseUrl, transport);
+  const lifecycle = managedSessionLifecycleFromCall(call);
   /** POST the input as the body, sending its idempotency key as a header. */
   const post = <T>(
     path: "/sessions" | "/profiles" | "/tasks",
@@ -226,24 +235,16 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
     sessions: {
       /** Create a session for CDP control or managed tasks. Defaults: idle 5 minutes, maximum 20 minutes. Existing sessions.create remains unchanged. */
       createManaged: (input: ManagedSessionInput) =>
-        post<ManagedBrowserSession>("/sessions", input),
+        lifecycle.createManaged(input),
       get: (sessionId: string) =>
         call<BrowserSessionInfo>(
           "GET",
           route("/sessions/:sessionId", { sessionId }),
         ),
       /** Recover with the original API key and creation key. Never creates or pays again. */
-      recover: (idempotencyKey: string) =>
-        call<BrowserCreationRecovery>(
-          "GET",
-          route("/sessions/recovery/:idempotencyKey", { idempotencyKey }),
-        ),
+      recover: (idempotencyKey: string) => lifecycle.recover(idempotencyKey),
       /** Close only sessions created with createManaged. Retry when settlement is pending. */
-      closeManaged: (sessionId: string) =>
-        call<ManagedSessionSettlement>(
-          "DELETE",
-          route("/sessions/:sessionId", { sessionId }),
-        ),
+      closeManaged: (sessionId: string) => lifecycle.closeManaged(sessionId),
     },
     profiles: {
       /** Save an unrecorded session without protected inputs. Close it to finish the save. */
@@ -318,3 +319,233 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
 
 /** The managed sessions, tasks, profiles, and recordings API bound to one transport. */
 export type ManagedBrowserApi = ReturnType<typeof managedBrowserApi>;
+
+export interface ManagedSessionLifecycle {
+  createManaged(
+    input: ManagedSessionInput,
+    signal?: AbortSignal,
+  ): Promise<ManagedBrowserSession>;
+  recover(
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserCreationRecovery>;
+  closeManaged(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ManagedSessionSettlement>;
+}
+
+type BrowserCall = <T>(
+  method: string,
+  path: Route,
+  body?: unknown,
+  key?: string,
+  signal?: AbortSignal,
+) => Promise<T>;
+
+function managedSessionLifecycleFromCall(
+  call: BrowserCall,
+): ManagedSessionLifecycle {
+  return {
+    createManaged: (input, signal) => {
+      const { idempotencyKey, ...body } = input;
+      return call("POST", route("/sessions", {}), body, idempotencyKey, signal);
+    },
+    recover: (idempotencyKey, signal) =>
+      call(
+        "GET",
+        route("/sessions/recovery/:idempotencyKey", { idempotencyKey }),
+        undefined,
+        undefined,
+        signal,
+      ),
+    closeManaged: (sessionId, signal) =>
+      call(
+        "DELETE",
+        route("/sessions/:sessionId", { sessionId }),
+        undefined,
+        undefined,
+        signal,
+      ),
+  };
+}
+
+/** @internal Session lifecycle requests for withManagedSession; each accepts an abort signal. */
+export function managedSessionLifecycle(
+  baseUrl: string,
+  transport?: Transport,
+): ManagedSessionLifecycle {
+  const { call } = browserRequests(baseUrl, transport);
+  return managedSessionLifecycleFromCall(call);
+}
+
+export type WithManagedSessionInput = Omit<
+  ManagedSessionInput,
+  "idempotencyKey"
+> & { idempotencyKey?: string };
+
+export interface WithManagedSessionOptions {
+  /** Called when a close has not completed within the retry window, so the caller can retry closeManaged later. */
+  onPendingClose?: (sessionId: string) => void | Promise<void>;
+}
+
+const CREATE_RETRY_WINDOW_MS = 90_000;
+const CREATE_RETRY_INITIAL_DELAY_MS = 2_000;
+const CREATE_RETRY_MAX_DELAY_MS = 10_000;
+const RECOVERY_WINDOW_MS = 120_000;
+const RECOVERY_INTERVAL_MS = 10_000;
+const CLOSE_WINDOW_MS = 90_000;
+const CLOSE_INTERVAL_MS = 5_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function withRequestTimeout<T>(
+  deadline: number,
+  op: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const { signal } = controller;
+  let rejectTimeout!: (error: Error) => void;
+  const timeout = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const onAbort = () => {
+    const error = new Error("Browser request timed out");
+    error.name = "TimeoutError";
+    rejectTimeout(error);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()),
+  );
+
+  try {
+    return await Promise.race([op(signal), timeout]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function isUncertain(error: unknown): boolean {
+  return (
+    !(error instanceof BrowserAutomationHttpError) ||
+    error.status === 429 ||
+    error.status >= 500 ||
+    error.code === "browser_outcome_unknown"
+  );
+}
+
+async function closeWithRetry(
+  sessions: ManagedSessionLifecycle,
+  sessionId: string,
+  options?: WithManagedSessionOptions,
+): Promise<void> {
+  const deadline = Date.now() + CLOSE_WINDOW_MS;
+  while (Date.now() <= deadline) {
+    try {
+      const result = await withRequestTimeout(deadline, (signal) =>
+        sessions.closeManaged(sessionId, signal),
+      );
+      if (result.settlement === "completed") return;
+      if (Date.now() + CLOSE_INTERVAL_MS > deadline) break;
+    } catch (error) {
+      if (error instanceof BrowserAutomationHttpError && error.status === 404) {
+        return;
+      }
+      const retryable =
+        isUncertain(error) ||
+        (error instanceof BrowserAutomationHttpError &&
+          (error.status === 409 || error.status >= 500));
+      if (!retryable || Date.now() + CLOSE_INTERVAL_MS > deadline) break;
+    }
+    await sleep(CLOSE_INTERVAL_MS);
+  }
+
+  try {
+    await options?.onPendingClose?.(sessionId);
+  } catch {
+    /* swallow */
+  }
+}
+
+export async function runManagedSession<T>(
+  sessions: ManagedSessionLifecycle,
+  input: WithManagedSessionInput,
+  fn: (session: ManagedBrowserSession) => Promise<T>,
+  options?: WithManagedSessionOptions,
+): Promise<T> {
+  const createInput: ManagedSessionInput = {
+    ...input,
+    idempotencyKey: input.idempotencyKey ?? randomUUID(),
+  };
+  const createDeadline = Date.now() + CREATE_RETRY_WINDOW_MS;
+  let delay = CREATE_RETRY_INITIAL_DELAY_MS;
+  let session: ManagedBrowserSession | undefined;
+  let sawUncertain = false;
+  let lastUncertain: unknown;
+  let definiteError: unknown;
+
+  while (session === undefined) {
+    try {
+      session = await withRequestTimeout(createDeadline, (signal) =>
+        sessions.createManaged(createInput, signal),
+      );
+    } catch (error) {
+      if (!isUncertain(error)) {
+        if (!sawUncertain) throw error;
+        definiteError = error;
+        break;
+      }
+      sawUncertain = true;
+      lastUncertain = error;
+      if (Date.now() + delay > createDeadline) break;
+      await sleep(delay);
+      delay = Math.min(delay * 2, CREATE_RETRY_MAX_DELAY_MS);
+    }
+  }
+
+  if (session === undefined) {
+    const recoveryDeadline = Date.now() + RECOVERY_WINDOW_MS;
+    try {
+      while (Date.now() <= recoveryDeadline) {
+        let recovery;
+        try {
+          recovery = await withRequestTimeout(recoveryDeadline, (signal) =>
+            sessions.recover(createInput.idempotencyKey, signal),
+          );
+        } catch (error) {
+          if (!isUncertain(error)) break;
+          if (Date.now() + RECOVERY_INTERVAL_MS > recoveryDeadline) break;
+          await sleep(RECOVERY_INTERVAL_MS);
+          continue;
+        }
+
+        if (
+          recovery.status === "completed" ||
+          recovery.status === "cleanup_only"
+        ) {
+          for (const recoveredSession of recovery.sessions) {
+            await closeWithRetry(sessions, recoveredSession.sessionId, options);
+          }
+          break;
+        }
+        if (recovery.status !== "unknown") break;
+        if (Date.now() + RECOVERY_INTERVAL_MS > recoveryDeadline) break;
+        await sleep(RECOVERY_INTERVAL_MS);
+      }
+    } catch {
+      /* Preserve the creation error. */
+    }
+    throw definiteError ?? lastUncertain;
+  }
+
+  try {
+    return await fn(session);
+  } finally {
+    await closeWithRetry(sessions, session.sessionId, options);
+  }
+}

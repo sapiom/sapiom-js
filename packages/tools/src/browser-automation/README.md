@@ -187,8 +187,8 @@ try {
 
 The authorization is `ceil(maxDurationMinutes / 60) × $1`, using 20 minutes when omitted.
 For example, 60 minutes authorizes $1, 61 minutes authorizes $2, and 240 minutes authorizes $4.
-This payment authorization does not impose a provider usage or traffic limit. Proxy usage can
-exceed it, which can cause settlement to fail.
+This payment authorization does not impose a provider usage or traffic limit. Settlement
+captures the reported usage, up to the authorized amount.
 
 Sessions expire at the configured maximum duration, but expiry does not guarantee payment
 settlement. Always close sessions when finished. `withSession` attempts to close the session;
@@ -213,6 +213,42 @@ The SDK's usage analytics records route templates such as `/v1/browser/tasks/:ta
 never these IDs or creation keys.
 Save returned IDs; there is no session-list endpoint. Tags are metadata, not a
 session discovery or access mechanism.
+
+### Run a session with automatic cleanup
+
+```typescript
+import { chromium } from "playwright";
+
+const browser = sapiom.browserAutomation;
+const title = await browser.withManagedSession(
+  { recording: false },
+  async (session) => {
+    const driver = await chromium.connectOverCDP(session.cdpUrl);
+    try {
+      return await driver.contexts()[0].pages()[0].title();
+    } finally {
+      await driver.close();
+    }
+  },
+  {
+    onPendingClose: (sessionId) => {
+      // Store a cleanup job to retry closeManaged.
+    },
+  },
+);
+```
+
+If you omit `idempotencyKey`, the helper generates one. It retries uncertain
+creation outcomes with the same key and input, and retries the close until
+settlement completes. Each request has its own timeout; a request that never
+answers is treated like a network failure. If creation remains uncertain, it
+checks for and closes any session left behind before rethrowing the creation error.
+It closes the session in `finally`, even when your callback throws; close problems
+never replace the callback's result or error. `onPendingClose` receives the session
+ID when a close has not completed. If creation never confirms and recovery still
+reports no browser, `withManagedSession` throws. To reconcile later with
+`sessions.recover`, pass your own `idempotencyKey` and store it first; recovery
+accepts only the API key that sent the original request.
 
 ### Control with your own model and driver
 
@@ -414,19 +450,57 @@ unrecorded session with no persistent profile.
 
 ### Retries, recovery, and billing
 
-After a lost response, retry the same operation with its original key and input.
-Do not generate a new key for an uncertain operation. The SDK makes one request per
-call; it does not automatically repeat mutations. `BrowserAutomationHttpError`
-exposes HTTP `status`, an optional Sapiom `code`, and `body` for inspection. Its
-message omits the response body. Do not log the body: it can contain sensitive data.
-A `browser_outcome_unknown` code means that execution is not confirmed; retain the
-key even if the task later completes. A confirmed local rejection can be retried
-with the same key after the blocking condition clears.
+Paths are relative to the service base URL the SDK already uses.
 
-A completed session creation retry returns the saved connection URLs without
-another payment. `sessions.recover(createKey)` uses the original Sapiom API key and
-returns session IDs and states, not connection URLs. Retry the original creation
-to retrieve a completed receipt. A rotated API key cannot recover an old creation.
+| SDK method                           | HTTP request                                                       | Idempotency key |
+| ------------------------------------ | ------------------------------------------------------------------ | --------------- |
+| `sessions.createManaged`             | `POST /v1/browser/sessions`                                        | Yes             |
+| `sessions.get`                       | `GET /v1/browser/sessions/:sessionId`                              | No              |
+| `sessions.closeManaged`              | `DELETE /v1/browser/sessions/:sessionId`                           | No              |
+| `sessions.recover`                   | `GET /v1/browser/sessions/recovery/:idempotencyKey`                | No              |
+| `tasks.start`                        | `POST /v1/browser/tasks`                                           | Yes             |
+| `tasks.get`                          | `GET /v1/browser/tasks/:taskId`                                    | No              |
+| `tasks.interventions`                | `GET /v1/browser/tasks/:taskId/interventions`                      | No              |
+| `tasks.pause` / `resume` / `respond` | `POST /v1/browser/tasks/:taskId/pause`, `/resume`, `/respond`      | Yes             |
+| `profiles.save`                      | `POST /v1/browser/profiles`                                        | Yes             |
+| `profiles.get`                       | `GET /v1/browser/profiles/:profileId`                              | No              |
+| `profiles.delete`                    | `DELETE /v1/browser/profiles/:profileId`                           | Yes             |
+| `recordings.list`                    | `GET /v1/browser/sessions/:sessionId/recordings`                   | No              |
+| `recordings.pause` / `resume`        | `POST /v1/browser/sessions/:sessionId/recordings/pause`, `/resume` | Yes             |
+| `recordings.fetch`                   | `GET /v1/browser/sessions/:sessionId/recordings/primary/fetch`     | No              |
+| `recordings.delete`                  | `DELETE /v1/browser/sessions/:sessionId/recordings/:recordingId`   | No              |
+
+The SDK sends each key as both `Idempotency-Key` and `X-Idempotency-Key`; on
+session creation the two must match.
+
+After a lost response, retry the same operation with its original key and input.
+Do not generate a new key for an uncertain operation. Apart from
+`withManagedSession`, the SDK makes one request per call and does not automatically
+repeat mutations. `BrowserAutomationHttpError` exposes HTTP `status`, an optional
+Sapiom `code`, and `body` for inspection. Its message omits the response body. Do
+not log the body: it can contain sensitive data.
+
+What a resend can settle:
+
+- `createManaged`: a resend with the same key and input returns the same session
+  once creation completed, with no second charge. Otherwise use
+  `sessions.recover(key)`. `withManagedSession` does both for you.
+- `profiles.delete`: a resend checks whether the earlier attempt already
+  succeeded before deleting again.
+- `profiles.save`: a resend returns the same `profileId` and its recorded status.
+  Only `ready` from `profiles.get`, after the source session closes, confirms the save.
+- `tasks.start`, `tasks.pause`/`resume`/`respond`, `recordings.pause`/`resume`: an
+  attempt lost after it was sent is never confirmed later, and resends keep
+  returning `browser_outcome_unknown`. Stop controlling the session and close it.
+- 400, 403, and 404 mean the request did not run. A 409 without a code is a state
+  conflict, so read the current state before retrying. `browser_termination_pending`
+  means a close or another operation on the session is still in progress; retry later.
+- Settlement can complete only until 2 minutes after the session's maximum
+  duration. After that, `closeManaged` keeps returning `pending`, so stop retrying.
+
+`sessions.recover(createKey)` uses the original Sapiom API key and returns session
+IDs and states, not connection URLs. Retry the original creation to retrieve a
+completed receipt. A rotated API key cannot recover an old creation.
 Direct HTTP callers using a payment proof must retain the same proof for recovery.
 `cleanup_only` permits cleanup, not tasks; `unknown` means no resource is confirmed.
 
