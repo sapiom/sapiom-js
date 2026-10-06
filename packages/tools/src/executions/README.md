@@ -64,7 +64,8 @@ The offline stub supports preparation but rejects durable submission/retrieval e
 only for capabilities on its reviewed allow-list: search, scrape, the three email lookups,
 image/video submissions, the four memory operations, database creation, domain registration,
 and upload reservations (14 capability IDs). `decisions.evaluate` remains inline because its
-streamed metering needs separate adoption. The default is `legacy`, and Core admission is
+streamed metering needs separate adoption, and the three `speech.*` capabilities remain
+inline because Core does not admit them as jobs. The default is `legacy`, and Core admission is
 still disabled pending the release gate. A selected invocation
 keeps its mode, Core base and key through retries; admission rejection never falls back
 to the synchronous path. Existing namespace mappers receive the stored raw result, including

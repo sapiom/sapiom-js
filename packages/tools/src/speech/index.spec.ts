@@ -1,568 +1,421 @@
+import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
 import * as speech from "./index.js";
 import { SpeechHttpError } from "./errors.js";
-import { DEFAULT_VOICE } from "./index.js";
 
-// ---------------------------------------------------------------------------
-// Helpers — capability fns are tested directly with a real Transport plus a
-// scripted fetch mock (URL/method/header/body assertions are exact, and we
-// verify the Transport itself injects the tenant credential).
-// ---------------------------------------------------------------------------
-
-interface FetchCall {
-  url: string;
-  init: RequestInit;
+const RACHEL_ID = "21m00Tcm4TlvDq8ikWAM";
+const ARIA_ID = "9BWtsMINqrJLrRacOk9x";
+const AUDIO = {
+  url: "https://example.test/audio.mp3",
+  expiresAt: "2026-10-06T00:00:00Z",
+  fileId: "file-audio",
+  metadata: { format: "mp3" },
+};
+interface RequestRecord {
+  path: string;
+  method?: string;
+  headers: IncomingHttpHeaders;
+  body: { cursor?: string; [k: string]: unknown };
 }
+let server: Server;
+let baseUrl: string;
+let requests: RequestRecord[];
+let respond: (request: RequestRecord) => { status: number; body: unknown };
+const savedEnv = process.env;
+const nativeFetch = globalThis.fetch;
 
-function jsonResponse(body: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
+// The server supplies Core response fixtures. The SDK uses real HTTP and its
+// real transport. The fetch guard prevents any test from reaching production.
+const localFetch: typeof fetch = (input, init) => {
+  if (new URL(String(input)).origin !== baseUrl) {
+    throw new Error("Speech test attempted a non-local request");
+  }
+  return nativeFetch(input, init);
+};
+const transport = () =>
+  new Transport({ apiKey: "test-key", fetch: localFetch });
+const lastBody = () => requests[requests.length - 1]!.body;
+
+beforeAll(async () => {
+  server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const request: RequestRecord = {
+      path: req.url ?? "",
+      method: req.method,
+      headers: req.headers,
+      body: JSON.parse(Buffer.concat(chunks).toString() || "{}"),
+    };
+    requests.push(request);
+    const result = respond(request);
+    res.writeHead(result.status, { "content-type": "application/json" });
+    res.end(
+      typeof result.body === "string"
+        ? result.body
+        : JSON.stringify(result.body),
+    );
   });
-}
-
-function makeTransport(
-  handlers: Array<
-    (call: FetchCall) => Response | Promise<Response> | null | undefined
-  >,
-  apiKey: string | undefined = "test-key",
-): { transport: Transport; calls: FetchCall[] } {
-  const calls: FetchCall[] = [];
-  const fetchMock = (async (
-    input: Parameters<typeof globalThis.fetch>[0],
-    init: RequestInit = {},
-  ): Promise<Response> => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : (input as Request).url;
-    calls.push({ url, init });
-    for (const handler of handlers) {
-      const response = await handler({ url, init });
-      if (response) return response;
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+beforeEach(() => {
+  process.env = {
+    ...savedEnv,
+    SAPIOM_BASE_URL: baseUrl,
+    // Speech must ignore this; the exact-path checks fail on any /legacy request.
+    SAPIOM_SPEECH_URL: `${baseUrl}/legacy`,
+  };
+  requests = [];
+  respond = ({ path }) => {
+    if (path === "/v1/capabilities/speech.voices.list") {
+      return { status: 201, body: { voices: [] } };
     }
-    throw new Error(`Unmatched mock fetch: ${init.method ?? "GET"} ${url}`);
-  }) as typeof globalThis.fetch;
-  return { transport: new Transport({ apiKey, fetch: fetchMock }), calls };
-}
-
-const BASE = "https://api.test";
-const headerOf = (c: FetchCall, k: string) =>
-  (c.init.headers as Record<string, string>)[k];
-
-// ---------------------------------------------------------------------------
-// textToSpeech.create / createSpeech()
-// ---------------------------------------------------------------------------
-
-describe("speech.textToSpeech.create()", () => {
-  it("POSTs /v1/text-to-speech/:voice with JSON body + credential and returns mapped result", async () => {
-    const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse(
-          { url: "https://cdn.example.com/audio.mp3", expiresAt: "2026-07-10T00:00:00Z" },
-          { status: 200 },
-        ),
-    ]);
-
-    const result = await speech.createSpeech(
-      { text: "Hello world", voice: "Aria" },
-      transport,
-      BASE,
-    );
-
-    expect(calls[0]!.url).toBe(`${BASE}/v1/text-to-speech/Aria`);
-    expect(calls[0]!.init.method).toBe("POST");
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
-    expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
-    expect(headerOf(calls[0]!, "accept")).toBe("application/json");
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ text: "Hello world" });
-
-    expect(result.url).toBe("https://cdn.example.com/audio.mp3");
-    expect(result.expiresAt).toBe("2026-07-10T00:00:00Z");
-    expect(result.fileId).toBeUndefined();
-    expect(result.storageError).toBeUndefined();
-  });
-
-  it("uses the DEFAULT_VOICE when voice is omitted", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/audio.mp3" }),
-    ]);
-
-    await speech.createSpeech({ text: "Hello" }, transport, BASE);
-
-    expect(calls[0]!.url).toBe(
-      `${BASE}/v1/text-to-speech/${encodeURIComponent(DEFAULT_VOICE)}`,
-    );
-  });
-
-  it("URL-encodes the voice in the path segment", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/audio.mp3" }),
-    ]);
-
-    await speech.createSpeech(
-      { text: "Hello", voice: "Some Voice/ID" },
-      transport,
-      BASE,
-    );
-
-    expect(calls[0]!.url).toBe(
-      `${BASE}/v1/text-to-speech/${encodeURIComponent("Some Voice/ID")}`,
-    );
-  });
-
-  it("includes extra params in the body", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/audio.mp3" }),
-    ]);
-
-    await speech.createSpeech(
-      { text: "Hello", voice: "Aria", params: { stability: 0.5, speed: 1.2 } },
-      transport,
-      BASE,
-    );
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.text).toBe("Hello");
-    expect(body.stability).toBe(0.5);
-    expect(body.speed).toBe(1.2);
-  });
-
-  it("includes storage in the body when provided", async () => {
-    const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse(
-          { url: "https://cdn.example.com/audio.mp3", file_id: "file_abc123" },
-          { status: 200 },
-        ),
-    ]);
-
-    const result = await speech.createSpeech(
-      {
-        text: "Hello",
-        voice: "Aria",
-        storage: { visibility: "private" },
-      },
-      transport,
-      BASE,
-    );
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.storage).toEqual({ visibility: "private" });
-    expect(result.fileId).toBe("file_abc123");
-  });
-
-  it("maps file_id → fileId on the result", async () => {
-    const { transport } = makeTransport([
-      () =>
-        jsonResponse({
-          url: "https://cdn.example.com/audio.mp3",
-          file_id: "file_xyz789",
-        }),
-    ]);
-
-    const result = await speech.createSpeech(
-      { text: "Hi", storage: { visibility: "private" } },
-      transport,
-      BASE,
-    );
-
-    expect(result.fileId).toBe("file_xyz789");
-    expect((result as Record<string, unknown>).file_id).toBeUndefined();
-  });
-
-  it("maps storage_error → storageError on the result", async () => {
-    const { transport } = makeTransport([
-      () =>
-        jsonResponse({
-          url: "https://cdn.example.com/audio.mp3",
-          storage_error: "quota exceeded",
-        }),
-    ]);
-
-    const result = await speech.createSpeech(
-      { text: "Hi", storage: { visibility: "private" } },
-      transport,
-      BASE,
-    );
-
-    expect(result.storageError).toBe("quota exceeded");
-    expect((result as Record<string, unknown>).storage_error).toBeUndefined();
-  });
-
-  it("passes url and expiresAt through unchanged", async () => {
-    const { transport } = makeTransport([
-      () =>
-        jsonResponse({
-          url: "https://cdn.example.com/audio.mp3",
-          expiresAt: "2026-07-10T12:00:00Z",
-        }),
-    ]);
-
-    const result = await speech.createSpeech({ text: "Hi" }, transport, BASE);
-    expect(result.url).toBe("https://cdn.example.com/audio.mp3");
-    expect(result.expiresAt).toBe("2026-07-10T12:00:00Z");
-  });
-
-  it("omits storage from body when storage is not provided", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/audio.mp3" }),
-    ]);
-
-    await speech.createSpeech({ text: "Hello" }, transport, BASE);
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).not.toHaveProperty("storage");
-  });
-
-  it("throws SpeechHttpError (before any fetch) when text is empty", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      speech.createSpeech({ text: "" }, transport, BASE),
-    ).rejects.toMatchObject({ name: "SpeechHttpError", status: 400 });
-    expect(calls.length).toBe(0);
-  });
-
-  it("throws SpeechHttpError (before any fetch) when text is missing", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      speech.createSpeech(
-        { text: undefined as unknown as string },
-        transport,
-        BASE,
-      ),
-    ).rejects.toMatchObject({ name: "SpeechHttpError", status: 400 });
-    expect(calls.length).toBe(0);
-  });
-
-  it("throws SpeechHttpError (before any fetch) when text is whitespace only", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      speech.createSpeech({ text: "   " }, transport, BASE),
-    ).rejects.toBeInstanceOf(SpeechHttpError);
-    expect(calls.length).toBe(0);
-  });
-
-  it("throws SpeechHttpError with status + body on a non-2xx response", async () => {
-    const { transport } = makeTransport([
-      () =>
-        new Response(JSON.stringify({ message: "voice not found" }), {
-          status: 404,
-        }),
-    ]);
-
-    await expect(
-      speech.createSpeech({ text: "Hello", voice: "Unknown" }, transport, BASE),
-    ).rejects.toMatchObject({
-      name: "SpeechHttpError",
-      status: 404,
-      body: { message: "voice not found" },
-    });
-    await expect(
-      speech.createSpeech({ text: "Hello" }, transport, BASE),
-    ).rejects.toBeInstanceOf(SpeechHttpError);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// soundEffects.create / createSoundEffect()
-// ---------------------------------------------------------------------------
-
-describe("speech.soundEffects.create()", () => {
-  it("POSTs /v1/sound-generation with text and returns mapped result", async () => {
-    const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse(
-          { url: "https://cdn.example.com/sfx.mp3", expiresAt: "2026-07-10T00:00:00Z" },
-          { status: 200 },
-        ),
-    ]);
-
-    const result = await speech.createSoundEffect(
-      { text: "thunder clap" },
-      transport,
-      BASE,
-    );
-
-    expect(calls[0]!.url).toBe(`${BASE}/v1/sound-generation`);
-    expect(calls[0]!.init.method).toBe("POST");
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ text: "thunder clap" });
-
-    expect(result.url).toBe("https://cdn.example.com/sfx.mp3");
-    expect(result.expiresAt).toBe("2026-07-10T00:00:00Z");
-  });
-
-  it("maps durationSeconds → duration_seconds in the request body", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/sfx.mp3" }),
-    ]);
-
-    await speech.createSoundEffect(
-      { text: "rain on leaves", durationSeconds: 4.5 },
-      transport,
-      BASE,
-    );
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.duration_seconds).toBe(4.5);
-    expect(body).not.toHaveProperty("durationSeconds");
-  });
-
-  it("omits duration_seconds when durationSeconds is not provided", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/sfx.mp3" }),
-    ]);
-
-    await speech.createSoundEffect({ text: "wind" }, transport, BASE);
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).not.toHaveProperty("duration_seconds");
-    expect(body).not.toHaveProperty("durationSeconds");
-  });
-
-  it("includes extra params in the body", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ url: "https://cdn.example.com/sfx.mp3" }),
-    ]);
-
-    await speech.createSoundEffect(
-      { text: "thunder", params: { seed: 42 } },
-      transport,
-      BASE,
-    );
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.seed).toBe(42);
-  });
-
-  it("includes storage in the body and maps file_id → fileId on result", async () => {
-    const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse({
-          url: "https://cdn.example.com/sfx.mp3",
-          file_id: "file_sfx123",
-        }),
-    ]);
-
-    const result = await speech.createSoundEffect(
-      {
-        text: "thunder",
-        storage: { visibility: "public" },
-      },
-      transport,
-      BASE,
-    );
-
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.storage).toEqual({ visibility: "public" });
-    expect(result.fileId).toBe("file_sfx123");
-  });
-
-  it("throws SpeechHttpError (before any fetch) when text is empty", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      speech.createSoundEffect({ text: "" }, transport, BASE),
-    ).rejects.toMatchObject({ name: "SpeechHttpError", status: 400 });
-    expect(calls.length).toBe(0);
-  });
-
-  it("throws SpeechHttpError on a non-2xx response", async () => {
-    const { transport } = makeTransport([
-      () =>
-        new Response(JSON.stringify({ message: "rate limit exceeded" }), {
-          status: 429,
-        }),
-    ]);
-
-    await expect(
-      speech.createSoundEffect({ text: "thunder" }, transport, BASE),
-    ).rejects.toMatchObject({
-      name: "SpeechHttpError",
-      status: 429,
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// voices.list / listVoices()
-// ---------------------------------------------------------------------------
-
-describe("speech.voices.list()", () => {
-  it("GETs /v2/voices and returns mapped voices array", async () => {
-    const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse({
-          voices: [
-            { voice_id: "v1", name: "Aria" },
-            { voice_id: "v2", name: "Rachel" },
-          ],
-        }),
-    ]);
-
-    const result = await speech.listVoices(transport, BASE);
-
-    expect(calls[0]!.url).toBe(`${BASE}/v2/voices`);
-    expect(calls[0]!.init.method).toBeUndefined(); // default GET
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
-
-    expect(result.voices).toHaveLength(2);
-    expect(result.voices[0]).toEqual({ voiceId: "v1", name: "Aria" });
-    expect(result.voices[1]).toEqual({ voiceId: "v2", name: "Rachel" });
-  });
-
-  it("maps voice_id → voiceId on each voice", async () => {
-    const { transport } = makeTransport([
-      () =>
-        jsonResponse({
-          voices: [{ voice_id: "abc123", name: "Sam" }],
-        }),
-    ]);
-
-    const result = await speech.listVoices(transport, BASE);
-    expect(result.voices[0]!.voiceId).toBe("abc123");
-    expect((result.voices[0] as Record<string, unknown>).voice_id).toBeUndefined();
-  });
-
-  it("handles a camelCase voiceId field from the response", async () => {
-    const { transport } = makeTransport([
-      () =>
-        jsonResponse({
-          voices: [{ voiceId: "xyz789", name: "Emma" }],
-        }),
-    ]);
-
-    const result = await speech.listVoices(transport, BASE);
-    expect(result.voices[0]!.voiceId).toBe("xyz789");
-  });
-
-  it("returns an empty voices array when the response has no voices", async () => {
-    const { transport } = makeTransport([
-      () => jsonResponse({}),
-    ]);
-
-    const result = await speech.listVoices(transport, BASE);
-    expect(result.voices).toEqual([]);
-  });
-
-  it("throws SpeechHttpError on a non-2xx response", async () => {
-    const { transport } = makeTransport([
-      () => new Response("unauthorized", { status: 401 }),
-    ]);
-
-    await expect(
-      speech.listVoices(transport, BASE),
-    ).rejects.toMatchObject({ name: "SpeechHttpError", status: 401 });
-    await expect(
-      speech.listVoices(transport, BASE),
-    ).rejects.toBeInstanceOf(SpeechHttpError);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Client wiring + auth
-// ---------------------------------------------------------------------------
-
-describe("speech — client wiring + credential", () => {
-  it("createClient().speech routes textToSpeech.create/soundEffects.create/voices.list with the credential", async () => {
-    const calls: FetchCall[] = [];
-    const fetchMock = (async (
-      input: Parameters<typeof globalThis.fetch>[0],
-      init: RequestInit = {},
-    ): Promise<Response> => {
-      const url = typeof input === "string" ? input : (input as URL).toString();
-      calls.push({ url, init });
-      return jsonResponse({ url: "https://cdn.example.com/audio.mp3" });
-    }) as typeof globalThis.fetch;
-
-    const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
-    await sapiom.speech.textToSpeech.create({ text: "Hello" });
-    await sapiom.speech.soundEffects.create({ text: "thunder" });
-    await sapiom.speech.voices.list();
-
-    expect(calls).toHaveLength(3);
-    for (const c of calls) {
-      expect(headerOf(c, "x-sapiom-api-key")).toBe("my-key");
+    if (
+      path === "/v1/capabilities/speech.tts" ||
+      path === "/v1/capabilities/speech.sound-effects"
+    ) {
+      return { status: 201, body: AUDIO };
     }
-    // Assert the capability path only — avoid embedding the backing subdomain in public test output.
-    expect(calls[0]!.url).toContain("/v1/text-to-speech/");
-    expect(calls[1]!.url).toContain("/v1/sound-generation");
-    expect(calls[2]!.url).toContain("/v2/voices");
-  });
+    return { status: 404, body: { error: "unexpected_route" } };
+  };
+});
+afterEach(() => {
+  process.env = savedEnv;
+});
+afterAll(async () => {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
 
-  it("params cannot override the guard-validated text on the wire", async () => {
-    const calls: Array<{ url: string; init: RequestInit }> = [];
-    const fetchMock = (async (
-      input: Parameters<typeof globalThis.fetch>[0],
-      init: RequestInit = {},
-    ): Promise<Response> => {
-      const url = typeof input === "string" ? input : (input as URL).toString();
-      calls.push({ url, init });
-      return jsonResponse({ file_id: "f1" });
-    }) as typeof globalThis.fetch;
-    const sapiom = createClient({ apiKey: "k", fetch: fetchMock });
+describe("Core speech HTTP contract", () => {
+  it.each(["legacy", "executions"] as const)(
+    "routes all client methods through Core with %s delivery and identity",
+    async (capabilityDelivery) => {
+      // The shared _client specs cover the full attribution header set; this
+      // pins the speech identity that SAP-3285 requires.
+      const client = createClient({
+        apiKey: "client-key",
+        fetch: localFetch,
+        coreBaseUrl: `${baseUrl}/`,
+        capabilityDelivery,
+      }).withAttribution({ agentName: "speech-agent", executionId: "run-1" });
+      await client.speech.textToSpeech.create({ text: "Hello" });
+      await client.speech.soundEffects.create({ text: "Bell" });
+      await client.speech.voices.list();
+      expect(requests.map((r) => r.path)).toEqual([
+        "/v1/capabilities/speech.tts",
+        "/v1/capabilities/speech.sound-effects",
+        "/v1/capabilities/speech.voices.list",
+      ]);
+      for (const request of requests) {
+        expect(request.method).toBe("POST");
+        expect(request.headers).toMatchObject({
+          "content-type": "application/json",
+          "x-api-key": "client-key",
+          "x-sapiom-agent-name": "speech-agent",
+          "x-sapiom-execution-id": "run-1",
+        });
+        expect(request.headers["x-sapiom-api-key"]).toBeUndefined();
+        expect(request.headers["x-sapiom-client"]).toMatch(/^sapiom-tools\//);
+      }
+      await client.shutdown();
+    },
+  );
 
-    await sapiom.speech.textToSpeech.create({ text: "REAL", params: { text: "INJECTED" } });
-
-    const body = JSON.parse(String(calls[0]!.init.body)) as { text: string };
-    expect(body.text).toBe("REAL");
-  });
-
-  it("throws a clear error when no tenant credential is configured", async () => {
-    const saved = process.env["SAPIOM_API_KEY"];
-    delete process.env["SAPIOM_API_KEY"];
-    try {
-      const transport = new Transport({
-        fetch: (async () => new Response("{}")) as typeof globalThis.fetch,
+  it("uses ambient credentials and attribution and resolves the Core origin at call time", async () => {
+    await jest.isolateModulesAsync(async () => {
+      // Import before the runtime selects Core. This must not freeze the origin.
+      delete process.env.SAPIOM_BASE_URL;
+      const ambient = await import("./index.js");
+      process.env.SAPIOM_BASE_URL = baseUrl;
+      process.env.SAPIOM_API_KEY = "ambient-key";
+      process.env.SAPIOM_AGENT_NAME = "ambient-agent";
+      process.env.SAPIOM_EXECUTION_ID = "ambient-run";
+      globalThis.fetch = localFetch;
+      try {
+        await ambient.textToSpeech.create({ text: "Hi" });
+        await ambient.soundEffects.create({ text: "Wind" });
+        await ambient.voices.list();
+      } finally {
+        globalThis.fetch = nativeFetch;
+      }
+    });
+    expect(requests).toHaveLength(3);
+    for (const r of requests) {
+      expect(r.path).toMatch(/^\/v1\/capabilities\/speech\./);
+      expect(r.headers).toMatchObject({
+        "x-api-key": "ambient-key",
+        "x-sapiom-agent-name": "ambient-agent",
+        "x-sapiom-execution-id": "ambient-run",
       });
-      await expect(
-        speech.listVoices(transport, BASE),
-      ).rejects.toThrow(/no tenant credential/i);
-    } finally {
-      if (saved !== undefined) process.env["SAPIOM_API_KEY"] = saved;
     }
   });
-});
 
-// ---------------------------------------------------------------------------
-// Namespace exports (textToSpeech / soundEffects / voices)
-// ---------------------------------------------------------------------------
-
-describe("speech — namespace exports", () => {
-  it("textToSpeech.create is the same function as createSpeech", () => {
+  it("keeps the public aliases and uses Core's Rachel default without a catalog lookup", async () => {
+    expect(speech.DEFAULT_VOICE).toBe(RACHEL_ID);
     expect(speech.textToSpeech.create).toBe(speech.createSpeech);
-  });
-
-  it("soundEffects.create is the same function as createSoundEffect", () => {
     expect(speech.soundEffects.create).toBe(speech.createSoundEffect);
-  });
-
-  it("voices.list is the same function as listVoices", () => {
     expect(speech.voices.list).toBe(speech.listVoices);
+    expect(
+      await speech.createSpeech({ text: "Hello" }, transport(), baseUrl),
+    ).toEqual(AUDIO);
+    expect(requests).toHaveLength(1);
+    expect(lastBody()).toEqual({ text: "Hello" });
   });
-});
 
-// ---------------------------------------------------------------------------
-// SpeechHttpError
-// ---------------------------------------------------------------------------
+  it.each([RACHEL_ID, ARIA_ID, "custom_voice-id"])(
+    "passes voice ID %s unchanged without depending on voice listing",
+    async (voice) => {
+      respond = ({ path }) =>
+        path.endsWith("voices.list")
+          ? { status: 503, body: { code: "unavailable" } }
+          : { status: 201, body: AUDIO };
+      await speech.createSpeech({ text: "Hi", voice }, transport(), baseUrl);
+      expect(requests.map((r) => r.path)).toEqual([
+        "/v1/capabilities/speech.tts",
+      ]);
+      expect(lastBody()).toEqual({ text: "Hi", voice });
+    },
+  );
 
-describe("SpeechHttpError", () => {
-  it("carries status and body and is instanceof Error", () => {
-    const err = new SpeechHttpError("something went wrong", 422, {
-      message: "invalid",
+  it("sends the top-level model and keeps provider options nested under params", async () => {
+    const input = {
+      text: "REAL",
+      voice: ARIA_ID,
+      model: "eleven_flash_v2_5",
+      storage: { visibility: "private" as const },
+      idempotencyKey: "tts-request",
+      params: {
+        text: "INJECTED",
+        voice: "INJECTED",
+        idempotencyKey: "INJECTED",
+        model_id: "eleven_multilingual_v2",
+        voice_settings: { stability: 0.5, speed: 1.2 },
+        output_format: "mp3_44100_128",
+      },
+    };
+    await speech.createSpeech(input, transport(), baseUrl);
+    expect(requests).toHaveLength(1);
+    expect(lastBody()).toEqual(input);
+  });
+
+  it.each(["Rachel", "Aria", "ProfessionalNarrator"])(
+    "does not resolve or alias %s and preserves the Core error",
+    async (voice) => {
+      respond = () => ({ status: 404, body: { code: "upstream_rejected" } });
+      await expect(
+        speech.createSpeech({ text: "Hi", voice }, transport(), baseUrl),
+      ).rejects.toMatchObject({
+        name: "SpeechHttpError",
+        status: 404,
+        body: { code: "upstream_rejected" },
+      });
+      expect(requests.map((r) => r.path)).toEqual([
+        "/v1/capabilities/speech.tts",
+      ]);
+      expect(lastBody().voice).toBe(voice);
+    },
+  );
+
+  it.each([
+    [4.5, 2],
+    [undefined, 2],
+    [null, 2],
+    [undefined, undefined],
+    [null, null],
+  ])(
+    "forwards durationSeconds=%s and params.duration_seconds=%s for Core to apply precedence",
+    async (durationSeconds, duration) => {
+      const input = {
+        text: "Bell",
+        durationSeconds,
+        params: { duration_seconds: duration },
+      };
+      await speech.createSoundEffect(input, transport(), baseUrl);
+      // toEqual treats undefined input fields as absent from the JSON body.
+      expect(lastBody()).toEqual(input);
+      expect(requests[0]!.path).toBe("/v1/capabilities/speech.sound-effects");
+    },
+  );
+
+  it("keeps automatic sound effects and model options with durable camelCase fields", async () => {
+    const input = {
+      text: "Wind",
+      model: "eleven_text_to_sound_v2",
+      storage: { visibility: "public" as const },
+      idempotencyKey: "sfx-request",
+      params: {
+        prompt_influence: 0.3,
+        text: "INJECTED",
+      },
+    };
+    expect(await speech.createSoundEffect(input, transport(), baseUrl)).toEqual(
+      AUDIO,
+    );
+    expect(lastBody()).toEqual(input);
+  });
+
+  it.each([speech.createSpeech, speech.createSoundEffect])(
+    "keeps stored-file-only, temporary-only, and storage-error responses",
+    async (create) => {
+      for (const body of [
+        { fileId: "durable-only", metadata: { format: "mp3" } },
+        { url: AUDIO.url, expiresAt: AUDIO.expiresAt },
+        {
+          url: AUDIO.url,
+          expiresAt: AUDIO.expiresAt,
+          storageError: "storage unavailable",
+          metadata: { format: "mp3" },
+        },
+      ]) {
+        respond = () => ({ status: 201, body });
+        expect(
+          await create(
+            { text: "Hi", storage: { visibility: "private" } },
+            transport(),
+            baseUrl,
+          ),
+        ).toEqual(body);
+      }
+    },
+  );
+
+  it("follows Core's cursor across pages and keeps voice metadata", async () => {
+    respond = ({ body }) => ({
+      status: 201,
+      body: body.cursor
+        ? { voices: [{ voiceId: RACHEL_ID, name: "Rachel" }] }
+        : {
+            voices: [
+              {
+                voiceId: ARIA_ID,
+                name: "Aria",
+                labels: { accent: "American" },
+              },
+            ],
+            nextCursor: "page-2",
+          },
     });
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(SpeechHttpError);
-    expect(err.status).toBe(422);
-    expect(err.body).toEqual({ message: "invalid" });
-    expect(err.name).toBe("SpeechHttpError");
+    expect(await speech.listVoices(transport(), baseUrl)).toEqual({
+      voices: [
+        { voiceId: ARIA_ID, name: "Aria", labels: { accent: "American" } },
+        { voiceId: RACHEL_ID, name: "Rachel" },
+      ],
+    });
+    expect(requests.map((r) => r.body)).toEqual([{}, { cursor: "page-2" }]);
+  });
+
+  it("rejects a repeated cursor instead of returning a partial list", async () => {
+    respond = () => ({
+      status: 201,
+      body: {
+        voices: [{ voiceId: ARIA_ID, name: "Aria" }],
+        nextCursor: "repeated",
+      },
+    });
+    await expect(speech.listVoices(transport(), baseUrl)).rejects.toMatchObject(
+      {
+        name: "SpeechHttpError",
+        status: 502,
+        body: { error: "repeated_cursor", cursor: "repeated" },
+      },
+    );
+    expect(requests).toHaveLength(2);
+  });
+
+  it("throws instead of returning a partial list when a later page fails", async () => {
+    respond = ({ body }) =>
+      body.cursor
+        ? { status: 503, body: { code: "unavailable" } }
+        : {
+            status: 201,
+            body: {
+              voices: [{ voiceId: ARIA_ID, name: "Aria" }],
+              nextCursor: "page-2",
+            },
+          };
+    await expect(speech.listVoices(transport(), baseUrl)).rejects.toMatchObject(
+      { name: "SpeechHttpError", status: 503 },
+    );
+    expect(requests).toHaveLength(2);
+  });
+
+  it("preserves a valid empty voice catalog", async () => {
+    respond = () => ({ status: 201, body: { voices: [] } });
+    expect(await speech.listVoices(transport(), baseUrl)).toEqual({
+      voices: [],
+    });
+  });
+
+  it.each(["", "   ", undefined, 42])(
+    "rejects invalid text %s before HTTP",
+    async (text) => {
+      for (const create of [speech.createSpeech, speech.createSoundEffect]) {
+        await expect(
+          create({ text: text as string }, transport(), baseUrl),
+        ).rejects.toMatchObject({
+          name: "SpeechHttpError",
+          status: 400,
+          body: { error: "invalid_text" },
+        });
+      }
+      expect(requests).toEqual([]);
+    },
+  );
+
+  // capability-call.spec covers status-agnostic error mapping; this pins the
+  // speech error type on each route.
+  it("keeps typed errors, status, and JSON body on all three routes", async () => {
+    const status = 422;
+    const body = { code: "request_failed", message: "Request failed." };
+    respond = () => ({ status, body });
+    const calls = [
+      () => speech.createSpeech({ text: "Hi" }, transport(), baseUrl),
+      () => speech.createSoundEffect({ text: "Bell" }, transport(), baseUrl),
+      () => speech.listVoices(transport(), baseUrl),
+    ];
+    for (const call of calls) {
+      const error = await call().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SpeechHttpError);
+      expect(error).toMatchObject({ status, body });
+    }
+    expect(requests).toHaveLength(3);
+  });
+
+  it("keeps raw-text errors and the operation prefix without legacy fallback", async () => {
+    respond = () => ({ status: 502, body: "temporarily unavailable" });
+    await expect(
+      speech.createSoundEffect({ text: "Bell" }, transport(), baseUrl),
+    ).rejects.toMatchObject({
+      message: "Failed to generate sound effect: 502 temporarily unavailable",
+      status: 502,
+      body: "temporarily unavailable",
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("keeps network errors without retry or legacy fallback", async () => {
+    const failed = new Transport({
+      apiKey: "test-key",
+      fetch: localFetch,
+      coreBaseUrl: "http://non-local.invalid",
+    });
+    await expect(
+      speech.createSoundEffect({ text: "Bell" }, failed),
+    ).rejects.toThrow("Speech test attempted a non-local request");
+    expect(requests).toEqual([]);
+  });
+
+  it("rejects missing credentials before HTTP", async () => {
+    delete process.env.SAPIOM_API_KEY;
+    await expect(
+      speech.listVoices(new Transport({ fetch: localFetch }), baseUrl),
+    ).rejects.toThrow(/no tenant credential/i);
+    expect(requests).toEqual([]);
   });
 });

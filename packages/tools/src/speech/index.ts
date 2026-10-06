@@ -13,15 +13,20 @@
  * Or via an explicit client: `createClient({ apiKey }).speech.textToSpeech.create(...)`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
-import { ensureOk, SpeechHttpError } from "./errors.js";
+import { capabilityCall } from "../_client/capability-call.js";
+import { SpeechHttpError } from "./errors.js";
 
 export { SpeechHttpError };
 
-const DEFAULT_BASE_URL = resolveServiceUrl("elevenlabs", process.env.SAPIOM_SPEECH_URL);
+/**
+ * Rachel's provider voice ID.
+ * @deprecated Core owns the default voice. Omit `voice` to use it. This export
+ * will be removed in a future release.
+ */
+export const DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM";
 
-/** Default voice used when none is specified. */
-export const DEFAULT_VOICE = "Rachel";
+const speechError = (message: string, status: number, body: unknown): Error =>
+  new SpeechHttpError(message, status, body);
 
 // ----- Types -----
 
@@ -29,16 +34,27 @@ export interface SpeechCreateInput {
   /** The text to convert to speech (required, must be non-empty). */
   text: string;
   /**
-   * Voice name or id to use. Defaults to a standard voice when omitted.
-   * Call `voices.list()` to see available voices.
+   * Provider voice ID to use. Core selects the default when omitted.
+   * Call `voices.list()` to select an ID. Voice names are not resolved.
    */
   voice?: string;
+  /**
+   * Optional Core model ID, such as `eleven_flash_v2_5`. It sets the price class,
+   * takes precedence over `params.model_id`, and Core rejects unsupported models
+   * before billing. Core uses its default when both are absent.
+   */
+  model?: string;
   /**
    * Optional: persist the generated audio to Sapiom file storage. When set, the
    * result carries `fileId` (or `storageError` if persisting failed).
    */
   storage?: { visibility?: "private" | "public" };
-  /** Advanced: extra parameters forwarded verbatim to the underlying model. */
+  /**
+   * Optional Core idempotency key. Reusing a key returns its first successful
+   * result, so use a new key per request; a failed request can retry with it.
+   */
+  idempotencyKey?: string;
+  /** Advanced: provider options sent to Core under `params`; Core validates them. */
   params?: Record<string, unknown>;
 }
 
@@ -46,15 +62,27 @@ export interface SoundEffectInput {
   /** The text prompt describing the sound effect to generate (required, must be non-empty). */
   text: string;
   /**
-   * Optional duration in seconds for the generated sound effect.
+   * Optional Core model ID, such as `eleven_text_to_sound_v2`. It sets the
+   * price class, takes precedence over `params.model_id`, and Core rejects
+   * unsupported models before billing. Core uses its default when both are absent.
    */
-  durationSeconds?: number;
+  model?: string;
+  /**
+   * Optional duration in seconds. Overrides `params.duration_seconds`; null or
+   * omitted defers to it, and Core picks a duration when both are absent.
+   */
+  durationSeconds?: number | null;
   /**
    * Optional: persist the generated audio to Sapiom file storage. When set, the
    * result carries `fileId` (or `storageError` if persisting failed).
    */
   storage?: { visibility?: "private" | "public" };
-  /** Advanced: extra parameters forwarded verbatim to the underlying model. */
+  /**
+   * Optional Core idempotency key. Reusing a key returns its first successful
+   * result, so use a new key per request; a failed request can retry with it.
+   */
+  idempotencyKey?: string;
+  /** Advanced: provider options sent to Core under `params`; Core validates them. */
   params?: Record<string, unknown>;
 }
 
@@ -90,52 +118,16 @@ export interface Voice {
 }
 
 export interface VoicesResult {
-  /** Available voices. */
+  /** Every available voice, across all pages. */
   voices: Voice[];
-  /** Additional fields returned by the capability. */
-  [k: string]: unknown;
 }
 
 // ----- Internal response shapes -----
 
-interface RawSpeechResponse {
-  url?: string;
-  expiresAt?: string;
-  file_id?: string;
-  storage_error?: string;
-  [k: string]: unknown;
-}
-
-interface RawVoice {
-  voice_id?: string;
-  voiceId?: string;
-  name?: string;
-  [k: string]: unknown;
-}
-
 interface RawVoicesResponse {
-  voices?: RawVoice[];
-  [k: string]: unknown;
-}
-
-function mapSpeechResult(raw: RawSpeechResponse): SpeechResult {
-  const { url, expiresAt, file_id, storage_error, ...rest } = raw;
-  return {
-    ...(url !== undefined && { url }),
-    ...(expiresAt !== undefined && { expiresAt }),
-    ...(file_id !== undefined && { fileId: file_id }),
-    ...(storage_error !== undefined && { storageError: storage_error }),
-    ...rest,
-  };
-}
-
-function mapVoice(raw: RawVoice): Voice {
-  const { voice_id, voiceId, name, ...rest } = raw;
-  return {
-    voiceId: voiceId ?? voice_id ?? "", // benign fallback — `voice` is optional at call sites
-    ...(name !== undefined && { name }),
-    ...rest,
-  };
+  voices?: Voice[];
+  /** Core's opaque cursor, present only when more voices remain. */
+  nextCursor?: unknown;
 }
 
 // ----- Guard -----
@@ -160,33 +152,26 @@ function assertText(text: unknown): void {
 export async function createSpeech(
   input: SpeechCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl?: string,
 ): Promise<SpeechResult> {
   assertText(input.text);
-
-  const voice = input.voice ?? DEFAULT_VOICE;
-  // `params` is spread first so it can't override the guard-validated `text` (or `storage`).
-  const body: Record<string, unknown> = {
-    ...input.params,
-    text: input.text,
-    ...(input.storage ? { storage: input.storage } : {}),
-  };
-
-  const res = await ensureOk(
-    await transport.fetch(
-      `${baseUrl}/v1/text-to-speech/${encodeURIComponent(voice)}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify(body),
-      },
-    ),
-    "Failed to generate speech",
+  return capabilityCall<SpeechResult>(
+    "speech.tts",
+    {
+      text: input.text,
+      voice: input.voice,
+      model: input.model,
+      storage: input.storage,
+      params: input.params,
+      idempotencyKey: input.idempotencyKey,
+    },
+    {
+      transport,
+      baseUrl,
+      makeError: speechError,
+      errorPrefix: "Failed to generate speech",
+    },
   );
-  return mapSpeechResult((await res.json()) as RawSpeechResponse);
 }
 
 /**
@@ -197,52 +182,67 @@ export async function createSpeech(
 export async function createSoundEffect(
   input: SoundEffectInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl?: string,
 ): Promise<SpeechResult> {
   assertText(input.text);
-
-  // `params` is spread first so it can't override the guard-validated `text` (or duration/storage).
-  const body: Record<string, unknown> = {
-    ...input.params,
-    text: input.text,
-    ...(input.durationSeconds != null
-      ? { duration_seconds: input.durationSeconds }
-      : {}),
-    ...(input.storage ? { storage: input.storage } : {}),
-  };
-
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/sound-generation`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify(body),
-    }),
-    "Failed to generate sound effect",
+  return capabilityCall<SpeechResult>(
+    "speech.sound-effects",
+    {
+      text: input.text,
+      model: input.model,
+      durationSeconds: input.durationSeconds,
+      storage: input.storage,
+      params: input.params,
+      idempotencyKey: input.idempotencyKey,
+    },
+    {
+      transport,
+      baseUrl,
+      makeError: speechError,
+      errorPrefix: "Failed to generate sound effect",
+    },
   );
-  return mapSpeechResult((await res.json()) as RawSpeechResponse);
 }
 
 /**
- * List available voices. Returns the set of voices you can pass to
- * `textToSpeech.create({ voice })`. Failed requests throw {@link SpeechHttpError}.
+ * List every available voice. Pass a `voiceId` to `textToSpeech.create({ voice })`.
+ * Follows Core's `nextCursor` until no pages remain; Core sets the page size. A
+ * failed page or a repeated cursor throws {@link SpeechHttpError} rather than
+ * returning a partial list.
  */
 export async function listVoices(
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl?: string,
 ): Promise<VoicesResult> {
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v2/voices`),
-    "Failed to list voices",
-  );
-  const raw = (await res.json()) as RawVoicesResponse;
-  const { voices: rawVoices, ...rest } = raw;
-  return {
-    voices: (rawVoices ?? []).map(mapVoice),
-    ...rest,
+  const options = {
+    transport,
+    baseUrl,
+    makeError: speechError,
+    errorPrefix: "Failed to list voices",
   };
+  const voices: Voice[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await capabilityCall<RawVoicesResponse>(
+      "speech.voices.list",
+      { cursor },
+      options,
+    );
+    voices.push(...(page.voices ?? []));
+    const next = page.nextCursor;
+    if (typeof next !== "string" || !next) return { voices };
+    // A repeated cursor would page forever.
+    if (seen.has(next)) {
+      throw new SpeechHttpError(
+        "Failed to list voices: Core returned a repeated cursor",
+        502,
+        { error: "repeated_cursor", cursor: next },
+      );
+    }
+    seen.add(next);
+    cursor = next;
+  }
 }
 
 // ----- Namespace exports -----
