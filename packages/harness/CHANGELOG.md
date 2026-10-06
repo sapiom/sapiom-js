@@ -1,5 +1,11 @@
 # @sapiom/harness
 
+## 0.21.1
+
+### Patch Changes
+
+- 362c8ba: The project map opens on macOS and Windows when Studio holds the project folder under a different spelling of the same path. On macOS, temp folders sit behind `/var` → `/private/var`. Studio now compares the real paths.
+
 ## 0.21.0
 
 ### Minor Changes
