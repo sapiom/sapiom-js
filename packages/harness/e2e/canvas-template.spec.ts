@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { TEMPLATE_HTML, renderCanvasDocument } from "../src/core/canvas-template.js";
+import { renderCanvasDocument } from "../src/core/canvas-template.js";
 
 /**
  * A representative filled-in canvas body — the shape an agent following the
- * visualize macro's prompt produces after cloning `_template.html` and
- * using its documented node/edge patterns. Kept independent of
+ * visualize macro's prompt produces using the template's node/edge
+ * classes. Kept independent of
  * scripts/seed-example.mjs (which has scaffold side effects on import) but
  * intentionally mirrors the same order-triage workflow for consistency.
  */
@@ -170,29 +170,4 @@ test("renders a multi-graph workspace overview with cross-graph interconnections
   await expect(page.locator(".canvas-panel").filter({ has: page.locator(".canvas-title") })).toHaveCount(2);
   await expect(page.locator(".canvas-interconnection-row")).toHaveCount(1);
   await expect(page.locator(".canvas-interconnection-title")).toHaveText("start -> done");
-});
-
-test("the pristine template renders its friendly empty state, with zero visible nodes", async ({ page }) => {
-  const errors: string[] = [];
-  page.on("pageerror", (err) => errors.push(String(err)));
-  await page.setContent(TEMPLATE_HTML);
-  await expect(page.locator(".canvas-empty-note")).toHaveText(/nothing visualized yet/i);
-  // The <template id="canvas-patterns"> block documents one example of
-  // every node/edge kind, but <template> content is inert (lives in a
-  // DocumentFragment, not the live DOM) — it must never render as if it
-  // were a real graph.
-  await expect(page.locator(".canvas-node")).toHaveCount(0);
-  await expect(page.locator(".canvas-legend-item")).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-test("the pristine template's patterns are readable as raw markup for an agent to copy, even though inert", async ({ page }) => {
-  await page.setContent(TEMPLATE_HTML);
-  // Confirm the pattern content actually exists in the template's parsed
-  // fragment (not just absent/typo'd) — read it back out via .content.
-  const patternHtml = await page.evaluate(() => {
-    const tpl = document.getElementById("canvas-patterns") as HTMLTemplateElement;
-    return tpl.content.querySelectorAll(".canvas-node").length;
-  });
-  expect(patternHtml).toBe(5); // one example per node kind
 });

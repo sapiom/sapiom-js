@@ -134,7 +134,6 @@ describe("SessionManager", () => {
       onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
-      ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
       platform?: SessionManagerOptions["platform"];
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
@@ -179,7 +178,6 @@ describe("SessionManager", () => {
       onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
-      ensureCanvasTemplate: opts.ensureCanvasTemplate,
       isPidAlive: opts.isPidAlive,
       platform: opts.platform,
       writeSessionRegistry: opts.writeSessionRegistry,
@@ -3171,64 +3169,6 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("canvas template wiring", () => {
-    it("create() drops the canvas template for every session, regardless of caller", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {});
-      const { manager } = makeManager({ ensureCanvasTemplate });
-
-      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-
-      expect(ensureCanvasTemplate).toHaveBeenCalledTimes(1);
-      expect(ensureCanvasTemplate).toHaveBeenCalledWith("/tmp/proj");
-    });
-
-    it("create() ensures the canvas template before the pty is actually spawned", async () => {
-      const order: string[] = [];
-      const ensureCanvasTemplate = vi.fn(async () => {
-        order.push("canvas");
-      });
-      const spawnPty: PtySpawnFn = (file, args) => {
-        order.push("spawn");
-        void file;
-        void args;
-        return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
-      };
-      const { manager } = makeManager({ ensureCanvasTemplate, spawnPty });
-
-      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-
-      // Same reasoning as writeWorkspaceContext: the canvas pane can open the
-      // moment the session reports "running", so the template must already
-      // be on disk before the real process (the pty) ever starts.
-      expect(order).toEqual(["canvas", "spawn"]);
-    });
-
-    it("resume() also ensures the canvas template — the function itself is the backfill check", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {});
-      const { manager } = makeManager({ ensureCanvasTemplate });
-
-      const session = await manager.registerHistorical({
-        agentSessionId: "agent-uuid-9",
-        harness: "claude-code",
-        cwd: "/tmp/proj",
-        title: "past session",
-        lastActiveAt: "2026-01-01T00:00:00.000Z",
-      });
-      ensureCanvasTemplate.mockClear(); // registerHistorical() doesn't call it; isolate resume()'s call
-
-      await manager.resume(session.id);
-
-      expect(ensureCanvasTemplate).toHaveBeenCalledWith("/tmp/proj");
-    });
-
-    it("defaults to a no-op so tests with fake cwds never touch the real filesystem", async () => {
-      const { manager } = makeManager();
-      await expect(
-        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
-      ).resolves.toBeDefined();
-    });
-  });
-
   describe("ghost-session reconciliation (non-exited records with no live pty)", () => {
     it("create() preserves its original persist error when exited reconciliation also fails", async () => {
       const original = new Error("initial create persist failed");
@@ -3275,11 +3215,11 @@ describe("SessionManager", () => {
       });
     });
 
-    it("create() reconciles the record to exited when ensureCanvasTemplate rejects", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {
+    it("create() reconciles the record to exited when the workspace context write rejects", async () => {
+      const writeWorkspaceContext = vi.fn(async () => {
         throw new Error("read-only fs");
       });
-      const { manager } = makeManager({ ensureCanvasTemplate });
+      const { manager } = makeManager({ writeWorkspaceContext });
 
       await expect(
         manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
@@ -3311,10 +3251,10 @@ describe("SessionManager", () => {
     });
 
     it("resume() reconciles the record back to exited when a pre-spawn step rejects", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {
+      const prepareWorkspaceContext = vi.fn(async () => {
         throw new Error("read-only fs");
       });
-      const { manager } = makeManager({ ensureCanvasTemplate });
+      const { manager } = makeManager({ prepareWorkspaceContext });
       const session = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",

@@ -1,3 +1,4 @@
+import type { CanvasMapRequest } from "../lib/project-map";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, JSX } from "react";
 import type { AppState, WorkflowInfo } from "@shared/types";
@@ -104,6 +105,7 @@ export function AgentModal({
   verbs,
   onOpenAgent,
   onClose,
+  canvasMap = null,
 }: {
   harness: HarnessStateHook;
   state: AppState;
@@ -112,8 +114,14 @@ export function AgentModal({
   /** A launched child agent, opened in this modal in its place. */
   onOpenAgent: (path: string) => void;
   onClose: () => void;
+  /** This agent's steps and edges from the project map at the ref it is drawn
+   *  at (design.md M6); null draws the working copy alone. */
+  canvasMap?: CanvasMapRequest | null;
 }): JSX.Element {
   const [tab, setTab] = useState<AgentModalTab>("canvas");
+  const canvasMapKey = canvasMap ? JSON.stringify(canvasMap) : "";
+  const canvasMapRef = useRef(canvasMap);
+  canvasMapRef.current = canvasMap;
   const [boardRevision, setBoardRevision] = useState(0);
   const [progress, setProgress] = useState<Progress | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -424,7 +432,8 @@ export function AgentModal({
           role="tabpanel"
         >
           <CanvasPane
-            key={`agent:${agent.path}:${boardRevision}`}
+            // A map read that changes this agent's steps or edges redraws the board.
+            key={`agent:${agent.path}:${boardRevision}:${canvasMapKey}`}
             sessionId={null}
             lastMessage={harness.lastMessage}
             subjectWorkflow={agent}
@@ -433,7 +442,7 @@ export function AgentModal({
               bindingPath: null,
               sessionId: null,
             })}
-            loadWorkflowGraph={boardApi.getWorkflowGraph.bind(boardApi)}
+            loadWorkflowGraph={(path) => boardApi.getWorkflowGraph(path, canvasMapRef.current)}
             overviewActive={false}
             sessionExited={false}
             expanded={false}

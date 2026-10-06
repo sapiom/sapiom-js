@@ -2,9 +2,8 @@
  * Assembles the `<div id="canvas-root">` body — the bound workflow's
  * `<section class="canvas-panel">` (title/summary header + SVG diagram),
  * entirely from the classes `core/canvas-template.ts`'s shell already defines.
- * This is the HTML half of the deterministic render; `core/canvas-render.ts`
- * wraps the result through `renderCanvasDocument()` and writes it to the
- * workflow's render file.
+ * This is the HTML half of the deterministic render; `core/canvas-document.ts`
+ * wraps the result through `renderCanvasDocument()`.
  *
  * The panel ends with the color/shape legend (only the node kinds actually
  * used, plus a cross-workflow row when relevant) so the diagram reads on its

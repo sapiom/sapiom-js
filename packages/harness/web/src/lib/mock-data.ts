@@ -74,17 +74,6 @@ export const MOCK_ACCOUNT_PLAN: AccountPlanView = {
   source: "live",
 };
 
-/** The ONLY mock sessions with a real bundled canvas document under
- *  public/canvas/<id>/. The canvas pane must never mount an iframe for any
- *  other mock session — on the static Pages build that URL is GitHub's 404
- *  page, which would render inside the pane. Add a folder AND its id here
- *  together, never one without the other. */
-export const MOCK_CANVAS_SESSIONS: readonly string[] = ["sess-boot"];
-
-export function hasMockCanvasDoc(sessionId: string): boolean {
-  return MOCK_CANVAS_SESSIONS.includes(sessionId);
-}
-
 /**
  * A slice of the real template catalog for mock mode. Spans several categories
  * on purpose — the dialog groups by category — and, since SAP-2088, one template

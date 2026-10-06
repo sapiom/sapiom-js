@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { agentDepsInstalled, agentDepsInstalledSync } from "./agent-deps.js";
+import { agentDepsInstalled } from "./agent-deps.js";
 
 const tmpDirs: string[] = [];
 async function tmp(prefix: string): Promise<string> {
@@ -34,14 +34,12 @@ describe("agentDepsInstalled", () => {
   it("is false for a fresh project with no SDK anywhere up the tree", async () => {
     const project = await tmp("agent-deps-none-");
     expect(await agentDepsInstalled(project)).toBe(false);
-    expect(agentDepsInstalledSync(project)).toBe(false);
   });
 
   it("is true once the SDK is installed (no package.json → SDK fallback)", async () => {
     const project = await tmp("agent-deps-own-");
     await installPkg(project, "@sapiom/agent");
     expect(await agentDepsInstalled(project)).toBe(true);
-    expect(agentDepsInstalledSync(project)).toBe(true);
   });
 
   it("resolves deps hoisted to an ANCESTOR node_modules (monorepo / repo fixtures)", async () => {
@@ -50,7 +48,6 @@ describe("agentDepsInstalled", () => {
     const nested = path.join(root, "packages", "app", "agents", "leads");
     await fs.mkdir(nested, { recursive: true });
     expect(await agentDepsInstalled(nested)).toBe(true);
-    expect(agentDepsInstalledSync(nested)).toBe(true);
   });
 
   it("requires ALL declared deps — a partial install (SDK present, zod missing) is NOT ready", async () => {
@@ -62,12 +59,10 @@ describe("agentDepsInstalled", () => {
     await installPkg(project, "@sapiom/agent");
     await installPkg(project, "@sapiom/tools");
     expect(await agentDepsInstalled(project)).toBe(false);
-    expect(agentDepsInstalledSync(project)).toBe(false);
 
     // zod lands — now the full dependency set resolves.
     await installPkg(project, "zod");
     expect(await agentDepsInstalled(project)).toBe(true);
-    expect(agentDepsInstalledSync(project)).toBe(true);
   });
 
   it("ignores devDependencies — they don't affect the type-stripped bundle", async () => {

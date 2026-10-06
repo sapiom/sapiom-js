@@ -1,6 +1,6 @@
 /**
  * Test fixture for the workspace-overview render's interconnection
- * detection (core/canvas-interconnections.test.ts, core/canvas-render.test.ts).
+ * detection (core/canvas-interconnections.test.ts).
  * Uses the current context API so both the manifest check and the syntax-only
  * interconnection detector exercise a supported authored call shape.
  */

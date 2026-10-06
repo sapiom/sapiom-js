@@ -20,8 +20,6 @@
  *   3. POST /api/sessions/:id/input is accepted by a ready session.
  *   4. A tool.call event's localhost:<port> reference produces a
  *      port.detected frame on /ws/events.
- *   5. Writing to the session's canvas dir produces a canvas.reload frame,
- *      and GET /canvas/:id/ serves what was written.
  *   6. POST /api/macros/:id/run is accepted (injects into the pty).
  *   7. The CLI's launch directory is scanned for agents at boot, and a
  *      new directory is scanned when a session opens in it — both fire a
@@ -55,24 +53,13 @@
  *      the analytics collector's port produces no port.detected frame at
  *      all — proving server/index.ts's exclusion wiring, not just
  *      PortDetector's own unit-tested filter in isolation.
- *  13. Canvas kit: both .sapiom/canvas/_template.html (pristine clone
- *      source) and index.html (live canvas, same initial content) are
- *      already on disk the moment a session is created — before any
- *      visualize run — and POST /api/macros/visualize/run succeeds both
- *      with no workflow bound (requiresWorkflow: false — a cheap no-op) and
- *      after one is bound.
- *  14. Deterministic canvas render (zero LLM): bound to a real @sapiom/agent
- *      project, POST /api/canvas/:id/render extracts its actual step graph
- *      and writes real step names + SVG node markup to the workflow's own
- *      render file under .sapiom/canvas/renders/, GET /canvas/:id/ serves
- *      that render for the bound session (per-request resolution — no
- *      index.html rewrite), and the write fires a canvas.reload frame
- *      exactly like an agent's own edit would — the visualize macro's
- *      default path never touches the pty. A second render of the unchanged
- *      workflow is served from the extraction cache (no child process), and
- *      unbinding flips GET /canvas/:id/ back to the agent-authored
- *      index.html untouched. Binding that cleanly-extracting agent derives
- *      annotations in-process and spawns no coding-agent enrichment task.
+ *  13. POST /api/macros/visualize/run is rejected with a 400: Visualize
+ *      re-reads the board in the app, and the server has no render step.
+ *  14. Deterministic board (zero LLM): bound to a real @sapiom/agent
+ *      project, GET /api/workflows/:path/graph extracts its actual step graph
+ *      and returns real step names + SVG node markup. Binding that
+ *      cleanly-extracting agent derives annotations in-process and spawns no
+ *      coding-agent enrichment task.
  *  15. State isolation + registry hygiene: `stateRoot` alone (no per-file
  *      overrides, no machineId) roots every piece of persistent state under
  *      the scratch dir — machine-id included — and a pre-seeded registry
@@ -94,7 +81,6 @@ import { startServer } from "../src/server/index.js";
 import { createClaudeCodeAdapter } from "../src/core/adapters/claude-code.js";
 import { createCodexAdapter } from "../src/core/adapters/codex.js";
 import { ensureSpawnHelperExecutable } from "../src/core/session-manager.js";
-import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML } from "../src/core/canvas-template.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = path.join(SCRIPT_DIR, "fixtures", "fake-claude.mjs");
@@ -174,11 +160,9 @@ async function testCoreFlow(): Promise<void> {
   // A sapiom.json marker here, in the CLI's launch directory, proves the
   // boot-time workflow scan (item 7 below) — it must be in place before
   // startServer() runs its one-shot scan of launchDir. Deliberately just a
-  // marker (no index.ts) — projectDir doubles as the session's own cwd, and
-  // the "pristine empty template already on disk at create" assertion below
-  // reads its canvas synchronously right after creation, which would race a
-  // real workflow's auto-render. The deterministic-render proof (item 14)
-  // uses a separate, dedicated workflow directory instead — see below.
+  // marker (no index.ts) — projectDir doubles as the session's own cwd. The
+  // deterministic-board proof (item 14) uses a separate, dedicated workflow
+  // directory instead — see below.
   await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 4821 }));
   const collectorCwd = path.join(tmpRoot, "collector");
   await fs.mkdir(collectorCwd, { recursive: true });
@@ -319,20 +303,6 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json emits only boundAgent/agents public keys",
     );
 
-    // The canvas kit's template is also backfilled before the pty spawns —
-    // the canvas pane must never open to a bare empty iframe, and a pristine
-    // clone source must already exist for the visualize macro to clone from.
-    const initialCanvasHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
-    assert(
-      initialCanvasHtml === TEMPLATE_HTML,
-      "the canvas kit's empty-state template is already on disk when the session is created",
-    );
-    const initialTemplateHtml = await fs.readFile(path.join(projectDir, CANVAS_TEMPLATE_FILE), "utf8");
-    assert(
-      initialTemplateHtml === TEMPLATE_HTML,
-      "a pristine _template.html clone source is also already on disk when the session is created",
-    );
-
     // --- 2. the fixture captured its own argv/env — proves the launch-opts wiring ---
     const capture = await waitFor<FakeClaudeCapture>(async () => {
       try {
@@ -395,7 +365,7 @@ async function testCoreFlow(): Promise<void> {
     );
     assert(capture.env.SAPIOM_HARNESS_SESSION_ID === sessionId, "pty env carries SAPIOM_HARNESS_SESSION_ID");
 
-    // --- 3. wait for the session to report "running" (this is what starts the canvas watcher) ---
+    // --- 3. wait for the session to report "running" (this is what starts the workspace watcher) ---
     await waitFor(async () => {
       const res = await fetch(`${baseUrl}/api/sessions`, { headers });
       const sessions = (await res.json()) as Array<{ id: string; status: string }>;
@@ -525,20 +495,6 @@ async function testCoreFlow(): Promise<void> {
       "the harness's own port and the collector's port are excluded from port.detected",
     );
 
-    // --- 9. write to the session's canvas dir, assert canvas.reload arrives, and the file is served ---
-    const canvasDir = path.join(projectDir, ".sapiom", "canvas");
-    await fs.mkdir(canvasDir, { recursive: true });
-    await fs.writeFile(path.join(canvasDir, "index.html"), "<html><body>e2e</body></html>");
-
-    await waitFor(async () => {
-      return wsMessages.find((m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId);
-    });
-    console.log("canvas.reload frame received");
-
-    const canvasRes = await fetch(`${baseUrl}/canvas/${sessionId}/`);
-    assert(canvasRes.status === 200, "GET /canvas/:id/ serves the written index.html");
-    assert((await canvasRes.text()).includes("e2e"), "served canvas content matches what was written");
-
     // --- 11. the launch directory's sapiom.json (written before startServer) was scanned at boot ---
     // Note: WorkflowInfo.name comes from package.json (or the directory's own
     // basename) — the sapiom.json marker itself only carries definitionId —
@@ -575,14 +531,14 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json embeds the session's own {id, cwd, harness}",
     );
 
-    // --- 10a. visualize is binding-independent (requiresWorkflow: false, a
-    // cheap no-op), unlike every other action-rail macro. ---
+    // --- 10a. visualize re-reads the board in the SPA; the server has no
+    // render step for it and says so rather than answering ok. ---
     const unboundMacroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers,
       body: JSON.stringify({ harnessSessionId: sessionId }),
     });
-    assert(unboundMacroRes.status === 200, "POST /api/macros/visualize/run succeeds independent of binding");
+    assert(unboundMacroRes.status === 400, "POST /api/macros/visualize/run is rejected: the app re-reads the board");
 
     // --- 11a. bind the session to that discovered workflow ---
     const workflowStatusBefore = wsMessages.filter((m) => m.type === "session.status").length;
@@ -617,33 +573,16 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json reflects the bound agent's {name, path, definitionId}",
     );
 
-    // --- 11a-2. also run visualize now that a workflow IS bound — here it's a
-    // force refresh of the bound canvas (this workflow is a bare marker, so
-    // its extraction honestly fails and no enrichment task spawns), proving
-    // the request still succeeds once bound. ---
-    const macroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ harnessSessionId: sessionId }),
-    });
-    assert(macroRes.status === 200, "POST /api/macros/visualize/run returns 200");
-    const macroBody = (await macroRes.json()) as { ok: boolean };
-    assert(macroBody.ok === true, "macro run responds { ok: true }");
-
-    // --- 14. deterministic render: bind to a REAL @sapiom/agent project (the
-    // same shape as the order-triage test fixture — copied, not
-    // reimplemented, so the two can't drift) and prove POST
-    // /api/canvas/:id/render writes the workflow's real step names to
-    // index.html and fires a canvas.reload frame, with zero LLM involvement.
-    // A separate directory from `projectDir` (which stays a bare marker —
-    // see its own comment above) so this doesn't race the "pristine empty
-    // template on create" assertion. Only `node_modules/@sapiom/agent` is
-    // symlinked (this package's own, a real workspace dependency) — NOT the
-    // whole node_modules tree, which would also expose harness's own
-    // node_modules/.bin/tsc and make check()'s typecheck step try (and fail)
-    // to run tsc with no tsconfig.json in this fixture dir; esbuild only
-    // needs the one package resolvable, exactly like any real consumer
-    // project's own install.
+    // --- 14. deterministic board (zero LLM): bind to a REAL @sapiom/agent
+    // project (the same shape as the order-triage test fixture — copied, not
+    // reimplemented, so the two can't drift) and prove GET
+    // /api/workflows/:path/graph returns its real step names as SVG node
+    // markup. Only `node_modules/@sapiom/agent` is symlinked (this package's
+    // own, a real workspace dependency) — NOT the whole node_modules tree,
+    // which would also expose harness's own node_modules/.bin/tsc and make
+    // check()'s typecheck step try (and fail) to run tsc with no tsconfig.json
+    // in this fixture dir; esbuild only needs the one package resolvable,
+    // exactly like any real consumer project's own install.
     const workflowDir = path.join(tmpRoot, "order-triage");
     await fs.mkdir(path.join(workflowDir, "node_modules", "@sapiom"), { recursive: true });
     await fs.writeFile(path.join(workflowDir, "sapiom.json"), JSON.stringify({ definitionId: 5150 }));
@@ -664,9 +603,6 @@ async function testCoreFlow(): Promise<void> {
     });
     assert(connectRes.status === 200, "POST /api/workflows/connect registers the real order-triage project");
 
-    const reloadFramesBefore = wsMessages.filter(
-      (message) => message.type === "canvas.reload" && message.harnessSessionId === sessionId,
-    ).length;
     const renderBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
       method: "PATCH",
       headers,
@@ -690,52 +626,14 @@ async function testCoreFlow(): Promise<void> {
       "AppState.tasks contains no coding-agent enrichment task for the deterministic render",
     );
 
-    const renderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
-    assert(renderRes.status === 200, "POST /api/canvas/:id/render returns 200");
-    const renderBody = (await renderRes.json()) as {
-      ok: boolean;
-      mode: string;
-      extractionFailed: string[];
-      renderPath?: string;
-    };
-    assert(renderBody.ok === true && renderBody.mode === "single", "render reports { ok: true, mode: 'single' }");
-    assert(
-      renderBody.extractionFailed.length === 0,
-      `extraction succeeded (no degraded panels): ${JSON.stringify(renderBody.extractionFailed)}`,
-    );
-    assert(
-      (renderBody.renderPath ?? "").startsWith(path.join(projectDir, ".sapiom", "canvas", "renders") + path.sep),
-      "the render landed in the session cwd's .sapiom/canvas/renders/ (per-workflow file, not index.html)",
-    );
-
-    await waitFor(async () => {
-      const count = wsMessages.filter(
-        (m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId,
-      ).length;
-      return count > reloadFramesBefore ? true : undefined;
-    });
-    console.log("canvas.reload frame received for the deterministic bind/render write");
-
-    // GET /canvas/:id/ resolves the session's binding at request time and
-    // serves the bound workflow's render file.
-    const renderedHtml = await (await fetch(`${baseUrl}/canvas/${sessionId}/`)).text();
+    const graphRes = await fetch(`${baseUrl}/api/workflows/${encodeURIComponent(workflowDir)}/graph`, { headers });
+    assert(graphRes.status === 200, "GET /api/workflows/:path/graph returns 200");
+    const graphBody = (await graphRes.json()) as { status: string; document: string };
+    assert(graphBody.status === "ok", `extraction succeeded: ${graphBody.status}`);
     for (const step of ["intake", "classify", "route", "auto_resolve", "escalate"]) {
-      assert(renderedHtml.includes(`>${step}<`), `served canvas contains the real step name '${step}'`);
+      assert(graphBody.document.includes(`>${step}<`), `the board contains the real step name '${step}'`);
     }
-    assert(renderedHtml.includes("canvas-node-rect"), "served canvas contains real SVG node markup, not just text");
-    // index.html was NOT rewritten by the deterministic render — the agent's
-    // own canvas (written in step 9) is still exactly what it wrote.
-    const indexAfterRender = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
-    assert(indexAfterRender.includes("e2e"), "index.html (the agent-authored canvas) is untouched by the render");
-
-    // A second render of the unchanged workflow comes from the extraction
-    // cache — no child check() process runs at all.
-    const cachedRenderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
-    const cachedRenderBody = (await cachedRenderRes.json()) as { ok: boolean; cachedExtraction?: boolean };
-    assert(
-      cachedRenderBody.ok === true && cachedRenderBody.cachedExtraction === true,
-      "re-rendering the unchanged workflow is served from the extraction cache (no child process)",
-    );
+    assert(graphBody.document.includes("canvas-node-rect"), "the board contains real SVG node markup, not just text");
 
     // --- 11b. unbind — the context file gets boundAgent: null, not deleted ---
     const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
@@ -750,14 +648,6 @@ async function testCoreFlow(): Promise<void> {
       return context.boundAgent === null ? context : undefined;
     });
     assert(unboundContext.boundAgent === null, "unbinding writes boundAgent: null to harness-context.json");
-
-    // Unbound again, the canvas root falls back to the legacy agent-authored
-    // index.html — the render files stay on disk for the next bind.
-    const unboundCanvas = await (await fetch(`${baseUrl}/canvas/${sessionId}/`)).text();
-    assert(
-      unboundCanvas.includes("e2e") && !unboundCanvas.includes("canvas-node-rect"),
-      "unbinding flips GET /canvas/:id/ back to the agent-authored index.html",
-    );
 
     // --- 11c. binding to a path that isn't a registered workflow is rejected ---
     const badBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {

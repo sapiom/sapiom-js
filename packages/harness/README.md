@@ -146,7 +146,7 @@ breadcrumbs. Its tabs are **Canvas | Runs | Secrets**.
   deploys.
 - Header: the agent's name and **Draft** or **Deployed** ("Deployed {when}"
   only for a deploy watched in the current tab), then icons labelled on hover:
-  **`</>`** (integration snippets), **Visualize** (re-render the graph),
+  **`</>`** (integration snippets), **Visualize** (re-read the graph),
   **Run locally**, **Run** (production) and **Deploy**, with progress beside
   them. **Run** needs a
   signed-in account and a ready cloud build; **Deploy** needs a signed-in
@@ -169,11 +169,6 @@ first message names the agent, and open it:
   ask. Ask coding agent to fix still gets a fix, because its own text asks for
   one; after Debug this step, tell the session to make the fix if you want it.
 - Describe with AI sends its own prompt, which edits the agent's descriptions.
-
-### Not in the UI yet
-
-- The session Canvas pane for static HTML under `.sapiom/canvas/` exists in the
-  code and has no place in the current layout.
 
 The run workspace's Focus mode and the **Prod** globe were removed (SAP-3875).
 A run started from a session's terminal (for example, the coding agent calling

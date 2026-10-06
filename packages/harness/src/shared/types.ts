@@ -62,26 +62,6 @@ export const HARNESS_PATHS = {
  */
 export const AGENT_PROJECT_MARKER = "sapiom.json";
 
-/**
- * Canvas convention: Studio-owned deterministic renders and optional custom
- * HTML live here, relative to the session cwd. The server watches this
- * directory and serves the active workflow at `/canvas/<harnessSessionId>/`.
- * Deterministic workflow files use `CANVAS_RENDERS_DIR`; `index.html` remains
- * the optional custom-canvas fallback and is never rewritten by that pipeline.
- */
-export const CANVAS_DIR = ".sapiom/canvas";
-export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
-
-/**
- * Deterministic per-workflow renders live here (one `<slug>.html` per
- * workflow, slugged by `slugForWorkflowPath` in core/canvas-render.ts),
- * relative to the session cwd. `GET /canvas/:sessionId/` serves the bound
- * workflow's render from this directory; `index.html` above stays the
- * agent-authored/custom canvas and is never rewritten by the deterministic
- * pipeline.
- */
-export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
-
 /** Renderer-only files are materialized here before their paths are included
  * in a new session's first prompt. Disk-backed attachments never get copied. */
 export const HARNESS_UPLOADS_DIR = ".sapiom/uploads";
@@ -1792,11 +1772,11 @@ export interface SecretWriteReport {
 
 /**
  * A macro injects text into the active session's pty, opens a URL, or (the
- * one exception to "always goes through the agent's session") runs the
- * deterministic canvas render + AI enrichment refresh server-side. Template
- * placeholders, substituted server-side before "inject"/"open-url" execution:
+ * one exception to "always goes through the agent's session") re-reads the
+ * board, which the SPA does itself. Template placeholders, substituted
+ * server-side before "inject"/"open-url" execution:
  *   {{workflow.path}} {{workflow.name}} {{workflow.definitionId}}
- *   {{session.cwd}}   {{canvas.path}}   {{subject}}
+ *   {{session.cwd}}   {{subject}}
  */
 export interface MacroDef {
   id: string;
@@ -1806,10 +1786,8 @@ export interface MacroDef {
   action:
     | { kind: "inject"; text: string; submit?: boolean }
     | { kind: "open-url"; url: string }
-    /** Refresh of the bound workflow's canvas: invalidates the extraction
-     *  cache and re-renders the fully deterministic diagram (structure +
-     *  derived annotations, no LLM, no user token) — no pty involved. A cheap
-     *  no-op when the session is unbound. */
+    /** Re-read of the agent's board (GET /api/workflows/:path/graph). The SPA
+     *  performs it; the server has no render step and rejects a run request. */
     | { kind: "render-canvas" };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;

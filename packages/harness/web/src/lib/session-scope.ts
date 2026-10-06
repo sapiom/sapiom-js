@@ -95,8 +95,8 @@ export interface AttributedRun {
 export type CanvasSource =
   /** Nothing to draw. */
   | { kind: "none" }
-  /** `/canvas/:sessionId/` — the session-keyed board, resolved server-side by
-   *  that session's current binding. */
+  /** A session-keyed board. The server no longer serves one, so the pane draws
+   *  nothing for this kind; the agent modal always passes `sessionId: null`. */
   | { kind: "session"; sessionId: string }
   /** `GET /api/workflows/:path/graph` — the session-free entry point onto the
    *  same derivation (IA-01). Keyed by the AGENT's directory path; the route's
