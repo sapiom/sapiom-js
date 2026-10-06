@@ -137,15 +137,20 @@ export const useProjectActions = ({
     setView({ kind: "project", projectId });
     // AN EMPTY PROJECT'S NAME IS THE DOOR (D36, flow 4.6.2): a project with
     // no agent lands on the new-agent screen scoped to it rather than on a map
-    // with nothing in it. The map is computed from the same folder, so the
-    // folder's agents are the whole answer.
+    // with nothing in it. Studio's agent list misses defineAgent folders with
+    // no sapiom.json, so "empty" is decided by the computed map, not the list.
     if (projects.agentsInProject(projectId).length > 0) return;
-    composeInProject({
-      root: project.root,
-      label: project.label,
-      projectId,
-      template: null,
-    });
+    const compose = (): void => {
+      if (generation !== navGenerationRef.current) return;
+      composeInProject({ root: project.root, label: project.label, projectId, template: null });
+    };
+    // A failed read falls back to the agent list's answer: no agents.
+    void harness.api.getProjectMap(projectId, null).then(
+      (response) => {
+        if (response.map.agents.length === 0) compose();
+      },
+      compose,
+    );
   };
   if (!harness.loading && !harness.error && state) {
     selectProjectRef.current = handleSelectProject;

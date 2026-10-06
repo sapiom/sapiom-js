@@ -8,6 +8,7 @@
  * repository with two branches. Every other project draws its agents loose,
  * outside git.
  *
+ * Query flags: `mockProjectMapUnlisted=1` gives an agentless project one map-only agent.
  * Query flags: `mockProjectMap=error|missing|empty` for the failure and empty
  * states; `mockProjectMapDeployed=0` drops the deploy state (no badge);
  * `mockProjectMapChips=many` gives leasing four shared resources, more than
@@ -49,6 +50,10 @@ export function mockProjectMap(input: {
   const agents = input.workflows
     .filter((workflow) => isWithinDir(root, workflow.path))
     .map((workflow) => fromWorkflow(root, workflow));
+  // A defineAgent folder with no sapiom.json: the map finds it, Studio's agent list does not.
+  if (params?.get("mockProjectMapUnlisted") === "1" && agents.length === 0) {
+    agents.push({ slug: "unlisted", path: "unlisted", description: "", deployed: null, changedSinceRef: false, shared: [], triggers: [] });
+  }
   const edges: MapEdge[] = [];
   const systems: ProjectMapResponse["map"]["systems"] = [];
   const acme = root === ACME && agents.some((agent) => agent.slug === "leasing");

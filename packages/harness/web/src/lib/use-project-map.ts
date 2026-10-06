@@ -105,7 +105,8 @@ export function useProjectMap({
           mode === "reload" &&
           previous.status === "ready" &&
           !unavailable &&
-          (previous.value.map.ref ?? null) === ref
+          // The working copy is drawn as ref "working" and requested as null.
+          (previous.value.map.ref === "working" ? null : (previous.value.map.ref ?? null)) === ref
             ? { ...previous, refreshing: false }
             : {
                 status: "error",

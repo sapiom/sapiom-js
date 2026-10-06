@@ -294,6 +294,15 @@ test("a project with no agents opens the new-agent screen from its header (D36)"
   await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
 });
 
+test("a project whose only agent has no sapiom.json opens its map, not the new-agent screen", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present&mockProjectMapUnlisted=1");
+  await page.getByTestId("project-select-scratch").click();
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+  await expect(page.getByTestId("project-map-pane")).toContainText("1 agent");
+});
+
 test("a drawn map's header has New agent and no full-view button", async ({
   page,
 }) => {

@@ -15,18 +15,24 @@ export async function checkProjectMap(boot: BootResult): Promise<string> {
       signal: AbortSignal.timeout(60_000),
       headers: { "X-Harness-Token": boot.bootToken },
     });
-    assert(response.ok, `GET ${path}: ${response.status}`);
+    if (!response.ok) {
+      const body = (await response.text().catch(() => "")).slice(0, 500);
+      assert.fail(`GET ${path}: ${response.status} ${body}`);
+    }
     return response.json();
   };
   const state = (await get("/state")) as {
     workspaceScopes?: Array<{ projectId?: string }>;
   };
-  const projectId = state.workspaceScopes?.find((scope) => scope.projectId)?.projectId;
+  const scope = state.workspaceScopes?.find((candidate) => candidate.projectId) as
+    | { projectId?: string; cwd?: string }
+    | undefined;
+  const projectId = scope?.projectId;
   assert(projectId, "the launch folder has no Studio project");
   const body = (await get(`/projects/${projectId}/map`)) as {
     map: { systems: unknown[]; agents: unknown[]; edges: unknown[] };
   };
   assert(Array.isArray(body.map.systems) && Array.isArray(body.map.agents) && Array.isArray(body.map.edges),
     "the map response has no systems, agents or edges");
-  return `map computed in process: ${body.map.agents.length} agents, ${body.map.systems.length} systems`;
+  return `map computed in process for ${scope?.cwd ?? "?"}: ${body.map.agents.length} agents, ${body.map.systems.length} systems`;
 }
