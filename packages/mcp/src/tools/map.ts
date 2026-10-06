@@ -2,19 +2,28 @@ import * as os from "node:os";
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { AgentOperationError } from "@sapiom/agent-core";
+import { AgentOperationError, type GatewayClient } from "@sapiom/agent-core";
 
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
 import {
   accountPlatform,
   buildMap,
   describeProject,
+  fileLabelCache,
+  labelMap,
   MapInputError,
+  memoryLabelCache,
+  type Evaluate,
 } from "../map/index.js";
 import { registerTool } from "../register-tool.js";
 import { fail, gatewayClient, ok } from "./shared.js";
 
 export { accountPlatform };
+
+/** Jev through the signed-in account's API key, the same route the hosted capability uses. */
+export function accountEvaluate(client: GatewayClient): Evaluate {
+  return (request) => client.postAtHostRoot("/v1/capabilities/decisions.evaluate", request);
+}
 
 const evidenceSchema = z.object({
   file: z.string(),
@@ -84,10 +93,12 @@ const agentSchema = z
   .strict();
 
 export function register(server: McpServer, env: ResolvedEnvironment): void {
+  // A described map has no folder to keep a cache in; this one lives as long as the server.
+  const describedCache = memoryLabelCache();
   registerTool(
     server,
     "sapiom_dev_map",
-    "The agent map: which agents call, launch, schedule or trigger each other, grouped into systems, with every agent's steps. Computed from code each call; nothing is stored. Pass `root` (a project folder; default the working directory) and optionally a git `ref` to draw that version, or pass `agents` to map your own description without scanning. Systems are connected components over code-proven calls, events, signals and timers; shared vault keys, databases and connectors show as `shared` chips and never join agents. Every edge carries the code location that proves it; calls whose target the code does not make knowable are listed under `unresolved`. When signed in, platform triggers and deploy state come from the account (set `platform: false` to skip).",
+    "The agent map: which agents call, launch, schedule or trigger each other, grouped into systems, with every agent's steps. Computed from code each call; nothing about agents or edges is stored. Pass `root` (a project folder; default the working directory) and optionally a git `ref` to draw that version, or pass `agents` to map your own description without scanning. Systems are connected components over code-proven calls, events, signals and timers; shared vault keys, databases and connectors show as `shared` chips and never join agents. Every edge carries the code location that proves it; calls whose target the code does not make knowable are listed under `unresolved`. When signed in, platform triggers and deploy state come from the account, and Jev labels an agent's `role` and a launch or event edge's `label` where its probability `p` is at least 0.8 (`labels: \"ok\"`; signed out or Jev unreachable: `labels: \"unavailable\"`, the map otherwise unchanged). Set `platform: false` to skip both.",
     {
       root: z
         .string()
@@ -109,7 +120,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .boolean()
         .optional()
         .describe(
-          "Read triggers and deploy state from the signed-in account (default true).",
+          "Read triggers and deploy state from the signed-in account and ask Jev for labels (default true).",
         ),
     },
     async ({ root, ref, agents, platform }) => {
@@ -121,9 +132,6 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
               "Pass either `agents` or `root` (with optional `ref`), not both.",
           });
         }
-        if (agents) {
-          return ok(buildMap({ root: null, agents, platform: "skipped" }));
-        }
         const client =
           platform === false ? undefined : await gatewayClient(env);
         const credentials = client ? await readCredentials(env.name) : null;
@@ -131,20 +139,28 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         const cacheKey = credentials
           ? `${env.apiURL}\0${credentials.tenantId}\0${credentials.apiKeyId}`
           : undefined;
-        const description = await describeProject({
-          // Node does not expand `~`; callers (and the README) use it.
-          root: root
-            ? root.replace(/^~(?=$|[\\/])/, os.homedir())
-            : process.cwd(),
-          ref,
-          platform:
-            platform === false
-              ? undefined
-              : client
-                ? accountPlatform(client, { cacheKey })
-                : null,
+        const map = agents
+          ? buildMap({ root: null, agents, platform: "skipped" })
+          : buildMap(
+              await describeProject({
+                // Node does not expand `~`; callers (and the README) use it.
+                root: root
+                  ? root.replace(/^~(?=$|[\\/])/, os.homedir())
+                  : process.cwd(),
+                ref,
+                platform:
+                  platform === false
+                    ? undefined
+                    : client
+                      ? accountPlatform(client, { cacheKey })
+                      : null,
+              }),
+            );
+        const labelled = await labelMap(map, {
+          evaluate: client ? accountEvaluate(client) : undefined,
+          cache: map.root ? fileLabelCache(map.root) : describedCache,
         });
-        return ok(buildMap(description));
+        return ok(labelled.map);
       } catch (error) {
         if (error instanceof MapInputError) {
           return fail(

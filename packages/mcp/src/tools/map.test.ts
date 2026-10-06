@@ -2,7 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedEnvironment } from "../credentials.js";
 
@@ -92,6 +92,72 @@ describe("sapiom_dev_map", () => {
 
     expect(map.platform).toBe("skipped");
     expect(readCredentials).not.toHaveBeenCalled();
+  });
+
+  describe("Jev labels", () => {
+    const agents = [
+      { slug: "intake", description: "Turns a customer's Slack message into a ticket.", emits: [{ eventType: "ticket.opened" }] },
+      {
+        slug: "triage",
+        description: "Classifies each new ticket and assigns it.",
+        triggers: [{ kind: "event", eventType: "ticket.opened", source: "code" }],
+      },
+    ];
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const request = JSON.parse(init.body) as { questions: Record<string, { criteria: Record<string, string> }> };
+      const answers = Object.fromEntries(
+        Object.entries(request.questions).map(([key, question]) => {
+          const choice = Object.keys(question.criteria)[0]!;
+          return [key, { type: "choice", choice, probabilities: { [choice]: 0.97 } }];
+        }),
+      );
+      return new Response(JSON.stringify({ answers }), { status: 201 });
+    });
+
+    beforeEach(() => {
+      fetchMock.mockClear();
+      vi.stubGlobal("fetch", fetchMock);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("asks Jev once when signed in, pinned to jev-1.13.0, and answers again from the cache", async () => {
+      vi.mocked(readCredentials).mockResolvedValue({ apiKey: "sk_test" } as never);
+      const tool = mapTool();
+
+      const map = parse(await tool({ agents }));
+      expect(map.labels).toBe("ok");
+      expect(map.agents.map((agent: { role?: unknown }) => agent.role)).toEqual([
+        { value: "intake", p: 0.97 },
+        { value: "intake", p: 0.97 },
+      ]);
+      expect(map.edges[0].label).toEqual({ value: "hands work to", p: 0.97 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(url).toBe("https://api.sapiom.ai/v1/capabilities/decisions.evaluate");
+      expect(JSON.parse(init.body).model).toBe("jev-1.13.0");
+
+      expect(parse(await tool({ agents }))).toEqual(map);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("draws the map without labels when Jev fails", async () => {
+      vi.mocked(readCredentials).mockResolvedValue({ apiKey: "sk_test" } as never);
+      fetchMock.mockResolvedValueOnce(new Response("{}", { status: 502 }));
+
+      const map = parse(await mapTool()({ agents }));
+      expect(map.labels).toBe("unavailable");
+      expect(map.agents.every((agent: { role?: unknown }) => agent.role === undefined)).toBe(true);
+      expect(map.systems).toHaveLength(1);
+    });
+
+    it("makes no Jev call signed out or with platform false", async () => {
+      expect(parse(await mapTool()({ agents })).labels).toBe("unavailable");
+      vi.mocked(readCredentials).mockResolvedValue({ apiKey: "sk_test" } as never);
+      expect(parse(await mapTool()({ agents, platform: false })).labels).toBe("unavailable");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("expands a leading ~ in root", async () => {
