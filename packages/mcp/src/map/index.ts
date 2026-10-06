@@ -3,6 +3,22 @@ export * from "./source-scan.js";
 export * from "./types.js";
 export { buildMap, systemId } from "./build.js";
 export {
+  LABEL_MODEL,
+  LABEL_THRESHOLD,
+  labelMap,
+  type Evaluate,
+  type EvaluateRequest,
+  type LabelCache,
+  type LabelCacheData,
+  type LabelOptions,
+  type LabelResult,
+} from "./labels.js";
+export {
+  fileLabelCache,
+  labelCachePath,
+  memoryLabelCache,
+} from "./labels-cache.js";
+export {
   checkSteps,
   describeProject,
   MapInputError,
