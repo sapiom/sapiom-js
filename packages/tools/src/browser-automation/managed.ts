@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Transport, defaultTransport } from "../_client/index.js";
 import { BrowserAutomationHttpError, ensureOk } from "./errors.js";
 
@@ -318,3 +319,138 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
 
 /** The managed sessions, tasks, profiles, and recordings API bound to one transport. */
 export type ManagedBrowserApi = ReturnType<typeof managedBrowserApi>;
+
+export type WithManagedSessionInput = Omit<
+  ManagedSessionInput,
+  "idempotencyKey"
+> & { idempotencyKey?: string };
+
+export interface WithManagedSessionOptions {
+  /** Called when a close has not completed within the retry window, so the caller can retry closeManaged later. */
+  onPendingClose?: (sessionId: string) => void | Promise<void>;
+}
+
+type ManagedSessionLifecycle = Pick<
+  ManagedBrowserApi["sessions"],
+  "createManaged" | "recover" | "closeManaged"
+>;
+
+const CREATE_RETRY_WINDOW_MS = 90_000;
+const CREATE_RETRY_INITIAL_DELAY_MS = 2_000;
+const CREATE_RETRY_MAX_DELAY_MS = 10_000;
+const RECOVERY_WINDOW_MS = 120_000;
+const RECOVERY_INTERVAL_MS = 10_000;
+const CLOSE_WINDOW_MS = 90_000;
+const CLOSE_INTERVAL_MS = 5_000;
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function isUncertain(error: unknown): boolean {
+  return (
+    !(error instanceof BrowserAutomationHttpError) ||
+    error.status === 429 ||
+    error.status >= 500 ||
+    error.code === "browser_outcome_unknown"
+  );
+}
+
+async function closeWithRetry(
+  sessions: ManagedSessionLifecycle,
+  sessionId: string,
+  options?: WithManagedSessionOptions,
+): Promise<void> {
+  const deadline = Date.now() + CLOSE_WINDOW_MS;
+  while (Date.now() <= deadline) {
+    try {
+      const result = await sessions.closeManaged(sessionId);
+      if (result.settlement === "completed") return;
+      if (Date.now() + CLOSE_INTERVAL_MS > deadline) break;
+    } catch (error) {
+      if (error instanceof BrowserAutomationHttpError && error.status === 404) {
+        return;
+      }
+      const retryable =
+        isUncertain(error) ||
+        (error instanceof BrowserAutomationHttpError &&
+          (error.status === 409 || error.status >= 500));
+      if (!retryable || Date.now() + CLOSE_INTERVAL_MS > deadline) break;
+    }
+    await sleep(CLOSE_INTERVAL_MS);
+  }
+
+  try {
+    await options?.onPendingClose?.(sessionId);
+  } catch {
+    /* swallow */
+  }
+}
+
+export async function runManagedSession<T>(
+  sessions: ManagedSessionLifecycle,
+  input: WithManagedSessionInput,
+  fn: (session: ManagedBrowserSession) => Promise<T>,
+  options?: WithManagedSessionOptions,
+): Promise<T> {
+  const createInput: ManagedSessionInput = {
+    ...input,
+    idempotencyKey: input.idempotencyKey ?? randomUUID(),
+  };
+  const createDeadline = Date.now() + CREATE_RETRY_WINDOW_MS;
+  let delay = CREATE_RETRY_INITIAL_DELAY_MS;
+  let session: ManagedBrowserSession | undefined;
+  let creationError: unknown;
+
+  while (session === undefined) {
+    try {
+      session = await sessions.createManaged(createInput);
+    } catch (error) {
+      if (!isUncertain(error)) throw error;
+      if (Date.now() + delay > createDeadline) {
+        creationError = error;
+        break;
+      }
+      await sleep(delay);
+      delay = Math.min(delay * 2, CREATE_RETRY_MAX_DELAY_MS);
+    }
+  }
+
+  if (session === undefined) {
+    const recoveryDeadline = Date.now() + RECOVERY_WINDOW_MS;
+    try {
+      while (Date.now() <= recoveryDeadline) {
+        let recovery;
+        try {
+          recovery = await sessions.recover(createInput.idempotencyKey);
+        } catch (error) {
+          if (!isUncertain(error)) break;
+          if (Date.now() + RECOVERY_INTERVAL_MS > recoveryDeadline) break;
+          await sleep(RECOVERY_INTERVAL_MS);
+          continue;
+        }
+
+        if (
+          recovery.status === "completed" ||
+          recovery.status === "cleanup_only"
+        ) {
+          for (const recoveredSession of recovery.sessions) {
+            await closeWithRetry(sessions, recoveredSession.sessionId, options);
+          }
+          break;
+        }
+        if (recovery.status !== "unknown") break;
+        if (Date.now() + RECOVERY_INTERVAL_MS > recoveryDeadline) break;
+        await sleep(RECOVERY_INTERVAL_MS);
+      }
+    } catch {
+      /* Preserve the creation error. */
+    }
+    throw creationError;
+  }
+
+  try {
+    return await fn(session);
+  } finally {
+    await closeWithRetry(sessions, session.sessionId, options);
+  }
+}

@@ -214,6 +214,37 @@ never these IDs or creation keys.
 Save returned IDs; there is no session-list endpoint. Tags are metadata, not a
 session discovery or access mechanism.
 
+### Run a session with automatic cleanup
+
+```typescript
+import { chromium } from "playwright";
+
+const browser = sapiom.browserAutomation;
+const title = await browser.withManagedSession(
+  { recording: false },
+  async (session) => {
+    const driver = await chromium.connectOverCDP(session.cdpUrl);
+    try {
+      return await driver.contexts()[0].pages()[0].title();
+    } finally {
+      await driver.close();
+    }
+  },
+  {
+    onPendingClose: (sessionId) => {
+      // Store a cleanup job to retry closeManaged.
+    },
+  },
+);
+```
+
+If you omit `idempotencyKey`, the helper generates one and reuses the same key
+and input when retrying uncertain creation or close outcomes. If creation remains
+uncertain, it checks for and closes any session left behind before rethrowing the
+creation error. It closes the session in `finally`, even when your callback throws;
+close problems never replace the callback's result or error. `onPendingClose`
+receives the session ID when a close has not completed.
+
 ### Control with your own model and driver
 
 ```typescript
@@ -414,19 +445,53 @@ unrecorded session with no persistent profile.
 
 ### Retries, recovery, and billing
 
+Paths are relative to the service base URL the SDK already uses.
+
+| SDK method                           | HTTP request                                                       | Idempotency key |
+| ------------------------------------ | ------------------------------------------------------------------ | --------------- |
+| `sessions.createManaged`             | `POST /v1/browser/sessions`                                        | Yes             |
+| `sessions.get`                       | `GET /v1/browser/sessions/:sessionId`                              | No              |
+| `sessions.closeManaged`              | `DELETE /v1/browser/sessions/:sessionId`                           | No              |
+| `sessions.recover`                   | `GET /v1/browser/sessions/recovery/:idempotencyKey`                | No              |
+| `tasks.start`                        | `POST /v1/browser/tasks`                                           | Yes             |
+| `tasks.get`                          | `GET /v1/browser/tasks/:taskId`                                    | No              |
+| `tasks.interventions`                | `GET /v1/browser/tasks/:taskId/interventions`                      | No              |
+| `tasks.pause` / `resume` / `respond` | `POST /v1/browser/tasks/:taskId/pause`, `/resume`, `/respond`      | Yes             |
+| `profiles.save`                      | `POST /v1/browser/profiles`                                        | Yes             |
+| `profiles.get`                       | `GET /v1/browser/profiles/:profileId`                              | No              |
+| `profiles.delete`                    | `DELETE /v1/browser/profiles/:profileId`                           | Yes             |
+| `recordings.list`                    | `GET /v1/browser/sessions/:sessionId/recordings`                   | No              |
+| `recordings.pause` / `resume`        | `POST /v1/browser/sessions/:sessionId/recordings/pause`, `/resume` | Yes             |
+| `recordings.fetch`                   | `GET /v1/browser/sessions/:sessionId/recordings/primary/fetch`     | No              |
+| `recordings.delete`                  | `DELETE /v1/browser/sessions/:sessionId/recordings/:recordingId`   | No              |
+
+The SDK sends each key as both `Idempotency-Key` and `X-Idempotency-Key`; on
+session creation the two must match.
+
 After a lost response, retry the same operation with its original key and input.
-Do not generate a new key for an uncertain operation. The SDK makes one request per
-call; it does not automatically repeat mutations. `BrowserAutomationHttpError`
+Do not generate a new key for an uncertain operation. Apart from
+`withManagedSession`, the SDK makes one request per call and does not automatically
+repeat mutations. `BrowserAutomationHttpError`
 exposes HTTP `status`, an optional Sapiom `code`, and `body` for inspection. Its
 message omits the response body. Do not log the body: it can contain sensitive data.
-A `browser_outcome_unknown` code means that execution is not confirmed; retain the
-key even if the task later completes. A confirmed local rejection can be retried
-with the same key after the blocking condition clears.
 
-A completed session creation retry returns the saved connection URLs without
-another payment. `sessions.recover(createKey)` uses the original Sapiom API key and
-returns session IDs and states, not connection URLs. Retry the original creation
-to retrieve a completed receipt. A rotated API key cannot recover an old creation.
+What a resend can settle:
+
+- `createManaged`: the same key and input return the created session without a
+  second charge; otherwise use `sessions.recover(key)`. `withManagedSession` does both.
+- `profiles.delete`: checks for prior success before deleting again.
+- `profiles.save`: a resend returns the same `profileId` and status; only `ready`
+  from `profiles.get` after the source session closes confirms the save.
+- Task starts/controls and recording pause/resume lost after sending are never
+  confirmed; resends return `browser_outcome_unknown`. Stop and close the session.
+- 400/403/404: no request ran. 409 without code: state conflict; read current
+  state first. `browser_termination_pending`: close/session work is in progress;
+  retry later.
+- Settlement ends 2m after max duration; `closeManaged` stays `pending`. Stop retrying.
+
+`sessions.recover(createKey)` uses the original Sapiom API key and returns session
+IDs and states, not connection URLs. Retry the original creation to retrieve a
+completed receipt. A rotated API key cannot recover an old creation.
 Direct HTTP callers using a payment proof must retain the same proof for recovery.
 `cleanup_only` permits cleanup, not tasks; `unknown` means no resource is confirmed.
 

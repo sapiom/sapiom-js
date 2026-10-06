@@ -131,6 +131,8 @@ import type {
   Identity,
   ActiveSession,
   WithSessionOptions,
+  WithManagedSessionInput,
+  WithManagedSessionOptions,
   BrowserTask,
   BrowserTaskControlResult,
   BrowserInterventions,
@@ -164,6 +166,7 @@ import type {
   McpTool,
 } from "../connectors/mcp/index.js";
 import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
+import { runManagedSession } from "../browser-automation/managed.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -2661,6 +2664,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             url: "https://cdn.example.com/stub-screenshot.png",
             expiresAt: "2099-01-01T00:00:00Z",
           })) as Screenshot,
+        ),
+      withManagedSession: <T>(
+        input: WithManagedSessionInput,
+        fn: (session: ManagedBrowserSession) => Promise<T>,
+        options?: WithManagedSessionOptions,
+      ) =>
+        runManagedSession(
+          client.browserAutomation.sessions,
+          input,
+          fn,
+          options,
         ),
       withSession: async <T>(
         fn: (session: ActiveSession) => Promise<T>,

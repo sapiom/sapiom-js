@@ -171,8 +171,11 @@ import type {
   IdentityCreateInput,
   Identity,
   WithSessionOptions,
+  WithManagedSessionInput,
+  WithManagedSessionOptions,
   ActiveSession,
   ManagedBrowserApi,
+  ManagedBrowserSession,
 } from "./browser-automation/index.js";
 import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
@@ -695,6 +698,12 @@ export interface Sapiom {
       fn: (session: ActiveSession) => Promise<T>,
       opts?: WithSessionOptions,
     ): Promise<T>;
+    /** Run a callback with a managed session and close it afterward. */
+    withManagedSession<T>(
+      input: WithManagedSessionInput,
+      fn: (session: ManagedBrowserSession) => Promise<T>,
+      options?: WithManagedSessionOptions,
+    ): Promise<T>;
     /** Create and manage browser identities for authenticated sessions. */
     identities: {
       /** Store credentials for automatic login during sessions. */
@@ -927,6 +936,8 @@ function bind(transport: Transport): Sapiom {
       screenshot: (input) => browserAutomation.screenshot(input, transport),
       withSession: (fn, opts) =>
         browserAutomation.withSession(fn, opts, transport),
+      withManagedSession: (input, fn, options) =>
+        browserAutomation.withManagedSession(input, fn, options, transport),
       identities: {
         create: (input) => browserAutomation.createIdentity(input, transport),
       },

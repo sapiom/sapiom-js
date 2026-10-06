@@ -24,7 +24,12 @@
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
-import { managedBrowserApi } from "./managed.js";
+import { managedBrowserApi, runManagedSession } from "./managed.js";
+import type {
+  ManagedBrowserSession,
+  WithManagedSessionInput,
+  WithManagedSessionOptions,
+} from "./managed.js";
 import { ensureOk, BrowserAutomationHttpError } from "./errors.js";
 
 export { BrowserAutomationHttpError };
@@ -641,6 +646,38 @@ export async function withSession<T>(
       () => undefined,
     );
   }
+}
+
+/**
+ * Create a managed session, run `fn`, and attempt to close the session afterward.
+ * If `idempotencyKey` is omitted, one is generated. Uncertain creation and close
+ * outcomes are retried with the same key and input. If creation remains uncertain,
+ * any session left by that creation is closed before the creation error is rethrown.
+ * The session is closed in `finally`, even when `fn` throws; close problems do not
+ * replace `fn`'s result or error. `onPendingClose` receives the session ID when a
+ * close has not completed.
+ *
+ * @example
+ * const title = await sapiom.browserAutomation.withManagedSession(
+ *   { recording: false },
+ *   async (session) => {
+ *     const browser = await chromium.connectOverCDP(session.cdpUrl);
+ *     return browser.contexts()[0].pages()[0].title();
+ *   },
+ * );
+ */
+export function withManagedSession<T>(
+  input: WithManagedSessionInput,
+  fn: (session: ManagedBrowserSession) => Promise<T>,
+  options?: WithManagedSessionOptions,
+  transport?: Transport,
+): Promise<T> {
+  return runManagedSession(
+    managedBrowserApi(DEFAULT_BASE_URL, transport).sessions,
+    input,
+    fn,
+    options,
+  );
 }
 
 // ----- Namespace exports -----
