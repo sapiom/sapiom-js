@@ -136,6 +136,7 @@ export class AgentMapImplementationBindings {
       inventoryFailed: boolean;
       nodes: PlanNode[];
       rows: z.infer<typeof rowSchema>[];
+      inferred: Set<string>;
       write: (value: unknown) => Promise<void>;
     }) => Promise<T> | T,
   ): Promise<T> {
@@ -230,6 +231,31 @@ export class AgentMapImplementationBindings {
                 resolution,
               };
             });
+          // Agents written by hand never went through Studio's create flow, so
+          // their nodes carry no recorded binding. Resolve such a node to the
+          // project's one agent of the same name, in memory only, so a later
+          // explicit bind or unbind still wins.
+          const claimed = new Set(bindings.map((binding) => binding.agentId));
+          const inferred = new Set<string>();
+          for (const binding of bindings) {
+            if (
+              binding.resolution !== "unbound" ||
+              rows.some((row) => row.nodeId === binding.nodeId)
+            )
+              continue;
+            const name = nodes.find((node) => node.id === binding.nodeId)!.name;
+            const matches = inventory.candidates.filter(
+              (candidate) =>
+                !claimed.has(candidate.agentId) &&
+                (candidate.name === name ||
+                  candidate.path.split(/[\\/]/u).at(-1) === name),
+            );
+            if (matches.length === 1) {
+              binding.agentId = matches[0].agentId;
+              binding.resolution = "bound";
+              inferred.add(binding.nodeId);
+            } else if (matches.length > 1) binding.resolution = "ambiguous";
+          }
           for (const binding of bindings) {
             if (
               binding.agentId &&
@@ -249,6 +275,7 @@ export class AgentMapImplementationBindings {
             inventoryFailed,
             nodes,
             rows,
+            inferred,
             write: sidecar.write,
           });
         },
@@ -327,7 +354,7 @@ export class AgentMapImplementationBindings {
     return this.inspect(
       projectId,
       assertAuthorized,
-      async ({ projection, inventory, nodes, rows, write }) => {
+      async ({ projection, inventory, nodes, rows, inferred, write }) => {
         if (request.expectedMapVersionId !== projection.mapVersionId)
           fail("stale_map");
         const node = nodes.find((node) => node.id === request.nodeId);
@@ -353,6 +380,7 @@ export class AgentMapImplementationBindings {
             projection.bindings.some(
               (row) =>
                 row.nodeId !== request.nodeId &&
+                !inferred.has(row.nodeId) &&
                 row.agentId === request.agentId,
             )
           )

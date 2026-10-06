@@ -292,6 +292,80 @@ describe("Agent Map implementation bindings", () => {
     });
   });
 
+  it("resolves an unlinked node to the one project agent of the same name without persisting it", async () => {
+    const f = await fixture(false, []);
+    f.inventory.candidates = [
+      { agentId, name: "Node 0", path: "/private/a", definitionId: null },
+      {
+        agentId: secondId,
+        name: "other",
+        path: "/private/Node 1",
+        definitionId: null,
+      },
+    ];
+    await expect(
+      f.service.target(projectId, f.nodeId, authorize),
+    ).resolves.toMatchObject({ agentId, workflowPath: "/private/a" });
+    await expect(
+      f.service.target(projectId, f.otherNodeId, authorize),
+    ).resolves.toMatchObject({ agentId: secondId });
+    expect((await f.read()).bindings).toEqual([
+      expect.objectContaining({
+        nodeId: f.nodeId,
+        agentId,
+        revision: 0,
+        resolution: "bound",
+      }),
+      expect.objectContaining({
+        nodeId: f.otherNodeId,
+        agentId: secondId,
+        resolution: "bound",
+      }),
+    ]);
+    await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports several same-name agents as ambiguous", async () => {
+    const f = await fixture(false, []);
+    f.inventory.candidates = [
+      { agentId, name: "Node 0", path: "/private/a", definitionId: null },
+      {
+        agentId: secondId,
+        name: "Node 0",
+        path: "/private/b",
+        definitionId: null,
+      },
+    ];
+    await expect(
+      f.service.target(projectId, f.nodeId, authorize),
+    ).rejects.toMatchObject({ code: "target_ambiguous" });
+  });
+
+  it("lets a recorded binding win over a same-name agent", async () => {
+    const f = await fixture(false, []);
+    f.inventory.candidates = [
+      { agentId, name: "Node 1", path: "/private/a", definitionId: null },
+      {
+        agentId: secondId,
+        name: "Node 0",
+        path: "/private/b",
+        definitionId: null,
+      },
+    ];
+    await f.bind(agentId);
+    await expect(
+      f.service.target(projectId, f.nodeId, authorize),
+    ).resolves.toMatchObject({ agentId });
+    // The name match for Node 1 is already claimed, so it stays unlinked.
+    await expect(
+      f.service.target(projectId, f.otherNodeId, authorize),
+    ).rejects.toMatchObject({ code: "unbound" });
+    await f.bind(null, 1);
+    await expect(
+      f.service.target(projectId, f.nodeId, authorize),
+    ).rejects.toMatchObject({ code: "unbound" });
+  });
+
   it("serializes independent writers, checks immutable map versions, and rejects duplicate claims", async () => {
     const f = await fixture();
     const input = {
