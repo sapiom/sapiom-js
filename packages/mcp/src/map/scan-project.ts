@@ -153,13 +153,15 @@ async function discoverAgents(root: string, fleet: FleetJson | null): Promise<Fo
   const visit = async (dir: string, depth: number): Promise<void> => {
     const sapiom = await readJson(path.join(dir, "sapiom.json"));
     const isAgent = keysByDir.has(dir) || sapiom !== null || (await declaresAgent(dir));
-    if (isAgent) {
+    // The root is a project folder first: its children are searched, and the root counts as an
+    // agent only when nothing beneath it is one (a single-agent project opened at its own folder).
+    if (isAgent && dir === root) rootIsAgent = { sapiom };
+    else if (isAgent) {
       const parsed = sapiom ? sapiomJsonSchema.safeParse(sapiom.value) : null;
       const pkg = await readJson(path.join(dir, "package.json"));
       found.set(dir, {
         dir,
         key: keysByDir.get(dir) ?? path.basename(dir),
-        // A root that is itself an agent folder maps to that one agent.
         sapiomJson: parsed?.success ? parsed.data : null,
         packageJson: (pkg?.value as FoundAgent["packageJson"]) ?? null,
       });
@@ -177,7 +179,19 @@ async function discoverAgents(root: string, fleet: FleetJson | null): Promise<Fo
       await visit(path.join(dir, entry.name), depth + 1);
     }
   };
+  let rootIsAgent: { sapiom: { value: unknown } | null } | null = null;
   await visit(root, 0);
+  if (rootIsAgent && found.size === 0) {
+    const { sapiom } = rootIsAgent as { sapiom: { value: unknown } | null };
+    const parsed = sapiom ? sapiomJsonSchema.safeParse(sapiom.value) : null;
+    const pkg = await readJson(path.join(root, "package.json"));
+    found.set(root, {
+      dir: root,
+      key: keysByDir.get(root) ?? path.basename(root),
+      sapiomJson: parsed?.success ? parsed.data : null,
+      packageJson: (pkg?.value as FoundAgent["packageJson"]) ?? null,
+    });
+  }
   return [...found.values()].sort((left, right) => (left.dir < right.dir ? -1 : 1));
 }
 

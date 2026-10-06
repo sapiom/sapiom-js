@@ -99,6 +99,11 @@ function objectProperty(object: ts.ObjectLiteralExpression, key: string): ts.Exp
       found = null;
       continue;
     }
+    // A computed key may overwrite this one at run time.
+    if (property.name && ts.isComputedPropertyName(property.name)) {
+      found = null;
+      continue;
+    }
     if (propertyNameText(property.name) !== key) continue;
     if (ts.isPropertyAssignment(property)) found = property.initializer;
     else if (ts.isShorthandPropertyAssignment(property)) found = property.name;
@@ -322,8 +327,20 @@ function reachableScope(sourceFile: ts.SourceFile, wanted: ReadonlySet<string>):
     };
     visit(statement);
   }
+  // A const initializer that is not a function runs on import, referenced or not.
+  const runsOnImport = (statement: ts.Statement): boolean =>
+    ts.isVariableStatement(statement) &&
+    statement.declarationList.declarations.some((declaration) => {
+      const init = declaration.initializer ? unwrapExpression(declaration.initializer) : null;
+      return init !== null && !ts.isArrowFunction(init) && !ts.isFunctionExpression(init) && !ts.isClassExpression(init);
+    });
   const ranges = sourceFile.statements
-    .filter((statement) => reached.has(statement) || (topLevelName(statement).length === 0 && !ts.isImportDeclaration(statement)))
+    .filter(
+      (statement) =>
+        reached.has(statement) ||
+        runsOnImport(statement) ||
+        (topLevelName(statement).length === 0 && !ts.isImportDeclaration(statement)),
+    )
     .map((statement) => [statement.pos, statement.end] as const);
   return (position) => ranges.some(([start, end]) => position >= start && position < end);
 }

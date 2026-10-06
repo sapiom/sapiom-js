@@ -366,3 +366,48 @@ describe("checkSteps", () => {
     expect(result).toEqual({ unavailable: expect.stringMatching(/agents check/) });
   });
 });
+
+describe("describeProject review round 2", () => {
+  it("searches a root with its own sapiom.json for child agents first", async () => {
+    const root = await project({
+      "sapiom.json": '{ "name": "desk" }',
+      "fleet.json": '{ "projects": [{ "key": "intake", "path": "agents/intake" }] }',
+      "agents/intake/index.ts": agentSource("intake"),
+      "agents/worker/index.ts": agentSource("worker"),
+    });
+
+    expect((await mapOf(root)).agents.map((agent) => agent.slug)).toEqual(["intake", "worker"]);
+  });
+
+  it("counts a launch in an imported file's top-level initializer", async () => {
+    const root = await project({
+      "_shared/boot.ts": `export const STATUS = "open";
+declare const ctx: any;
+const started = ctx.sapiom.agents.launch({ definition: "worker" });
+export function unused(ctx: any) { return ctx.sapiom.agents.run({ definition: "other" }); }
+`,
+      "app/index.ts": agentSource("app", `import { STATUS } from "../_shared/boot";\nconsole.log(STATUS);`),
+      "worker/index.ts": agentSource("worker"),
+      "other/index.ts": agentSource("other"),
+    });
+
+    expect(edgesOf(await mapOf(root))).toEqual(["app->worker"]);
+  });
+
+  it("treats a fixed key as dynamic when a computed key could overwrite it", async () => {
+    const root = await project({
+      "router/index.ts": agentSource(
+        "router",
+        `const key = process.argv[2];
+const TARGETS = { primary: "alpha", [key]: "beta" };
+export async function a(ctx: any) { await ctx.sapiom.agents.run({ definition: TARGETS["primary"] }); }`,
+      ),
+      "alpha/index.ts": agentSource("alpha"),
+    });
+
+    const map = await mapOf(root);
+
+    expect(map.edges).toEqual([]);
+    expect(map.unresolved.map((item) => item.reason)).toEqual(["dynamic-target"]);
+  });
+});
