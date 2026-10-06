@@ -24,10 +24,14 @@ export function useAssistantDrafts(harness: HarnessStateHook) {
   const authorityRevision = snapshot?.authorityRevision ?? null;
   // Terminal or Assistant, per session. The header's switch sets it; losing
   // access or another account signing in puts every session back on Terminal.
-  const [modes, setModes] = useState<
-    Readonly<Record<string, ConversationMode>>
-  >({});
-  useEffect(() => setModes({}), [enabled, authorityRevision]);
+  // Keyed by account, so a switch is never read with the previous
+  // account's choices, not even for one render.
+  const modeKey = `${enabled}:${authorityRevision ?? ""}`;
+  const [modeState, setModeState] = useState<{
+    key: string;
+    modes: Readonly<Record<string, ConversationMode>>;
+  }>({ key: modeKey, modes: {} });
+  const modes = modeState.key === modeKey ? modeState.modes : {};
   const modeFor = useCallback(
     (sessionId: string): ConversationMode =>
       enabled ? (modes[sessionId] ?? "Terminal") : "Terminal",
@@ -35,10 +39,24 @@ export function useAssistantDrafts(harness: HarnessStateHook) {
   );
   const setMode = useCallback(
     (sessionId: string, mode: ConversationMode) =>
-      setModes((current) =>
-        current[sessionId] === mode ? current : { ...current, [sessionId]: mode },
-      ),
-    [],
+      setModeState((current) => {
+        const base = current.key === modeKey ? current.modes : {};
+        return base[sessionId] === mode && current.key === modeKey
+          ? current
+          : { key: modeKey, modes: { ...base, [sessionId]: mode } };
+      }),
+    [modeKey],
+  );
+  // A terminal reveal (the session asked to be seen) puts it on Terminal
+  // once; remounting the pane must not replay an already-handled one.
+  const handledReveals = useRef(new Map<string, number>());
+  const onTerminalReveal = useCallback(
+    (sessionId: string, revision: number) => {
+      if (revision <= (handledReveals.current.get(sessionId) ?? 0)) return;
+      handledReveals.current.set(sessionId, revision);
+      setMode(sessionId, "Terminal");
+    },
+    [setMode],
   );
   // Draft text belongs to a principal + Studio session, not to whichever
   // centre-pane branch happens to be mounted. An auth barrier replaces this
@@ -62,7 +80,15 @@ export function useAssistantDrafts(harness: HarnessStateHook) {
       harness.showToast(errorMessage(error, "Could not start sign-in."));
     });
   }, [harness.showToast, harness.startAuth]);
-  return { drafts, enabled, authorityRevision, signIn, modeFor, setMode };
+  return {
+    drafts,
+    enabled,
+    authorityRevision,
+    signIn,
+    modeFor,
+    setMode,
+    onTerminalReveal,
+  };
 }
 
 /**
@@ -111,6 +137,7 @@ export function SessionView({
         enabled={assistant.enabled}
         mode={assistant.modeFor(session.id)}
         onModeChange={(mode) => assistant.setMode(session.id, mode)}
+        onTerminalReveal={assistant.onTerminalReveal}
         drafts={assistant.drafts}
         authorityRevision={assistant.authorityRevision}
         onSignIn={assistant.signIn}
@@ -164,6 +191,7 @@ export function SessionView({
           enabled={assistant.enabled}
           mode={assistant.modeFor(session.id)}
           onModeChange={(mode) => assistant.setMode(session.id, mode)}
+          onTerminalReveal={assistant.onTerminalReveal}
           drafts={assistant.drafts}
           authorityRevision={assistant.authorityRevision}
           onSignIn={assistant.signIn}

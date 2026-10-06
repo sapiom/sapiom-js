@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import {
   OpenCodeChat,
   type ChatDraft,
@@ -17,6 +17,7 @@ export function AssistantPane({
   enabled,
   mode,
   onModeChange,
+  onTerminalReveal,
   terminalRevision,
   drafts,
   authorityRevision,
@@ -29,6 +30,8 @@ export function AssistantPane({
   enabled: boolean;
   mode: ConversationMode;
   onModeChange: (mode: ConversationMode) => void;
+  /** Handled by the shell, which outlives this pane, so a remount replays nothing. */
+  onTerminalReveal: (sessionId: string, revision: number) => void;
   terminalRevision: number;
   drafts: ChatDraftStore;
   authorityRevision: string | null;
@@ -41,13 +44,9 @@ export function AssistantPane({
     drafts.set(sessionId, entry);
     return entry;
   }, [drafts, sessionId]);
-  const revealed = useRef(new Map<string, number>());
   useEffect(() => {
-    if (terminalRevision > (revealed.current.get(sessionId) ?? 0)) {
-      revealed.current.set(sessionId, terminalRevision);
-      onModeChange("Terminal");
-    }
-  }, [sessionId, terminalRevision, onModeChange]);
+    onTerminalReveal(sessionId, terminalRevision);
+  }, [sessionId, terminalRevision, onTerminalReveal]);
 
   return (
     <div className="studio-conversation">

@@ -128,6 +128,19 @@ describe("Assistant access", () => {
     transient.close();
   });
 
+  it("keeps checking when one check never settles, so a later off still lands", async () => {
+    await access.refresh();
+    request.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockImplementation(async () =>
+      Response.json({ ...enabled, assistant: false }),
+    );
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(access.get()).toBeNull();
+  });
+
   it("does no network work in no-auth mode or without Studio credentials", async () => {
     const off = new AssistantAccess({
       enabled: false,

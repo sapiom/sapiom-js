@@ -110,6 +110,13 @@ export class AssistantAccess {
     clearTimeout(this.refreshTimer);
     // A newer check (a sign-in, a credential write) supersedes an older one.
     const generation = ++this.generation;
+    // Scheduled before awaiting, so a check that never settles cannot stop
+    // the next one from applying the flag.
+    this.refreshTimer = setTimeout(
+      () => void this.refresh(),
+      this.options.refreshIntervalMs ?? REFRESH_INTERVAL_MS,
+    );
+    this.refreshTimer.unref?.();
     const result = await this.check().catch(
       (): CheckResult => ({ failure: "access_denied" }),
     );
@@ -117,11 +124,6 @@ export class AssistantAccess {
     if ("grant" in result) this.adopt(result.grant);
     else if (result.failure !== "transport_unavailable" || !this.grant)
       this.adopt(null, result.failure);
-    this.refreshTimer = setTimeout(
-      () => void this.refresh(),
-      this.options.refreshIntervalMs ?? REFRESH_INTERVAL_MS,
-    );
-    this.refreshTimer.unref?.();
   }
 
   close(): void {
