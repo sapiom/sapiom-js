@@ -94,7 +94,8 @@ export function useProjectMap({
         if (generation !== request.current) return;
         const unavailable =
           error instanceof ApiError &&
-          (error.status === 401 || error.status === 403 || error.status === 404);
+          // 409: the project's folder is gone or not open; its old map must not stay up.
+          (error.status === 401 || error.status === 403 || error.status === 404 || error.status === 409);
         track("agent_map.workspace_load_failed", {
           code: error instanceof ApiError ? (error.code ?? String(error.status)) : "network",
         });

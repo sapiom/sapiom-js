@@ -1839,6 +1839,8 @@ export class MockApi implements HarnessApi {
     await delay();
     if (failure === "error")
       throw new ApiError(500, "The map could not be computed", "The map could not be computed", "map_failed");
+    if (failure === "gone")
+      throw new ApiError(409, "The project folder no longer exists", "The project folder no longer exists", "project_unavailable");
     if (failure === "missing" || !project || !scope)
       throw new ApiError(404, "Studio project not found", "Studio project not found", "project_not_found");
     if (typeof window !== "undefined") {

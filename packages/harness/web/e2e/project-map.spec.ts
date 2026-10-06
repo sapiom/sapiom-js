@@ -538,6 +538,12 @@ test.describe("states", () => {
     await expect(page.getByTestId("agent-map-canvas")).toHaveCount(0);
   });
 
+  test("a project whose folder is gone (409) is unavailable, with no retry", async ({ page }) => {
+    await select(page, "acme-app", "&mockProjectMap=gone");
+    await expect(page.getByTestId("agent-map-project-unavailable")).toBeVisible();
+    await expect(page.getByTestId("agent-map-retry")).toHaveCount(0);
+  });
+
   test("without a deploy state no node carries a badge", async ({ page }) => {
     await openReady(page, "acme-app", "&mockProjectMapDeployed=0");
     await expect(page.locator(".agent-map-node")).toHaveCount(4);
