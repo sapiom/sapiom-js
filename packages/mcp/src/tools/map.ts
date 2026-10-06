@@ -1,3 +1,5 @@
+import * as os from "node:os";
+
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AgentOperationError } from "@sapiom/agent-core";
@@ -94,7 +96,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         }
         const client = platform === false ? undefined : await gatewayClient(env);
         const description = await describeProject({
-          root: root ?? process.cwd(),
+          // Node does not expand `~`; callers (and the README) use it.
+          root: root ? root.replace(/^~(?=$|[\\/])/, os.homedir()) : process.cwd(),
           ref,
           platform: platform === false ? undefined : client ? accountPlatform(client) : null,
         });

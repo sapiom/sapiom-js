@@ -411,3 +411,17 @@ export async function a(ctx: any) { await ctx.sapiom.agents.run({ definition: TA
     expect(map.unresolved.map((item) => item.reason)).toEqual(["dynamic-target"]);
   });
 });
+
+describe("describeProject review round 3", () => {
+  it("names both folders when two agents share a slug", async () => {
+    const root = await project({
+      "a/sapiom.json": '{ "name": "same" }',
+      "legacy/a/sapiom.json": '{ "name": "same" }',
+    });
+
+    await expect(describeProject({ root, steps: false })).rejects.toMatchObject({
+      code: "DUPLICATE_AGENT",
+      message: expect.stringContaining("a and legacy/a"),
+    });
+  });
+});

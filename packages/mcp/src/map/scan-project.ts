@@ -363,6 +363,9 @@ async function gitView(root: string, ref: string | undefined): Promise<GitView> 
   return { scanRoot: path.join(temp, prefix), ref, changed, dispose };
 }
 
+/** The files a scan reads: TypeScript sources and the JSON it parses. Assets are never extracted. */
+const SCANNED_FILE = /(\.[cm]?tsx?|(^|\/)(sapiom|package|fleet|map)\.json)$/;
+
 /** Write the blobs under `prefix` at `commit` into `dest` with git alone (no `tar`, which Windows may lack). */
 async function extractTree(top: string, commit: string, prefix: string, dest: string): Promise<void> {
   const listing = await execFileAsync(
@@ -376,7 +379,7 @@ async function extractTree(top: string, commit: string, prefix: string, dest: st
     .flatMap((line) => {
       const match = /^(\d+) blob ([0-9a-f]+)\t(.+)$/.exec(line);
       // Regular files only: symlinks (120000) and submodules are never followed by the scan.
-      return match && match[1] !== "120000" ? [{ sha: match[2]!, file: match[3]! }] : [];
+      return match && match[1] !== "120000" && SCANNED_FILE.test(match[3]!) ? [{ sha: match[2]!, file: match[3]! }] : [];
     });
   if (entries.length === 0) return;
   const contents = await catBlobs(top, entries.map((entry) => entry.sha));
@@ -482,6 +485,17 @@ async function describeAt(root: string, view: GitView, options: ScanOptions): Pr
   }
 
   const slugByDir = new Map(found.map((agent) => [agent.dir, slugFor(agent, facts.get(agent.dir)!)]));
+  const dirBySlug = new Map<string, string>();
+  for (const [dir, slug] of slugByDir) {
+    const other = dirBySlug.get(slug);
+    if (other) {
+      throw new MapInputError(
+        "DUPLICATE_AGENT",
+        `Two folders are agent "${slug}": ${posix(path.relative(scanRoot, other))} and ${posix(path.relative(scanRoot, dir))}. Rename one (sapiom.json "name" or defineAgent name).`,
+      );
+    }
+    dirBySlug.set(slug, dir);
+  }
   const knownSlugs = new Set(slugByDir.values());
   const slugByKey = new Map(found.map((agent) => [agent.key, slugByDir.get(agent.dir)!]));
   // A target names an agent by slug, or by its folder / fleet key (`agentSlug("controller")`).

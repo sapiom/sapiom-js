@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -91,6 +92,12 @@ describe("sapiom_dev_map", () => {
 
     expect(map.platform).toBe("skipped");
     expect(readCredentials).not.toHaveBeenCalled();
+  });
+
+  it("expands a leading ~ in root", async () => {
+    const res = await mapTool()({ root: "~/definitely-not-a-sapiom-project-dir", platform: false });
+
+    expect(parse(res).error.message).toContain(os.homedir());
   });
 
   it("answers a missing folder with a coded error", async () => {
