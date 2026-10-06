@@ -149,7 +149,7 @@ import {
 } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
 import { createStudioProjectsRouter } from "./studio-projects.js";
-import { createProjectMapRouter, platformForKey } from "./project-map.js";
+import { createProjectMapRouter, openProjectRoots, platformForKey } from "./project-map.js";
 import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import { isProjectSessionDispatchAuthorized } from "../core/project-session.js";
@@ -2769,10 +2769,7 @@ export const startServer = async (
         const project = await studioProjectCatalog.resolveIdentity(projectId);
         if (!project) return null;
         const scopes = await studioWorkspaceScopeCatalog.list();
-        const roots = project.rootBindings
-          .filter((binding) => binding.status === "active" &&
-            scopes.some((scope) => samePath(scope.cwd, binding.localRootRef)))
-          .map((binding) => binding.localRootRef);
+        const roots = await openProjectRoots(project.rootBindings, scopes);
         return { projectId: project.projectId, displayName: project.displayName, roots };
       },
       platform: () => platformForKey(apiKeyProvider.getKey(), resolveCoreBaseUrl()),

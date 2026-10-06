@@ -18,6 +18,7 @@ import {
   createProjectMapRouter,
   gitRefs,
   type ProjectMapProject,
+  openProjectRoots,
 } from "./project-map.js";
 
 const PROJECT_ID = "project_00000000-0000-4000-8000-000000000001";
@@ -309,5 +310,27 @@ describe("gitRefs", () => {
     dirs.push(dir);
 
     expect(await gitRefs(dir)).toBeNull();
+  });
+});
+
+describe("openProjectRoots", () => {
+  it("matches a binding to an open scope through a symlinked folder", async () => {
+    const { mkdtemp, mkdir, symlink, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const base = await mkdtemp(join(tmpdir(), "open-roots-"));
+    try {
+      const real = join(base, "real");
+      const link = join(base, "link");
+      await mkdir(real);
+      await symlink(real, link, "dir");
+
+      expect(await openProjectRoots([{ status: "active", localRootRef: real }], [{ cwd: link }])).toEqual([real]);
+      expect(await openProjectRoots([{ status: "active", localRootRef: link }], [{ cwd: real }])).toEqual([link]);
+      expect(await openProjectRoots([{ status: "retired", localRootRef: real }], [{ cwd: real }])).toEqual([]);
+      expect(await openProjectRoots([{ status: "active", localRootRef: real }], [{ cwd: join(base, "other") }])).toEqual([]);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
