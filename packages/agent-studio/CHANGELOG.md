@@ -1,5 +1,13 @@
 # @sapiom/agent-studio
 
+## 0.1.35
+
+### Patch Changes
+
+- Updated dependencies [fe4a4fb]
+- Updated dependencies [45c2846]
+  - @sapiom/harness@0.21.0
+
 ## 0.1.34
 
 ### Patch Changes
