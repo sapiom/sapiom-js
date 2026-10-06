@@ -98,7 +98,6 @@ const createSessionSchema = z
 const injectInputSchema = z.object({
   text: z.string(),
   submit: z.boolean().optional(),
-  requestId: z.string().min(1).max(200).optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
 
 const attachFileSchema = z.object({
@@ -248,15 +247,13 @@ export interface RestRouterOptions {
    * and, when the scan discovers one, render the new session's canvas. */
   onSessionCreated?: (cwd: string, harnessSessionId: string) => void;
   /**
-   * Optional lifecycle-aware input boundary. It lets a pending project
-   * bootstrap yield durably to real user input; ordinary sessions fall back
-   * to SessionManager.submitInput.
+   * Optional input boundary shared with the rolling alias; without it the
+   * route falls back to SessionManager.submitInput.
    */
   submitSessionInput?: (
     sessionId: string,
     text: string,
     submit: boolean,
-    requestId?: string,
   ) => Promise<boolean | SessionInputSubmissionResult>;
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
@@ -893,7 +890,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
             req.params.id,
             parsed.data.text,
             submit,
-            parsed.data.requestId,
           )
         : await sessionManager.submitInput(
             req.params.id,
@@ -913,23 +909,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
         err instanceof ExternalHarnessError ||
         err instanceof SessionBackgroundInputPreemptedError ||
         err instanceof SessionInputIsolationError
-      ) {
-        res.status(409).json({ error: err.message, code: err.code });
-        return;
-      }
-      if (
-        err instanceof Error &&
-        "code" in err &&
-        err.code === "project_bootstrap_dispatch_forbidden"
-      ) {
-        res.status(403).json({ error: err.message, code: err.code });
-        return;
-      }
-      if (
-        err instanceof Error &&
-        "code" in err &&
-        (err.code === "project_bootstrap_request_id_reused" ||
-          err.code === "project_bootstrap_input_capacity")
       ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;

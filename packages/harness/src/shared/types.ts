@@ -229,8 +229,6 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
-  /** Durable lifecycle state for a new project's one automatic map seed. */
-  projectBootstrap?: import("@sapiom/agent-map").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
   agentMapIdentity: import("@sapiom/agent-map").ProjectAgentSession;
 }
@@ -859,35 +857,8 @@ export type AnalyticsEventType =
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
   | "agent_map.capability"
-  | "build_plan.operation"
-  | "agent_brief.refresh"
-  | "subsession.store_initialized"
-  | "subsession.binding_reserved"
-  | "subsession.duplicate_prevented"
-  | "subsession.spawn_claimed"
-  | "subsession.requested"
-  | "subsession.created"
-  | "subsession.reused"
-  | "subsession.released"
-  | "subsession.ready"
-  | "subsession.failed"
-  | "subsession.kickoff_claimed"
-  | "subsession.kickoff_submitted"
-  | "subsession.kickoff_acknowledged"
-  | "subsession.kickoff_uncertain"
-  | "subsession.context_stale"
-  | "subsession.manual_session_protected"
   | "project_agent.identity_migrated"
-  | "project_agent.identity_rejected"
-  | "project_bootstrap.scheduled"
-  | "project_bootstrap.recovered"
-  | "project_bootstrap.attempted"
-  | "project_bootstrap.retried"
-  | "project_bootstrap.delivered"
-  | "project_bootstrap.failed"
-  | "project_bootstrap.preempted"
-  | "project_bootstrap.skipped"
-  | "project_bootstrap.input_delivery_uncertain";
+  | "project_agent.identity_rejected";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -1231,27 +1202,16 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
-  /**
-   * Optional idempotency key used only when the new-project bootstrap FIFO
-   * owns this submitted turn. Ordinary post-bootstrap input remains one
-   * intentional message per request.
-   */
-  requestId?: string;
 }
 
 export interface InjectInputResponse {
   ok: true;
-  /** Present only when the durable bootstrap FIFO handled this request. */
-  receipt?: import("@sapiom/agent-map").ProjectBootstrapInputReceipt;
 }
 
 /** Internal server boundary shared by the canonical route and rolling alias. */
 export type SessionInputSubmissionResult =
   | { ok: false }
-  | {
-      ok: true;
-      receipt?: import("@sapiom/agent-map").ProjectBootstrapInputReceipt;
-    };
+  | { ok: true };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
  *  must be a path already known to the workflow registry (scan/connect). */

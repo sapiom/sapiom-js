@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentMapWorkspaceState } from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
 import {
-  buildFocusedProjectContext,
   isProjectSessionDispatchAuthorized,
   isWithinCurrentProject,
 } from "./project-session.js";
@@ -25,17 +23,6 @@ const project: StudioProjectIdentity = {
   createdAt: "2026-09-01T00:00:00.000Z",
   updatedAt: "2026-09-01T00:00:00.000Z",
 };
-const workspace: AgentMapWorkspaceState = {
-  projectId,
-  schemaVersion: 1,
-  recordVersion: 1,
-  confirmedRevisionId: null,
-  activeProposalId: null,
-  projectBuildPlanId: null,
-  createdAt: "2026-09-01T00:00:00.000Z",
-  updatedAt: "2026-09-01T00:00:00.000Z",
-};
-
 function session(id: string): HarnessSession {
   return {
     id,
@@ -136,25 +123,5 @@ describe("role-neutral project session", () => {
     };
     resolve(project);
     await expect(authorization).resolves.toBe(false);
-  });
-
-  it("builds bounded path-free context without changing authority", () => {
-    const context = buildFocusedProjectContext({
-      project,
-      workspace,
-      sessionId: "session-1",
-      userId: "user-1",
-      details: { warnings: Array.from({ length: 40 }, (_, i) => `warning-${i}-${"w".repeat(400)}`) },
-    });
-    const parsed = JSON.parse(context.split("\n")[2]!) as {
-      identity: Record<string, string>;
-      project: { warnings: string[] };
-    };
-    expect(parsed.identity).toEqual({ projectId, sessionId: "session-1", userId: "user-1" });
-    expect(parsed.project.warnings).toHaveLength(16);
-    expect(context).not.toContain('"role"');
-    expect(context).not.toContain(projectRoot);
-    expect(context).not.toContain("private-workspace-key");
-    expect(context.length).toBeLessThan(16_384);
   });
 });

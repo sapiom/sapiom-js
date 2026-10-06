@@ -225,50 +225,6 @@ export class AgentMapInitializationCoordinator {
     return initializationStatus(projectId, record);
   }
 
-  /** Ordinary new-project bootstrap takes the same one-time ownership decision.
-   * A reservation is permanent: that ordinary coding session owns subsequent map work. */
-  reserveForBootstrap(projectId: string): Promise<boolean> {
-    const operation = this.reserveBootstrap(projectId);
-    this.operations.add(operation);
-    void operation.then(
-      () => this.operations.delete(operation),
-      () => this.operations.delete(operation),
-    );
-    return operation;
-  }
-
-  private async reserveBootstrap(projectId: string): Promise<boolean> {
-    if (this.closed) return false;
-    return this.options.store.inspectInitialization(
-      projectId,
-      async (aggregate, journal) => {
-        if (hasAuthoredAgentMap(aggregate)) return false;
-        const current = await journal.read();
-        if (
-          current?.status === "queued" ||
-          current?.status === "running" ||
-          current?.status === "completed"
-        )
-          return false;
-        const project = await this.options.project(projectId);
-        if (this.closed || !project?.available) return false;
-        await journal.write({
-          schemaVersion: 1,
-          projectId,
-          userId: project.userId,
-          attemptId: current?.attemptId ?? randomUUID(),
-          status: "skipped",
-          ownerId: null,
-          ownerPid: null,
-          provider: null,
-          errorCode: null,
-          updatedAt: new Date().toISOString(),
-        });
-        return true;
-      },
-    );
-  }
-
   private pump(): void {
     while (!this.closed && this.active.size < (this.options.concurrency ?? 2)) {
       const projectId = [...this.pending].find((id) => !this.active.has(id));

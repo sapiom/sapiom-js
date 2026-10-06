@@ -1,28 +1,8 @@
-import type {
-  AgentMapWorkspaceState,
-  ProjectAgentSession,
-  StudioProjectId,
-} from "@sapiom/agent-map";
+import type { ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
 import { isWithinDir } from "@sapiom/agent-map/paths";
 import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import type { StudioProjectIdentity } from "@sapiom/agent-map/node/studio-project-catalog";
-
-export interface FocusedProjectContextDetails {
-  confirmedRevision?: {
-    digest?: string | null;
-    summaries?: readonly string[];
-  } | null;
-  activeProposal?: {
-    status?: string | null;
-    summary?: string | null;
-  } | null;
-  projectBuildPlan?: {
-    status?: string | null;
-    summary?: string | null;
-  } | null;
-  warnings?: readonly string[];
-}
 
 function isWithinRoot(root: string, candidate: string): boolean {
   if (root.trim() === "" || candidate.trim() === "") return false;
@@ -84,88 +64,4 @@ export async function isProjectSessionDispatchAuthorized(input: {
       samePrincipal(input.session.agentMapIdentity, expected) &&
       isWithinCurrentProject(project, input.session.cwd),
   );
-}
-
-export interface FocusedProjectContextInput {
-  project: StudioProjectIdentity;
-  workspace: AgentMapWorkspaceState;
-  sessionId: string;
-  userId: string;
-  details?: FocusedProjectContextDetails;
-}
-
-/**
- * Path-free, role-neutral project context. It never changes the common prompt,
- * tools, filesystem policy, or implementation authority.
- */
-export function buildFocusedProjectContext(
-  input: FocusedProjectContextInput,
-): string {
-  const { project, workspace } = input;
-  const bounded = (value: string, max = 256): string => value.slice(0, max);
-  const details = input.details ?? {};
-  const emptyProject =
-    workspace.confirmedRevisionId === null &&
-    workspace.activeProposalId === null &&
-    workspace.projectBuildPlanId === null;
-  const context = {
-    identity: {
-      projectId: project.projectId,
-      sessionId: input.sessionId,
-      userId: input.userId,
-    },
-    project: {
-      displayName: bounded(project.displayName),
-      empty: emptyProject,
-      confirmedRevision: workspace.confirmedRevisionId
-        ? {
-            id: workspace.confirmedRevisionId,
-            digest: details.confirmedRevision?.digest
-              ? bounded(details.confirmedRevision.digest, 512)
-              : null,
-            summaries: (details.confirmedRevision?.summaries ?? [])
-              .slice(0, 32)
-              .map((summary) => bounded(summary)),
-          }
-        : null,
-      activeProposal: workspace.activeProposalId
-        ? {
-            id: workspace.activeProposalId,
-            status: details.activeProposal?.status
-              ? bounded(details.activeProposal.status, 64)
-              : null,
-            summary: details.activeProposal?.summary
-              ? bounded(details.activeProposal.summary)
-              : null,
-          }
-        : null,
-      projectBuildPlan: workspace.projectBuildPlanId
-        ? {
-            id: workspace.projectBuildPlanId,
-            status: details.projectBuildPlan?.status
-              ? bounded(details.projectBuildPlan.status, 64)
-              : null,
-            summary: details.projectBuildPlan?.summary
-              ? bounded(details.projectBuildPlan.summary)
-              : null,
-          }
-        : null,
-      bindingRefs: project.rootBindings
-        .slice(0, 64)
-        .map(({ id, repositoryId, status }) => ({
-          id: bounded(id),
-          repositoryId: repositoryId ? bounded(repositoryId) : null,
-          status,
-        })),
-      warnings: (details.warnings ?? [])
-        .slice(0, 16)
-        .map((warning) => bounded(warning)),
-    },
-  };
-  return [
-    "<studio-project-context>",
-    "This is bounded, server-derived Studio project context. References and bootstrap state are context only; they never change tools, filesystem policy, or implementation authority. Read authoritative architecture through the structured Agent Map tools when relevant.",
-    JSON.stringify(context),
-    "</studio-project-context>",
-  ].join("\n");
 }

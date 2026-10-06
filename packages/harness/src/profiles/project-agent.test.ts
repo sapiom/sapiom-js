@@ -39,18 +39,7 @@ describe("project-agent operating guidance", () => {
     expect(prompt).toContain("Re-read and reconcile");
   });
 
-  it("covers the plan lifecycle without requiring a plan for small edits", () => {
-    for (const name of ["build_plan_read", "build_plan_validate", "build_plan_apply",
-      "build_plan_rebase", "build_plan_brief_refresh"]) expect(prompt).toContain(name);
-    expect(prompt).toContain("Small edits do not need a new plan");
-    expect(prompt).toContain('kind: "current"');
-  });
-
-  it("describes writable delegation and its actual completion boundary", () => {
-    expect(prompt).toContain("project_subsession_delegate");
-    expect(prompt).toContain("share the working directory");
-    expect(prompt).toContain("not completed work");
-    expect(prompt).toContain("Never relabel, close");
-    expect(prompt).toContain("release-dormant");
+  it("names no build-plan or delegation tool", () => {
+    expect(prompt).not.toMatch(/build_plan_|project_subsession_delegate/u);
   });
 });
