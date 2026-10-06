@@ -112,6 +112,13 @@ describe("createProjectMapRouter", () => {
     expect(labelled.map.agents.every((agent) => agent.role)).toBe(true);
     expect(evaluate).toHaveBeenCalledTimes(1);
 
+    const failing = await start({
+      evaluate: () => (async () => { throw new Error("ECONNRESET"); }) as unknown as Evaluate,
+    });
+    const drawn = (await (await failing.get()).json()) as { map: { labels: string; agents: unknown[] } };
+    expect(drawn.map.labels).toBe("unavailable");
+    expect(drawn.map.agents).toHaveLength(2);
+
     const signedOut = await start({ evaluate: () => null });
     expect(((await (await signedOut.get()).json()) as { map: { labels: string } }).map.labels).toBe("unavailable");
   });
