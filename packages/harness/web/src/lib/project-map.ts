@@ -157,3 +157,54 @@ export function mapStructureKey(map: AgentMap): string {
     edges: map.edges.map(edgeId).sort(bySlug),
   });
 }
+
+/**
+ * What the agent modal's Canvas asks the graph route to draw for one agent
+ * (design.md M6, D74): its steps and its edges to other agents, from the map
+ * at the ref it is drawn at. Null when the map does not hold the agent (an
+ * agent new in the working copy while a ref is drawn): the board then comes
+ * from the working copy alone.
+ */
+export interface CanvasMapRequest {
+  map: {
+    steps: MapAgent["steps"] | null;
+    stepsUnavailable?: string;
+    calls: Array<{ to: string; kind: string; fromStep?: string; label?: string }>;
+    calledBy: Array<{ from: string; kind: string; label?: string }>;
+  };
+  atRef: boolean;
+}
+
+export function canvasMapFor(map: AgentMap, agentPath: string): CanvasMapRequest | null {
+  const agent = map.agents.find((candidate) => {
+    const folder = agentFolder(map, candidate);
+    return folder !== null && samePath(folder, agentPath);
+  });
+  if (!agent) return null;
+  const kindOf = (edge: MapEdge) =>
+    edge.kind === "event" && edge.eventType ? `event ${edge.eventType}` : edge.kind;
+  return {
+    map: {
+      steps: agent.steps ?? null,
+      ...(agent.stepsUnavailable ? { stepsUnavailable: agent.stepsUnavailable } : {}),
+      calls: map.edges
+        .filter((edge) => edge.from === agent.slug && edge.to !== agent.slug)
+        .map((edge) => {
+          const text = edgeLabel(edge);
+          return {
+            to: edge.to,
+            kind: kindOf(edge),
+            ...(edge.fromStep ? { fromStep: edge.fromStep } : {}),
+            ...(text ? { label: text } : {}),
+          };
+        }),
+      calledBy: map.edges
+        .filter((edge) => edge.to === agent.slug && edge.from !== agent.slug)
+        .map((edge) => {
+          const text = edgeLabel(edge);
+          return { from: edge.from, kind: kindOf(edge), ...(text ? { label: text } : {}) };
+        }),
+    },
+    atRef: Boolean(map.ref),
+  };
+}

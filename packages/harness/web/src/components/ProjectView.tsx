@@ -30,6 +30,7 @@ import {
   openInSessionPrompt,
 } from "../lib/map-chat-host";
 import { samePath } from "../lib/paths";
+import { canvasMapFor } from "../lib/project-map";
 import { projectIdForAgent, type ShellProjects } from "../lib/shell-projects";
 import type { AgentVerbs } from "../lib/use-agent-verbs";
 import type { ProjectMapEntry } from "../lib/use-project-map";
@@ -457,6 +458,11 @@ export function ProjectView({
             harness={harness}
             state={state}
             agent={modalAgent}
+            canvasMap={
+              agentMapEntry.state.status === "ready"
+                ? canvasMapFor(agentMapEntry.state.value.map, modalAgent.path)
+                : null
+            }
             verbs={verbs}
             onOpenAgent={(path) => onOpenAgent(projectId, path)}
             onClose={() => onCloseAgent(projectId)}

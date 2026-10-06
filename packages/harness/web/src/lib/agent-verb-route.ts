@@ -41,7 +41,7 @@ export type AgentVerbRoute =
  * An inject macro's text with the agent's own placeholders filled. The server
  * filled these (and the session's) when the text was typed into a bound pty;
  * a macro session has no binding, so the agent's values are written in here
- * and the session-only ones (`{{session.cwd}}`, `{{canvas.path}}`) are left
+ * and the session-only ones (`{{session.cwd}}`) are left
  * for the reader, as the server leaves an unknown token.
  */
 function fillAgentPlaceholders(text: string, workflow: WorkflowInfo): string {

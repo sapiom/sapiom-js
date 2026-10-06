@@ -1025,12 +1025,12 @@ test("the canvas is a single controlled surface — no separate preview tab or p
 test("a stale enrichment renders with the 'stale — Refresh' chip in the served canvas document", async ({
   page,
 }) => {
-  // The chip is server-rendered (core/canvas-render.ts marks an enrichment
+  // The chip is server-rendered (the canvas derivation marks an enrichment
   // whose fingerprint no longer matches the sources) — serve the REAL
   // renderer's output for that state into the pane's iframe and assert the
   // chip actually displays through the sandboxed-iframe pipeline.
   // Frontend-only port: the real server renderer lives upstream
-  // (sapiom-js packages/harness/src/core/canvas-render.ts). This inline
+  // (sapiom-js packages/harness/src/core/). This inline
   // fixture reproduces its stale-enrichment markup contract exactly
   // (.canvas-badge--stale chip + .canvas-subtitle stays displayed).
   const staleDocument = `<!doctype html><html><head><meta charset="utf-8" /></head><body>

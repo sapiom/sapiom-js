@@ -9,15 +9,10 @@
  * legend markers) is locked and can't drift.
  *
  * `renderCanvasDocument(bodyHtml)` is the single shared shell (CSS + theme
- * switch) — `TEMPLATE_HTML` (the pristine, empty-state document) and
- * `scripts/seed-example.mjs` (prefilled with real content) both wrap their
- * body through it, so the kit and the seed can't drift from each other.
+ * switch) every board document is wrapped in, so the boards can't drift from
+ * each other.
  */
 
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
-import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
 import {
   applyRunStateToCanvas,
   bootCanvasError,
@@ -29,11 +24,6 @@ import {
   bootCanvasView,
   runStateNodeClass,
 } from "./canvas-run-state.js";
-
-/** Lives alongside index.html, in the same CANVAS_DIR — a pristine copy of
- *  the template, written once and never touched again, so "clone the
- *  template" always has a clean, un-filled-in source to clone from. */
-export const CANVAS_TEMPLATE_FILE = `${CANVAS_DIR}/_template.html`;
 
 function themeStyleBlock(): string {
   // Values ported 1:1 from web/src/styles.css's :root (light, default) and
@@ -109,13 +99,16 @@ body {
 .canvas-stat { display: flex; flex-direction: column; }
 .canvas-stat-value { font-size: 17px; font-weight: 600; }
 .canvas-stat-label { font-size: 10px; color: var(--canvas-text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
-.canvas-diagram-panel { overflow-x: auto; }
+/* Visible, not scrolled: the parent's pan and zoom move the whole card, and a
+   board wider than the frame (a column of other agents at its border) must be
+   inside what fit-to-view measures (canvas-run-state.ts reports scrollWidth). */
+.canvas-diagram-panel { overflow-x: visible; }
 .canvas-empty-note { color: var(--canvas-text-dim); font-size: 13px; text-align: center; padding: 60px 20px; margin: 0; }
 /* The <svg> carries explicit width/height, so it always renders at its
    NATURAL (1×) size — a narrow single-column graph can never stretch to fill
    the pane (the old width:100% did that, ballooning nodes ~4×). Centered when
-   it fits; a graph wider than the pane keeps full size and scrolls via
-   .canvas-diagram-panel's overflow-x, staying legible instead of shrinking. */
+   it fits; a graph wider than the pane keeps full size and the parent's
+   fit-to-view scales the whole card, staying legible instead of squeezing. */
 .canvas-graph-svg { display: block; margin: 0 auto; }
 
 /* --- node kinds: entry | step | pause | terminal-success | terminal-warn | launched-workflow --- */
@@ -311,69 +304,6 @@ const THEME_SCRIPT = `
 })();
 `.trim();
 
-/**
- * One example of every markup building block, inside an inert `<template>`
- * (never rendered, but real parsed DOM — not an HTML comment, so class names
- * with `--` in them are never at risk of being mistaken for a comment
- * terminator). An agent reads this once to learn the exact shape of a node,
- * an edge of each kind, a stat, a badge, a legend item, and an
- * interconnection row, then writes its own real ones using the same classes.
- */
-const PATTERNS_TEMPLATE = `
-<template id="canvas-patterns">
-  <!-- copy the pattern you need; this whole block is never rendered -->
-  <span class="canvas-badge">standalone agent</span>
-  <div class="canvas-stat"><span class="canvas-stat-value">5</span><span class="canvas-stat-label">steps</span></div>
-  <svg>
-    <g class="canvas-node node--entry" filter="url(#canvas-glow)" transform="translate(392,40)">
-      <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-      <text class="canvas-node-title" x="88" y="24">step_name</text>
-      <text class="canvas-node-sub" x="88" y="40">short description</text>
-    </g>
-    <g class="canvas-node node--step" filter="url(#canvas-glow)" transform="translate(392,150)">
-      <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-      <text class="canvas-node-title" x="88" y="28">step_name</text>
-    </g>
-    <g class="canvas-node node--pause" filter="url(#canvas-glow)" transform="translate(392,260)">
-      <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-      <text class="canvas-node-title" x="88" y="24">step_name</text>
-      <text class="canvas-node-sub" x="88" y="40">waits for a human / event</text>
-    </g>
-    <g class="canvas-node node--terminal-success" filter="url(#canvas-glow)" transform="translate(200,410)">
-      <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-      <text class="canvas-node-title" x="88" y="24">step_name</text>
-      <text class="canvas-node-sub" x="88" y="40">terminate({ resolved: true })</text>
-    </g>
-    <g class="canvas-node node--terminal-warn" filter="url(#canvas-glow)" transform="translate(600,410)">
-      <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-      <text class="canvas-node-title" x="88" y="24">step_name</text>
-      <text class="canvas-node-sub" x="88" y="40">terminate({ escalated: true })</text>
-    </g>
-    <!-- sequential: a step with exactly one successor -> straight line -->
-    <path class="canvas-edge" d="M480,96 L480,150" marker-end="url(#canvas-arrow)" />
-    <!-- branching: a step with multiple successors -> curved, colored by the destination's outcome -->
-    <path class="canvas-edge canvas-edge--success" d="M480,320 C480,365 288,365 288,410" marker-end="url(#canvas-arrow-success)" />
-    <path class="canvas-edge canvas-edge--warn" d="M480,320 C480,365 688,365 688,410" marker-end="url(#canvas-arrow-warn)" />
-    <!-- cross-agent signal/handoff: dashed, always neutral -->
-    <path class="canvas-edge canvas-edge--cross" d="M480,320 L480,410" marker-end="url(#canvas-arrow)" />
-    <!-- edge label, positioned near the branch point, anchored toward its own destination -->
-    <text class="canvas-edge-label" x="440" y="345" text-anchor="end">category == x</text>
-  </svg>
-  <div class="canvas-interconnection-row">
-    <span class="canvas-legend-marker canvas-legend-marker--entry"></span>
-    <span class="canvas-interconnection-title">external -&gt; intake</span>
-    <span class="canvas-interconnection-tag">signal</span>
-    <p class="canvas-interconnection-desc">an order object enters here</p>
-  </div>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--entry"></span>entry / active step</span>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--step"></span>step</span>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--pause"></span>pause / waits for input</span>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-success"></span>terminal &middot; success</span>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>terminal &middot; escalation</span>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-agent signal/handoff</span>
-</template>
-`.trim();
-
 /** The `<defs>` every SVG graph needs — same glow filter and arrow markers
  *  (default/success/warn) referenced by every node/edge pattern above. */
 const SVG_DEFS = `
@@ -497,102 +427,4 @@ ${themeStyleBlock()}
 </body>
 </html>
 `;
-}
-
-const TEMPLATE_BODY = `
-<!--
-  ═══════════════════════════════════════════════════════════════════════
-  AGENT STUDIO CANVAS TEMPLATE — fill in the sections below to visualize an
-  agent. Keep the <style> block in <head> and the structural classes
-  you see here untouched; only add markup using the patterns in the
-  <template id="canvas-patterns"> block near the end of <body> (it is
-  never rendered — read it, copy from it, don't edit it). Delete the
-  empty-state note below and the patterns template once you're done
-  authoring. For a single bound agent, one canvas-panel is enough; for
-  a workspace overview, add one canvas-panel per agent plus an
-  Interconnections panel (see the pattern for its row shape).
-  ═══════════════════════════════════════════════════════════════════════
--->
-<section class="canvas-panel">
-  <header class="canvas-header">
-    <div class="canvas-title-row">
-      <h1 class="canvas-title">Untitled agent</h1>
-    </div>
-    <p class="canvas-subtitle">One-line description of what this agent does.</p>
-    <div class="canvas-stats"></div>
-  </header>
-  <div class="canvas-diagram-panel">
-    <p class="canvas-empty-note">Nothing visualized yet — run Visualize on an agent.</p>
-  </div>
-</section>
-
-${PATTERNS_TEMPLATE}
-`.trim();
-
-/** The exact document written to both `_template.html` and the initial
- *  `index.html` — a friendly empty state plus the patterns reference. */
-export const TEMPLATE_HTML = renderCanvasDocument(TEMPLATE_BODY);
-
-async function writeIfMissing(
-  filePath: string,
-  content: string,
-): Promise<void> {
-  try {
-    await fs.access(filePath);
-    return;
-  } catch {
-    // Doesn't exist yet — fall through and write it.
-  }
-  try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content, "utf8");
-  } catch (err) {
-    console.error(`[harness] failed to write canvas file ${filePath}:`, err);
-  }
-}
-
-/**
- * Backfill-only: seeds `<cwd>/.sapiom/canvas/index.html` (and a pristine
- * `_template.html` beside it) with the empty-state document, and clears any
- * legacy overview a pre-split server left behind. A bound session always
- * renders its workflow deterministically to `renders/<slug>.html`, so this
- * seed is only the unbound placeholder — the canvas pane never opens to a
- * completely empty iframe. Never clobbers an existing file. Called from
- * SessionManager's create()/resume() (see its `ensureCanvasTemplate` option).
- * Best-effort, like the sibling `workspace-context.ts` writer: a session's cwd
- * could be unwritable, and that must never fail session creation itself.
- */
-export async function ensureCanvasTemplate(cwd: string): Promise<void> {
-  await removeLegacyOverviewIndex(path.join(cwd, CANVAS_INDEX));
-  await writeIfMissing(path.join(cwd, CANVAS_TEMPLATE_FILE), TEMPLATE_HTML);
-  await writeIfMissing(path.join(cwd, CANVAS_INDEX), TEMPLATE_HTML);
-}
-
-/**
- * Deletes `index.html` iff it's a legacy deterministic overview a pre-split
- * server wrote there (detected by signature — see canvas-index-classify.ts).
- * Such a file is a stale stacked all-workflows page with baked-in "render
- * failed" panels; left in place it keeps getting served (or, at minimum,
- * skipped by `writeIfMissing` so a fresh seed never replaces it). An
- * agent-authored custom canvas and the seeded template are both left
- * untouched. Best-effort — a read/unlink failure must never fail session
- * creation. Once removed, the `writeIfMissing` below reseeds the clean
- * template.
- */
-async function removeLegacyOverviewIndex(indexPath: string): Promise<void> {
-  let content: string;
-  try {
-    content = await fs.readFile(indexPath, "utf8");
-  } catch {
-    return; // Missing (the common case) or unreadable — nothing to clean up.
-  }
-  if (!isLegacyDeterministicCanvas(content)) return;
-  try {
-    await fs.rm(indexPath, { force: true });
-  } catch (err) {
-    console.error(
-      `[harness] failed to remove legacy canvas overview ${indexPath}:`,
-      err,
-    );
-  }
 }

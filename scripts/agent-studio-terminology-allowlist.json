@@ -91,18 +91,18 @@
     "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
   },
   {
+    "id": "canvas-map-steps-node-kind",
+    "path": "packages/harness/src/core/canvas-map-steps.ts",
+    "pattern": "launched-workflow",
+    "occurrences": 3,
+    "reason": "The private Canvas node-kind literal is a persisted compatibility identifier; border agent cards reuse it."
+  },
+  {
     "id": "canvas-graph-node-kind",
     "path": "packages/harness/src/core/canvas-graph.ts",
     "pattern": "launched-workflow",
     "occurrences": 1,
     "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
-  },
-  {
-    "id": "canvas-render-slug-fallback",
-    "path": "packages/harness/src/core/canvas-render.ts",
-    "pattern": "^workflow$",
-    "occurrences": 1,
-    "reason": "The private render filename fallback remains stable for existing generated paths."
   },
   {
     "id": "canvas-template-private-selectors",
@@ -171,8 +171,8 @@
     "id": "workflow-graph-local-route",
     "path": "packages/harness/src/server/workflow-graph.ts",
     "pattern": "^/api/workflows/:path/graph$",
-    "occurrences": 1,
-    "reason": "The agent-keyed canvas route is a shipped localhost API surface and its path stays stable for existing clients."
+    "occurrences": 2,
+    "reason": "The agent-keyed canvas route (GET, and POST with the agent's map entry) is a shipped localhost API surface and its path stays stable for existing clients."
   },
   {
     "id": "readme-canvas-graph-route",
@@ -306,6 +306,13 @@
     "pattern": "^/workflow$",
     "occurrences": 1,
     "reason": "The internal session-binding route remains stable for existing clients."
+  },
+  {
+    "id": "web-mock-map-canvas-node-kind",
+    "path": "packages/harness/web/src/lib/api.ts",
+    "pattern": "^launched-workflow$",
+    "occurrences": 2,
+    "reason": "The mock board for a map request draws border agents with the private Canvas node-kind literal."
   },
   {
     "id": "web-canvas-node-kind",

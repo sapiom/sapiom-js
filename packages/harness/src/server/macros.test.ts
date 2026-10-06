@@ -27,7 +27,6 @@ function makeDeps(overrides: Partial<MacrosRouterDeps> = {}): MacrosRouterDeps {
     getBoundWorkflowPath: () => null,
     injectInput: vi.fn().mockResolvedValue(undefined),
     openUrl: vi.fn().mockResolvedValue(undefined),
-    renderCanvas: vi.fn().mockResolvedValue(undefined),
     runBackgroundTask: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -291,31 +290,18 @@ describe("macros router", () => {
     expect(res.status).toBe(400);
   });
 
-  it("runs visualize with no workflow bound at all — refreshes server-side, never touches the pty", async () => {
-    const deps = makeDeps(); // getBoundWorkflowPath defaults to () => null
-    await start(deps);
-    const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ harnessSessionId: "sess-1" }), // no subject, no workflowPath, no binding
-    });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
-    expect(deps.renderCanvas).toHaveBeenCalledWith("sess-1");
-    expect(deps.injectInput).not.toHaveBeenCalled();
-  });
-
-  it("also runs visualize when a workflow IS bound — same server-side refresh either way", async () => {
-    const deps = makeDeps({ getBoundWorkflowPath: (id) => (id === "sess-1" ? workflow.path : null) });
+  it("rejects a visualize run with a 400: the SPA re-reads the board, the server has no render step", async () => {
+    const deps = makeDeps();
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
     });
-    expect(res.status).toBe(200);
-    expect(deps.renderCanvas).toHaveBeenCalledWith("sess-1");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/re-reads the board/i);
     expect(deps.injectInput).not.toHaveBeenCalled();
+    expect(deps.runBackgroundTask).not.toHaveBeenCalled();
   });
 
   it("routes an inject macro marked execution: 'background' to runBackgroundTask, never the pty", async () => {
@@ -401,30 +387,30 @@ describe("macros router", () => {
     });
   });
 
-  it("400s visualize on a harness with no headless mode (TaskNotSupportedError from the enrichment spawn)", async () => {
+  it("400s a background macro on a harness with no headless mode (TaskNotSupportedError)", async () => {
     const deps = makeDeps({
-      renderCanvas: vi.fn().mockRejectedValue(new TaskNotSupportedError("codex", "Visualize")),
+      runBackgroundTask: vi.fn().mockRejectedValue(new TaskNotSupportedError("codex", "Describe with AI")),
     });
     await start(deps);
-    const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
+    const res = await fetch(`${baseUrl}/api/macros/describe/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path, subject: "describe it" }),
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toMatch(/don't support/i);
   });
 
-  it("409s visualize when this workflow's enrichment is already running (TaskAlreadyRunningError)", async () => {
+  it("409s a background macro already running for this workflow (TaskAlreadyRunningError)", async () => {
     const deps = makeDeps({
-      renderCanvas: vi.fn().mockRejectedValue(new TaskAlreadyRunningError("Visualize")),
+      runBackgroundTask: vi.fn().mockRejectedValue(new TaskAlreadyRunningError("Describe with AI")),
     });
     await start(deps);
-    const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
+    const res = await fetch(`${baseUrl}/api/macros/describe/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path, subject: "describe it" }),
     });
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };

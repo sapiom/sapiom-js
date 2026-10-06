@@ -54,7 +54,7 @@ import { getTheme } from "./theme";
 import { refuseAgentName } from "@shared/agent-name";
 import { parseStudioCurrentWorkspaceResponse } from "./agent-map";
 import { mockProjectMap } from "./mock-project-map";
-import type { MapRef, ProjectMapResponse } from "./project-map";
+import type { CanvasMapRequest, MapRef, ProjectMapResponse } from "./project-map";
 import { refuseMove, remapUnder } from "./agent-move";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
@@ -287,8 +287,7 @@ export type WorkflowGraphStatus = "ok" | "empty" | "preparing" | "error";
  *
  * The route returns JSON and CANNOT be an `<iframe src>`: it sits behind the
  * `X-Harness-Token` middleware and a bare `src` carries no header. `document`
- * is byte-identical to what a bound session's `/canvas/:sessionId/` serves for
- * the same workflow, and is present for EVERY status — an empty board is still
+ * is present for EVERY status — an empty board is still
  * a renderable page, never a hole — so a consumer renders it via `srcdoc`.
  */
 export interface WorkflowGraphResponse {
@@ -403,7 +402,9 @@ export interface HarnessApi {
    * empty, never missing — so a consumer must tell a real board from an empty
    * one by `status`, never by the status code.
    */
-  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse>;
+  /** The agent's Canvas. With `map`, its steps and its edges to other agents
+   *  come from the project map (POST); without, from the working copy (GET). */
+  getWorkflowGraph(workflowPath: string, map?: CanvasMapRequest | null): Promise<WorkflowGraphResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   /**
    * `POST /api/workflows/scan` — a requested deep scan of one root.
@@ -728,13 +729,21 @@ class RealApi implements HarnessApi {
     );
   }
 
-  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+  getWorkflowGraph(
+    workflowPath: string,
+    map?: CanvasMapRequest | null,
+  ): Promise<WorkflowGraphResponse> {
     // Same encoding as `input-contract` and `deploy` beside it: the agent's
     // absolute path URI-encoded into ONE segment. Express matches on the raw
     // path and decodes the param, so an encoded `/` never splits the route.
-    return this.request<WorkflowGraphResponse>(
-      `/api/workflows/${encodeURIComponent(workflowPath)}/graph`,
-    );
+    const url = `/api/workflows/${encodeURIComponent(workflowPath)}/graph`;
+    return map
+      ? this.request<WorkflowGraphResponse>(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(map),
+        })
+      : this.request<WorkflowGraphResponse>(url);
   }
 
   connectWorkflow(path: string): Promise<WorkflowInfo> {
@@ -1328,6 +1337,57 @@ function mockWorkflowGraph(name: string): CanvasGraph {
   };
 }
 
+/** The mock board for a map request: the map's steps, and each agent this one
+ *  touches as a border card, its edge leaving `fromStep` or the entry
+ *  (core/canvas-map-steps.ts is the real version). */
+function mockGraphFromMap(name: string, request: CanvasMapRequest): CanvasGraph {
+  const steps = request.map.steps!;
+  const outgoing = new Set(steps.transitions.map((t) => t.from));
+  const node = (id: string, kind: CanvasGraphNode["kind"], role: string): CanvasGraphNode => ({
+    id,
+    kind,
+    label: id.startsWith("agent:") ? id.slice("agent:".length) : id,
+    role,
+    description: "",
+    timeoutMs: null,
+    inputSchema: null,
+    capabilities: [],
+  });
+  const ids = new Set(steps.steps.map((step) => step.id));
+  return {
+    name,
+    entry: steps.entry,
+    nodes: [
+      ...steps.steps.map((step) =>
+        step.id === steps.entry
+          ? node(step.id, "entry", "entry")
+          : outgoing.has(step.id)
+            ? node(step.id, "step", "step")
+            : node(step.id, "terminal-success", "terminal · success"),
+      ),
+      ...request.map.calls.map((call) => node(`agent:${call.to}`, "launched-workflow", "agent")),
+      ...request.map.calledBy.map((caller) => node(`agent:${caller.from}`, "launched-workflow", "calls this agent")),
+    ],
+    edges: [
+      ...steps.transitions.map((t) => ({ from: t.from, to: t.to, kind: "sequential" as const, label: "" })),
+      ...request.map.calls.map((call) => ({
+        from: call.fromStep && ids.has(call.fromStep) ? call.fromStep : steps.entry,
+        to: `agent:${call.to}`,
+        kind: "launch" as const,
+        label: call.label ?? "",
+      })),
+      ...request.map.calledBy.map((caller) => ({
+        from: `agent:${caller.from}`,
+        to: steps.entry,
+        kind: "launch" as const,
+        label: caller.label ?? "",
+      })),
+    ],
+    groups: [],
+    warnings: [],
+  };
+}
+
 /**
  * The fixture stand-in for the message documents the real route returns for
  * every status but `ok` — the calm "Preparing your agent" placeholder, the
@@ -1369,10 +1429,15 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
   const nodes = graph.nodes
     .map(
       (n) =>
-        `<div class="node" data-kind="${esc(n.kind)}" data-step-name="${esc(n.label)}">` +
+        `<div class="node" data-kind="${esc(n.kind)}" data-node-id="${esc(n.id)}" data-step-name="${esc(n.label)}">` +
         `<strong>${esc(n.label)}</strong><small>${esc(n.role)}</small></div>`,
     )
     .join('<div class="edge" aria-hidden="true"></div>');
+  // The real board's edge attributes, so a spec can assert which step an edge
+  // to another agent leaves from.
+  const edgeMarks = graph.edges
+    .map((e) => `<path class="edge" data-edge-from="${esc(e.from)}" data-edge-to="${esc(e.to)}"></path>`)
+    .join("");
   return [
     '<!doctype html><html lang="en"><head><meta charset="utf-8" />',
     `<title>${esc(name)} — mock agent board</title>`,
@@ -1387,7 +1452,7 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
     ".node small{color:var(--dim)}",
     ".edge{width:1px;height:24px;background:var(--line)}",
     "</style></head><body>",
-    `<main class="board" id="board" data-testid="mock-workflow-board">${nodes}</main>`,
+    `<main class="board" id="board" data-testid="mock-workflow-board">${nodes}<svg aria-hidden="true" style="display:none">${edgeMarks}</svg></main>`,
     '<script id="sapiom-graph" type="application/json">',
     JSON.stringify(graph),
     "</script><script>",
@@ -2322,8 +2387,18 @@ export class MockApi implements HarnessApi {
     return this.studioWorkflows();
   }
 
-  async getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+  async getWorkflowGraph(
+    workflowPath: string,
+    map?: CanvasMapRequest | null,
+  ): Promise<WorkflowGraphResponse> {
     await delay(80);
+    if (typeof window !== "undefined") {
+      // Every board read, for specs: which agent, and whether the map came along.
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = win.__HARNESS_TEST__ ?? {};
+      const calls = (win.__HARNESS_TEST__.workflowGraphCalls as unknown[] | undefined) ?? [];
+      win.__HARNESS_TEST__.workflowGraphCalls = [...calls, { path: workflowPath, map: map ?? null }];
+    }
     const workflow = this.workflows.find((item) => item.path === workflowPath);
     // 404 means "not a registered workflow" and NOTHING else — an agent whose
     // board is empty still answers 200. The mock keeps that distinction because
@@ -2372,7 +2447,9 @@ export class MockApi implements HarnessApi {
         ),
       };
     }
-    const graph = mockWorkflowGraph(workflow.name);
+    const graph = map?.map.steps
+      ? mockGraphFromMap(workflow.name, map)
+      : mockWorkflowGraph(workflow.name);
     return {
       ...base,
       status: "ok",

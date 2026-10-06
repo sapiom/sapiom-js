@@ -478,17 +478,6 @@ export interface SessionManagerOptions {
    */
   prepareWorkspaceContext?: (session: HarnessSession) => Promise<void>;
   /**
-   * Drops the canvas kit template into `<cwd>/.sapiom/canvas/index.html`
-   * when nothing is there yet (backfill-only — the real implementation,
-   * `ensureCanvasTemplate` from core/canvas-template.ts, does its own
-   * existence check internally, so unlike `writeWorkspaceContext` this
-   * needs no separate `*Exists` companion). Called from both `create()` and
-   * `resume()` so the canvas pane is never a blank iframe, regardless of
-   * entry point. Defaults to a no-op so tests that pass a fake `cwd` never
-   * touch the real filesystem unless they opt in.
-   */
-  ensureCanvasTemplate?: (cwd: string) => Promise<void>;
-  /**
    * Injectable for tests (fake ptys carry fake pids that must never be
    * probed against real OS processes). Defaults to `defaultIsPidAlive`.
    */
@@ -1010,7 +999,6 @@ export class SessionManager {
   private readonly prepareWorkspaceContext: (
     session: HarnessSession,
   ) => Promise<void>;
-  private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly platform: NodeJS.Platform;
 
@@ -1070,8 +1058,6 @@ export class SessionManager {
       options.writeWorkspaceContext ?? (async () => {});
     this.prepareWorkspaceContext =
       options.prepareWorkspaceContext ?? (async () => {});
-    this.ensureCanvasTemplate =
-      options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     this.platform = options.platform ?? process.platform;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
@@ -1478,10 +1464,6 @@ export class SessionManager {
       // the prompt-regeneration window so no resumed process can observe the
       // new prompt with an old context contract.
       await this.prepareWorkspaceContext(session);
-      // Also backfill-only (ensureCanvasTemplate does its own existence check)
-      // — a session from before the canvas kit existed, or one whose canvas
-      // file was somehow deleted, still gets a live pane on resume.
-      await this.ensureCanvasTemplate(session.cwd);
       await this.spawn(
         session,
         spec,
@@ -3275,10 +3257,6 @@ export class SessionManager {
         // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
         // regardless of which entry point called create() (REST, autoCreateSession).
         await this.writeWorkspaceContext(session);
-        // Same reasoning: the canvas pane opens immediately once the session is
-        // "running" — it must never show a bare empty iframe because nothing's
-        // been written to .sapiom/canvas/index.html yet.
-        await this.ensureCanvasTemplate(session.cwd);
         await this.spawn(
           session,
           spec,

@@ -15,7 +15,6 @@ import {
   mkdir,
   mkdtemp,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -205,12 +204,7 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
   });
 
   async function startTestServer(
-    options: {
-      autoCreateSession?: boolean;
-      beforeAutomaticCanvasLaunch?: (
-        workflowPath: string,
-      ) => void | Promise<void>;
-    } = {},
+    options: { autoCreateSession?: boolean } = {},
   ): Promise<number> {
     server = await startServer({
       port: 0,
@@ -220,9 +214,6 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
       stateRoot: dir,
       launchDir: cwd,
       autoCreateSession: options.autoCreateSession ?? false,
-      workflowDiscoveryTestHooks: {
-        beforeAutomaticCanvasLaunch: options.beforeAutomaticCanvasLaunch,
-      },
     });
     return server.port;
   }
@@ -231,11 +222,8 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
     "neither binds nor executes a hostile source-only workflow discovered by the watcher",
     { timeout: 20_000 },
     async () => {
-      const launches = vi.fn();
       const sideEffect = join(dir, "source-executed");
-      const port = await startTestServer({
-        beforeAutomaticCanvasLaunch: launches,
-      });
+      const port = await startTestServer();
       const session = await server!.sessionManager.create({
         cwd,
         harness: "claude-code",
@@ -246,7 +234,6 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
       await settle();
 
       expect(await boundPath(port, session.id)).toBeNull();
-      expect(launches).not.toHaveBeenCalled();
       await expect(access(sideEffect)).rejects.toThrow();
       await expectPrivateWorkflowEvidenceHidden(port);
     },
@@ -256,14 +243,10 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
     "never binds or executes a hostile source-only workflow during boot auto-create",
     { timeout: 20_000 },
     async () => {
-      const launches = vi.fn();
       const sideEffect = join(dir, "boot-source-executed");
       await scaffoldHostileSourceWorkflow(cwd, sideEffect);
 
-      await startTestServer({
-        autoCreateSession: true,
-        beforeAutomaticCanvasLaunch: launches,
-      });
+      await startTestServer({ autoCreateSession: true });
       await vi.waitFor(() => {
         expect(server!.sessionManager.list().length).toBeGreaterThan(0);
       });
@@ -272,7 +255,6 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
       expect(
         server!.sessionManager.list().map((s) => s.boundWorkflowPath),
       ).toEqual([null]);
-      expect(launches).not.toHaveBeenCalled();
       await expect(access(sideEffect)).rejects.toThrow();
     },
   );
@@ -281,12 +263,9 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
     "never binds or executes a hostile source-only workflow on REST session creation",
     { timeout: 20_000 },
     async () => {
-      const launches = vi.fn();
       const sideEffect = join(dir, "session-source-executed");
       await scaffoldHostileSourceWorkflow(cwd, sideEffect);
-      const port = await startTestServer({
-        beforeAutomaticCanvasLaunch: launches,
-      });
+      const port = await startTestServer();
 
       const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
         method: "POST",
@@ -301,111 +280,7 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
       await settle();
 
       expect(await boundPath(port, id)).toBeNull();
-      expect(launches).not.toHaveBeenCalled();
       await expect(access(sideEffect)).rejects.toThrow();
-    },
-  );
-
-  it(
-    "revalidates marker proof at the automatic extraction boundary of an explicitly bound session",
-    { timeout: 25_000 },
-    async () => {
-      const sideEffect = join(dir, "late-marker-removal-executed");
-      await scaffoldHostileSourceWorkflow(cwd, sideEffect);
-      await scaffoldWorkflow(cwd);
-      const beforeLaunch = vi.fn(async (workflowPath: string) => {
-        await rm(join(workflowPath, "sapiom.json"));
-      });
-
-      const port = await startTestServer({
-        beforeAutomaticCanvasLaunch: beforeLaunch,
-      });
-      const session = await server!.sessionManager.create({
-        cwd,
-        harness: "claude-code",
-      });
-      await waitForWorkflow(port, cwd);
-      await settle();
-      // The explicit bind renders without dependencies installed: a
-      // placeholder, no extraction, and the install watcher armed.
-      await bindSession(port, session.id, cwd);
-      // Installing dependencies triggers the automatic render, so the hook
-      // sits after the dependency probe and source fingerprint, immediately
-      // before the child launch. They land in the parent folder, which module
-      // resolution reaches: a new entry inside cwd would dirty the workspace
-      // inventory on Linux and refuse the render before the boundary.
-      await symlink(
-        join(process.cwd(), "node_modules"),
-        join(dir, "node_modules"),
-        "dir",
-      );
-      await vi.waitFor(() => expect(beforeLaunch).toHaveBeenCalledOnce(), {
-        timeout: 10_000,
-      });
-      // Long enough for a refused launch to have run had it been allowed: the
-      // hook-free mutation of this test writes the side effect within ~5s.
-      await new Promise((resolve) => setTimeout(resolve, 6_000));
-
-      expect(beforeLaunch).toHaveBeenCalledWith(cwd);
-      await expect(access(sideEffect)).rejects.toThrow();
-    },
-  );
-
-  it(
-    "preserves legacy automatic Canvas authorization for a markerless cloud-linked source row bound explicitly",
-    { timeout: 25_000 },
-    async () => {
-      const launches = vi.fn();
-      await writeFile(
-        join(cwd, "index.ts"),
-        `import { defineAgent } from "@sapiom/agent";
-export const agent = defineAgent({ name: "linked-source" });`,
-      );
-      await symlink(
-        join(process.cwd(), "node_modules"),
-        join(cwd, "node_modules"),
-        "dir",
-      );
-      await writeFile(
-        join(dir, "workflows.json"),
-        JSON.stringify([
-          {
-            name: "linked-source",
-            path: cwd,
-            definitionId: 42,
-            definitionSlug: "linked-source",
-            sourceDefinitionName: "linked-source",
-            activeBuildRunId: null,
-            activeBuildRunStatus: null,
-            templateId: null,
-            forkId: null,
-            starterId: null,
-            source: "connect",
-          },
-        ]),
-      );
-
-      const port = await startTestServer({
-        beforeAutomaticCanvasLaunch: launches,
-      });
-      const session = await server!.sessionManager.create({
-        cwd,
-        harness: "claude-code",
-      });
-      await settle();
-      expect(await boundPath(port, session.id)).toBeNull();
-      expect(launches).not.toHaveBeenCalled();
-
-      await bindSession(port, session.id, cwd);
-      await writeFile(
-        join(cwd, "index.ts"),
-        `import { defineAgent } from "@sapiom/agent";
-export const agent = defineAgent({ name: "linked-source-edited" });`,
-      );
-      await vi.waitFor(() => expect(launches).toHaveBeenCalled(), {
-        timeout: 10_000,
-      });
-      expect(launches).toHaveBeenCalledWith(cwd);
     },
   );
 

@@ -11,7 +11,7 @@ import {
   type WorkflowGraphResponse,
   type WorkflowGraphRouterDeps,
 } from "./workflow-graph.js";
-import type { WorkflowCanvasDerivation } from "../core/canvas-render.js";
+import type { WorkflowCanvasDerivation } from "../core/canvas-document.js";
 import type { CanvasGraph } from "../core/canvas-graph.js";
 
 // ---------------------------------------------------------------------------
@@ -120,8 +120,65 @@ describe("GET /api/workflows/:path/graph", () => {
         definitionId: 7,
         activeBuildRunStatus: null,
       },
-      { authorizeBeforeExtraction: expect.any(Function) },
+      { authorizeBeforeExtraction: expect.any(Function), map: null, mapOnly: false },
     );
+  });
+
+  describe("POST: the agent's entry in the project map", () => {
+    const map = {
+      steps: {
+        entry: "receive",
+        steps: [{ id: "receive" }, { id: "notify" }],
+        transitions: [{ from: "receive", to: "notify", kind: "continue" }],
+      },
+      calls: [{ to: "escalation", kind: "launch", fromStep: "notify" }],
+      calledBy: [],
+    };
+    const post = (agentPath: string, body: unknown) =>
+      fetch(`${baseUrl}/api/workflows/${encodeURIComponent(agentPath)}/graph`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const startWith = (marker: "valid" | "absent") => {
+      const deriveCanvas = vi.fn().mockResolvedValue(okDerivation());
+      const app = express();
+      app.use(express.json());
+      app.use(
+        createWorkflowGraphRouter({
+          resolveWorkflow: () => ({ path: "/registered/agent", name: "copilot", definitionId: null }),
+          inspectMarker: () =>
+            Promise.resolve(marker === "valid" ? { status: "valid", marker: {} } : { status: "absent" }),
+          realpath: (p) => Promise.resolve(p),
+          deriveCanvas,
+        }),
+      );
+      server = app.listen(0);
+      baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      return deriveCanvas;
+    };
+
+    it("passes the map to the derivation and joins the working copy's details", async () => {
+      const deriveCanvas = startWith("valid");
+      expect((await post("/registered/agent", { map })).status).toBe(200);
+      expect(deriveCanvas.mock.calls[0]![1]).toMatchObject({ map, mapOnly: false });
+    });
+
+    it("draws the map alone at a ref, and for an agent with no sapiom.json", async () => {
+      const deriveCanvas = startWith("absent");
+      const body = (await (await post("/registered/agent", { map })).json()) as WorkflowGraphResponse;
+      expect(body.status).toBe("ok");
+      expect(deriveCanvas.mock.calls[0]![1]).toMatchObject({ map, mapOnly: true });
+      await post("/registered/agent", { map, atRef: true });
+      expect(deriveCanvas.mock.calls[1]![1]).toMatchObject({ mapOnly: true });
+    });
+
+    it("refuses a malformed map instead of drawing the working copy in its place", async () => {
+      const deriveCanvas = startWith("valid");
+      const response = await post("/registered/agent", { map: { steps: 1 }, atRef: true });
+      expect(response.status).toBe(400);
+      expect(deriveCanvas).not.toHaveBeenCalled();
+    });
   });
 
   it("rechecks marker proof at the extractor launch boundary", async () => {

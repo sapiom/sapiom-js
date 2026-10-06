@@ -226,13 +226,6 @@ export interface RestRouterOptions {
    *  successful bind/unbind. Never throws — a write failure is logged by the
    *  implementation, not surfaced as a request error. */
   writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
-  /** Re-renders the session's canvas (its bound workflow, or the workspace
-   *  overview when unbound) via the deterministic pipeline — called after a
-   *  successful bind/unbind so the pane reflects the new selection without
-   *  waiting on the agent to run the Visualize macro itself. Never throws
-   *  (core/canvas-render.ts's contract); defaults to a no-op for tests that
-   *  don't care about canvas output. */
-  renderCanvas?: (session: HarnessSession) => Promise<void>;
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
@@ -578,7 +571,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // `session` here already reflects the new boundWorkflowPath — the
       // callee resolves it against the live registry itself.
       await options.writeWorkspaceContext(session);
-      await (options.renderCanvas ?? (async () => {}))(session);
       res.json(sessionManager.get(req.params.id));
     } catch (err) {
       next(err);

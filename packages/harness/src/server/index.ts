@@ -6,7 +6,7 @@ import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace
  * Harness server — integration point for every workstream.
  *
  * Single process: serves the built SPA from dist/web, the REST surface, the
- * webhook ingest endpoint, canvas file serving, and the two WebSocket
+ * webhook ingest endpoint, and the two WebSocket
  * endpoints (/ws/terminal, /ws/events). Binds 127.0.0.1 only. See
  * src/shared/types.ts for the full protocol contract.
  */
@@ -114,14 +114,12 @@ import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
-import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { observeCredentialStore } from "../core/credential-store-observer.js";
 import {
   sourceObservationsWithinScope,
   WorkspaceWatcherManager,
   type WorkflowSourceObservation,
 } from "../core/workspace-watcher.js";
-import { InstallWatcherManager } from "../core/install-watcher.js";
 import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
@@ -132,9 +130,6 @@ import {
   writeHarnessContextForLaunch,
   type StagedHarnessContext,
 } from "../core/workspace-context.js";
-import { ensureCanvasTemplate } from "../core/canvas-template.js";
-import { renderCanvasForSession } from "../core/canvas-render.js";
-import { invalidateExtractionCache } from "../core/canvas-cache.js";
 import { SharedWorkspaceWatchBroker } from "../core/workspace-watch-broker.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
@@ -178,8 +173,6 @@ import {
   type IngestRequestBody,
   type IngestSessionContext,
 } from "./ingest.js";
-import { createCanvasRouter } from "./canvas.js";
-import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createWorkflowGraphRouter } from "./workflow-graph.js";
 import { createStudioRailRouter } from "./studio-rail.js";
 import {
@@ -351,10 +344,6 @@ export interface HarnessServerOptions {
       epoch: number;
       sessionIds: readonly string[];
     }) => void | Promise<void>;
-    /** Called at the exact automatic Canvas execution boundary. */
-    beforeAutomaticCanvasLaunch?: (
-      workflowPath: string,
-    ) => void | Promise<void>;
   };
   /** Internal deterministic seam for post-listen startup-failure tests. */
   startupTestHooks?: {
@@ -837,24 +826,6 @@ export const startServer = async (
     } satisfies Partial<Record<HarnessKind, HarnessAdapter>>);
 
   const bus = new EventBus();
-  const canvasWatcher = new CanvasWatcherManager({
-    onChange: (harnessSessionId) =>
-      bus.publish({ type: "canvas.reload", harnessSessionId }),
-    // A workflow SOURCE edit auto re-renders the bound workflow — deterministic
-    // and free, so there's nothing to wait for and no button to press. Uses the
-    // preserve-on-failure path: while an agent is mid-edit the sources are
-    // transiently un-buildable, and flashing an extraction-error panel over a
-    // perfectly good diagram reads as broken. So keep the last good render until
-    // a later watched .ts/.tsx edit extracts successfully, then swap it in (the
-    // write flows back through onChange above as the iframe reload). Other fixes
-    // need an explicit Visualize retry because the watcher is intentionally
-    // source-limited. Only a workflow that has never rendered shows the honest
-    // error immediately.
-    onSourceChange: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      if (session) void autoRenderCanvas(session).catch(() => {});
-    },
-  });
   // The harness's own infrastructure shouldn't ever show up as a "discovered"
   // dev server in the Preview pane — a mention of our own listening port (in
   // an agent's own output, e.g. echoing SAPIOM_HARNESS_INGEST_URL) or the
@@ -1350,7 +1321,7 @@ export const startServer = async (
         workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
       scaffoldAgent: async ({ targetDir, template }) => {
         // `installDependencies: true` for the same reason the MCP tool passes
-        // it: the Canvas bundles the project on its first, unprompted render
+        // it: the Canvas bundles the project on its first read
         // and resolves `@sapiom/agent`/`zod` from the project's own
         // node_modules, so a never-installed agent opens on a "Could not
         // resolve …" error. Best-effort inside agent-core — a failed install
@@ -1526,7 +1497,6 @@ export const startServer = async (
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: initializeSessionContext,
     prepareWorkspaceContext: prepareSessionContext,
-    ensureCanvasTemplate,
   });
   await sessionManager.init();
   const sessionSweepTimer = setInterval(
@@ -1839,34 +1809,6 @@ export const startServer = async (
     },
   });
 
-  // Bridges the scaffold→`npm install` gap: a brand-new project renders a calm
-  // "preparing" placeholder (core/canvas-render.ts's depsMissing path) because
-  // its deps aren't installed yet, and neither watcher above re-fires when
-  // install completes (both ignore node_modules). This one notices deps landing
-  // and re-renders, so the placeholder becomes the step graph with no Retry.
-  const installWatcher = new InstallWatcherManager({
-    onInstalled: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      if (session && session.status !== "exited") {
-        void autoRenderCanvas(session).catch((err: unknown) => {
-          console.error("[harness] post-install canvas render failed:", err);
-        });
-      }
-    },
-    onTimeout: (harnessSessionId) => {
-      // Install never completed within the window (offline, npm missing on
-      // PATH in a stripped host). Restore the honest error panel so the user
-      // regains the Retry / Ask-coding-agent actions instead of a placeholder
-      // that would wait forever.
-      const session = sessionManager.get(harnessSessionId);
-      if (session && session.status !== "exited") {
-        void renderCanvasSurfacingDepErrors(session).catch((err: unknown) => {
-          console.error("[harness] install-timeout canvas render failed:", err);
-        });
-      }
-    },
-  });
-
   // Sessions that have already had their one-time on-start workspace rescan.
   // onStatusChange also fires on later status broadcasts (including the
   // bind/unbind frames setBoundWorkflowPath emits), so this guard keeps the
@@ -1877,7 +1819,6 @@ export const startServer = async (
   sessionManager.onStatusChange((session) => {
     bus.publish({ type: "session.status", session });
     if (session.status === "running") {
-      canvasWatcher.start(session.id, session.cwd);
       workspaceWatcher.start(session.id, session.cwd);
       // The workspace watcher captures the workflows already present at start as
       // its baseline and only fires onChange on a LATER change — so a session
@@ -1890,19 +1831,9 @@ export const startServer = async (
         void rescanWorkspaceForSession(session.id).catch((err: unknown) => {
           console.error("[harness] initial workspace rescan failed:", err);
         });
-        // A resumed/already-bound session renders here — a reopened workflow
-        // shows its diagram on start without any manual trigger, now that the
-        // empty-state render button is gone.
-        if (session.boundWorkflowPath) {
-          void autoRenderCanvas(session).catch((err: unknown) => {
-            console.error("[harness] on-start canvas render failed:", err);
-          });
-        }
       }
     } else if (session.status === "exited") {
-      canvasWatcher.stop(session.id);
       workspaceWatcher.stop(session.id);
-      installWatcher.stop(session.id);
       portDetector.reset(session.id);
       executionDetector.reset(session.id);
       // Let a resumed session get a fresh on-start rescan.
@@ -1951,9 +1882,8 @@ export const startServer = async (
   // scan/connect anywhere changes what every session's `workflows` list
   // should say, not just the session that triggered the scan.
   // Returns the workflows freshly discovered under `root` (not the whole
-  // merged registry) — callers use this to decide whether THIS scan turned
-  // up something new worth an unprompted canvas render, without conflating
-  // it with unrelated workflows some earlier scan already found elsewhere.
+  // merged registry), without conflating it with unrelated workflows some
+  // earlier scan already found elsewhere.
   //
   // Every call names WHY it is scanning. The registry is the thing the user
   // asked "how am I finding my agents?" about, and until this line existed the
@@ -2474,125 +2404,6 @@ export const startServer = async (
     }
   };
 
-  /** Enrich only the bound workflow before a Canvas render. Canvas extraction
-   *  needs the registry snapshot to resolve the binding, but its cloud badge
-   *  needs the same mutable build projection exposed by /api/state. Limiting
-   *  the pass to the bound workflow avoids extra detail lookups on every
-   *  source-triggered auto-render. */
-  const canvasWorkflowsForSession = async (
-    session: Pick<HarnessSession, "boundWorkflowPath">,
-  ): Promise<WorkflowInfo[]> => {
-    if (session.boundWorkflowPath == null) return workflowsCache;
-    const boundIndex = workflowsCache.findIndex(
-      (workflow) => workflow.path === session.boundWorkflowPath,
-    );
-    if (boundIndex === -1) return workflowsCache;
-    const [enrichedBound] = await enrichWorkflows([workflowsCache[boundIndex]]);
-    const workflows = [...workflowsCache];
-    workflows[boundIndex] = enrichedBound;
-    return workflows;
-  };
-
-  const automaticCanvasAuthorized = async (
-    session: Pick<HarnessSession, "boundWorkflowPath">,
-    expectedWorkflowPath = session.boundWorkflowPath,
-  ): Promise<boolean> => {
-    if (
-      !expectedWorkflowPath ||
-      session.boundWorkflowPath !== expectedWorkflowPath
-    ) {
-      return false;
-    }
-    const workflow = workflowsCache.find(
-      (candidate) => candidate.path === expectedWorkflowPath,
-    );
-    if (!workflow) return false;
-    // A retained cloud definition link is explicit legacy authorization even
-    // when the local marker is no longer present. Marker-only rows require
-    // both fresh accepted proof and a hardened launch-time recheck so a queued
-    // automatic render cannot race an offline marker removal.
-    if (workflow.definitionId !== null) return true;
-    const evidence = acceptedCanonicalWorkflowRoots.find(
-      (entry) => entry.workflowPath === workflow.path,
-    )?.identityEvidence;
-    if (evidence !== "marker") return false;
-    return (await inspectAgentProjectMarker(workflow.path)).status === "valid";
-  };
-
-  // Renders a session's bound workflow via the fully deterministic pipeline —
-  // against the live workflowsCache plus the bound definition's current cloud
-  // build projection; structure + derived annotations, no LLM, no user token.
-  // A cheap no-op for an unbound session (the canvas router serves the empty
-  // state on its own). Never throws (see core/canvas-render.ts); best-effort,
-  // like every other canvas write here.
-  // autoRenderCanvas is the UNPROMPTED variant (session-create/boot) that
-  // won't replace a workflow's existing render with an error panel when its
-  // extraction fails.
-  // A depsMissing render (fresh scaffold, pre-install) shows the "preparing"
-  // placeholder; arm the install watcher to re-render once deps land. Any other
-  // outcome means we no longer need to wait — cancel a pending watcher (no-op
-  // if none). Shared by every render trigger so the arm/disarm stays in lockstep
-  // with what the pane is actually showing.
-  const reactToRenderOutcome = (
-    session: HarnessSession,
-    outcome: Awaited<ReturnType<typeof renderCanvasForSession>>,
-  ): void => {
-    if (outcome.depsMissing && outcome.workflowPath) {
-      installWatcher.start(session.id, outcome.workflowPath);
-    } else {
-      installWatcher.stop(session.id);
-    }
-  };
-  const renderCanvas = async (session: HarnessSession): Promise<void> => {
-    const outcome = await renderCanvasForSession(
-      session,
-      await canvasWorkflowsForSession(session),
-    );
-    reactToRenderOutcome(session, outcome);
-  };
-  const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
-    const workflowPath = session.boundWorkflowPath;
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const workflows = await canvasWorkflowsForSession(session);
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const outcome = await renderCanvasForSession(session, workflows, {
-      preserveExistingOnFailure: true,
-      authorizeBeforeExtraction: () =>
-        automaticCanvasAuthorized(session, workflowPath),
-      beforeExtractionLaunchAuthorization: workflowPath
-        ? () =>
-            options.workflowDiscoveryTestHooks?.beforeAutomaticCanvasLaunch?.(
-              workflowPath,
-            )
-        : undefined,
-    });
-    reactToRenderOutcome(session, outcome);
-  };
-  // Used only by the install-watcher timeout: forces extraction even with deps
-  // missing so the honest esbuild error panel (and its Retry/Ask actions) is
-  // written instead of the placeholder. Does NOT re-arm the watcher — its
-  // outcome is an extraction failure, not depsMissing.
-  const renderCanvasSurfacingDepErrors = async (
-    session: HarnessSession,
-  ): Promise<void> => {
-    const workflowPath = session.boundWorkflowPath;
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const workflows = await canvasWorkflowsForSession(session);
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const outcome = await renderCanvasForSession(session, workflows, {
-      surfaceErrorOnMissingDeps: true,
-      authorizeBeforeExtraction: () =>
-        automaticCanvasAuthorized(session, workflowPath),
-      beforeExtractionLaunchAuthorization: workflowPath
-        ? () =>
-            options.workflowDiscoveryTestHooks?.beforeAutomaticCanvasLaunch?.(
-              workflowPath,
-            )
-        : undefined,
-    });
-    reactToRenderOutcome(session, outcome);
-  };
-
   const initialWorkflowScan = scanWorkflowsAndBroadcast(
     launchDir,
     "boot",
@@ -2907,26 +2718,17 @@ export const startServer = async (
       findWorkflow: (workflowPath) =>
         workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
-      renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
       onRecentDirAdded: initializeOpenedProject,
-      onSessionCreated: (cwd, harnessSessionId) => {
-        scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true })
-          .then(({ found }) => {
-            // Only auto-render when THIS session's own directory turned up a
-            // workflow — an unrelated project scanned earlier elsewhere in
-            // the registry shouldn't unprompt-render into a brand new,
-            // unrelated session's pane.
-            if (found.length === 0) return;
-            const session = sessionManager.get(harnessSessionId);
-            if (session) return autoRenderCanvas(session);
-          })
-          .catch((err: unknown) => {
+      onSessionCreated: (cwd) => {
+        scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true }).catch(
+          (err: unknown) => {
             console.error(
               "[harness] agent scan on session create failed:",
               err,
             );
-          });
+          },
+        );
       },
       submitSessionInput,
       launchDir,
@@ -2975,20 +2777,6 @@ export const startServer = async (
       },
       platform: () => platformForKey(apiKeyProvider.getKey(), resolveCoreBaseUrl()),
       onRootRead: watchProjectMapRoot,
-    }),
-  );
-  app.use(
-    "/api",
-    createCanvasRenderRouter({
-      getSession: (harnessSessionId) => sessionManager.get(harnessSessionId),
-      listWorkflows: canvasWorkflowsForSession,
-      // Keep the install watcher in lockstep with what this route just put on
-      // screen — without this, a depsMissing render through the POST route
-      // showed the "preparing" placeholder with nothing armed to replace it.
-      onOutcome: (harnessSessionId, outcome) => {
-        const session = sessionManager.get(harnessSessionId);
-        if (session) reactToRenderOutcome(session, outcome);
-      },
     }),
   );
   // Wrap the registry so GET /api/workflows also returns enriched slugs —
@@ -3112,9 +2900,8 @@ export const startServer = async (
       pendingSecrets,
     }),
   );
-  // IA-01: the session-free, workflow-keyed canvas route. Same derivation the
-  // session-bound render uses, keyed by the agent's absolute path instead of a
-  // session id — so a board can be read for an agent that has never hosted a
+  // IA-01: the session-free, workflow-keyed canvas route, keyed by the agent's
+  // absolute path — so a board can be read for an agent that has never hosted a
   // session. Resolution goes through the same live cache actions.ts uses, so
   // only registered agents are ever read from disk.
   app.use(
@@ -3208,17 +2995,6 @@ export const startServer = async (
         sessionManager.get(harnessSessionId)?.cwd ?? null,
       getBoundWorkflowPath: (harnessSessionId) =>
         sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
-      // The visualize/refresh macro forces a fresh deterministic re-render:
-      // drop the bound workflow's extraction cache so a source change (new or
-      // removed steps) is picked up, then re-render. Fully deterministic and
-      // instant — no task, no user token, nothing to already-be-running.
-      renderCanvas: async (harnessSessionId) => {
-        const session = sessionManager.get(harnessSessionId);
-        if (!session) return;
-        if (session.boundWorkflowPath)
-          invalidateExtractionCache(session.boundWorkflowPath);
-        await renderCanvas(session);
-      },
       injectInput: async (harnessSessionId, text, submit) => {
         // Two-phase write: a combined text+\r lands in Claude Code as a
         // bracketed paste and never submits.
@@ -3492,17 +3268,6 @@ export const startServer = async (
     }
   });
 
-  // Canvas is intentionally unauthenticated (see canvas.ts) — served straight
-  // off the session's cwd, no boot token required.
-  app.use(
-    createCanvasRouter((harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      return session
-        ? { cwd: session.cwd, boundWorkflowPath: session.boundWorkflowPath }
-        : undefined;
-    }),
-  );
-
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
   });
@@ -3572,11 +3337,9 @@ export const startServer = async (
       await settle(() =>
         rejectPublication(new Error("Agent discovery coordinator is closed")),
       );
-      await settle(() => canvasWatcher.stopAll());
       await settle(() => workspaceWatcher.stopAll());
       await settle(() => createdAgentWatcher.stopAll());
       stopProjectMapWatches();
-      await settle(() => installWatcher.stopAll());
       for (const tailer of codexTailers.values()) {
         await settle(() => tailer.stop());
       }
@@ -3715,13 +3478,6 @@ export const startServer = async (
       const harness = options.defaultHarnessKind ?? "claude-code";
       sessionManager
         .create({ cwd: launchDir, harness })
-        .then(async (session) => {
-          // Reuses the scan already kicked off above rather than scanning
-          // launchDir twice — only renders when it actually found something,
-          // same "discoverable" gate as the REST onSessionCreated path.
-          const { found } = await initialWorkflowScan;
-          if (found.length > 0) await autoRenderCanvas(session);
-        })
         .catch((err: unknown) => {
           console.error("[harness] auto-create boot session failed:", err);
         });

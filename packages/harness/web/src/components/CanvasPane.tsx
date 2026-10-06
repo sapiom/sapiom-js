@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import type { BackgroundTask, BusMessage, MacroDef, RunView, WorkflowInfo } from "@shared/types";
 
 import { ApiError, isMockMode, type WorkflowGraphResponse } from "../lib/api";
-import { MOCK_CANVAS_OVERVIEWS, hasMockCanvasDoc } from "../lib/mock-data";
+import { MOCK_CANVAS_OVERVIEWS } from "../lib/mock-data";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import type { CanvasSource } from "../lib/session-scope";
 import {
@@ -109,11 +109,9 @@ interface CanvasPaneProps {
    */
   subjectWorkflow: WorkflowInfo | null;
   /**
-   * Which canvas entry point serves the subject's document — the session-keyed
-   * board when the active session is bound to the subject, IA-01's
-   * workflow-keyed route otherwise (`lib/session-scope.ts:canvasSourceFor`).
-   * An agent that has never hosted a session is served by the second one; it is
-   * no longer a hole in the pane.
+   * Which canvas entry point serves the subject's document. Only the
+   * workflow-keyed route (`kind: "agent"`) has a board: the pane reads
+   * `GET /api/workflows/:path/graph` and never frames a session-keyed URL.
    */
   source: CanvasSource;
   /**
@@ -261,7 +259,6 @@ export function CanvasPane({
   onGraphChange,
   stepCard,
 }: CanvasPaneProps): JSX.Element {
-  const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   // Latest reporter, read from the content effects without listing it in their
   // deps — otherwise a new inline callback each render would re-run them and
   // re-report stale content (re-opening a pane the user just collapsed).
@@ -278,12 +275,11 @@ export function CanvasPane({
    * primitives are what the effects and callbacks below key on instead.
    */
   const workflowSourcePath = source.kind === "agent" ? source.path : null;
-  const sessionSourceId = source.kind === "session" ? source.sessionId : null;
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
-  // True while the initial HEAD probe for this session is still in flight —
-  // the pane shows a loading state instead of flashing "Nothing generated
-  // yet" at content that's about to appear.
+  // True while the board read is in flight — the pane shows a loading state
+  // instead of flashing "Nothing generated yet" at content that's about to
+  // appear.
   const [probing, setProbing] = useState(false);
   // True while the iframe is (re)loading its document — a skeleton overlays
   // it so a load/render in progress never reads as a blank pane. The overlay
@@ -757,17 +753,14 @@ export function CanvasPane({
   // still loading (the onLoad re-post below catches that case).
   const postRunStateToFrame = useCallback((): void => {
     if (!run || !runTarget) return;
-    // Guard: only post when a board is actually mounted. The workflow-keyed
-    // document is a real board too (same derivation), so it animates a run the
-    // same way; a session-keyed one still needs its mock-doc gate.
-    if (workflowSourcePath == null && sessionSourceId == null) return;
-    if (sessionSourceId != null && isMockMode() && !hasMockCanvasDoc(sessionSourceId)) return;
+    // Guard: only post when a board is actually mounted.
+    if (workflowSourcePath == null) return;
     if (frameLoading) return;
     frameRef.current?.contentWindow?.postMessage(
       { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
       "*",
     );
-  }, [run, runTarget, workflowSourcePath, sessionSourceId, frameLoading]);
+  }, [run, runTarget, workflowSourcePath, frameLoading]);
 
   useEffect(() => {
     postRunStateToFrame();
@@ -785,54 +778,13 @@ export function CanvasPane({
   // that don't read the param are unaffected.
   useEffect(() => subscribeTheme(setTheme), []);
 
-  // Probe once per session for pre-existing content — the agent may have written
-  // it in an earlier turn, before this pane was around to catch a reload event.
-  // Skipped entirely while the subject is served by the workflow-keyed route:
-  // `/canvas/:sessionId/` resolves by the session's BINDING, so its answer is
-  // about a different agent and would decide this pane's content for it.
+  // Without an agent source there is no board to read, so the pane reports
+  // that nothing is on display and drops any stale loading state.
   useEffect(() => {
     if (workflowSourcePath != null) return;
     setFrameLoading(true);
-    if (!sessionId) {
-      setHasGeneratedContent(false);
-      onCanvasStateRef.current?.(false);
-      return;
-    }
-    // Mock mode ships no live probe. A mock session that ships a bundled canvas
-    // doc (public/canvas/<id>/, i.e. hasMockCanvasDoc) renders its board on
-    // FIRST PAINT — the demo opens on its seeded agent's live board, not an
-    // empty pane. Sessions without a bundled doc stay honestly empty and never
-    // mount an iframe (the invariant smoke.spec guards); no fabricated docs.
-    if (isMockMode()) {
-      const has = hasMockCanvasDoc(sessionId);
-      setHasGeneratedContent(has);
-      // Same rule as the live probe: absence is announced, presence waits for
-      // the graph message. The bundled fixture posts one (public/canvas/
-      // sess-boot/index.html), so the demo still opens on its seeded board —
-      // and the e2e suite exercises the real gate rather than a shortcut.
-      if (!has) onCanvasStateRef.current?.(false);
-      return;
-    }
-    setHasGeneratedContent(false);
-    let cancelled = false;
-    setProbing(true);
-    fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
-      .then((res) => {
-        if (cancelled) return;
-        // Mount the iframe when something is servable, but only ever announce
-        // the ABSENCE of content here. A 200 covers the real board, the
-        // "preparing" placeholder AND the server's "Rendering agent diagram…"
-        // pending document — indistinguishable to a HEAD probe. The reveal is
-        // the graph message's job; hiding an empty pane is still this one's.
-        setHasGeneratedContent(res.ok);
-        if (!res.ok) onCanvasStateRef.current?.(false);
-      })
-      .catch(() => {})
-      .finally(() => !cancelled && setProbing(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, workflowSourcePath]);
+    onCanvasStateRef.current?.(false);
+  }, [workflowSourcePath]);
 
   /**
    * The workflow-keyed board (IA-01) — the pane's document whenever the active
@@ -904,32 +856,17 @@ export function CanvasPane({
     };
   }, [workflowSourcePath, workflowReloadSeq]);
 
+  // `canvas.reload` is the app's own announcement (Visualize re-reads the
+  // board); `project-map.changed` arrives when a source edit changes step
+  // details without changing the map's structure, which the modal's remount on
+  // map change does not cover.
   useEffect(() => {
-    if (lastMessage?.type === "canvas.reload") setWorkflowReloadSeq((seq) => seq + 1);
+    if (lastMessage?.type === "canvas.reload" || lastMessage?.type === "project-map.changed")
+      setWorkflowReloadSeq((seq) => seq + 1);
   }, [lastMessage]);
 
-  useEffect(() => {
-    if (!lastMessage || !sessionId) return;
-    if (lastMessage.type === "canvas.reload" && lastMessage.harnessSessionId === sessionId) {
-      // Mock mode ships REAL documents only for MOCK_CANVAS_SESSIONS (files
-      // under public/canvas/<id>/). For any other mock session the iframe
-      // URL would be the static host's 404 page — never mount it; the pane
-      // keeps its honest empty state instead.
-      if (isMockMode() && !hasMockCanvasDoc(sessionId)) return;
-      // Mount and swap the document, but do NOT announce it: a canvas write is
-      // also how the "preparing" placeholder lands, and announcing here opened
-      // the pane on setup scaffolding. The reveal is announced from the graph
-      // message below, once the loaded document proves it has a board.
-      setHasGeneratedContent(true);
-      setFrameLoading(true);
-      setReloadKey((key) => key + 1);
-    }
-  }, [lastMessage, sessionId]);
-
-  // The server resolves the canvas root by the session's CURRENT binding, so
-  // a bind/unbind changes what the same URL serves — refetch immediately
-  // instead of waiting for the render write's canvas.reload to arrive. A new
-  // document also invalidates the old view transform.
+  // A different subject is a different document, which invalidates the old
+  // view transform.
   const subjectPath = subjectWorkflow?.path ?? null;
   useEffect(() => {
     setFrameLoading(true);
@@ -974,12 +911,6 @@ export function CanvasPane({
 
   // Content is on screen and loadable — the only state where panel-level
   // view actions (expand) make sense.
-  // Mock hard gate, derived (not state): only sessions with a bundled demo
-  // document may EVER mount the iframe — state can go stale for one render
-  // across a session switch, and on the static Pages build a wrong URL is
-  // GitHub's 404 page rendered inside the pane.
-  const sessionHasServableDoc =
-    sessionSourceId != null && (!isMockMode() || hasMockCanvasDoc(sessionSourceId));
   /**
    * The workflow-keyed answer for the CURRENT subject. Path-checked, so a reply
    * that arrives after the selection moved on is ignored rather than drawn
@@ -989,6 +920,23 @@ export function CanvasPane({
     workflowSourcePath != null && workflowBoard?.path === workflowSourcePath
       ? workflowBoard
       : null;
+  // Nothing announces a finished `npm install` (the watchers skip
+  // node_modules), so a "preparing" board reads again every few seconds, for
+  // at most two minutes.
+  const preparingReads = useRef(0);
+  const preparing = boardFromRoute?.status === "preparing";
+  useEffect(() => {
+    if (!preparing) {
+      preparingReads.current = 0;
+      return;
+    }
+    if (preparingReads.current >= 30) return;
+    const timer = setTimeout(() => {
+      preparingReads.current += 1;
+      setWorkflowReloadSeq((seq) => seq + 1);
+    }, 4_000);
+    return () => clearTimeout(timer);
+  }, [preparing, workflowBoard]);
   /**
    * `preparing` mounts the frame alongside `ok`: it is the calm "installing
    * dependencies" placeholder the server renders for a fresh scaffold, and
@@ -1001,10 +949,7 @@ export function CanvasPane({
     boardFromRoute.document != null
       ? boardFromRoute.document
       : null;
-  const showsContent =
-    source.kind === "agent"
-      ? routeFrameDocument != null
-      : hasGeneratedContent && sessionHasServableDoc;
+  const showsContent = routeFrameDocument != null;
 
   // The observability header for the Steps surface: a deploy landing (if one is
   // in flight/just landed) and the run summary card (if a run has been
@@ -1444,7 +1389,7 @@ export function CanvasPane({
                     } else {
                       skeletonHoldUntilRef.current = Date.now() + 900;
                       setFrameLoading(true);
-                      setReloadKey((key) => key + 1);
+                      setWorkflowReloadSeq((seq) => seq + 1);
                     }
                   }}
                 >
@@ -1514,24 +1459,13 @@ export function CanvasPane({
           )}
           <iframe
             ref={frameRef}
-            key={
-              routeFrameDocument != null
-                ? `wf:${workflowSourcePath}:${workflowReloadSeq}`
-                : `${sessionId}:${reloadKey}`
-            }
+            key={`wf:${workflowSourcePath}:${workflowReloadSeq}`}
             className="canvas-iframe"
-            /* Two entry points, one element. The session-keyed board is a URL
-               (`/canvas/:sessionId/` is mounted unauthenticated for exactly
-               this reason); the workflow-keyed one CANNOT be a `src` — it sits
-               behind the `X-Harness-Token` middleware, which an iframe cannot
-               carry — so its document arrives as JSON and renders via `srcdoc`.
-               The theme rides in a query string for the first and an appended
-               script for the second, which has no URL to read. */
-            {...(routeFrameDocument != null
-              ? { srcDoc: withFrameTheme(routeFrameDocument, theme) }
-              : {
-                  src: `${import.meta.env.BASE_URL}canvas/${sessionId}/${isMockMode() ? "index.html" : ""}?theme=${theme}`,
-                })}
+            /* The board CANNOT be a `src`: the graph route sits behind the
+               `X-Harness-Token` middleware, which an iframe cannot carry, so
+               its document arrives as JSON and renders via `srcdoc`. The theme
+               rides in an appended script, since there is no URL to read. */
+            srcDoc={routeFrameDocument != null ? withFrameTheme(routeFrameDocument, theme) : undefined}
             sandbox="allow-scripts"
             // The board is navigated only through the app's zoom/fit/pan
             // controls (the view is posted INTO the document); it must never
@@ -1551,7 +1485,7 @@ export function CanvasPane({
               // the current animation immediately without waiting for the next
               // run update. frameLoading is still true at this point (it clears
               // after the hold timer), so call the raw post directly.
-              if (run && runTarget && (routeFrameDocument != null || sessionHasServableDoc)) {
+              if (run && runTarget && routeFrameDocument != null) {
                 frameRef.current?.contentWindow?.postMessage(
                   { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
                   "*",

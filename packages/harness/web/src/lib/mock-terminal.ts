@@ -74,14 +74,14 @@ function transcript(): ScriptLine[] {
         "\r\n\r\n",
       delayMs: 800,
     },
-    { text: green("⏺") + " " + bold("Write") + "(.sapiom/canvas/renders/leasing.html)\r\n", delayMs: 700 },
-    { text: dim("  ⎿  Wrote 118 lines") + "\r\n\r\n", delayMs: 500 },
+    { text: green("⏺") + " " + bold("Read") + "(leasing/index.ts)\r\n", delayMs: 700 },
+    { text: dim("  ⎿  Read 118 lines") + "\r\n\r\n", delayMs: 500 },
     {
       // Pre-broken like the tip line: xterm wraps at the column boundary
       // with no regard for words, so authored copy supplies its own breaks.
       text:
         green("⏺") +
-        " Done. The diagram is rendered. Press " +
+        " Done. The diagram is current. Press " +
         bold("Visualize") +
         "\r\n  in the Canvas pane to view it.\r\n\r\n",
       delayMs: 700,

@@ -1,10 +1,7 @@
 /**
  * One shared notion of "this agent project's dependencies are installed",
- * used by both the render pipeline (core/canvas-render.ts — decides whether to
- * extract or show the "preparing" placeholder) and the install watcher
- * (core/install-watcher.ts — decides when to re-render). Keeping the probe in
- * one place stops those two from disagreeing about readiness, which would
- * either flash the esbuild error or never re-render.
+ * used by the workflow canvas derivation (core/canvas-document.ts — decides
+ * whether to extract or show the "preparing" placeholder).
  *
  * "Ready" means EVERY runtime dependency the bundle imports is resolvable —
  * the project's declared `dependencies` (e.g. `@sapiom/agent`, `@sapiom/tools`,
@@ -28,7 +25,7 @@
  * If `package.json` can't be read (a fixture without one), it falls back to the
  * SDK package every agent project imports — never crashing the render on it.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
@@ -64,10 +61,6 @@ function requiredDeps(projectDir: string): string[] {
   }
 }
 
-function resolvesSync(projectDir: string, pkg: string): boolean {
-  return manifestCandidates(projectDir, pkg).some((c) => existsSync(c));
-}
-
 async function resolvesAsync(projectDir: string, pkg: string): Promise<boolean> {
   for (const candidate of manifestCandidates(projectDir, pkg)) {
     const found = await fsp
@@ -79,16 +72,11 @@ async function resolvesAsync(projectDir: string, pkg: string): Promise<boolean> 
   return false;
 }
 
-/** Async readiness probe for the render pipeline — true iff every declared
+/** Async readiness probe for the canvas derivation — true iff every declared
  *  runtime dependency resolves. */
 export async function agentDepsInstalled(projectDir: string): Promise<boolean> {
   for (const dep of requiredDeps(projectDir)) {
     if (!(await resolvesAsync(projectDir, dep))) return false;
   }
   return true;
-}
-
-/** Sync readiness probe for the install watcher's poll loop. */
-export function agentDepsInstalledSync(projectDir: string): boolean {
-  return requiredDeps(projectDir).every((dep) => resolvesSync(projectDir, dep));
 }
