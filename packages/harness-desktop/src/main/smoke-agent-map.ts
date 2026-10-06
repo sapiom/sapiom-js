@@ -254,8 +254,15 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
       `document.querySelector('[data-testid=agent-map-viewport]').dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}))`,
     );
     await click('[aria-label="Fit Agent Map to view"]');
-    await click(selector("canvas-expand"));
-    // Let the 150ms viewport debounce submit the expanded layout before capture.
+    // The map fills the centre pane; it has no separate full view.
+    assert.equal(
+      await evaluate<number>(
+        `document.querySelectorAll('[data-testid="canvas-expand"]').length`,
+      ),
+      0,
+      "Agent Map Expand button is still present",
+    );
+    // Let the 150ms viewport debounce submit the fitted layout before capture.
     await delay(250);
     await ready("elk");
     if (process.env.SAPIOM_SMOKE_OUT)
@@ -263,7 +270,6 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
         `${process.env.SAPIOM_SMOKE_OUT}.agent-map.png`,
         (await web.capturePage()).toPNG(),
       );
-    await click(selector("canvas-expand-exit"));
     assert.equal(
       await evaluate<number>(
         `[...document.querySelectorAll('.agent-map-controls button')].filter(b => /^(Classic|Vertical)$/.test(b.textContent)).length`,
