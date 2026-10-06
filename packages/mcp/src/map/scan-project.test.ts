@@ -425,3 +425,28 @@ describe("describeProject review round 3", () => {
     });
   });
 });
+
+describe("ref snapshots", () => {
+  it("keep the files an agent's bundle imports, and leave out large assets", async () => {
+    const root = await project({
+      "award/sapiom.json": '{ "name": "award" }',
+      "award/index.ts": 'import { HELPER } from "./helper.js";\nexport const x = HELPER;\n',
+      "award/helper.js": 'export const HELPER = 1;\n',
+      "award/data.json": '{ "a": 1 }',
+      "award/big.bin": "x".repeat(1024 * 1024 + 1),
+    });
+    git(root, "init", "-q");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "base");
+    const seen: string[] = [];
+    const steps: StepSource = async (dir) => {
+      seen.push(...(await fs.readdir(dir)).sort());
+      return { unavailable: "test" };
+    };
+
+    await mapOf(root, { ref: "HEAD", steps });
+
+    expect(seen).toEqual(["data.json", "helper.js", "index.ts", "sapiom.json"]);
+  });
+});
+

@@ -363,23 +363,25 @@ async function gitView(root: string, ref: string | undefined): Promise<GitView> 
   return { scanRoot: path.join(temp, prefix), ref, changed, dispose };
 }
 
-/** The files a scan reads: TypeScript sources and the JSON it parses. Assets are never extracted. */
-const SCANNED_FILE = /(\.[cm]?tsx?|(^|\/)(sapiom|package|fleet|map)\.json)$/;
+/** Larger blobs are assets, never sources `check` bundles; they are left out of a ref snapshot. */
+const MAX_REF_BLOB_BYTES = 1024 * 1024;
 
 /** Write the blobs under `prefix` at `commit` into `dest` with git alone (no `tar`, which Windows may lack). */
 async function extractTree(top: string, commit: string, prefix: string, dest: string): Promise<void> {
   const listing = await execFileAsync(
     "git",
-    ["-C", top, "ls-tree", "-r", "-z", "--full-tree", commit, "--", prefix || "."],
+    ["-C", top, "ls-tree", "-r", "-l", "-z", "--full-tree", commit, "--", prefix || "."],
     { maxBuffer: 256 * 1024 * 1024 },
   );
   const entries = listing.stdout
     .split("\0")
     .filter(Boolean)
     .flatMap((line) => {
-      const match = /^(\d+) blob ([0-9a-f]+)\t(.+)$/.exec(line);
+      const match = /^(\d+) blob ([0-9a-f]+) +(\d+)\t(.+)$/.exec(line);
       // Regular files only: symlinks (120000) and submodules are never followed by the scan.
-      return match && match[1] !== "120000" && SCANNED_FILE.test(match[3]!) ? [{ sha: match[2]!, file: match[3]! }] : [];
+      return match && match[1] !== "120000" && Number(match[3]) <= MAX_REF_BLOB_BYTES
+        ? [{ sha: match[2]!, file: match[4]! }]
+        : [];
     });
   if (entries.length === 0) return;
   const contents = await catBlobs(top, entries.map((entry) => entry.sha));
@@ -461,7 +463,9 @@ async function describeAt(root: string, view: GitView, options: ScanOptions): Pr
       // A ref is extracted without dependencies; borrow the working copy's so check can bundle.
       if (scanRoot !== root) {
         const working = path.join(root, path.relative(scanRoot, agent.dir), "node_modules");
-        await fs.symlink(working, path.join(agent.dir, "node_modules"), "dir").catch(() => {});
+        if (await fs.stat(working).catch(() => null)) {
+          await fs.symlink(working, path.join(agent.dir, "node_modules"), "dir").catch(() => {});
+        }
       }
       return stepSource(agent.dir);
     });
