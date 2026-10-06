@@ -591,7 +591,10 @@ function createDefaultBuildLaunchOpts(
         ...(devServer ? { devServer } : {}),
       }),
       promptPromise,
-      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
+      generateSkillsPlugin(harnessSessionId, {
+        generatedRoot,
+        environment: process.env.SAPIOM_ENVIRONMENT,
+      }),
     ]);
     const appendices = [
       viaSystemPrompt ? brief : null,
