@@ -1,39 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  AgentOperationError,
-  listSchedules,
-  type DefinitionSummary,
-  type GatewayClient,
-} from "@sapiom/agent-core";
+import { AgentOperationError } from "@sapiom/agent-core";
 
 import type { ResolvedEnvironment } from "../credentials.js";
-import { buildMap, describeProject, MapInputError, type PlatformSource } from "../map/index.js";
-import type { DescribedTrigger } from "../map/types.js";
+import { accountPlatform, buildMap, describeProject, MapInputError } from "../map/index.js";
 import { registerTool } from "../register-tool.js";
 import { fail, gatewayClient, ok } from "./shared.js";
 
-/** Triggers and deploy state from the signed-in account. */
-export function accountPlatform(client: GatewayClient): PlatformSource {
-  return {
-    async deployedSlugs() {
-      const definitions = await client.get<DefinitionSummary[]>("/definitions");
-      return new Set(definitions.flatMap((definition) => [definition.slug ?? definition.name, definition.name]));
-    },
-    async triggers(slug) {
-      const schedules = await listSchedules({ definition: slug, status: "active" }, client);
-      return schedules.flatMap((schedule): DescribedTrigger[] => {
-        if (schedule.kind === "event" && schedule.eventType) {
-          return [{ kind: "event", eventType: schedule.eventType, source: "platform" }];
-        }
-        if (schedule.kind === "schedule_cron" && schedule.cron) {
-          return [{ kind: "schedule", cron: schedule.cron, source: "platform" }];
-        }
-        return []; // one-off timers and webhooks join no agents
-      });
-    },
-  };
-}
+export { accountPlatform };
 
 const evidenceSchema = z.object({
   file: z.string(),
