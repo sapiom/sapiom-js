@@ -1,5 +1,13 @@
 # @sapiom/harness-desktop
 
+## 0.4.16
+
+### Patch Changes
+
+- efef2da: Studio's agent map now shows Jev's role and edge labels, as `sapiom_dev_map` does: cached per project and shown only at p ≥ 0.8. Edges from different agents no longer merge into one shared line, so each line shows who calls whom. `accountEvaluate` is exported from `@sapiom/mcp/map`.
+- Updated dependencies [efef2da]
+  - @sapiom/harness@0.21.2
+
 ## 0.4.15
 
 ### Patch Changes
