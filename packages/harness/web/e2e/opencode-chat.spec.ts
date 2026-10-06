@@ -21,8 +21,6 @@ type Conversation = {
 };
 let server: Server;
 let origin: string;
-let enabled: boolean;
-let accessAuthorityRevision: string;
 let failAttach: boolean;
 let attachError: unknown | null;
 let failMetadata: boolean;
@@ -30,9 +28,7 @@ let metadataError: unknown | null;
 let holdHistory: boolean;
 let failEvents: boolean;
 let failPrompt: boolean;
-let failAccess: boolean;
 let finalResponseError: unknown | null;
-let accessCalls: number;
 let recoveryReply: ((text: string, agent?: string) => void) | undefined;
 const historyReplies: Array<() => void> = [];
 let routeCalls: number;
@@ -61,8 +57,6 @@ function finish(id: string, suffix: string) {
 }
 test.beforeEach(async ({ page }) => {
   conversations.clear();
-  enabled = true;
-  accessAuthorityRevision = "authority-a";
   failAttach = false;
   attachError = null;
   failMetadata = false;
@@ -70,9 +64,7 @@ test.beforeEach(async ({ page }) => {
   holdHistory = false;
   failEvents = false;
   failPrompt = false;
-  failAccess = false;
   finalResponseError = null;
-  accessCalls = 0;
   recoveryReply = undefined;
   historyReplies.length = 0;
   routeCalls = 0;
@@ -288,12 +280,11 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     (window as any).__HARNESS__ = { token: "chat-test-boot" };
   });
-  await page.route("**/api/assistant/access", (route) => {
-    accessCalls++;
-    return route.fulfill({
-      status: failAccess ? 503 : 200,
-      json: { enabled, authorityRevision: accessAuthorityRevision },
-    });
+  await page.addInitScript(() => {
+    (window as any).__MOCK_ASSISTANT__ ??= {
+      enabled: true,
+      authorityRevision: "authority-a",
+    };
   });
   await page.route("**/opencode/**", (route) =>
     route.continue({
@@ -301,6 +292,31 @@ test.beforeEach(async ({ page }) => {
     }),
   );
 });
+
+/** The server's pushed Assistant access, as boot state and as a live update. */
+let accessRevision = 0;
+async function setAccess(
+  page: Page,
+  enabled: boolean,
+  authorityRevision: string,
+): Promise<void> {
+  await page.evaluate(
+    ([enabled, authorityRevision, revision]) => {
+      (window as any).__MOCK_ASSISTANT__ = { enabled, authorityRevision };
+      (window as any).__HARNESS_TEST__.publish({
+        type: "assistant.state",
+        snapshot: {
+          hostInstanceId: "mock-host",
+          authorityRevision,
+          revision,
+          enabled,
+          sessions: [],
+        },
+      });
+    },
+    [enabled, authorityRevision, ++accessRevision] as const,
+  );
+}
 
 function endWithoutAnswer(c: Conversation) {
   const preamble = c.turns.at(-1)!;
@@ -890,6 +906,13 @@ test("opens saved Assistant history when its Terminal session has exited", async
     page.getByRole("status", { name: "Assistant status" }),
   ).toHaveText("Finished");
   expect(conversations.get("ses_sess_boot")!.prompts).toHaveLength(1);
+
+  // Leaving and coming back keeps the ended session on its Assistant view.
+  await page.getByTestId("rail-session-select-sess-leasing-2").click();
+  await page.getByTestId("rail-session-select-sess-boot").click();
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Finished");
 });
 test.afterEach(async () => {
   server.closeAllConnections();
@@ -907,7 +930,12 @@ async function openAssistant(page: Page) {
 test("defaults to Terminal and keeps Assistant unavailable when access is off", async ({
   page,
 }) => {
-  enabled = false;
+  await page.addInitScript(() => {
+    (window as any).__MOCK_ASSISTANT__ = {
+      enabled: false,
+      authorityRevision: "authority-a",
+    };
+  });
   await page.goto("/?seed=0");
   await expect(page.locator(".harness-terminal")).toBeVisible();
   await expect(
@@ -979,14 +1007,15 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
       ),
   };
   await tabs.nth(1).click();
+  // Each session keeps its own Terminal / Assistant choice; this one is new.
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await input.fill("Second session draft");
 
   // The create-new destination unmounts the whole conversation branch.
   await openNewAgentScreen(page);
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
   await page.getByTestId("composer-back").click();
-  await expect(page.locator(".harness-terminal")).toBeVisible();
-  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  // Coming back finds the session on the view it was left on.
   await expect(input).toHaveValue("Second session draft");
 
   // A transcript-only review is another centre-pane owner. Closing it returns
@@ -997,8 +1026,6 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
     .click();
   await expect(page.getByTestId("past-session-pane")).toBeVisible();
   await page.getByTestId("past-session-close").click();
-  await expect(page.locator(".harness-terminal")).toBeVisible();
-  await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(input).toHaveValue("Second session draft");
 
   await tabs.nth(0).click();
@@ -1077,7 +1104,6 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
 
   // An auth barrier replaces the whole store. A newly verified principal can
   // use Assistant, but never inherits either prior principal's unsent text.
-  enabled = false;
   await page.evaluate(() =>
     (window as any).__HARNESS_TEST__.publish({
       type: "auth.changed",
@@ -1088,7 +1114,6 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
   await expect(
     page.getByRole("group", { name: "Conversation view" }),
   ).toHaveCount(0);
-  enabled = true;
   await page.evaluate(() =>
     (window as any).__HARNESS_TEST__.publish({
       type: "auth.changed",
@@ -1096,6 +1121,8 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
       organizationName: "Another organization",
     }),
   );
+  // The server pushes the new account's access once its check completes.
+  await setAccess(page, true, "another-organization");
   await expect(
     page.getByRole("button", { name: "Assistant", exact: true }),
   ).toBeVisible();
@@ -1422,79 +1449,44 @@ test("surfaces a rejected prompt POST and reconnects without replaying it", asyn
   expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
 });
 
-test("retains the draft across stable and failed access polls but clears it at a disabled authority barrier", async ({
+test("keeps the draft while access stays on and clears it when access turns off", async ({
   page,
 }) => {
-  await page.clock.install();
   await openAssistant(page);
   const input = page.getByRole("textbox", { name: "Message Assistant" });
   await input.fill("An unsent draft");
 
-  const beforeStablePoll = accessCalls;
-  await page.clock.fastForward(16000);
-  await expect.poll(() => accessCalls).toBeGreaterThan(beforeStablePoll);
-  await expect(input).toHaveValue("An unsent draft");
-
-  const before = accessCalls;
-  failAccess = true;
-  await page.clock.fastForward(16000);
-  await expect.poll(() => accessCalls).toBeGreaterThan(before);
+  await setAccess(page, true, "authority-a");
   await expect(input).toHaveValue("An unsent draft");
   expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
-  failAccess = false;
-  enabled = false;
-  accessAuthorityRevision = "authority-retired";
-  await page.clock.fastForward(16000);
+
+  // The flag turned off: back to the terminal, and the chat's stream closes.
+  await setAccess(page, false, "authority-retired");
   await expect(
     page.getByRole("group", { name: "Conversation view" }),
   ).toHaveCount(0);
   await expect(page.locator(".harness-terminal")).toBeVisible();
+  await expect
+    .poll(() => conversations.get("ses_sess_boot")!.streams.size)
+    .toBe(0);
 
-  // Repeated disabled observations retain the same barrier. Readmission uses
-  // a new authority epoch, and neither can recover the retired draft.
-  const beforeDisabledPoll = accessCalls;
-  await page.clock.fastForward(16000);
-  await expect.poll(() => accessCalls).toBeGreaterThan(beforeDisabledPoll);
-  enabled = true;
-  accessAuthorityRevision = "authority-readmitted";
-  await page.clock.fastForward(16000);
+  // Readmission is a new account epoch; the retired draft does not return.
+  await setAccess(page, true, "authority-readmitted");
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(input).toHaveValue("");
 });
 
-test("clears a draft on a direct enabled authority crossover without an auth event", async ({
+test("clears a draft when another account takes over without an auth event", async ({
   page,
 }) => {
-  await page.clock.install();
   await openAssistant(page);
   const input = page.getByRole("textbox", { name: "Message Assistant" });
   await input.fill("Principal A private draft");
 
-  const before = accessCalls;
-  accessAuthorityRevision = "authority-b";
-  await page.clock.fastForward(16000);
-  await expect.poll(() => accessCalls).toBeGreaterThan(before);
-
-  // authRevision is deliberately unchanged: the access epoch alone must swap
-  // the App-owned store before the enabled Principal B chat can mount.
+  await setAccess(page, true, "authority-b");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(input).toHaveValue("");
   expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
-});
-
-test("expires the cached UI capability after sixty seconds without a successful poll", async ({
-  page,
-}) => {
-  await page.clock.install();
-  await openAssistant(page);
-  failAccess = true;
-  await page.clock.fastForward(61000);
-  await expect(
-    page.getByRole("group", { name: "Conversation view" }),
-  ).toHaveCount(0);
-  await expect
-    .poll(() => conversations.get("ses_sess_boot")!.streams.size)
-    .toBe(0);
-  await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
 for (const kind of ["permission", "question"] as const) {

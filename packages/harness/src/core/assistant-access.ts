@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   resolveEnvironment,
   readCredentialsOrThrow,
@@ -12,35 +12,24 @@ import type { OpenCodeTransportErrorCode } from "../shared/opencode-errors.js";
 
 export type AssistantAccessFailureCode = Extract<
   OpenCodeTransportErrorCode,
-  | "access_denied"
-  | "access_expired"
-  | "authentication_required"
-  | "transport_unavailable"
+  "access_denied" | "authentication_required" | "transport_unavailable"
 >;
 
-/** Private host state. Principal fields are never projected to the browser. */
+/**
+ * Who the Assistant runs as. The bridge forwards with this environment's API
+ * key, which already authorizes every model call it makes; this record only
+ * decides whether Studio shows the Assistant.
+ */
 export interface AssistantGrant {
   userId: string;
   tenantId: string;
-  identityRevision: string;
-  expiresAt: number;
   environment: ResolvedEnvironment;
 }
 
-/** Browser-safe access state. The revision is opaque and process-memory only. */
+/** Browser-safe access state. The revision changes only with the account. */
 export interface AssistantAccessProjection {
   enabled: boolean;
   authorityRevision: string;
-}
-
-interface CapabilityResponse {
-  protocol?: number;
-  assistant?: boolean;
-  userId?: string;
-  tenantId?: string;
-  identityRevision?: string;
-  maxAgeMs?: number;
-  refreshAfterMs?: number;
 }
 
 export interface AssistantAccessOptions {
@@ -51,42 +40,42 @@ export interface AssistantAccessOptions {
   loadEnvironment?: () => Promise<ResolvedEnvironment>;
   refreshCredentials?: typeof refreshStudioCredentials;
   fetch?: typeof globalThis.fetch;
+  /** How often the PostHog kill switch is re-read. */
+  refreshIntervalMs?: number;
 }
 
-const fingerprint = (env: ResolvedEnvironment): string =>
-  createHash("sha256")
-    .update(
-      JSON.stringify([
-        env.name,
-        env.apiURL,
-        env.services,
-        env.credentials?.apiKey,
-        env.credentials?.tenantId,
-      ]),
-    )
-    .digest("hex");
+const REFRESH_INTERVAL_MS = 5 * 60_000;
 
-/** Bounded, revocable eligibility; no analytics opt-in or persisted enabled cache. */
+/** Same account and key: running Assistant hosts may keep going. */
+export const samePrincipal = (a: AssistantGrant, b: AssistantGrant): boolean =>
+  a.userId === b.userId &&
+  a.tenantId === b.tenantId &&
+  a.environment.name === b.environment.name &&
+  a.environment.apiURL === b.environment.apiURL &&
+  a.environment.credentials?.apiKey === b.environment.credentials?.apiKey;
+
+/**
+ * Whether the signed-in Studio account has the Assistant: asked of
+ * `/v1/studio/capabilities` at boot, on every credential change, and every
+ * five minutes so turning the flag off takes effect without a restart. A
+ * network or 5xx failure keeps the last answer.
+ */
 export class AssistantAccess {
   private grant: AssistantGrant | null = null;
   private failure: AssistantAccessFailureCode = this.options.enabled
     ? "authentication_required"
     : "access_denied";
-  private credentialFingerprint: string | null = null;
   private authorityRevision = randomUUID();
-  private epoch = 0;
+  private generation = 0;
   private closed = false;
-  private queue: Promise<void> = Promise.resolve();
   private refreshTimer?: ReturnType<typeof setTimeout>;
-  private expiryTimer?: ReturnType<typeof setTimeout>;
   private listeners = new Set<() => void>();
 
   constructor(private readonly options: AssistantAccessOptions) {}
 
   get(): AssistantGrant | null {
-    if (this.grant?.expiresAt && this.grant.expiresAt <= Date.now())
-      this.adopt(null, "access_expired");
-    else if (
+    // A key rotated by another Studio window is a different principal.
+    if (
       this.grant &&
       this.options.getApiKey() !== this.grant.environment.credentials?.apiKey
     )
@@ -112,22 +101,29 @@ export class AssistantAccess {
   }
 
   clear(): void {
-    this.epoch++;
-    this.credentialFingerprint = null;
+    this.generation++;
     this.adopt(null, "authentication_required");
   }
 
-  refresh(): Promise<void> {
-    if (this.closed || !this.options.enabled) return Promise.resolve();
-    // A newer credential observation fences any older response, without
-    // revoking a running grant just because another host rotated its token.
-    const epoch = ++this.epoch;
-    const run = this.queue.then(() => this.evaluate(epoch));
-    this.queue = run.catch(() => {
-      if (!this.closed && epoch === this.epoch)
-        this.adopt(null, "access_denied");
-    });
-    return this.queue;
+  async refresh(): Promise<void> {
+    if (this.closed || !this.options.enabled) return;
+    clearTimeout(this.refreshTimer);
+    // A newer check (a sign-in, a credential write) supersedes an older one.
+    const generation = ++this.generation;
+    // Scheduled before awaiting, so a check that never settles cannot stop
+    // the next one from applying the flag.
+    this.refreshTimer = setTimeout(
+      () => void this.refresh(),
+      this.options.refreshIntervalMs ?? REFRESH_INTERVAL_MS,
+    );
+    this.refreshTimer.unref?.();
+    const result = await this.check().catch(
+      (): CheckResult => ({ failure: "access_denied" }),
+    );
+    if (this.closed || generation !== this.generation) return;
+    if ("grant" in result) this.adopt(result.grant);
+    else if (result.failure !== "transport_unavailable" || !this.grant)
+      this.adopt(null, result.failure);
   }
 
   close(): void {
@@ -142,207 +138,94 @@ export class AssistantAccess {
     failure: AssistantAccessFailureCode = this.failure,
   ): void {
     const changed =
-      this.grant?.userId !== grant?.userId ||
-      this.grant?.tenantId !== grant?.tenantId ||
-      this.grant?.identityRevision !== grant?.identityRevision ||
-      this.grant?.environment.name !== grant?.environment.name ||
-      this.grant?.environment.apiURL !== grant?.environment.apiURL ||
-      this.grant?.environment.credentials?.apiKey !==
-        grant?.environment.credentials?.apiKey;
+      !!grant !== !!this.grant ||
+      (grant !== null && this.grant !== null && !samePrincipal(grant, this.grant));
     if (changed) this.authorityRevision = randomUUID();
     this.grant = grant;
     this.failure = failure;
-    clearTimeout(this.expiryTimer);
-    if (grant) {
-      this.expiryTimer = setTimeout(
-        () => this.adopt(null, "access_expired"),
-        Math.max(0, grant.expiresAt - Date.now()),
-      );
-      this.expiryTimer.unref?.();
-    }
     if (changed) for (const listener of this.listeners) listener();
   }
 
-  private async evaluate(epoch: number): Promise<void> {
-    if (this.closed || epoch !== this.epoch) return;
-    clearTimeout(this.refreshTimer);
-    let refreshAfterMs = 30_000;
-    const current = () => !this.closed && epoch === this.epoch;
+  private async check(): Promise<CheckResult> {
+    let env: ResolvedEnvironment;
     try {
-      let env: ResolvedEnvironment;
-      try {
-        env = this.options.loadEnvironment
-          ? await this.options.loadEnvironment()
-          : await resolveEnvironment(
-              this.options.environment ?? process.env.SAPIOM_ENVIRONMENT,
-            );
-        if (!this.options.loadEnvironment)
-          env.credentials = await readCredentialsOrThrow(env.name);
-      } catch {
-        if (current()) this.adopt(null, "access_denied");
-        return;
-      }
-      if (!current()) return;
-      const before = fingerprint(env);
-      if (
-        this.credentialFingerprint !== null &&
-        before !== this.credentialFingerprint
-      )
-        this.adopt(null, "access_denied");
-      this.credentialFingerprint = before;
-      if (
-        !env.credentials?.studioCredentials ||
-        !env.credentials.apiKey ||
-        env.credentials.apiKey !== this.options.getApiKey()
-      ) {
-        this.adopt(null, "authentication_required");
-        return;
-      }
-      const observedCredentialExpiry = Date.parse(
-        env.credentials.studioCredentials.expiresAt,
-      );
-      if (
-        !Number.isFinite(observedCredentialExpiry) ||
-        observedCredentialExpiry <= Date.now()
-      ) {
-        this.adopt(null, "authentication_required");
-        return;
-      }
-      let credentials;
-      try {
-        credentials = await (
-          this.options.refreshCredentials ?? refreshStudioCredentials
-        )(env);
-      } catch (error) {
-        if (!current()) return;
-        if (
-          error instanceof StudioCredentialRefreshError &&
-          error.kind === "transient"
-        )
-          this.retainTransient(before, observedCredentialExpiry);
-        else this.adopt(null, "authentication_required");
-        return;
-      }
-      if (!current()) return;
-      if (!credentials) {
-        this.adopt(null, "authentication_required");
-        return;
-      }
-      const credentialExpiry = Date.parse(credentials.expiresAt);
-      if (
-        !Number.isFinite(credentialExpiry) ||
-        credentialExpiry <= Date.now()
-      ) {
-        this.adopt(null, "authentication_required");
-        return;
-      }
-      env.credentials = { ...env.credentials, studioCredentials: credentials };
-      const startedAt = Date.now();
-      let response: Response;
-      try {
-        response = await (this.options.fetch ?? fetch)(
-          `${env.apiURL}/v1/studio/capabilities`,
-          {
-            headers: {
-              Authorization: `Bearer ${credentials.accessToken}`,
-              "X-Studio-Capability-Version": "1",
-              "X-Studio-Harness-Version": this.options.harnessVersion,
-            },
-            signal: AbortSignal.timeout(5000),
-            redirect: "error",
-          },
-        );
-      } catch {
-        if (current()) this.retainTransient(before, credentialExpiry);
-        return;
-      }
-      if (!current()) return;
-      if (!response.ok) {
-        if (response.status >= 500)
-          this.retainTransient(before, credentialExpiry);
-        else
-          this.adopt(
-            null,
-            [401, 403].includes(response.status)
-              ? "authentication_required"
-              : "access_denied",
+      env = this.options.loadEnvironment
+        ? await this.options.loadEnvironment()
+        : await resolveEnvironment(
+            this.options.environment ?? process.env.SAPIOM_ENVIRONMENT,
           );
-        return;
-      }
-      let result: CapabilityResponse;
-      try {
-        result = (await response.json()) as CapabilityResponse;
-      } catch {
-        this.adopt(null, "access_denied");
-        return;
-      }
-      if (!current()) return;
-      if (
-        result.protocol !== 1 ||
-        result.assistant !== true ||
-        typeof result.userId !== "string" ||
-        !result.userId ||
-        typeof result.identityRevision !== "string" ||
-        !result.identityRevision ||
-        result.tenantId !== env.credentials.tenantId ||
-        typeof result.maxAgeMs !== "number" ||
-        !Number.isFinite(result.maxAgeMs) ||
-        result.maxAgeMs <= 0
-      ) {
-        this.adopt(null, "access_denied");
-        return;
-      }
-      const expiresAt = Math.min(
-        startedAt + Math.min(result.maxAgeMs, 60_000),
-        credentialExpiry,
-      );
-      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-        this.adopt(null, "authentication_required");
-        return;
-      }
-      this.credentialFingerprint = fingerprint(env);
-      this.adopt({
-        userId: result.userId,
-        tenantId: result.tenantId,
-        identityRevision: result.identityRevision,
-        expiresAt,
-        environment: env,
-      });
-      if (
-        typeof result.refreshAfterMs === "number" &&
-        Number.isFinite(result.refreshAfterMs)
-      )
-        refreshAfterMs = Math.max(
-          1000,
-          Math.min(result.refreshAfterMs, 30_000),
-        );
+      if (!this.options.loadEnvironment)
+        env.credentials = await readCredentialsOrThrow(env.name);
     } catch {
-      if (current()) this.adopt(null, "access_denied");
-    } finally {
-      if (current()) {
-        this.refreshTimer = setTimeout(() => {
-          void this.refresh();
-        }, refreshAfterMs);
-        this.refreshTimer.unref?.();
-      }
-    }
-  }
-
-  private retainTransient(
-    fingerprintAtFailure: string,
-    credentialExpiry: number,
-  ): void {
-    const grant = this.get();
-    if (!grant) {
-      if (this.failure !== "access_denied" && this.failure !== "access_expired")
-        this.adopt(null, "transport_unavailable");
-      return;
+      return { failure: "access_denied" };
     }
     if (
-      this.credentialFingerprint !== fingerprintAtFailure ||
-      credentialExpiry <= Date.now() ||
-      grant.environment.credentials?.apiKey !== this.options.getApiKey()
+      !env.credentials?.studioCredentials ||
+      !env.credentials.apiKey ||
+      env.credentials.apiKey !== this.options.getApiKey()
     )
-      this.adopt(null, "transport_unavailable");
+      return { failure: "authentication_required" };
+    let credentials;
+    try {
+      credentials = await (
+        this.options.refreshCredentials ?? refreshStudioCredentials
+      )(env);
+    } catch (error) {
+      return {
+        failure:
+          error instanceof StudioCredentialRefreshError &&
+          error.kind === "transient"
+            ? "transport_unavailable"
+            : "authentication_required",
+      };
+    }
+    if (!credentials) return { failure: "authentication_required" };
+    let response: Response;
+    try {
+      response = await (this.options.fetch ?? fetch)(
+        `${env.apiURL}/v1/studio/capabilities`,
+        {
+          headers: {
+            Authorization: `Bearer ${credentials.accessToken}`,
+            "X-Studio-Capability-Version": "1",
+            "X-Studio-Harness-Version": this.options.harnessVersion,
+          },
+          signal: AbortSignal.timeout(5000),
+          redirect: "error",
+        },
+      );
+    } catch {
+      return { failure: "transport_unavailable" };
+    }
+    if (response.status >= 500) return { failure: "transport_unavailable" };
+    if (response.status === 401 || response.status === 403)
+      return { failure: "authentication_required" };
+    const result = (await response.json().catch(() => null)) as {
+      assistant?: unknown;
+      userId?: unknown;
+      tenantId?: unknown;
+    } | null;
+    if (
+      !response.ok ||
+      result?.assistant !== true ||
+      typeof result.userId !== "string" ||
+      !result.userId ||
+      result.tenantId !== env.credentials.tenantId
+    )
+      return { failure: "access_denied" };
+    return {
+      grant: {
+        userId: result.userId,
+        tenantId: env.credentials.tenantId,
+        environment: {
+          ...env,
+          credentials: { ...env.credentials, studioCredentials: credentials },
+        },
+      },
+    };
   }
 }
+
+type CheckResult =
+  | { grant: AssistantGrant }
+  | { failure: AssistantAccessFailureCode };

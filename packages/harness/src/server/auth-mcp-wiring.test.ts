@@ -307,23 +307,18 @@ describe("Agent Studio MCP authentication wiring", () => {
     });
   }
 
-  it("gates the capability projection with the boot token and stays off without user credentials", async () => {
+  it("boots with the Assistant off and no access route without user credentials", async () => {
     const host = await boot({ authMode: "disabled" });
-    const url = `http://127.0.0.1:${host.port}/api/assistant/access`;
-    expect((await fetch(url)).status).toBe(401);
-    const response = await fetch(url, {
-      headers: { "X-Harness-Token": "test-token" },
-    });
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    const first = (await response.json()) as Record<string, unknown>;
-    expect(first).toEqual({
-      enabled: false,
-      authorityRevision: expect.any(String),
-    });
-    const repeated = await fetch(url, {
-      headers: { "X-Harness-Token": "test-token" },
-    });
-    expect(await repeated.json()).toEqual(first);
+    const headers = { "X-Harness-Token": "test-token" };
+    const state = (await (
+      await fetch(`http://127.0.0.1:${host.port}/api/state`, { headers })
+    ).json()) as { assistant: { enabled: boolean } };
+    expect(state.assistant.enabled).toBe(false);
+    const removed = await fetch(
+      `http://127.0.0.1:${host.port}/api/assistant/access`,
+      { headers },
+    );
+    expect(removed.status).toBe(404);
   });
 
   async function waitForAuthenticated(): Promise<void> {

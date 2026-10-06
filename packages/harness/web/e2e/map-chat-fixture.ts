@@ -208,9 +208,9 @@ export async function serveMapChat(page: Page): Promise<FakeMapChat> {
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 
-  await page.route("**/api/assistant/access", (route) =>
-    route.fulfill({ status: 200, json: { enabled: true, authorityRevision: "map-chat" } }),
-  );
+  await page.addInitScript(() => {
+    (window as any).__MOCK_ASSISTANT__ = { enabled: true, authorityRevision: "map-chat" };
+  });
   await page.route("**/opencode/**", (route) => {
     const url = new URL(route.request().url());
     return route.continue({ url: `${origin}${url.pathname}${url.search}` });

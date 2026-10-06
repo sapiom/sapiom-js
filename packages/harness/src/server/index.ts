@@ -3344,10 +3344,6 @@ export const startServer = async (
     createBootTokenMiddleware(options.bootToken),
     express.json({ limit: JSON_BODY_LIMIT_BYTES }),
   );
-  app.get("/api/assistant/access", (_req, res) => {
-    res.setHeader("Cache-Control", "no-store");
-    res.json(assistantAccess.getBrowserState());
-  });
   app.use(
     "/api",
     createRestRouter({

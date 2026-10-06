@@ -132,6 +132,7 @@ export const App = (): JSX.Element => {
   const mapChat = useMapChat({
     bootToken: harness.bootToken,
     authRevision: harness.authRevision,
+    canAsk: harness.assistant.snapshot?.enabled === true,
   });
   /**
    * The clock the rail's marks and relative times read. A session quiet for ten
@@ -146,14 +147,6 @@ export const App = (): JSX.Element => {
   /** See `ShellNav.navGenerationRef`. */
   const navGenerationRef = useRef(0);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
-  /** The centre map's full view. Its own flag, so leaving the map always
-   *  lowers it. An agent's modal lowers it too: the full view is a fixed
-   *  layer above the modal's (the modal shares the menu rung, so the board's
-   *  own menus can open over it). */
-  const [mapExpanded, setMapExpanded] = useState(false);
-  useEffect(() => {
-    if (view.kind !== "project") setMapExpanded(false);
-  }, [view.kind]);
   const agentMapEntry = useAgentMapEntry({
     projectId: viewProjectId,
     api: harness.api,
@@ -337,7 +330,6 @@ export const App = (): JSX.Element => {
     projects,
     agentMapEntry,
     projectActions,
-    onExpandMap: () => setMapExpanded(true),
     previewBySession: harness.previewBySession,
   });
 
@@ -452,6 +444,17 @@ export const App = (): JSX.Element => {
                 railCollapsed ? () => setRailCollapsed(false) : null
               }
               projectView={projectViewHeader}
+              conversation={
+                assistant.enabled &&
+                conversationSession &&
+                (centre.kind === "workbench" || centre.kind === "dead")
+                  ? {
+                      mode: assistant.modeFor(conversationSession.id),
+                      onChange: (mode) =>
+                        assistant.setMode(conversationSession.id, mode),
+                    }
+                  : null
+              }
             />
 
             {sessionBarSession &&
@@ -525,8 +528,6 @@ export const App = (): JSX.Element => {
                   agentMapEntry={agentMapEntry}
                   viewportStore={agentMapViewportStore}
                   agentsInProject={projects.agentsInProject}
-                  mapExpanded={mapExpanded}
-                  onToggleMapExpanded={() => setMapExpanded((value) => !value)}
                   mapPanelPath={mapPanelPath}
                   onPickAgent={setMapPanelPath}
                   onClosePanel={() => setMapPanelPath(null)}

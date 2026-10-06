@@ -44,8 +44,7 @@ import "../styles/map-chat.css";
 /**
  * What the project view needs from the shell before it renders: whether it
  * draws the map pane or the agent cards, and the header the session bar shows
- * in its place (the project, its App Links, New agent, and the map's full
- * view while a drawn map is ready).
+ * in its place (the project, its App Links and New agent).
  */
 export function projectViewChrome({
   centre,
@@ -53,7 +52,6 @@ export function projectViewChrome({
   projects,
   agentMapEntry,
   projectActions,
-  onExpandMap,
   previewBySession,
 }: {
   centre: Centre;
@@ -61,7 +59,6 @@ export function projectViewChrome({
   projects: ShellProjects;
   agentMapEntry: ReturnType<typeof useAgentMapEntry>;
   projectActions: ProjectActions;
-  onExpandMap: () => void;
   /** Dev servers detected per session (`port.detected`). */
   previewBySession: ReadonlyMap<string, LocalPreview>;
 }) {
@@ -107,11 +104,6 @@ export function projectViewChrome({
               shownScope.cwd,
               projects.projectLabelOf(shownProject),
             ),
-          onExpandMap:
-            mapMode?.kind === "map" &&
-            agentMapEntry.state.workspace.status === "ready"
-              ? onExpandMap
-              : null,
         }
       : null;
   return { mapMode, header };
@@ -147,8 +139,6 @@ export function ProjectView({
   agentMapEntry,
   viewportStore,
   agentsInProject,
-  mapExpanded,
-  onToggleMapExpanded,
   mapPanelPath,
   onPickAgent,
   onClosePanel,
@@ -171,8 +161,6 @@ export function ProjectView({
   agentMapEntry: ReturnType<typeof useAgentMapEntry>;
   viewportStore: GraphViewportStore;
   agentsInProject: (projectId: string) => WorkflowInfo[];
-  mapExpanded: boolean;
-  onToggleMapExpanded: () => void;
   /** The agent picked on the map, by path: the card names it (4.2). */
   mapPanelPath: string | null;
   onPickAgent: (path: string) => void;
@@ -448,8 +436,6 @@ export function ProjectView({
           onRetry={agentMapEntry.retryWorkspace}
           initialization={agentMapEntry.initialization}
           onRetryGeneration={agentMapEntry.retryGeneration}
-          expanded={mapExpanded}
-          onToggleExpanded={onToggleMapExpanded}
         />
       ) : (
         <ProjectAgentGrid

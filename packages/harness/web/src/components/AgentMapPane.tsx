@@ -30,7 +30,6 @@ import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { AgentMapCanvas } from "./AgentMapCanvas";
-import { Icon } from "./Icon";
 
 /** A picked map node that is not an agent: a resource, a step or a group. It
  *  opens no agent, only the card's header row (flow 4.2.3). */
@@ -75,8 +74,6 @@ interface AgentMapPaneProps {
   onRetryGeneration?: () => void;
   unavailable: string | null;
   onRetry: () => void;
-  expanded: boolean;
-  onToggleExpanded: () => void;
 }
 
 export function AgentMapPane({
@@ -98,8 +95,6 @@ export function AgentMapPane({
   onRetryGeneration,
   unavailable,
   onRetry,
-  expanded,
-  onToggleExpanded,
 }: AgentMapPaneProps): JSX.Element {
   const value = state.status === "ready" ? state.value : null;
   const proposal = value?.proposal ?? null;
@@ -282,21 +277,6 @@ export function AgentMapPane({
     returnFocus.current?.focus();
   }, [setSelected]);
 
-  // Match the per-agent graph's full-view contract: Escape unwinds one layer
-  // at a time, clearing the selection before it lowers the map overlay.
-  useEffect(() => {
-    if (!expanded) return;
-    const onKey = (event: KeyboardEvent): void => {
-      // Another layer (the map chat, the card's pick) already took this key.
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (selected !== null) clearSelection();
-      else if (expanded) onToggleExpanded();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [clearSelection, expanded, onToggleExpanded, selected]);
 
   let content: JSX.Element;
   if (state.status === "error" && unavailable) {
@@ -412,23 +392,8 @@ export function AgentMapPane({
   }
 
   return (
-    <div
-      className={`canvas-frame-wrap${expanded ? " is-expanded" : ""}`}
-      data-testid="agent-map-frame"
-    >
+    <div className="canvas-frame-wrap" data-testid="agent-map-frame">
       {content}
-      {expanded && (
-        <button
-          type="button"
-          className="macro-icon-btn canvas-expand-exit"
-          data-testid="canvas-expand-exit"
-          aria-label="Exit expanded Agent Map"
-          title="Exit expanded Agent Map (Esc)"
-          onClick={onToggleExpanded}
-        >
-          <Icon name="Minimize2" size={14} />
-        </button>
-      )}
     </div>
   );
 }

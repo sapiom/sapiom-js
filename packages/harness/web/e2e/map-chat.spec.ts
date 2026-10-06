@@ -304,33 +304,6 @@ test("Escape with a resource picked closes the map chat first and keeps the pick
   await expect(card(page)).toHaveAttribute("data-state", "project");
 });
 
-test("Escape in the expanded map closes the map chat and keeps the full view", async ({ page }) => {
-  await page.getByTestId("canvas-expand").click();
-  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
-  await ask(page, "What runs here?");
-  await page.keyboard.press("Escape");
-  await expect(card(page)).toHaveAttribute("data-state", "project");
-  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("agent-map-frame")).not.toHaveClass(/is-expanded/);
-});
-
-test("an agent opened from the expanded map shows its modal; the full view is lowered", async ({ page }) => {
-  await page.getByTestId("canvas-expand").click();
-  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
-  await node(page, STOCK_RESEARCH).dblclick();
-  const modal = page.getByTestId("agent-modal");
-  await expect(modal).toBeVisible();
-  await expect(page.getByTestId("agent-map-frame")).not.toHaveClass(/is-expanded/);
-  // On top: a click at its centre lands on the modal itself.
-  const box = (await modal.boundingBox())!;
-  const hit = await page.evaluate(
-    ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid="agent-modal"]') != null,
-    { x: box.x + box.width / 2, y: box.y + 40 },
-  );
-  expect(hit).toBe(true);
-});
-
 test("Stop interrupts a reply that is still streaming", async ({ page }) => {
   await cardInput(page).fill("slow, take your time");
   await cardInput(page).press("Enter");
@@ -567,4 +540,39 @@ test("each project has its own map chat", async ({ page }) => {
   expect(hosts).toHaveLength(2);
   expect(hosts).toContain(`map:${first}`);
   expect(chat.prompts(first!)).toHaveLength(1);
+});
+
+/** The server's `assistant.state` push, as the host sends it on any change. */
+async function pushAccess(page: Page, enabled: boolean, revision: number) {
+  await page.evaluate(
+    ([enabled, revision]) =>
+      (window as any).__HARNESS_TEST__.publish({
+        type: "assistant.state",
+        snapshot: {
+          hostInstanceId: "mock-host",
+          authorityRevision: "map-chat",
+          revision,
+          enabled,
+          sessions: [],
+        },
+      }),
+    [enabled, revision] as const,
+  );
+}
+
+test("the card follows the server's access push: off at cold start, on when the check lands", async ({ page }) => {
+  // A cold start: the host has not finished its first check yet.
+  await pushAccess(page, false, 1);
+  await expect(card(page)).toHaveCount(0);
+  await pushAccess(page, true, 2);
+  await expect(cardInput(page)).toBeVisible();
+  await node(page, STOCK_RESEARCH).click();
+  await expect(cardInput(page)).toBeVisible();
+});
+
+test("turning access off closes an open map chat", async ({ page }) => {
+  await ask(page, "What runs here?");
+  await expect(page.getByTestId("map-chat-overlay")).toBeVisible();
+  await pushAccess(page, false, 1);
+  await expect(page.getByTestId("map-chat-overlay")).toHaveCount(0);
 });

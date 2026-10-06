@@ -11,6 +11,7 @@ import { AnchoredPopover } from "./AnchoredPopover";
 import { Icon } from "./Icon";
 import { ProjectAppLinks, type ProjectAppLinkSources } from "./ProjectAppLinks";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+import type { ConversationMode } from "./SessionView";
 
 /** The workspace a session belongs to is its directory's basename — the
  *  same label the rail's workspace group carries. */
@@ -64,13 +65,16 @@ interface SessionBarProps {
    * (flow-map-chat-overlay.md 4.2b), so the header never names one.
    */
   projectView?: ProjectViewHeader | null;
+  /** The session's Terminal / Assistant switch, while the Assistant is on. */
+  conversation?: {
+    mode: ConversationMode;
+    onChange: (mode: ConversationMode) => void;
+  } | null;
 }
 
 export interface ProjectViewHeader {
   label: string;
   onNewAgent: () => void;
-  /** Full view for a drawn map; null when there is no map to enlarge. */
-  onExpandMap: (() => void) | null;
   /** The project's App Links, deployed and local (flow 4.7.3). */
   appLinks: ProjectAppLinkSources;
 }
@@ -102,6 +106,7 @@ export function SessionBar({
   editorLabel,
   onToast,
   projectView = null,
+  conversation = null,
 }: SessionBarProps): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -371,6 +376,26 @@ export function SessionBar({
         </AnchoredPopover>
       )}
 
+      {conversation && activeSession && !projectView && (
+        <div
+          className="studio-conversation-switch"
+          role="group"
+          aria-label="Conversation view"
+        >
+          {(["Terminal", "Assistant"] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              className="btn-ghost"
+              aria-pressed={conversation.mode === view}
+              onClick={() => conversation.onChange(view)}
+            >
+              {view}
+            </button>
+          ))}
+        </div>
+      )}
+
       {projectView && (
         <div className="project-view-actions">
           {/* New agent, in the project view's header (Q11): the map is where
@@ -384,18 +409,6 @@ export function SessionBar({
           >
             <Icon name="Plus" size={13} /> New agent
           </button>
-          {projectView.onExpandMap && (
-            <button
-              type="button"
-              className="theme-toggle"
-              data-testid="canvas-expand"
-              aria-label="Expand Agent Map"
-              title="Expand Agent Map"
-              onClick={projectView.onExpandMap}
-            >
-              <Icon name="Maximize2" size={15} />
-            </button>
-          )}
         </div>
       )}
     </div>
