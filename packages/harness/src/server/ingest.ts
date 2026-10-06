@@ -69,16 +69,6 @@ export interface IngestDeps {
    *  enrichment), before it's persisted — e.g. to feed a tool.call event's
    *  command/output text to dev-server port detection. */
   onNormalizedEvent?: (event: AnalyticsEvent, runtimeEpoch: string) => void;
-  /** Local-only annotation (for example planner control-turn correlation). */
-  decorateEvent?: (
-    event: AnalyticsEvent,
-    runtimeEpoch: string,
-  ) => AnalyticsEvent;
-  /** Content-free projection used only for remote product telemetry. */
-  projectTelemetryEvent?: (
-    event: AnalyticsEvent,
-    runtimeEpoch: string,
-  ) => AnalyticsEvent;
   /**
    * Called for every event AFTER it has been persisted to the local store —
    * the seam for consumers that need to read the store back and see this event
@@ -249,15 +239,11 @@ async function processIngestNow(
   }
 
   if (!deps.isCurrentRuntime(harnessSessionId, runtimeEpoch)) return;
-  finalEvent = deps.decorateEvent?.(finalEvent, runtimeEpoch) ?? finalEvent;
-  if (!deps.isCurrentRuntime(harnessSessionId, runtimeEpoch)) return;
   deps.onNormalizedEvent?.(finalEvent, runtimeEpoch);
   await deps.store.append(finalEvent);
   if (!deps.isCurrentRuntime(harnessSessionId, runtimeEpoch)) return;
   deps.onEventPersisted?.(finalEvent, runtimeEpoch);
-  deps.batcher.enqueue(
-    deps.projectTelemetryEvent?.(finalEvent, runtimeEpoch) ?? finalEvent,
-  );
+  deps.batcher.enqueue(finalEvent);
 
   if (hookEvent === "SessionEnd") {
     seqCounter.reset(harnessSessionId);

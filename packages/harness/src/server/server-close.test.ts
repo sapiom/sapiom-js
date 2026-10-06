@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
-import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { SessionManagerClosingError } from "../core/session-manager.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 import { startServer, type HarnessServer } from "./index.js";
@@ -16,13 +15,12 @@ describe("server close and post-listen startup failure", () => {
   let existingRoot: string;
   let newRoot: string;
   let webDir: string;
-  let existingProjectId: string;
   let server: HarnessServer | undefined;
   let launches: LaunchOpts[];
 
   beforeEach(async () => {
     stateRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "project-bootstrap-server-outbox-"),
+      path.join(os.tmpdir(), "harness-server-close-"),
     );
     existingRoot = path.join(stateRoot, "existing-project");
     newRoot = path.join(stateRoot, "new-project");
@@ -33,10 +31,9 @@ describe("server close and post-listen startup failure", () => {
       fs.mkdir(webDir),
     ]);
     await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
-    const reconciled = await new StudioProjectCatalog(
+    await new StudioProjectCatalog(
       path.join(stateRoot, "studio-projects.json"),
     ).reconcile([{ workspaceKey: "existing", cwd: existingRoot }]);
-    existingProjectId = reconciled.projects[0]!.projectId;
     await fs.writeFile(
       path.join(stateRoot, "settings.json"),
       JSON.stringify({ recentDirs: [existingRoot] }),
@@ -49,16 +46,6 @@ describe("server close and post-listen startup failure", () => {
     vi.restoreAllMocks();
     await fs.rm(stateRoot, { recursive: true, force: true, maxRetries: 5 });
   });
-
-
-  const intentFile = (projectId: string) =>
-    path.join(
-      stateRoot,
-      "agent-map",
-      "project-bootstrap",
-      "projects",
-      `${projectId}.json`,
-    );
 
 
   function adapter(): HarnessAdapter {
@@ -97,21 +84,6 @@ describe("server close and post-listen startup failure", () => {
 
 
   it("fully closes a post-listen startup failure before rejecting", async () => {
-    await fs.mkdir(path.dirname(intentFile(existingProjectId)), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      intentFile(existingProjectId),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        projectId: existingProjectId,
-        userId: "local:machine-1",
-        targetSessionId: null,
-        status: "scheduled",
-        createdAt: "2026-09-04T00:00:00.000Z",
-        updatedAt: "2026-09-04T00:00:00.000Z",
-      })}\n`,
-    );
     let rejectedPort = 0;
 
     await expect(
@@ -127,8 +99,8 @@ describe("server close and post-listen startup failure", () => {
         webDir,
         autoCreateSession: false,
         loadSystemPrompt: async () => "ordinary coding prompt",
-        projectBootstrapTestHooks: {
-          afterListenBeforeRecovery: (port) => {
+        startupTestHooks: {
+          afterListen: (port) => {
             rejectedPort = port;
             throw new Error("simulated post-listen recovery failure");
           },
@@ -147,14 +119,11 @@ describe("server close and post-listen startup failure", () => {
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect(launches).toEqual([]);
-    await expect(
-      fs.readFile(intentFile(existingProjectId), "utf8").then(JSON.parse),
-    ).resolves.toMatchObject({ status: "scheduled", targetSessionId: null });
   });
 
-  it.each(["bootstrap", "session flush"] as const)(
+  it.each(["session flush"] as const)(
     "releases the listener with admission fenced when %s teardown never settles",
-    async (stalledResource) => {
+    async () => {
       server = await boot();
       const active = server;
       const port = active.port;
@@ -162,16 +131,9 @@ describe("server close and post-listen startup failure", () => {
       const teardown = new Promise<void>((resolve) => {
         releaseTeardown = resolve;
       });
-      const originalBootstrapClose = ProjectBootstrapCoordinator.prototype.close;
       const kills = vi.spyOn(active.sessionManager, "killAll");
-      const stalled = stalledResource === "bootstrap"
-        ? vi.spyOn(ProjectBootstrapCoordinator.prototype, "close")
-            .mockImplementation(async function (this: ProjectBootstrapCoordinator) {
-              await originalBootstrapClose.call(this);
-              await teardown;
-            })
-        : vi.spyOn(active.sessionManager, "flush")
-            .mockImplementation(() => teardown);
+      const stalled = vi.spyOn(active.sessionManager, "flush")
+        .mockImplementation(() => teardown);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let closed = false;
       const closing = active.close().then(() => { closed = true; });

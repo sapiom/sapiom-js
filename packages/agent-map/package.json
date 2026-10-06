@@ -93,10 +93,6 @@
       "types": "./dist/shared/build-plan.d.ts",
       "import": "./dist/shared/build-plan.js"
     },
-    "./node/agent-brief": {
-      "types": "./dist/shared/agent-brief.d.ts",
-      "import": "./dist/shared/agent-brief.js"
-    },
     "./node/build-plan-codec": {
       "types": "./dist/shared/build-plan-codec.d.ts",
       "import": "./dist/shared/build-plan-codec.js"

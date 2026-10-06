@@ -576,16 +576,6 @@ describe("initialization eligibility and ownership", () => {
     await c.schedule(projectId, true);
     await vi.waitFor(() => expect(infer).toHaveBeenCalledTimes(2));
   });
-  it("bootstrap and initialization share one first-map reservation", async () => {
-    const f = await fixture();
-    const c = f.create({ concurrency: 0 });
-    await c.schedule(projectId);
-    expect(await c.reserveForBootstrap(projectId)).toBe(false);
-    const other = f.create();
-    expect(await other.reserveForBootstrap(otherId)).toBe(true);
-    expect((await other.schedule(otherId)).status).toBe("skipped");
-    expect(f.infer).not.toHaveBeenCalled();
-  });
   it.each(["timeout", "cancelled"] as const)(
     "records %s without publishing a partial map",
     async (reason) => {

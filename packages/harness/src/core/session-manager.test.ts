@@ -22,11 +22,7 @@ import {
   SessionInputIsolationError,
   SessionManagerClosingError,
   McpCredentialGenerationChangedError,
-  SubsessionBindingMismatchError,
-  SubsessionFreshRestartForbiddenError,
-  type TrustedSubsessionBindingMarker,
   ProjectSessionScopeUnavailableError,
-  ProjectBootstrapClaimUnavailableError,
   SessionManager,
   sanitizeExitTail,
   type PtySpawnFn,
@@ -135,11 +131,8 @@ describe("SessionManager", () => {
       migrateAgentMapIdentity?: SessionManagerOptions["migrateAgentMapIdentity"];
       prepareProjectSession?: SessionManagerOptions["prepareProjectSession"];
       onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
-      onTerminalInput?: SessionManagerOptions["onTerminalInput"];
       onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
-      onProjectBootstrapSession?: SessionManagerOptions["onProjectBootstrapSession"];
       onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
-      onSubsessionUserClosed?: SessionManagerOptions["onSubsessionUserClosed"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -148,7 +141,6 @@ describe("SessionManager", () => {
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
       writeAgentSessionOwnerRegistry?: SessionManagerOptions["writeAgentSessionOwnerRegistry"];
-      writeSubsessionBindingRegistry?: SessionManagerOptions["writeSubsessionBindingRegistry"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -185,11 +177,8 @@ describe("SessionManager", () => {
         (async (sessionId) => ({ projectId: "project-test", userId: "user-test", sessionId })),
       prepareProjectSession: opts.prepareProjectSession,
       onAgentMapSessionExit: opts.onAgentMapSessionExit,
-      onTerminalInput: opts.onTerminalInput,
       onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
-      onProjectBootstrapSession: opts.onProjectBootstrapSession,
       onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
-      onSubsessionUserClosed: opts.onSubsessionUserClosed,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -197,7 +186,6 @@ describe("SessionManager", () => {
       platform: opts.platform,
       writeSessionRegistry: opts.writeSessionRegistry,
       writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
-      writeSubsessionBindingRegistry: opts.writeSubsessionBindingRegistry,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -221,457 +209,6 @@ describe("SessionManager", () => {
     expect(session.title).toBe("proj");
     expect(manager.get(session.id)).toEqual(session);
     expect(manager.list()).toHaveLength(1);
-  });
-
-  const marker = (
-    sessionId: string,
-    incarnation = 1,
-    spawnEpoch = 1,
-  ): TrustedSubsessionBindingMarker => ({
-    projectId: "project_00000000-0000-4000-8000-000000000001",
-    parentSessionId: "parent-session-1",
-    bindingId: "binding-1",
-    sessionId,
-    incarnation,
-    spawnEpoch,
-  });
-
-  const delegatedCreate = (sessionId: string) => ({
-    cwd: "/tmp/proj",
-    harness: "claude-code" as const,
-    trusted: {
-      agentMapIdentity: () => ({
-        projectId: "project_00000000-0000-4000-8000-000000000001",
-        userId: "user-1",
-        sessionId,
-      }),
-      initialTitle: "Collect evidence",
-    },
-  });
-
-  it("creates a reserved writable session only with its exact private binding", async () => {
-    const { manager, adapter } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000111";
-    const input = delegatedCreate(sessionId);
-    const session = await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-
-    expect(session).toMatchObject({
-      id: sessionId,
-      status: "running",
-      title: "Collect evidence",
-      ready: false,
-      agentMapIdentity: {
-        projectId: marker(sessionId).projectId,
-        sessionId,
-      },
-    });
-    expect(adapter.launch).toHaveBeenCalledTimes(1);
-    expect(manager.matchesSubsessionBinding(marker(sessionId))).toBe(true);
-    expect(await readFile(sessionsPath, "utf8")).not.toContain("binding-1");
-    const sidecar = `${sessionsPath}.subsession-bindings.json`;
-    expect(JSON.parse(await readFile(sidecar, "utf8"))).toMatchObject({
-      version: 1,
-      markers: { [sessionId]: marker(sessionId) },
-      closedSessionIds: [],
-    });
-    expect((await stat(sidecar)).mode & 0o777).toBe(0o600);
-
-    const { manager: restartedManager } = makeManager();
-    await restartedManager.init();
-    expect(restartedManager.getSubsessionBinding(sessionId)).toEqual(
-      marker(sessionId),
-    );
-
-    await expect(
-      manager.createReserved(
-        sessionId,
-        { cwd: input.cwd, harness: input.harness },
-        { ...marker(sessionId), bindingId: "foreign-binding" },
-        input.trusted,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(adapter.launch).toHaveBeenCalledTimes(1);
-  });
-
-  it("never adopts a manual row merely because its reserved id matches", async () => {
-    const { manager } = makeManager();
-    const manual = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    const input = delegatedCreate(manual.id);
-    await expect(
-      manager.createReserved(
-        manual.id,
-        { cwd: input.cwd, harness: input.harness },
-        marker(manual.id),
-        input.trusted,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(manager.getSubsessionBinding(manual.id)).toBeNull();
-  });
-
-  it("fresh-restarts an exact zero-turn bound row under the same Harness id", async () => {
-    const { manager, adapter, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000112";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    spawns[0]!.emitExit(1);
-    await manager.flush();
-
-    const restarted = await manager.restartFreshBound(
-      sessionId,
-      marker(sessionId),
-      marker(sessionId, 2, 2),
-      input.trusted,
-      async () => false,
-    );
-    expect(restarted).toMatchObject({ id: sessionId, status: "running" });
-    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(
-      marker(sessionId, 2, 2),
-    );
-    expect(adapter.launch).toHaveBeenCalledTimes(2);
-  });
-
-  it("resumes an exact coordinator-owned conversation under an advanced marker", async () => {
-    const { manager, adapter, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000115";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    const firstRuntime = manager.getRuntimeEpoch(sessionId)!;
-    await manager.setAgentSessionId(
-      sessionId,
-      "agent-session-1",
-      "startup",
-      firstRuntime,
-    );
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-
-    const resumed = await manager.resumeBound(
-      sessionId,
-      marker(sessionId),
-      marker(sessionId, 2, 2),
-    );
-
-    expect(resumed).toMatchObject({ id: sessionId, status: "running" });
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(
-      marker(sessionId, 2, 2),
-    );
-    expect(adapter.resume).toHaveBeenCalledWith(
-      "agent-session-1",
-      expect.objectContaining({ harnessSessionId: sessionId }),
-    );
-    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
-  });
-
-  it("rejects a bound resume when its freshly resolved project scope is unavailable", async () => {
-    const identity = (sessionId: string) => ({
-      projectId: "project_00000000-0000-4000-8000-000000000001",
-      userId: "user-1",
-      sessionId,
-    });
-    const resolveAgentMapIdentity = vi
-      .fn()
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => {
-        throw new ProjectSessionScopeUnavailableError(sessionId);
-      });
-    const { manager, adapter, spawns } = makeManager({
-      resolveAgentMapIdentity,
-    });
-    const sessionId = "00000000-0000-4000-8000-000000000117";
-    const input = delegatedCreate(sessionId);
-    const expected = marker(sessionId);
-    const next = marker(sessionId, 2, 2);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      expected,
-      input.trusted,
-    );
-    await manager.setAgentSessionId(sessionId, "agent-bound-scope-unavailable");
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-    const beforeResume = structuredClone(manager.get(sessionId));
-
-    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-
-    expect(manager.get(sessionId)).toEqual(beforeResume);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(spawns).toHaveLength(1);
-    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
-  });
-
-  it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
-    const initial = createFakePty();
-    const resumedPty = createFakePty();
-    const spawnPty = vi.fn<PtySpawnFn>()
-      .mockReturnValueOnce(initial.pty as unknown as ReturnType<PtySpawnFn>)
-      .mockImplementationOnce(() => { throw new Error("resume spawn failed"); })
-      .mockReturnValue(resumedPty.pty as unknown as ReturnType<PtySpawnFn>);
-    const { manager, adapter } = makeManager({ spawnPty });
-    const sessionId = "00000000-0000-4000-8000-000000000116";
-    const input = delegatedCreate(sessionId);
-    const expected = marker(sessionId);
-    const next = marker(sessionId, 2, 2);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      expected,
-      input.trusted,
-    );
-    await manager.setAgentSessionId(
-      sessionId,
-      "agent-resume-retry",
-      "startup",
-      manager.getRuntimeEpoch(sessionId)!,
-    );
-    initial.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toThrow(
-      "resume spawn failed",
-    );
-    expect(manager.get(sessionId)?.status).toBe("exited");
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
-    expect(JSON.parse(await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8")))
-      .toMatchObject({ markers: { [sessionId]: next } });
-
-    // Already-next recovery still requires this exact project, parent, binding,
-    // and next incarnation; it cannot adopt a foreign coordinator's marker.
-    await expect(manager.resumeBound(
-      sessionId,
-      { ...expected, bindingId: "foreign-binding" },
-      next,
-    )).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    await expect(manager.resumeBound(sessionId, expected, marker(sessionId, 3, 3)))
-      .rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(spawnPty).toHaveBeenCalledTimes(2);
-
-    await expect(manager.resumeBound(sessionId, expected, next)).resolves.toMatchObject({
-      id: sessionId,
-      status: "running",
-      agentSessionId: "agent-resume-retry",
-    });
-    expect(adapter.resume).toHaveBeenCalledTimes(2);
-    expect(spawnPty).toHaveBeenCalledTimes(3);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
-    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
-    resumedPty.emitExit(0);
-    await manager.flush();
-  });
-
-  it("refuses a fresh bound restart when any recorded turn exists", async () => {
-    const { manager, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000113";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    spawns[0]!.emitExit(1);
-    await manager.flush();
-    await expect(
-      manager.restartFreshBound(
-        sessionId,
-        marker(sessionId),
-        marker(sessionId, 2, 2),
-        input.trusted,
-        async () => true,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
-  });
-
-  it("persists an explicit delegated-session close and forbids automatic resurrection", async () => {
-    const { manager, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000114";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    const closing = manager.close(sessionId);
-    spawns[0]!.emitExit(0);
-    await closing;
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
-    await manager.flush();
-    await expect(
-      manager.restartFreshBound(
-        sessionId,
-        marker(sessionId),
-        marker(sessionId, 2, 2),
-        input.trusted,
-        async () => false,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
-    expect(
-      JSON.parse(
-        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
-      ),
-    ).toMatchObject({ closedSessionIds: [sessionId] });
-  });
-
-  it("terminates a delegated PTY even when its user-close tombstone cannot persist", async () => {
-    let failCloseWrite = false;
-    const writeSubsessionBindingRegistry = vi.fn(async () => {
-      if (failCloseWrite) throw new Error("injected close persistence failure");
-    });
-    const onSubsessionUserClosed = vi.fn(async () => {});
-    const { manager, spawns } = makeManager({
-      writeSubsessionBindingRegistry,
-      onSubsessionUserClosed,
-    });
-    const sessionId = "00000000-0000-4000-8000-000000000115";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    failCloseWrite = true;
-
-    const closing = manager.close(sessionId);
-    expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1);
-    spawns[0]!.emitExit(0);
-    await expect(closing).rejects.toThrow("injected close persistence failure");
-    expect(manager.get(sessionId)).toMatchObject({ status: "exited" });
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
-    expect(onSubsessionUserClosed).toHaveBeenCalledWith(marker(sessionId));
-
-    failCloseWrite = false;
-    await expect(manager.close(sessionId)).resolves.toBe(false);
-    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(4);
-    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
-  });
-
-  it("prunes durably closed binding proof across release churn and restart", async () => {
-    const onSubsessionUserClosed = vi.fn(async () => {});
-    const { manager, spawns } = makeManager({ onSubsessionUserClosed });
-
-    for (let index = 0; index < 70; index += 1) {
-      const sessionId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
-      const input = delegatedCreate(sessionId);
-      await manager.createReserved(
-        sessionId,
-        { cwd: input.cwd, harness: input.harness },
-        marker(sessionId),
-        input.trusted,
-      );
-      const closing = manager.closeBound(marker(sessionId));
-      spawns[index]!.emitExit(0);
-      await closing;
-      expect(manager.getSubsessionBinding(sessionId)).toBeNull();
-    }
-
-    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(70);
-    expect(
-      JSON.parse(
-        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
-      ),
-    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
-    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
-    await restarted.init();
-    expect(restarted.getSubsessionBinding(
-      "00000000-0000-4000-8000-000000000000",
-    )).toBeNull();
-  });
-
-  it("retains exact binding proof when final cleanup fails and prunes it after restart", async () => {
-    let writeCount = 0;
-    const writeSubsessionBindingRegistry = vi.fn(
-      async (file: string, serialized: string) => {
-        writeCount += 1;
-        if (writeCount === 3)
-          throw new Error("injected cleanup persistence failure");
-        await writeFile(file, serialized, "utf8");
-      },
-    );
-    const onSubsessionUserClosed = vi.fn(async () => {});
-    const { manager, spawns } = makeManager({
-      writeSubsessionBindingRegistry,
-      onSubsessionUserClosed,
-    });
-    const sessionId = "00000000-0000-4000-8000-000000000117";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-
-    const closing = manager.closeBound(marker(sessionId));
-    spawns[0]!.emitExit(0);
-    await expect(closing).rejects.toThrow("injected cleanup persistence failure");
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
-
-    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
-    await restarted.init();
-    expect(restarted.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
-    await expect(restarted.closeBound(marker(sessionId))).resolves.toBe(false);
-    expect(restarted.getSubsessionBinding(sessionId)).toBeNull();
-    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(3);
-    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
-    expect(
-      JSON.parse(
-        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
-      ),
-    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
-  });
-
-  it("closes only an exact coordinator-owned binding through the trusted path", async () => {
-    const { manager, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000116";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-
-    await expect(
-      manager.closeBound({ ...marker(sessionId), bindingId: "binding_foreign" }),
-    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
-
-    const closing = manager.closeBound(marker(sessionId));
-    await vi.waitFor(() =>
-      expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1),
-    );
-    spawns[0]!.emitExit(0);
-    await expect(closing).resolves.toBe(true);
-    await expect(manager.closeBound(marker(sessionId))).resolves.toBe(false);
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
   });
 
   it("persists sessions to disk and reconciles non-exited sessions to exited on reload", async () => {
@@ -775,15 +312,9 @@ describe("SessionManager", () => {
         userId: "user-1",
         sessionId: planner.id,
       },
-      projectBootstrap: {
-        projectId: "project-1",
-        userId: "user-1",
-        targetSessionId: planner.id,
-        bootstrap: { status: "generating", attemptId: "attempt-7" },
-        queuedInputIds: ["input-1"],
-      },
     });
     expect(manager.get(planner.id)).not.toHaveProperty("planning");
+    expect(manager.get(planner.id)).not.toHaveProperty("projectBootstrap");
     expect(manager.get(manual.id)).toMatchObject({
       id: manual.id,
       agentSessionId: manual.agentSessionId,
@@ -825,15 +356,15 @@ describe("SessionManager", () => {
     expect(persisted[1]?.agentSessionId).toBe(manual.agentSessionId);
   });
 
-  it("restores a scope-unavailable bootstrap failure and resumes once authority is valid", async () => {
+  it("drops retired project-bootstrap metadata on load and resumes as an ordinary session", async () => {
     const identity = {
       projectId: "project-1",
       userId: "user-1",
-      sessionId: "bootstrap-scope-failure",
+      sessionId: "retired-bootstrap",
     };
-    const session: HarnessSession = {
+    const session = {
       id: identity.sessionId,
-      agentSessionId: "provider-scope-failure",
+      agentSessionId: "provider-retired-bootstrap",
       harness: "claude-code",
       cwd: "/tmp/project",
       title: "Keep my conversation",
@@ -858,42 +389,33 @@ describe("SessionManager", () => {
     };
     await writeFile(sessionsPath, JSON.stringify([session]), "utf8");
     const migrations = vi.fn();
-    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity: async () => identity,
       onProjectAgentIdentityMigration: migrations,
-      onProjectBootstrapSession,
     });
 
     await manager.init();
 
-    expect(manager.get(session.id)?.projectBootstrap).toEqual(session.projectBootstrap);
-    expect(migrations).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).not.toHaveProperty("projectBootstrap");
+    expect(migrations).toHaveBeenCalledWith({
+      sessionId: session.id,
+      outcome: "migrated",
+    });
     await expect(manager.resume(session.id)).resolves.toMatchObject({
       id: session.id,
       agentSessionId: session.agentSessionId,
       title: session.title,
       agentMapIdentity: identity,
-      projectBootstrap: session.projectBootstrap,
       status: "running",
     });
     expect(adapter.resume).toHaveBeenCalledTimes(1);
     expect(spawns).toHaveLength(1);
-    expect(onProjectBootstrapSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: session.id,
-        projectBootstrap: session.projectBootstrap,
-      }),
-      "resumed",
-      expect.any(String),
-    );
     const persisted = JSON.parse(
       await readFile(sessionsPath, "utf8"),
     ) as HarnessSession[];
     expect(
-      persisted.find((candidate) => candidate.id === session.id)
-        ?.projectBootstrap,
-    ).toEqual(session.projectBootstrap);
+      persisted.find((candidate) => candidate.id === session.id),
+    ).not.toHaveProperty("projectBootstrap");
   });
 
   it("drops malformed or conflicting legacy identity records from the registry on load", async () => {
@@ -1163,11 +685,9 @@ describe("SessionManager", () => {
     );
     const migrations = vi.fn();
     const resolveAgentMapIdentity = vi.fn();
-    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
       resolveAgentMapIdentity,
-      onProjectBootstrapSession,
     });
 
     await manager.init();
@@ -1196,7 +716,6 @@ describe("SessionManager", () => {
       await readFile(sessionsPath, "utf8"),
     ) as unknown[];
     expect(persistedAfterResume).toEqual([malformedBootstrap]);
-    expect(onProjectBootstrapSession).not.toHaveBeenCalled();
     expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
     expect(adapter.canResume).not.toHaveBeenCalled();
     expect(adapter.resume).not.toHaveBeenCalled();
@@ -1584,8 +1103,7 @@ describe("SessionManager", () => {
     });
 
     it("write() (raw keystrokes) is never gated on readiness — a human must be able to answer a blocking prompt themselves", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
+      const { manager, spawns } = makeManager();
       const session = await manager.create({
         cwd: "/tmp/proj",
         harness: "claude-code",
@@ -1594,11 +1112,6 @@ describe("SessionManager", () => {
 
       expect(manager.write(session.id, "1\r")).toBe(true);
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("1\r");
-      expect(onTerminalInput).toHaveBeenCalledOnce();
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: false,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
     });
 
     it(
@@ -3325,35 +2838,6 @@ describe("SessionManager", () => {
     );
   });
 
-  it("keeps a trusted planner FIFO predecessor distinct from its history brief source", async () => {
-    const buildLaunchOpts = vi.fn(
-      async (_harnessSessionId: string, request: CreateSessionRequest) => ({
-        rehydratedFrom: request.rehydrateFrom,
-      }),
-    );
-    const { manager } = makeManager({ buildLaunchOpts });
-
-    const session = await manager.create(
-      {
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-        rehydrateFrom: "recorded-history-ancestor",
-      },
-      { handoffFromSessionId: "queue-owning-predecessor" },
-    );
-
-    expect(buildLaunchOpts).toHaveBeenCalledWith(
-      session.id,
-      expect.objectContaining({
-        rehydrateFrom: "recorded-history-ancestor",
-      }),
-      expect.objectContaining({
-        agentMapIdentity: expect.objectContaining({ sessionId: session.id }),
-      }),
-    );
-    expect(session.rehydratedFrom).toBe("queue-owning-predecessor");
-  });
-
   it("also awaits an async buildLaunchOpts on resume()", async () => {
     const buildLaunchOpts = vi.fn(async (harnessSessionId: string) => ({
       mcpConfigFile: `/generated/${harnessSessionId}/mcp-config.json`,
@@ -4645,63 +4129,6 @@ describe("SessionManager", () => {
     expect(emittedStates).toEqual(["restarting", undefined]);
   });
 
-  it("kills credential-bearing bound subsessions without ordinary relaunch", async () => {
-    let generation = 1;
-    const adapter = createFakeAdapter({
-      canResume: vi.fn(async () => true),
-    });
-    const { manager, spawns } = makeManager({
-      adapter,
-      currentCredentialGeneration: () => generation,
-      buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: {
-          generation,
-          credentialBearing: generation === 1,
-        },
-      }),
-    });
-    const sessionId = "00000000-0000-4000-8000-000000000118";
-    const input = delegatedCreate(sessionId);
-    const expected = marker(sessionId);
-    const next = marker(sessionId, 2, 2);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      expected,
-      input.trusted,
-    );
-    await manager.setAgentSessionId(
-      sessionId,
-      "agent-bound-credential-removal",
-      "startup",
-      manager.getRuntimeEpoch(sessionId)!,
-    );
-    generation = 2;
-
-    const removal = manager.relaunchCredentialBearingSessions(1);
-    await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
-    expect(adapter.canResume).not.toHaveBeenCalled();
-    expect(adapter.resume).not.toHaveBeenCalled();
-    spawns[0]!.emitExit(0);
-    await removal;
-    await manager.flush();
-
-    expect(manager.get(sessionId)).toMatchObject({
-      status: "exited",
-    });
-    expect(manager.get(sessionId)?.mcpAuthState).not.toBe("restarting");
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
-    expect(adapter.canResume).not.toHaveBeenCalled();
-    expect(adapter.resume).not.toHaveBeenCalled();
-
-    await expect(
-      manager.resumeBound(sessionId, expected, next),
-    ).resolves.toMatchObject({ id: sessionId, status: "running" });
-    expect(adapter.canResume).toHaveBeenCalledOnce();
-    expect(adapter.resume).toHaveBeenCalledOnce();
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
-  });
-
   it("does not reject credential removal when the keyless resume fails", async () => {
     let generation = 1;
     const adapter = createFakeAdapter({
@@ -4781,28 +4208,6 @@ describe("SessionManager", () => {
   });
 
 
-    it("classifies raw input on a recognized trust screen without blocking the user's bytes", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({
-        onTerminalInput,
-        adapter: createFakeAdapter({
-          detectBlockingPrompt: (output) => output.includes("Do you trust"),
-        }),
-      });
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      spawns[0]?.emitData("Do you trust the files in this folder?\r\n");
-
-      expect(manager.write(session.id, "y\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: true,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
-      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("y\r");
-    });
-
 
   it("claims the starting lifecycle before asynchronous resume config is regenerated", async () => {
     const resumeConfig = deferred<void>();
@@ -4831,16 +4236,6 @@ describe("SessionManager", () => {
     const received: string[] = [];
     const detach = manager.attach(session.id, (chunk) => received.push(chunk));
 
-    // Bootstrap exit bookkeeping can finish after kill() resolves. Its metadata
-    // update must observe the claimed resume lifecycle, so server cleanup does
-    // not remove the config currently being regenerated.
-    await manager.setProjectBootstrapMetadata(session.id, {
-      projectId: "project-1",
-      userId: "user-1",
-      targetSessionId: session.id,
-      bootstrap: { status: "skipped", reason: "user-proceeded" },
-      queuedInputIds: [],
-    });
     expect(statuses.at(-1)).toBe("starting");
     expect(adapter.resume).not.toHaveBeenCalled();
 
@@ -5361,8 +4756,7 @@ describe("SessionManager", () => {
 
 
     it("lets durable API input cancel only a staged background turn", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
+      const { manager, spawns } = makeManager();
       const session = await manager.create({
         cwd: "/tmp/proj",
         harness: "claude-code",
@@ -5383,7 +4777,6 @@ describe("SessionManager", () => {
       expect(manager.preemptBackgroundInput(session.id)).toBe(true);
       expect(manager.preemptBackgroundInput(session.id)).toBe(false);
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(onTerminalInput).not.toHaveBeenCalled();
 
       const assertion = expect(background).rejects.toMatchObject({
         code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
@@ -5795,8 +5188,7 @@ describe("SessionManager", () => {
 
 
     it("lets raw user input preempt a staged background turn without combining either prompt", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
+      const { manager, spawns } = makeManager();
       const session = await manager.create({
         cwd: "/tmp/proj",
         harness: "claude-code",
@@ -5816,10 +5208,6 @@ describe("SessionManager", () => {
       );
 
       expect(manager.write(session.id, "implement the API now\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: false,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
         3,
@@ -5863,15 +5251,7 @@ describe("SessionManager", () => {
       });
       const prepareProjectSession = vi.fn(async () => {
         if (stage === "prepareProjectSession") throw setupError;
-        return {
-          projectBootstrap: {
-            projectId: "project-1",
-            userId: "user-1",
-            targetSessionId: claimedSessionId,
-            bootstrap: { status: "pending" as const },
-            queuedInputIds: [],
-          },
-        };
+        return {};
       });
       const buildLaunchOpts = vi.fn(async () => {
         if (stage === "buildLaunchOpts") throw setupError;
@@ -6028,130 +5408,6 @@ describe("SessionManager", () => {
   });
 
 
-  it("publishes a claimed first project session before a concurrent ordinary session", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async (identity) =>
-      prepareProjectSession.mock.calls.length === 1
-        ? {
-            initialTitle: "Plan Agents",
-            projectBootstrap: {
-              projectId: identity.projectId,
-              userId: identity.userId,
-              targetSessionId: identity.sessionId,
-              bootstrap: { status: "pending" as const },
-              queuedInputIds: [],
-            },
-          }
-        : {},
-    );
-    const { manager, adapter } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const automatic = manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { requireProjectBootstrapClaim: true },
-    );
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const explicit = manager.create({
-      cwd: "/tmp/proj/packages/worker",
-      harness: "claude-code",
-      initialUserInputPending: true,
-    });
-    await Promise.resolve();
-    expect(prepareProjectSession).toHaveBeenCalledOnce();
-    expect(adapter.launch).not.toHaveBeenCalled();
-
-    firstLaunch.resolve();
-    const [first, second] = await Promise.all([automatic, explicit]);
-
-    expect(first.title).toBe("Plan Agents");
-    expect(first.projectBootstrap?.targetSessionId).toBe(first.id);
-    expect(second.title).toBe("worker");
-    expect(second.projectBootstrap).toBeUndefined();
-    expect(manager.list().map((session) => session.id)).toEqual([
-      first.id,
-      second.id,
-    ]);
-    expect(adapter.launch).toHaveBeenCalledTimes(2);
-  });
-
-
-  it("cancels only an automatic create that loses its bootstrap claim", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async (identity) =>
-      prepareProjectSession.mock.calls.length === 1
-        ? {
-            initialTitle: "Plan Agents",
-            projectBootstrap: {
-              projectId: identity.projectId,
-              userId: identity.userId,
-              targetSessionId: identity.sessionId,
-              bootstrap: {
-                status: "skipped" as const,
-                reason: "user-proceeded" as const,
-              },
-              queuedInputIds: [],
-            },
-          }
-        : {},
-    );
-    const onAgentMapSessionExit = vi.fn();
-    const { manager, adapter, spawns } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      onAgentMapSessionExit,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const explicit = manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-      initialUserInputPending: true,
-    });
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const automatic = manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { requireProjectBootstrapClaim: true },
-    );
-    firstLaunch.resolve();
-
-    const first = await explicit;
-    await expect(automatic).rejects.toBeInstanceOf(
-      ProjectBootstrapClaimUnavailableError,
-    );
-    expect(first).toMatchObject({
-      title: "Plan Agents",
-      projectBootstrap: {
-        targetSessionId: first.id,
-        bootstrap: { status: "skipped", reason: "user-proceeded" },
-      },
-    });
-    expect(manager.list()).toEqual([first]);
-    expect(adapter.launch).toHaveBeenCalledOnce();
-    expect(spawns).toHaveLength(1);
-    expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-  });
 
 
   it("drains project create queues without preparing a waiter after shutdown", async () => {
@@ -6264,27 +5520,17 @@ describe("SessionManager", () => {
         return persisted ?? identity(sessionId);
       },
     );
-    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
-      onProjectBootstrapSession,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
       harness: "claude-code",
     });
     await manager.setAgentSessionId(session.id, "provider-project-session");
-    await manager.setProjectBootstrapMetadata(session.id, {
-      projectId: "project-1",
-      userId: "user-1",
-      targetSessionId: session.id,
-      bootstrap: { status: "pending" },
-      queuedInputIds: ["retained-input"],
-    });
     spawns[0]?.emitExit(0);
     await manager.flush();
     const persistedIdentity = structuredClone(session.agentMapIdentity);
-    const persistedBootstrap = structuredClone(session.projectBootstrap);
     const callsBeforeResume = resolveAgentMapIdentity.mock.calls.length;
     projectRemoved = true;
 
@@ -6301,7 +5547,6 @@ describe("SessionManager", () => {
     expect(manager.get(session.id)).toMatchObject({
       status: "exited",
       agentMapIdentity: persistedIdentity,
-      projectBootstrap: persistedBootstrap,
     });
     const persisted = JSON.parse(
       await readFile(sessionsPath, "utf8"),
@@ -6309,9 +5554,7 @@ describe("SessionManager", () => {
     expect(persisted.find((candidate) => candidate.id === session.id))
       .toMatchObject({
         agentMapIdentity: persistedIdentity,
-        projectBootstrap: persistedBootstrap,
       });
-    expect(onProjectBootstrapSession).not.toHaveBeenCalled();
     expect(adapter.resume).not.toHaveBeenCalled();
     expect(spawns).toHaveLength(1);
   });

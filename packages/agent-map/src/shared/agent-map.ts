@@ -282,9 +282,9 @@ export interface SessionPrincipal {
 /**
  * Server-derived authority for an ordinary session inside a Studio project.
  *
- * Optional assignment, bootstrap, and focused-context metadata deliberately
- * live outside this principal: they may describe why a session exists, but
- * they cannot change which project tools or execution policy it receives.
+ * Any other session metadata lives outside this principal: it may describe
+ * why a session exists, but it cannot change which project tools or execution
+ * policy the session receives.
  */
 export type ProjectAgentSession = Readonly<SessionPrincipal>;
 
@@ -399,111 +399,3 @@ export interface AgentMapReadSnapshot {
   workspace: AgentMapWorkspaceState;
   proposal: MapChangeProposal | null;
 }
-
-export type ProjectBootstrapErrorCode =
-  | "session_not_ready"
-  | "session_exited"
-  | "injection_failed"
-  | "model_turn_failed"
-  | "delivery_timeout"
-  | "persistence_failed"
-  | "scope_unavailable";
-
-export type ProjectBootstrapState =
-  | { status: "pending" }
-  | { status: "generating"; attemptId: string }
-  | { status: "delivered"; messageId: string }
-  | {
-      status: "failed";
-      retryable: boolean;
-      errorCode: ProjectBootstrapErrorCode;
-    }
-  | {
-      status: "skipped";
-      reason: "user-proceeded" | "map-not-empty";
-    };
-
-/**
- * Lifecycle context for the one automatic map seed owned by a newly created
- * project. It is deliberately separate from ProjectAgentSession authority.
- */
-export interface ProjectBootstrapMetadata {
-  projectId: StudioProjectId;
-  userId: string;
-  targetSessionId: string;
-  bootstrap: ProjectBootstrapState;
-  queuedInputIds: string[];
-}
-
-export interface ProjectBootstrapQueuedInput {
-  id: string;
-  sessionId: string;
-  text: string;
-  acceptedAt: string;
-}
-
-/**
- * Content-free receipt for input accepted by the durable bootstrap FIFO.
- * `uncertain` is terminal: Studio cannot prove whether that logical turn ran,
- * so it will never replay it automatically.
- */
-export interface ProjectBootstrapInputReceipt {
-  requestId: string | null;
-  inputId: string;
-  status: "queued" | "submitted" | "uncertain" | "completed";
-  acceptedAt: string;
-}
-
-export type ProjectBootstrapRegistrationMode =
-  | "boot"
-  | "created"
-  | "live"
-  | "resumed";
-
-/** Content-free lifecycle telemetry for project bootstrap reliability. */
-export type ProjectBootstrapLifecycleEvent =
-  | {
-      name: "project_bootstrap.scheduled" | "project_bootstrap.recovered";
-      projectId: StudioProjectId;
-      sessionId: string;
-    }
-  | {
-      name: "project_bootstrap.attempted" | "project_bootstrap.retried";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId: string;
-      retryOrdinal: number;
-      queueDepth: number;
-    }
-  | {
-      name: "project_bootstrap.delivered";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId: string;
-      queueDepth: number;
-    }
-  | {
-      name: "project_bootstrap.failed";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId?: string;
-      errorCode: ProjectBootstrapErrorCode;
-      retryable: boolean;
-      queueDepth: number;
-    }
-  | {
-      name: "project_bootstrap.preempted" | "project_bootstrap.skipped";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId?: string;
-      reason: "user-proceeded" | "map-not-empty";
-      queueDepth: number;
-    }
-  | {
-      name: "project_bootstrap.input_delivery_uncertain";
-      projectId: StudioProjectId;
-      sessionId: string;
-      inputId: string;
-      errorCode: "delivery_uncertain";
-      queueDepth: number;
-    };
