@@ -108,13 +108,13 @@ describe("agentMapGeometry", () => {
   });
 
   it("labels only edges the map tool labelled", () => {
-    const labelled = { ...edge("a", "b"), label: { value: "starts screening" } } as MapEdge;
+    const labelled = { ...edge("a", "b"), label: { value: "starts screening" } } as unknown as MapEdge;
     const input = agentMapGeometry(
       "p",
       mapOf({
         systems: [{ id: "s", name: "s", nameSource: "default", agents: ["a", "b", "c"] }],
         agents: [agent("a"), agent("b"), agent("c")],
-        edges: [labelled, edge("b", "c"), { ...edge("a", "c"), label: { value: "  " } } as MapEdge],
+        edges: [labelled, edge("b", "c"), { ...edge("a", "c"), label: { value: "  " } } as unknown as MapEdge],
       }),
     );
     const [first, second, third] = input.groups[0]!.edges;

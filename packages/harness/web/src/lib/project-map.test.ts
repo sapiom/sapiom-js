@@ -47,8 +47,8 @@ const mapOf = (over: Partial<AgentMap> = {}): AgentMap => ({
 
 describe("agentRole and edgeLabel", () => {
   it("return the label's value when the map tool attached one", () => {
-    expect(agentRole({ ...agent("a"), role: { value: "Intake" } } as MapAgent)).toBe("Intake");
-    expect(edgeLabel({ ...edge("a", "b"), label: { value: "starts screening" } } as MapEdge)).toBe(
+    expect(agentRole({ ...agent("a"), role: { value: "Intake" } } as unknown as MapAgent)).toBe("Intake");
+    expect(edgeLabel({ ...edge("a", "b"), label: { value: "starts screening" } } as unknown as MapEdge)).toBe(
       "starts screening",
     );
   });
@@ -57,8 +57,8 @@ describe("agentRole and edgeLabel", () => {
     expect(edgeLabel(edge("a", "b"))).toBeNull();
   });
   it("return null when blank or malformed", () => {
-    expect(agentRole({ ...agent("a"), role: { value: "   " } } as MapAgent)).toBeNull();
-    expect(edgeLabel({ ...edge("a", "b"), label: { value: "" } } as MapEdge)).toBeNull();
+    expect(agentRole({ ...agent("a"), role: { value: "   " } } as unknown as MapAgent)).toBeNull();
+    expect(edgeLabel({ ...edge("a", "b"), label: { value: "" } } as unknown as MapEdge)).toBeNull();
     expect(edgeLabel({ ...edge("a", "b"), label: { value: 3 } } as unknown as MapEdge)).toBeNull();
     expect(agentRole({ ...agent("a"), role: null } as unknown as MapAgent)).toBeNull();
   });
