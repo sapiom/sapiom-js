@@ -1,5 +1,30 @@
 # @sapiom/harness
 
+## 0.20.0
+
+### Minor Changes
+
+- 600ac11: Studio no longer starts a Plan Agents session for a new project, and the unused build-plan and delegation tools are gone.
+
+### Patch Changes
+
+- 5a88d10: `@sapiom/mcp` adds `sapiom_dev_map`. It computes the agent map from code on every call and stores nothing. You can pass a project folder, optionally with a git `ref`, or your own description of agents.
+
+  - **Systems** are agents joined by code-proven calls, events and timers. Each edge carries the file and line that proves it.
+  - **Shared resources** (vault keys, databases, connectors) show on each agent that uses them and never join two agents into a system.
+  - **Steps** come from `agents check`.
+  - **Triggers and deploy state** come from the signed-in account.
+
+  The source scan Studio's agent Canvas uses now lives in `@sapiom/mcp/map`, and `@sapiom/harness` imports it from there. The Canvas behaves the same.
+
+- Updated dependencies [5a88d10]
+- Updated dependencies [600ac11]
+- Updated dependencies [ec3d07a]
+  - @sapiom/mcp@0.19.0
+  - @sapiom/agent-map@0.3.0
+  - @sapiom/agent@0.14.8
+  - @sapiom/agent-core@0.15.4
+
 ## 0.19.2
 
 ### Patch Changes
