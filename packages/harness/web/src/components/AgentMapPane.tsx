@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
 import type { GraphViewportStore } from "../lib/graph-viewport";
 import {
+  drawnRef,
   agentFolder,
   workflowForAgent,
   type MapAgent,
@@ -101,7 +102,7 @@ export function AgentMapPane({
     const folder = agentFolder(snapshot.map, agent);
     // At a git ref the folder is the ref's, not necessarily the working copy's:
     // never add it to the agent list from there.
-    if (!workflow && folder && !snapshot.map.ref) {
+    if (!workflow && folder && drawnRef(snapshot.map) === null) {
       workflow = await connectAgent(folder).catch(() => null);
       if (generation.current !== request) return;
     }

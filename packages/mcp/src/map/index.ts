@@ -26,4 +26,4 @@ export {
   type ScanOptions,
   type StepSource,
 } from "./scan-project.js";
-export { accountPlatform } from "./platform.js";
+export { accountEvaluate, accountPlatform } from "./platform.js";

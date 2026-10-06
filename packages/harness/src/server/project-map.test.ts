@@ -11,6 +11,7 @@ import {
   type MapDescription,
   type PlatformSource,
   type ScanOptions,
+  type Evaluate,
 } from "@sapiom/mcp/map";
 
 import { createBootTokenMiddleware } from "./auth.js";
@@ -59,6 +60,7 @@ describe("createProjectMapRouter", () => {
       describe?: (options: ScanOptions) => Promise<MapDescription>;
       platform?: () => PlatformSource | null;
       onRootRead?: (projectId: string, root: string) => void;
+      evaluate?: () => Evaluate | null;
     } = {},
   ) {
     const root = await tempDir();
@@ -80,6 +82,7 @@ describe("createProjectMapRouter", () => {
         resolveProject,
         platform: overrides.platform ?? (() => null),
         onRootRead: overrides.onRootRead,
+        evaluate: overrides.evaluate,
         describe: describeSpy,
       }),
     );
@@ -93,6 +96,32 @@ describe("createProjectMapRouter", () => {
         fetch(`${baseUrl}/api/projects/${id}/map${query}`, { headers: auth }),
     };
   }
+
+  it("labels the map with Jev when signed in, and reads labels unavailable signed out", async () => {
+    const evaluate = vi.fn(async (request: { questions: Record<string, { criteria: Record<string, string> }> }) => ({
+      answers: Object.fromEntries(
+        Object.entries(request.questions).map(([key, question]) => {
+          const choice = Object.keys(question.criteria)[0]!;
+          return [key, { type: "choice", choice, probabilities: { [choice]: 0.97 } }];
+        }),
+      ),
+    }));
+    const signedIn = await start({ evaluate: () => evaluate as unknown as Evaluate });
+    const labelled = (await (await signedIn.get()).json()) as { map: { labels: string; agents: Array<{ role?: unknown }> } };
+    expect(labelled.map.labels).toBe("ok");
+    expect(labelled.map.agents.every((agent) => agent.role)).toBe(true);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+
+    const failing = await start({
+      evaluate: () => (async () => { throw new Error("ECONNRESET"); }) as unknown as Evaluate,
+    });
+    const drawn = (await (await failing.get()).json()) as { map: { labels: string; agents: unknown[] } };
+    expect(drawn.map.labels).toBe("unavailable");
+    expect(drawn.map.agents).toHaveLength(2);
+
+    const signedOut = await start({ evaluate: () => null });
+    expect(((await (await signedOut.get()).json()) as { map: { labels: string } }).map.labels).toBe("unavailable");
+  });
 
   it("requires the boot token", async () => {
     const f = await start();

@@ -20,9 +20,12 @@ import {
   buildMap,
   describeProject,
   MapInputError,
-  type AgentMap,
   type PlatformSource,
   type ScanOptions,
+  accountEvaluate,
+  fileLabelCache,
+  labelMap,
+  type Evaluate,
 } from "@sapiom/mcp/map";
 
 import type { ProjectMapResponse } from "../shared/project-map.js";
@@ -40,6 +43,8 @@ export interface ProjectMapRouterOptions {
   resolveProject: (projectId: string) => Promise<ProjectMapProject | null>;
   /** null: signed out. Read per request so a sign-in takes effect without a restart. */
   platform: () => PlatformSource | null;
+  /** Jev for the signed-in account, or null signed out: labels then read "unavailable". */
+  evaluate?: () => Evaluate | null;
   /** Called with every root the route has drawn, so the server can watch it. */
   onRootRead?: (projectId: string, root: string) => void;
   /** Test seam; defaults to the real scan. */
@@ -52,6 +57,11 @@ export interface ProjectMapRouterOptions {
  * refresh, a file save) reuse its definitions and triggers for a short while.
  */
 const keyIds = new Map<string, string>();
+
+/** Jev through the key the harness currently holds. */
+export function evaluateForKey(apiKey: string | null, host: string): Evaluate | null {
+  return apiKey ? accountEvaluate(createClient({ host, apiKey })) : null;
+}
 
 export function platformForKey(apiKey: string | null, host: string): PlatformSource | null {
   if (!apiKey) return null;
@@ -127,7 +137,10 @@ export function createProjectMapRouter(options: ProjectMapRouterOptions): Router
       describe({ root, ...(ref ? { ref } : {}), platform }),
       gitRefs(root),
     ]);
-    const map: AgentMap = buildMap(description);
+    // Roles and edge labels, as sapiom_dev_map gives them: cached in the project's
+    // .sapiom/cache, asked only for what changed, shown only at p >= 0.8.
+    const evaluate = options.evaluate?.() ?? undefined;
+    const { map } = await labelMap(buildMap(description), { evaluate, cache: fileLabelCache(root) });
     // The scan reports the real path; keep the folder the user opened so agent
     // paths match the workflow rows the rest of Studio holds.
     return {
