@@ -238,12 +238,13 @@ const title = await browser.withManagedSession(
 );
 ```
 
-If you omit `idempotencyKey`, the helper generates one and reuses the same key
-and input when retrying uncertain creation or close outcomes. If creation remains
-uncertain, it checks for and closes any session left behind before rethrowing the
-creation error. It closes the session in `finally`, even when your callback throws;
-close problems never replace the callback's result or error. `onPendingClose`
-receives the session ID when a close has not completed.
+If you omit `idempotencyKey`, the helper generates one. It retries uncertain
+creation outcomes with the same key and input, and retries the close until
+settlement completes. If creation remains uncertain, it checks for and closes any
+session left behind before rethrowing the creation error. It closes the session in
+`finally`, even when your callback throws; close problems never replace the
+callback's result or error. `onPendingClose` receives the session ID when a close
+has not completed.
 
 ### Control with your own model and driver
 
@@ -471,23 +472,27 @@ session creation the two must match.
 After a lost response, retry the same operation with its original key and input.
 Do not generate a new key for an uncertain operation. Apart from
 `withManagedSession`, the SDK makes one request per call and does not automatically
-repeat mutations. `BrowserAutomationHttpError`
-exposes HTTP `status`, an optional Sapiom `code`, and `body` for inspection. Its
-message omits the response body. Do not log the body: it can contain sensitive data.
+repeat mutations. `BrowserAutomationHttpError` exposes HTTP `status`, an optional
+Sapiom `code`, and `body` for inspection. Its message omits the response body. Do
+not log the body: it can contain sensitive data.
 
 What a resend can settle:
 
-- `createManaged`: the same key and input return the created session without a
-  second charge; otherwise use `sessions.recover(key)`. `withManagedSession` does both.
-- `profiles.delete`: checks for prior success before deleting again.
-- `profiles.save`: a resend returns the same `profileId` and status; only `ready`
-  from `profiles.get` after the source session closes confirms the save.
-- Task starts/controls and recording pause/resume lost after sending are never
-  confirmed; resends return `browser_outcome_unknown`. Stop and close the session.
-- 400/403/404: no request ran. 409 without code: state conflict; read current
-  state first. `browser_termination_pending`: close/session work is in progress;
-  retry later.
-- Settlement ends 2m after max duration; `closeManaged` stays `pending`. Stop retrying.
+- `createManaged`: a resend with the same key and input returns the same session
+  once creation completed, with no second charge. Otherwise use
+  `sessions.recover(key)`. `withManagedSession` does both for you.
+- `profiles.delete`: a resend checks whether the earlier attempt already
+  succeeded before deleting again.
+- `profiles.save`: a resend returns the same `profileId` and its recorded status.
+  Only `ready` from `profiles.get`, after the source session closes, confirms the save.
+- `tasks.start`, `tasks.pause`/`resume`/`respond`, `recordings.pause`/`resume`: an
+  attempt lost after it was sent is never confirmed later, and resends keep
+  returning `browser_outcome_unknown`. Stop controlling the session and close it.
+- 400, 403, and 404 mean the request did not run. A 409 without a code is a state
+  conflict, so read the current state before retrying. `browser_termination_pending`
+  means a close or another operation on the session is still in progress; retry later.
+- Settlement can complete only until 2 minutes after the session's maximum
+  duration. After that, `closeManaged` keeps returning `pending`, so stop retrying.
 
 `sessions.recover(createKey)` uses the original Sapiom API key and returns session
 IDs and states, not connection URLs. Retry the original creation to retrieve a

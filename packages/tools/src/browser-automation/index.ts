@@ -650,12 +650,12 @@ export async function withSession<T>(
 
 /**
  * Create a managed session, run `fn`, and attempt to close the session afterward.
- * If `idempotencyKey` is omitted, one is generated. Uncertain creation and close
- * outcomes are retried with the same key and input. If creation remains uncertain,
- * any session left by that creation is closed before the creation error is rethrown.
- * The session is closed in `finally`, even when `fn` throws; close problems do not
- * replace `fn`'s result or error. `onPendingClose` receives the session ID when a
- * close has not completed.
+ * If `idempotencyKey` is omitted, one is generated. Uncertain creation outcomes are
+ * retried with the same key and input; the close is retried until settlement
+ * completes. If creation remains uncertain, any session left by that creation is
+ * closed before the creation error is rethrown. The session is closed in `finally`,
+ * even when `fn` throws; close problems do not replace `fn`'s result or error.
+ * `onPendingClose` receives the session ID when a close has not completed.
  *
  * @example
  * const title = await sapiom.browserAutomation.withManagedSession(
