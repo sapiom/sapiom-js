@@ -1,5 +1,11 @@
 # @sapiom/agent-map
 
+## 0.3.0
+
+### Minor Changes
+
+- 600ac11: Studio no longer starts a Plan Agents session for a new project, and the unused build-plan and delegation tools are gone.
+
 ## 0.2.1
 
 ### Patch Changes
