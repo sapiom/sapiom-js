@@ -4,6 +4,7 @@ import {
   agentFolder,
   agentDisplayName,
   agentRole,
+  displayNames,
   chipKind,
   chipLabel,
   deploymentLabel,
@@ -277,10 +278,18 @@ describe("display names", () => {
     expect(agentDisplayName({ slug: "support-desk-intake", path: "agents/intake" })).toBe("intake");
     expect(agentDisplayName({ slug: "solo", path: "" })).toBe("solo");
   });
-  it("names a default system after its hub agent's folder, and keeps a name from map.json", () => {
-    const agents = new Map([["support-desk-controller", { slug: "support-desk-controller", path: "agents/controller" }]]);
-    expect(systemDisplayName({ name: "support-desk-controller", nameSource: "default" }, agents)).toBe("controller");
-    expect(systemDisplayName({ name: "Support desk", nameSource: "file" }, agents)).toBe("Support desk");
+  it("names a default system after its hub agent's shown name, and keeps a name from map.json", () => {
+    const names = displayNames([{ slug: "support-desk-controller", path: "agents/controller" }]);
+    expect(systemDisplayName({ name: "support-desk-controller", nameSource: "default" }, names)).toBe("controller");
+    expect(systemDisplayName({ name: "Support desk", nameSource: "file" }, names)).toBe("Support desk");
+  });
+  it("keeps full slugs for agents whose folders share a name", () => {
+    const names = displayNames([
+      { slug: "a-worker", path: "a/worker" },
+      { slug: "b-worker", path: "b/worker" },
+      { slug: "solo", path: "solo" },
+    ]);
+    expect([...names.values()]).toEqual(["a-worker", "b-worker", "solo"]);
   });
 });
 

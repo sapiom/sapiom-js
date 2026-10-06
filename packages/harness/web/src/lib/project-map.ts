@@ -43,14 +43,25 @@ export function agentDisplayName(agent: Pick<MapAgent, "slug" | "path">): string
   return folder || agent.slug;
 }
 
+/** Each agent's shown name; two agents whose folders share a name keep their full slugs. */
+export function displayNames(agents: readonly Pick<MapAgent, "slug" | "path">[]): Map<string, string> {
+  const counts = new Map<string, number>();
+  for (const agent of agents) counts.set(agentDisplayName(agent), (counts.get(agentDisplayName(agent)) ?? 0) + 1);
+  return new Map(
+    agents.map((agent) => {
+      const name = agentDisplayName(agent);
+      return [agent.slug, (counts.get(name) ?? 0) > 1 ? agent.slug : name];
+    }),
+  );
+}
+
 /** A default-named system is named after its most-connected agent: show that agent's name. */
 export function systemDisplayName(
   system: { name: string; nameSource: "file" | "default" },
-  agents: ReadonlyMap<string, Pick<MapAgent, "slug" | "path">>,
+  names: ReadonlyMap<string, string>,
 ): string {
   if (system.nameSource === "file") return system.name;
-  const hub = agents.get(system.name);
-  return hub ? agentDisplayName(hub) : system.name;
+  return names.get(system.name) ?? system.name;
 }
 
 /** Stable id for an edge: one per (from, to, kind, event type). */

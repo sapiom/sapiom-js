@@ -74,6 +74,7 @@ export function agentMapGeometry(projectId: string, map: AgentMap): ElkLayoutInp
       // A slug the map lists in a system but not as an agent has no card.
       const members = new Set(system.agents.filter((slug) => known.has(slug)));
       if (members.size === 0) return [];
+      const seenPairs = new Set<string>();
       return [{
         id: system.id,
         nodes: [...members].map(node),
@@ -81,10 +82,12 @@ export function agentMapGeometry(projectId: string, map: AgentMap): ElkLayoutInp
           // An agent calling itself has no line to draw between two cards.
           .filter((edge) => edge.from !== edge.to && members.has(edge.from) && members.has(edge.to))
           // One line per pair: two event types from intake to copilot are one hand-off on the map.
-          .filter(
-            (edge, index, all) =>
-              all.findIndex((other) => other.from === edge.from && other.to === edge.to) === index,
-          )
+          .filter((edge) => {
+            const pair = `${edge.from}\u0000${edge.to}`;
+            if (seenPairs.has(pair)) return false;
+            seenPairs.add(pair);
+            return true;
+          })
           .map((edge) => {
             const text = edgeLabel(edge);
             return {

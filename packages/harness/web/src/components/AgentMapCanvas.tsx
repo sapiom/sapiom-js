@@ -16,7 +16,7 @@ import {
   chipLabel,
   deploymentLabel,
   foldChips,
-  agentDisplayName,
+  displayNames,
   edgeId,
   systemDisplayName,
   edgeTitle,
@@ -63,9 +63,9 @@ interface AgentMapCanvasProps {
 /** A stable testid for an edge: its id joins with NULs, which a selector cannot hold. */
 const edgeTestId = (id: string) => `agent-map-edge-${id.split("\u0000").filter(Boolean).join("--")}`;
 
-function nodeLabel(agent: MapAgent, ref: string | undefined): string {
+function nodeLabel(agent: MapAgent, name: string, ref: string | undefined): string {
   return [
-    agentDisplayName(agent),
+    name === agent.slug ? name : `${name} (${agent.slug})`,
     "agent",
     deploymentLabel(agent),
     agentRole(agent),
@@ -104,6 +104,7 @@ export function AgentMapCanvas({
   const followsUpdates = useRef(true);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
+  const names = useMemo(() => displayNames(map.agents), [map.agents]);
   const agentsBySlug = useMemo(
     () => new Map(map.agents.map((agent) => [agent.slug, agent])),
     [map.agents],
@@ -373,7 +374,15 @@ export function AgentMapCanvas({
                   data-testid={edgeTestId(placed.id)}
                   data-edge-kind={edge?.kind}
                 >
-                  {edge && <title>{edgeTitle(edge)}</title>}
+                  {edge && (
+                    // One line stands for every connection between the pair.
+                    <title>
+                      {map.edges
+                        .filter((other) => other.from === edge.from && other.to === edge.to)
+                        .map(edgeTitle)
+                        .join("\n")}
+                    </title>
+                  )}
                   {/* A wider transparent stroke, so hovering near the line
                       shows its label and its tooltip. */}
                   <path className="agent-map-edge-hit" d={placed.path} />
@@ -405,7 +414,7 @@ export function AgentMapCanvas({
                 className="agent-map-system"
                 data-testid={`map-system-${system.id}`}
                 data-system-id={system.id}
-                data-group={systemDisplayName(system, agentsBySlug)}
+                data-group={systemDisplayName(system, names)}
                 data-name-source={system.nameSource}
                 style={
                   {
@@ -416,10 +425,10 @@ export function AgentMapCanvas({
                   } satisfies CSSProperties
                 }
                 role="group"
-                aria-label={`System ${systemDisplayName(system, agentsBySlug)}, ${system.agents.length} agents`}
+                aria-label={`System ${systemDisplayName(system, names)}, ${system.agents.length} agents`}
               >
                 <span className="agent-map-system-name">
-                  {systemDisplayName(system, agentsBySlug)}
+                  {systemDisplayName(system, names)}
                   <span className="agent-map-system-count">
                     {system.agents.length === 1 ? "1 agent" : `${system.agents.length} agents`}
                   </span>
@@ -463,7 +472,7 @@ export function AgentMapCanvas({
                   title={agent.description || undefined}
                   {...trackingAttrs({ object: "agent" })}
                   aria-pressed={selected}
-                  aria-label={nodeLabel(agent, map.ref)}
+                  aria-label={nodeLabel(agent, names.get(agent.slug) ?? agent.slug, map.ref)}
                   onClick={(event) => onSelectNode(agent.slug, event.currentTarget)}
                   onDoubleClick={(event) => onEnterNode(agent.slug, event.currentTarget)}
                 >
@@ -478,7 +487,7 @@ export function AgentMapCanvas({
                       />
                     )}
                     <span className="agent-map-node-label" title={agent.slug}>
-                      {agentDisplayName(agent)}
+                      {names.get(agent.slug) ?? agent.slug}
                     </span>
                   </span>
                   {(deployed || role) && (
