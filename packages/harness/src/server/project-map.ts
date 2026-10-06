@@ -9,6 +9,8 @@
  */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import * as path from "node:path";
 import { promisify } from "node:util";
 
 import { Router } from "express";
@@ -79,6 +81,31 @@ export async function gitRefs(root: string): Promise<ProjectMapResponse["git"]> 
   const listed = await git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
   const branches = (listed ?? "").split("\n").filter(Boolean).sort();
   return { branch: branch || null, branches };
+}
+
+/**
+ * The project's active root bindings that are open as workspace scopes. Folders are compared by
+ * real path: macOS temp folders sit behind /var -> /private/var and Windows spells one folder
+ * several ways, so the same folder can differ as text between the binding and the scope.
+ */
+export async function openProjectRoots(
+  bindings: ReadonlyArray<{ status: string; localRootRef: string }>,
+  scopes: ReadonlyArray<{ cwd: string }>,
+): Promise<string[]> {
+  const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
+  const open = await Promise.all(scopes.map((scope) => real(scope.cwd)));
+  const roots: string[] = [];
+  for (const binding of bindings) {
+    if (binding.status !== "active") continue;
+    const bound = await real(binding.localRootRef);
+    if (open.some((cwd) => samePathText(cwd, bound))) roots.push(binding.localRootRef);
+  }
+  return roots;
+}
+
+/** Windows paths compare case-insensitively; elsewhere case matters. */
+function samePathText(left: string, right: string): boolean {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 const REF_PATTERN = /^[A-Za-z0-9._/@~^-]{1,200}$/;
