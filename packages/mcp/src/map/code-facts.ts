@@ -33,6 +33,8 @@ import type { EdgeKind, Evidence } from "./types.js";
 export interface ResolvedValue {
   value: string;
   alias?: true;
+  /** One possible value the code does not make knowable (a dynamic entry of a const map). */
+  dynamic?: true;
 }
 
 export interface CallFact {
@@ -64,6 +66,10 @@ const IMPORT_DEPTH = 3;
 const RESOLVE_DEPTH = 6;
 
 interface SourceUnit {
+  /** False for a file outside the agent folder, reached through a relative import. */
+  own: boolean;
+  /** For an imported file: whether a position sits in code this agent reaches. */
+  inScope: (position: number) => boolean;
   abs: string;
   /** POSIX path relative to the project root, as evidence shows it. */
   rel: string;
@@ -126,6 +132,19 @@ function enclosingFunction(node: ts.Node): ts.SignatureDeclaration | null {
   return null;
 }
 
+/** The nearest enclosing function that declares `name` as a parameter (callbacks inside a step close over it). */
+function declaringFunction(node: ts.Node, name: string): ts.SignatureDeclaration | null {
+  for (let current = node.parent; current; current = current.parent) {
+    if (
+      ts.isFunctionLike(current) &&
+      current.parameters.some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name)
+    ) {
+      return current;
+    }
+  }
+  return null;
+}
+
 /** A function that forwards one of its parameters as an emitted event type. */
 interface EmitWrapper {
   unit: SourceUnit;
@@ -149,19 +168,27 @@ export class ProjectSources {
       .map((file) => ({ file, depth: 0 }));
     const seen = new Set(queue.map((item) => item.file));
     const units: SourceUnit[] = [];
+    // Names each imported file is asked for; "*" when a namespace, default or re-export takes all.
+    const importedNames = new Map<string, Set<string>>();
     while (queue.length > 0) {
       const { file, depth } = queue.shift()!;
       const unit = await this.load(file, agentDir);
       if (!unit) continue;
       units.push(unit);
       if (depth >= IMPORT_DEPTH) continue;
-      for (const target of this.relativeImports(unit)) {
-        if (seen.has(target)) continue;
+      for (const { target, names } of this.relativeImports(unit)) {
         const relative = path.relative(this.projectRoot, target);
         if (relative.startsWith("..") || isTestPath(relative)) continue;
+        const wanted = importedNames.get(target) ?? new Set<string>();
+        for (const name of names) wanted.add(name);
+        importedNames.set(target, wanted);
+        if (seen.has(target)) continue;
         seen.add(target);
         queue.push({ file: target, depth: depth + 1 });
       }
+    }
+    for (const unit of units) {
+      unit.inScope = unit.own ? () => true : reachableScope(unit.sourceFile, importedNames.get(unit.abs) ?? new Set());
     }
     return units.sort((left, right) => (left.rel < right.rel ? -1 : left.rel > right.rel ? 1 : 0));
   }
@@ -184,6 +211,8 @@ export class ProjectSources {
           path.extname(file) === ".tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
         );
         return {
+          own: inAgent,
+          inScope: () => true,
           abs: file,
           rel: path.relative(this.projectRoot, file).split(path.sep).join(path.posix.sep),
           sourceFile,
@@ -195,26 +224,44 @@ export class ProjectSources {
     return pending;
   }
 
-  private relativeImports(unit: SourceUnit): string[] {
-    const targets: string[] = [];
+  private relativeImports(unit: SourceUnit): Array<{ target: string; names: string[] }> {
+    const targets: Array<{ target: string; names: string[] }> = [];
     for (const statement of unit.sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
       const specifier =
-        (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
         statement.moduleSpecifier &&
         ts.isStringLiteral(statement.moduleSpecifier)
           ? statement.moduleSpecifier.text
           : null;
       if (!specifier || !specifier.startsWith(".")) continue;
-      const resolved = resolveModuleFile(unit.abs, specifier);
-      if (resolved) targets.push(resolved);
+      const resolved = this.resolveModuleFile(unit.abs, specifier);
+      if (resolved) targets.push({ target: resolved, names: importedNamesOf(statement) });
     }
     return targets;
+  }
+
+  private readonly exists = new Map<string, boolean>();
+
+  /** Per scan, so a module created after one map call is seen by the next. */
+  private resolveModuleFile(fromFile: string, specifier: string): string | null {
+    const base = path.resolve(path.dirname(fromFile), specifier.replace(/\.(m|c)?js$/, ""));
+    for (const suffix of MODULE_SUFFIXES) {
+      const candidate = base + suffix;
+      if (!/\.[cm]?tsx?$/.test(candidate)) continue;
+      let exists = this.exists.get(candidate);
+      if (exists === undefined) {
+        exists = fsExistsSync(candidate);
+        this.exists.set(candidate, exists);
+      }
+      if (exists) return candidate;
+    }
+    return null;
   }
 
   /** The unit an import specifier points at, loaded under the same agent. */
   async importTarget(unit: SourceUnit, specifier: string, agentDir: string): Promise<SourceUnit | null> {
     if (!specifier.startsWith(".")) return null;
-    const resolved = resolveModuleFile(unit.abs, specifier);
+    const resolved = this.resolveModuleFile(unit.abs, specifier);
     if (!resolved) return null;
     const relative = path.relative(this.projectRoot, resolved);
     if (relative.startsWith("..")) return null;
@@ -223,21 +270,62 @@ export class ProjectSources {
 }
 
 const MODULE_SUFFIXES = ["", ".ts", ".tsx", ".mts", ".cts", "/index.ts", "/index.tsx"];
-const existsCache = new Map<string, boolean>();
 
-function resolveModuleFile(fromFile: string, specifier: string): string | null {
-  const base = path.resolve(path.dirname(fromFile), specifier.replace(/\.(m|c)?js$/, ""));
-  for (const suffix of MODULE_SUFFIXES) {
-    const candidate = base + suffix;
-    if (!/\.[cm]?tsx?$/.test(candidate)) continue;
-    let exists = existsCache.get(candidate);
-    if (exists === undefined) {
-      exists = fsExistsSync(candidate);
-      existsCache.set(candidate, exists);
-    }
-    if (exists) return candidate;
+function importedNamesOf(statement: ts.ImportDeclaration | ts.ExportDeclaration): string[] {
+  if (ts.isExportDeclaration(statement)) {
+    const clause = statement.exportClause;
+    return clause && ts.isNamedExports(clause)
+      ? clause.elements.map((element) => element.propertyName?.text ?? element.name.text)
+      : ["*"];
   }
-  return null;
+  const clause = statement.importClause;
+  if (!clause) return ["*"]; // side-effect import: its top-level code runs
+  if (clause.name) return ["*"];
+  const bindings = clause.namedBindings;
+  if (!bindings || ts.isNamespaceImport(bindings)) return ["*"];
+  return bindings.elements.map((element) => element.propertyName?.text ?? element.name.text);
+}
+
+function topLevelName(statement: ts.Statement): string[] {
+  if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) {
+    return [statement.name.text];
+  }
+  if (ts.isVariableStatement(statement)) {
+    return statement.declarationList.declarations.flatMap((declaration) =>
+      ts.isIdentifier(declaration.name) ? [declaration.name.text] : [],
+    );
+  }
+  return [];
+}
+
+/**
+ * The parts of an imported file an agent reaches: module-level statements that are not
+ * declarations (they run on import), plus the declarations it imports by name and every
+ * declaration in the file those refer to. A helper in a shared file that only another agent
+ * calls is out of scope, so its calls are not this agent's.
+ */
+function reachableScope(sourceFile: ts.SourceFile, wanted: ReadonlySet<string>): (position: number) => boolean {
+  if (wanted.has("*")) return () => true;
+  const declarations = new Map<string, ts.Statement>();
+  for (const statement of sourceFile.statements) {
+    for (const name of topLevelName(statement)) declarations.set(name, statement);
+  }
+  const reached = new Set<ts.Statement>();
+  const pending = [...wanted];
+  while (pending.length > 0) {
+    const statement = declarations.get(pending.pop()!);
+    if (!statement || reached.has(statement)) continue;
+    reached.add(statement);
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && declarations.has(node.text)) pending.push(node.text);
+      ts.forEachChild(node, visit);
+    };
+    visit(statement);
+  }
+  const ranges = sourceFile.statements
+    .filter((statement) => reached.has(statement) || (topLevelName(statement).length === 0 && !ts.isImportDeclaration(statement)))
+    .map((statement) => [statement.pos, statement.end] as const);
+  return (position) => ranges.some(([start, end]) => position >= start && position < end);
 }
 
 function fsExistsSync(file: string): boolean {
@@ -351,14 +439,30 @@ async function resolveStrings(
           ts.isPropertyAssignment(property) ? [property.initializer] : [],
         );
     const values: ResolvedValue[] = [];
+    let dynamic = ts.isArrayLiteralExpression(node)
+      ? node.elements.some((element) => ts.isSpreadElement(element))
+      : node.properties.some((property) => !ts.isPropertyAssignment(property));
     for (const element of elements) {
       const resolved = await resolveStrings(context, unit, element, depth + 1);
       if (resolved) values.push(...resolved);
+      else dynamic = true;
     }
-    return values.length > 0 ? values : null;
+    if (values.length === 0) return null;
+    return dynamic ? [...values, { value: "", dynamic: true }] : values;
   }
 
   if (ts.isElementAccessExpression(node)) {
+    const key = stringLiteralValue(unwrapExpression(node.argumentExpression));
+    const collection = unwrapExpression(node.expression);
+    if (key !== null && ts.isIdentifier(collection)) {
+      // A fixed index picks one entry, not the whole collection.
+      const definition = await definitionOf(context, unit, collection.text, 0);
+      const target = definition ? unwrapExpression(definition.expression) : null;
+      if (target && definition && ts.isObjectLiteralExpression(target)) {
+        const property = objectProperty(target, key);
+        return property ? resolveStrings(context, definition.unit, property, depth + 1) : null;
+      }
+    }
     // Indexed at run time: any value of the collection can be the target.
     return resolveStrings(context, unit, node.expression, depth + 1);
   }
@@ -378,8 +482,11 @@ async function resolveStrings(
         return property ? resolveStrings(context, definition.unit, property, depth + 1) : null;
       }
     }
-    // `input.definition` read from the step's own input: the schema default is the target.
-    const fallback = zodFieldDefault(unit, node.name.text);
+    // `input.definition` read from the step's own input parameter: the schema default is the
+    // target the code declares. A caller can pass another slug at run time; the map shows the
+    // declared one, as the Canvas does.
+    const isOwnParameter = ts.isIdentifier(object) && declaringFunction(node, object.text) !== null;
+    const fallback = isOwnParameter ? zodFieldDefault(unit, node.name.text) : null;
     return fallback ? [{ value: fallback }] : null;
   }
 
@@ -439,6 +546,7 @@ export async function agentCodeFacts(
     collect(unit.sourceFile);
 
     for (const property of propertyNodes) {
+      if (!unit.inScope(property.getStart(unit.sourceFile))) continue;
       if (propertyNameText(property.name) !== "dbHandle") continue;
       const value = stringLiteralValue(unwrapExpression(property.initializer));
       if (value) resources.add(`db:${value}`);
@@ -446,7 +554,29 @@ export async function agentCodeFacts(
 
     for (const call of nodes) {
       const chain = propertyAccessChain(call.expression);
+      // Emit wrappers are definitions, found wherever they sit; every other call must be reachable.
+      const reachable = unit.inScope(call.getStart(unit.sourceFile));
       const firstArgument = call.arguments[0] ? unwrapExpression(call.arguments[0]) : null;
+
+      const emitType =
+        isCallTo(chain, "events", "emit") && firstArgument && ts.isObjectLiteralExpression(firstArgument)
+          ? objectProperty(firstArgument, "type")
+          : null;
+      const emitTypeNode = emitType ? unwrapExpression(emitType) : null;
+      if (emitTypeNode && ts.isIdentifier(emitTypeNode)) {
+        const owner = enclosingFunction(call);
+        const parameterIndex = owner
+          ? owner.parameters.findIndex(
+              (parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === emitTypeNode.text,
+            )
+          : -1;
+        const ownerName = owner ? functionName(owner) : null;
+        if (ownerName && parameterIndex >= 0) {
+          wrappers.push({ unit, name: ownerName, parameterIndex });
+          continue;
+        }
+      }
+      if (!reachable) continue;
 
       const mode = invocationMode(call, namespaces, unit.sourceFile);
       if (mode) {
@@ -480,40 +610,18 @@ export async function agentCodeFacts(
       }
 
       if (isCallTo(chain, "events", "emit")) {
-        const type =
-          firstArgument && ts.isObjectLiteralExpression(firstArgument)
-            ? objectProperty(firstArgument, "type")
-            : null;
-        const typeNode = type ? unwrapExpression(type) : null;
-        const owner = typeNode && ts.isIdentifier(typeNode) ? enclosingFunction(call) : null;
-        const parameterIndex =
-          owner && typeNode && ts.isIdentifier(typeNode)
-            ? owner.parameters.findIndex(
-                (parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === typeNode.text,
-              )
-            : -1;
-        const ownerName = owner ? functionName(owner) : null;
-        if (ownerName && parameterIndex >= 0) {
-          wrappers.push({ unit, name: ownerName, parameterIndex });
-          continue;
-        }
-        const resolved = type ? await resolveStrings(context, unit, type) : null;
-        if (resolved) {
-          for (const { value } of resolved) facts.emits.push({ eventType: value, evidence: evidenceAt(unit, call.expression) });
-        } else {
-          facts.dynamicEmits.push(evidenceAt(unit, call.expression));
-        }
+        recordEmits(facts, emitType ? await resolveStrings(context, unit, emitType) : null, evidenceAt(unit, call.expression));
         continue;
       }
 
       if (isCallTo(chain, "vault", "get") || isCallTo(chain, "vault", "getAll")) {
         const resolved = firstArgument ? await resolveStrings(context, unit, firstArgument) : null;
-        for (const { value } of resolved ?? []) resources.add(`vault:${value}`);
+        for (const { value, dynamic } of resolved ?? []) if (!dynamic) resources.add(`vault:${value}`);
         continue;
       }
       if (isCallTo(chain, "database", "get")) {
         const resolved = firstArgument ? await resolveStrings(context, unit, firstArgument) : null;
-        for (const { value } of resolved ?? []) resources.add(`db:${value}`);
+        for (const { value, dynamic } of resolved ?? []) if (!dynamic) resources.add(`db:${value}`);
         continue;
       }
 
@@ -538,12 +646,7 @@ export async function agentCodeFacts(
     const wrapper = await wrapperFor(context, unit, callee.text, wrappers);
     if (!wrapper) continue;
     const argument = call.arguments[wrapper.parameterIndex];
-    const resolved = argument ? await resolveStrings(context, unit, argument) : null;
-    if (resolved) {
-      for (const { value } of resolved) facts.emits.push({ eventType: value, evidence: evidenceAt(unit, call) });
-    } else {
-      facts.dynamicEmits.push(evidenceAt(unit, call));
-    }
+    recordEmits(facts, argument ? await resolveStrings(context, unit, argument) : null, evidenceAt(unit, call));
   }
 
   facts.resources = [...resources].sort();
@@ -617,6 +720,11 @@ function launchSpecs(
   };
   visit(unit.sourceFile);
   return sites.length > 0 ? sites : [{ spec: null, evidence: here }];
+}
+
+function recordEmits(facts: AgentCodeFacts, resolved: ResolvedValue[] | null, evidence: Evidence): void {
+  if (!resolved || resolved.some((item) => item.dynamic)) facts.dynamicEmits.push(evidence);
+  for (const { value, dynamic } of resolved ?? []) if (!dynamic) facts.emits.push({ eventType: value, evidence });
 }
 
 async function wrapperFor(

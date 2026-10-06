@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildMap } from "./build.js";
-import { describeProject, type PlatformSource, type StepSource } from "./scan-project.js";
+import { checkSteps, describeProject, type PlatformSource, type StepSource } from "./scan-project.js";
 import type { AgentMap } from "./types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -236,5 +236,133 @@ describe("describeProject", () => {
     await expect(describeProject({ root: plain, ref: "no-such-branch", steps: false })).rejects.toMatchObject({
       code: "UNKNOWN_REF",
     });
+  });
+});
+
+async function project(files: Record<string, string>): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sapiom-map-project-"));
+  temps.push(dir);
+  for (const [file, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(dir, file)), { recursive: true });
+    await fs.writeFile(path.join(dir, file), content);
+  }
+  return dir;
+}
+
+const agentSource = (name: string, body = "") => `import { defineAgent, defineStep, terminate } from "@sapiom/agent";
+${body}
+const work = defineStep({ name: "work", async run(input: any, ctx: any) { return terminate({}); } });
+export const agent = defineAgent({ name: "${name}", entry: "work", steps: { work } });
+`;
+
+const edgesOf = (map: AgentMap) => map.edges.map((edge) => `${edge.from}->${edge.to}`);
+
+describe("describeProject edge cases", () => {
+  it("maps a root that is itself an agent folder", async () => {
+    const root = await project({ "sapiom.json": '{ "name": "solo" }', "index.ts": agentSource("solo") });
+
+    const map = await mapOf(root);
+
+    expect(map.agents.map((agent) => [agent.slug, agent.path])).toEqual([["solo", ""]]);
+  });
+
+  it("counts a shared file's calls only for the agents that reach them", async () => {
+    const root = await project({
+      "_shared/helpers.ts": `export const STATUS = "open";
+export async function send(ctx: any) { await ctx.sapiom.agents.run({ definition: "payout", input: {} }); }
+`,
+      "intake/index.ts": agentSource("intake", `import { STATUS } from "../_shared/helpers";\nconsole.log(STATUS);`),
+      "billing/index.ts": agentSource("billing", `import { send } from "../_shared/helpers";\nexport const go = send;`),
+      "payout/index.ts": agentSource("payout"),
+    });
+
+    expect(edgesOf(await mapOf(root))).toEqual(["billing->payout"]);
+  });
+
+  it("a fixed index picks one entry; a dynamic entry is reported, not dropped", async () => {
+    const root = await project({
+      "router/index.ts": agentSource(
+        "router",
+        `const TARGETS = { primary: "alpha", secondary: "beta", other: process.env.OTHER_AGENT };
+export async function a(ctx: any) { await ctx.sapiom.agents.run({ definition: TARGETS["primary"] }); }
+export async function b(ctx: any, id: string) { await ctx.sapiom.agents.run({ definition: TARGETS[id] }); }`,
+      ),
+      "alpha/index.ts": agentSource("alpha"),
+      "beta/index.ts": agentSource("beta"),
+    });
+
+    const map = await mapOf(root);
+
+    expect(map.edges.map((edge) => [edge.to, edge.evidence.map((item) => item.line)])).toEqual([
+      ["alpha", [3, 4]],
+      ["beta", [4]],
+    ]);
+    expect(map.unresolved.map((item) => [item.reason, item.evidence[0]!.line])).toEqual([["dynamic-target", 4]]);
+  });
+
+  it("reads a launch from sapiom.json env only under a key that names an agent", async () => {
+    const root = await project({
+      "door/sapiom.json": '{ "resources": { "web": { "env": { "NOTE": "worker", "WORKER_SLUG": "worker" } } } }',
+      "worker/index.ts": agentSource("worker"),
+    });
+
+    const map = await mapOf(root);
+
+    expect(map.edges.map((edge) => edge.evidence[0]!.text)).toEqual(['"WORKER_SLUG": "worker"']);
+  });
+
+  it("uses a zod default only for the input the step itself reads", async () => {
+    const root = await project({
+      "caller/index.ts": agentSource(
+        "caller",
+        `import { z } from "zod/v4";
+const schema = z.object({ definition: z.string().default("callee") });
+const other = { settings: { definition: "x" } };
+export async function own(input: { definition: string }, ctx: any) { await [1].map(async () => ctx.sapiom.agents.run({ definition: input.definition })); }
+export async function notOwn(ctx: any) { await ctx.sapiom.agents.run({ definition: other.settings.definition }); }`,
+      ),
+      "callee/index.ts": agentSource("callee"),
+    });
+
+    const map = await mapOf(root);
+
+    expect(edgesOf(map)).toEqual(["caller->callee"]);
+    expect(map.unresolved).toHaveLength(1);
+  });
+
+  it("sees a module created after an earlier map call", async () => {
+    const root = await project({
+      "caller/index.ts": agentSource(
+        "caller",
+        `import { TARGET } from "./targets";\nexport async function go(ctx: any) { await ctx.sapiom.agents.run({ definition: TARGET }); }`,
+      ),
+      "callee/index.ts": agentSource("callee"),
+    });
+    expect(edgesOf(await mapOf(root))).toEqual([]);
+
+    await fs.writeFile(path.join(root, "caller", "targets.ts"), 'export const TARGET = "callee";\n');
+
+    expect(edgesOf(await mapOf(root))).toEqual(["caller->callee"]);
+  });
+
+  it("refuses a ref that git would read as an option", async () => {
+    const root = await copyFixture("map-payouts");
+    git(root, "init", "-q");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "base");
+
+    await expect(describeProject({ root, ref: "--output=/tmp/x", steps: false })).rejects.toMatchObject({
+      code: "UNKNOWN_REF",
+    });
+  });
+});
+
+describe("checkSteps", () => {
+  it("survives agent code that exits the process on load", async () => {
+    const root = await project({ "index.ts": "process.exit(0);\n" });
+
+    const result = await checkSteps(root);
+
+    expect(result).toEqual({ unavailable: expect.stringMatching(/agents check/) });
   });
 });

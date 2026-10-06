@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { z } from "zod";
@@ -42,6 +43,10 @@ const SKIP_DIRS = new Set([
 ]);
 const DISCOVERY_DEPTH = 4;
 const STEP_CONCURRENCY = 4;
+const CHECK_TIMEOUT_MS = 30_000;
+const MAX_JSON_BYTES = 1024 * 1024;
+/** An env key in `sapiom.json` that names the agent a sandbox server launches. */
+const LAUNCH_ENV_KEY = /(SLUG|DEFINITION|AGENT)$/i;
 
 /** Platform facts for a set of slugs; injected so tests and offline callers never touch the network. */
 export interface PlatformSource {
@@ -121,6 +126,7 @@ const mapJsonSchema = z.object({
 
 async function readJson(file: string): Promise<{ value: unknown; text: string } | null> {
   try {
+    if ((await fs.stat(file)).size > MAX_JSON_BYTES) return null;
     const text = await fs.readFile(file, "utf8");
     return { value: JSON.parse(text), text };
   } catch {
@@ -147,12 +153,13 @@ async function discoverAgents(root: string, fleet: FleetJson | null): Promise<Fo
   const visit = async (dir: string, depth: number): Promise<void> => {
     const sapiom = await readJson(path.join(dir, "sapiom.json"));
     const isAgent = keysByDir.has(dir) || sapiom !== null || (await declaresAgent(dir));
-    if (isAgent && dir !== root) {
+    if (isAgent) {
       const parsed = sapiom ? sapiomJsonSchema.safeParse(sapiom.value) : null;
       const pkg = await readJson(path.join(dir, "package.json"));
       found.set(dir, {
         dir,
         key: keysByDir.get(dir) ?? path.basename(dir),
+        // A root that is itself an agent folder maps to that one agent.
         sapiomJson: parsed?.success ? parsed.data : null,
         packageJson: (pkg?.value as FoundAgent["packageJson"]) ?? null,
       });
@@ -212,22 +219,69 @@ function manifestToSteps(
   };
 }
 
-/** Steps through `agents check` (bundles and loads the agent; needs its dependencies installed). */
+// Agent code runs when `check` loads it; a top-level loop or `process.exit` must not take the MCP
+// server down, so it runs in a child `node` with a timeout, as Studio's Canvas does.
+const CHECK_RUNNER = `
+import { check, AgentOperationError } from "@sapiom/agent-core";
+let out;
+try {
+  const result = await check({ sourceDir: process.env.SAPIOM_MAP_CHECK_DIR, typecheck: false });
+  out = { manifest: result.manifest };
+} catch (err) {
+  const message = (err instanceof Error ? err.message : String(err)).split("\\n")[0];
+  out = { unavailable: err instanceof AgentOperationError ? \`agents check failed (\${err.code}): \${message}\` : message };
+}
+process.stdout.write("\\n${"@@sapiom-map@@"}" + JSON.stringify(out));
+process.exit(0);
+`;
+
+function packageRoot(): string {
+  // src/map/ or dist/map/, two levels below the package; the unpacked twin inside Electron's asar.
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  return root.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2");
+}
+
+/** Steps through `agents check`, in a child process (needs the agent's dependencies installed). */
 export const checkSteps: StepSource = async (agentDir) => {
   try {
     await fs.access(path.join(agentDir, "index.ts"));
   } catch {
     return { unavailable: "no index.ts: not a defineAgent project (a sandbox app or server)" };
   }
-  try {
-    const { check } = await import("@sapiom/agent-core");
-    const result = await check({ sourceDir: agentDir, typecheck: false });
-    return { manifest: result.manifest };
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    const message = error instanceof Error ? error.message.split("\n")[0]! : String(error);
-    return { unavailable: code ? `agents check failed (${code}): ${message}` : message };
-  }
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      ["--input-type=module", "-e", CHECK_RUNNER],
+      {
+        cwd: packageRoot(),
+        env: {
+          ...process.env,
+          SAPIOM_MAP_CHECK_DIR: agentDir,
+          ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        },
+        timeout: CHECK_TIMEOUT_MS,
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        const marker = stdout.lastIndexOf("@@sapiom-map@@");
+        if (marker >= 0) {
+          try {
+            resolve(JSON.parse(stdout.slice(marker + "@@sapiom-map@@".length)));
+            return;
+          } catch {
+            // fall through to the process error
+          }
+        }
+        const timedOut = (error as { killed?: boolean } | null)?.killed;
+        resolve({
+          unavailable: timedOut
+            ? `agents check timed out after ${CHECK_TIMEOUT_MS / 1000} s`
+            : `agents check exited without a result${error ? `: ${error.message.split("\n")[0]}` : ""}`,
+        });
+      },
+    );
+  });
 };
 
 async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
@@ -268,10 +322,10 @@ async function gitView(root: string, ref: string | undefined): Promise<GitView> 
     if (ref) throw new MapInputError("NOT_A_GIT_REPO", `${root} is not in a git repository, so it has no ref "${ref}"`);
     return none;
   }
-  const base = ref ?? "HEAD";
-  if (ref && !(await git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]))) {
-    throw new MapInputError("UNKNOWN_REF", `No commit "${ref}" in ${top}`);
-  }
+  if (ref && ref.startsWith("-")) throw new MapInputError("UNKNOWN_REF", `"${ref}" is not a git ref`);
+  const commit = ref ? (await git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]))?.trim() : null;
+  if (ref && !commit) throw new MapInputError("UNKNOWN_REF", `No commit "${ref}" in ${top}`);
+  const base = commit ?? "HEAD";
   const hasHead = (await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"])) !== null;
   // changedSinceRef: the working copy differs from `ref` (from HEAD when drawing the working copy).
   const changed = async (agentRelative: string): Promise<boolean> => {
@@ -285,16 +339,62 @@ async function gitView(root: string, ref: string | undefined): Promise<GitView> 
 
   const prefix = posix(path.relative(top, root));
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "sapiom-map-"));
-  const archive = path.join(temp, "ref.tar");
-  await execFileAsync("git", ["-C", top, "archive", "--format=tar", "-o", archive, ref, "--", prefix || "."]);
-  await execFileAsync("tar", ["-xf", archive, "-C", temp]);
-  await fs.rm(archive);
-  return {
-    scanRoot: path.join(temp, prefix),
-    ref,
-    changed,
-    dispose: () => fs.rm(temp, { recursive: true, force: true }),
-  };
+  const dispose = () => fs.rm(temp, { recursive: true, force: true });
+  try {
+    await extractTree(top, commit!, prefix, temp);
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
+  return { scanRoot: path.join(temp, prefix), ref, changed, dispose };
+}
+
+/** Write the blobs under `prefix` at `commit` into `dest` with git alone (no `tar`, which Windows may lack). */
+async function extractTree(top: string, commit: string, prefix: string, dest: string): Promise<void> {
+  const listing = await execFileAsync(
+    "git",
+    ["-C", top, "ls-tree", "-r", "-z", "--full-tree", commit, "--", prefix || "."],
+    { maxBuffer: 256 * 1024 * 1024 },
+  );
+  const entries = listing.stdout
+    .split("\0")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const match = /^(\d+) blob ([0-9a-f]+)\t(.+)$/.exec(line);
+      // Regular files only: symlinks (120000) and submodules are never followed by the scan.
+      return match && match[1] !== "120000" ? [{ sha: match[2]!, file: match[3]! }] : [];
+    });
+  if (entries.length === 0) return;
+  const contents = await catBlobs(top, entries.map((entry) => entry.sha));
+  for (const [index, entry] of entries.entries()) {
+    const target = path.join(dest, ...entry.file.split("/"));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, contents[index]!);
+  }
+}
+
+function catBlobs(top: string, shas: string[]): Promise<Buffer[]> {
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", ["-C", top, "cat-file", "--batch"], {
+      encoding: "buffer",
+      maxBuffer: 1024 * 1024 * 1024,
+    }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      const blobs: Buffer[] = [];
+      let offset = 0;
+      for (let index = 0; index < shas.length; index++) {
+        const headerEnd = stdout.indexOf(10, offset);
+        const size = Number(stdout.subarray(offset, headerEnd).toString("utf8").split(" ")[2]);
+        blobs.push(stdout.subarray(headerEnd + 1, headerEnd + 1 + size));
+        offset = headerEnd + 1 + size + 1;
+      }
+      resolve(blobs);
+    });
+    child.stdin!.end(shas.join("\n") + "\n");
+  });
 }
 
 export class MapInputError extends Error {
@@ -401,7 +501,11 @@ async function describeAt(root: string, view: GitView, options: ScanOptions): Pr
         unresolved.push({ from: slug, kind: call.kind, reason: "dynamic-target", evidence: [call.evidence] });
         continue;
       }
+      if (call.targets.some((target) => target.dynamic)) {
+        unresolved.push({ from: slug, kind: call.kind, reason: "dynamic-target", evidence: [call.evidence] });
+      }
       for (const target of call.targets) {
+        if (target.dynamic) continue;
         const to = resolveTarget(target.value);
         if (to) calls.push({ to, kind: call.kind, evidence: [call.evidence] });
         else if (!target.alias) calls.push({ to: target.value, kind: call.kind, evidence: [call.evidence] });
@@ -416,7 +520,7 @@ async function describeAt(root: string, view: GitView, options: ScanOptions): Pr
     const sapiomText = (await readJson(path.join(agent.dir, "sapiom.json")))?.text ?? "";
     for (const resource of Object.values(agent.sapiomJson?.resources ?? {})) {
       for (const [key, value] of Object.entries(resource.env ?? {})) {
-        if (value === slug || !knownSlugs.has(value)) continue;
+        if (value === slug || !knownSlugs.has(value) || !LAUNCH_ENV_KEY.test(key)) continue;
         calls.push({
           to: value,
           kind: "launch",
