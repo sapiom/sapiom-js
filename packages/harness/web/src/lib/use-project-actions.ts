@@ -6,11 +6,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { HarnessEntry, HarnessKind } from "@shared/types";
-import type { AgentMapWorkspaceResponse } from "@sapiom/agent-map";
 
 import type { ProjectFolderIntent } from "../components/ProjectFolderDialog";
 import type { RailProject } from "../components/WorkflowsRail";
-import { agentMapLoader } from "./agent-map-loader";
 import { errorMessage } from "./api";
 import { getDesktopBridge } from "./desktop";
 import { chooseProjectFolder } from "./folder-step";
@@ -138,38 +136,21 @@ export const useProjectActions = ({
     if (viewProjectId !== projectId) setMapPanelPath(null);
     setView({ kind: "project", projectId });
     // AN EMPTY PROJECT'S NAME IS THE DOOR (D36, flow 4.6.2): a project with
-    // nothing to draw lands on the new-agent screen scoped to it rather than
-    // on a map with nothing in it. "Nothing to draw" means no agent AND no map
-    // content: a durable project can carry map nodes the folder does not, so
-    // the map is consulted, revalidated first because the loader's cache only
-    // receives deltas while a map is mounted. The map shows meanwhile.
-    const holdsAgents = projects.agentsInProject(projectId).length > 0;
-    if (holdsAgents) return;
-    const openDoor = (): void =>
-      composeInProject({
-        root: project.root,
-        label: project.label,
-        projectId,
-        template: null,
-      });
-    // No durable project behind the scope (an older server): no map can hold
-    // anything the folder does not, so the door opens at once.
-    if (!state.studioProjects?.some((candidate) => candidate.projectId === projectId)) {
-      openDoor();
-      return;
-    }
-    const mapIsEmpty = (snapshot: AgentMapWorkspaceResponse | null) =>
-      !snapshot ||
-      (snapshot.workspace.confirmedRevisionId === null && !snapshot.proposal);
-    agentMapLoader.invalidate(projectId);
-    void agentMapLoader
-      .load(harness.api, projectId)
-      .then((snapshot) => {
-        if (mapIsEmpty(snapshot) && navGenerationRef.current === generation) {
-          openDoor();
-        }
-      })
-      .catch(() => {});
+    // no agent lands on the new-agent screen scoped to it rather than on a map
+    // with nothing in it. Studio's agent list misses defineAgent folders with
+    // no sapiom.json, so "empty" is decided by the computed map, not the list.
+    if (projects.agentsInProject(projectId).length > 0) return;
+    const compose = (): void => {
+      if (generation !== navGenerationRef.current) return;
+      composeInProject({ root: project.root, label: project.label, projectId, template: null });
+    };
+    // A failed read falls back to the agent list's answer: no agents.
+    void harness.api.getProjectMap(projectId, null).then(
+      (response) => {
+        if (response.map.agents.length === 0) compose();
+      },
+      compose,
+    );
   };
   if (!harness.loading && !harness.error && state) {
     selectProjectRef.current = handleSelectProject;

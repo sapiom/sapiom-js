@@ -1,5 +1,4 @@
 import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
@@ -56,7 +55,6 @@ import { loadUiPrefs, saveUiPrefs } from "./ui-prefs";
 import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
-import { agentMapLoader } from "./agent-map-loader";
 import { WorkflowProjectionOrder } from "./workflow-projection-order";
 import { track as trackProduct } from "./analytics/events";
 import {
@@ -388,12 +386,9 @@ export interface HarnessStateHook {
   subscribeSessionRecordChanges: (
     listener: (sessionId: string) => void,
   ) => () => void;
-  /** Targeted Agent Map deltas over the existing event-bus connection. */
-  subscribeAgentMapInitializationChanges: (listener: (status: AgentMapInitializationStatus) => void) => () => void;
-  subscribeAgentMapProposalChanges: (
-    listener: (
-      delta: import("@sapiom/agent-map").AcceptedProposalDelta,
-    ) => void,
+  /** A project's source changed on disk: its map should be read again. */
+  subscribeProjectMapChanges: (
+    listener: (projectId: string) => void,
   ) => () => void;
   /** Signals that the shared event socket reconnected after an interruption. */
   subscribeEventReconnects: (listener: () => void) => () => void;
@@ -448,13 +443,6 @@ export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
   const assistantOrder = useRef(new AssistantStateOrder()).current;
   const [assistant, setAssistant] = useState(() => assistantOrder.current());
-  useEffect(() => {
-    if (!state) return;
-    const projectIds = new Set(
-      (state.studioProjects ?? []).map((project) => project.projectId),
-    );
-    agentMapLoader.retain(projectIds);
-  }, [state?.studioProjects]);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   /**
    * Mirror of `settings` for the one reader that cannot wait for a re-render:
@@ -556,24 +544,13 @@ export function useHarnessState(): HarnessStateHook {
     },
     [],
   );
-  const initializationListeners = useRef(new Set<(status: AgentMapInitializationStatus) => void>());
-  const subscribeAgentMapInitializationChanges = useCallback((listener: (status: AgentMapInitializationStatus) => void) => {
-    initializationListeners.current.add(listener);
-    return () => { initializationListeners.current.delete(listener); };
-  }, []);
-  const agentMapProposalChangeListeners = useRef(
-    new Set<
-      (delta: import("@sapiom/agent-map").AcceptedProposalDelta) => void
-    >(),
+  const projectMapChangeListeners = useRef(
+    new Set<(projectId: string) => void>(),
   );
-  const subscribeAgentMapProposalChanges = useCallback(
-    (
-      listener: (
-        delta: import("@sapiom/agent-map").AcceptedProposalDelta,
-      ) => void,
-    ): (() => void) => {
-      agentMapProposalChangeListeners.current.add(listener);
-      return () => agentMapProposalChangeListeners.current.delete(listener);
+  const subscribeProjectMapChanges = useCallback(
+    (listener: (projectId: string) => void): (() => void) => {
+      projectMapChangeListeners.current.add(listener);
+      return () => projectMapChangeListeners.current.delete(listener);
     },
     [],
   );
@@ -1310,14 +1287,9 @@ export function useHarnessState(): HarnessStateHook {
             // and let the next event/auth/manual refresh retry; never create an
             // unhandled rejection from the event callback.
             .catch(() => undefined);
-        } else if (message.type === "agent-map.initialization.changed") {
-          try {
-            const status = parseAgentMapInitializationStatus(message.status);
-            for (const listener of initializationListeners.current) listener(status);
-          } catch { /* malformed announcements cannot alter map state */ }
-        } else if (message.type === "agent-map.proposal.changed") {
-          agentMapProposalChangeListeners.current.forEach((listener) =>
-            listener(message.delta),
+        } else if (message.type === "project-map.changed") {
+          projectMapChangeListeners.current.forEach((listener) =>
+            listener(message.projectId),
           );
         } else if (message.type === "execution.started") {
           // A run a session's terminal started. The announcement names only
@@ -2511,8 +2483,7 @@ export function useHarnessState(): HarnessStateHook {
     listDir,
     lastMessage,
     subscribeSessionRecordChanges,
-    subscribeAgentMapProposalChanges,
-    subscribeAgentMapInitializationChanges,
+    subscribeProjectMapChanges,
     subscribeEventReconnects,
     refreshWorkspaceScopes,
     runsByAgent,

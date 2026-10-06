@@ -109,7 +109,7 @@ describe("served system prompt reaches the launched session", () => {
       expect(prompt).not.toContain("then stop");
       expect(prompt).toContain("ctx.sapiom.llm.run");
       expect(prompt).toContain("sapiom_dev_agents_*");
-      expect(prompt).toContain("agent_map_propose");
+      expect(prompt).toContain("sapiom_dev_map");
     },
   );
 

@@ -53,7 +53,7 @@ function stringRecord(value: unknown): Record<string, string> {
  * other shell settings. No persistent `codex mcp add` registration is needed.
  */
 export function buildCodexMcpConfig(
-  opts: Pick<LaunchOpts, "harnessSessionId" | "mcpConfigFile" | "agentMapMcp">,
+  opts: Pick<LaunchOpts, "harnessSessionId" | "mcpConfigFile">,
 ): Pick<SpawnSpec, "args" | "env"> & { instructions?: string } {
   const args: string[] = [];
   const aliases: string[] = [];
@@ -95,10 +95,6 @@ export function buildCodexMcpConfig(
       for (const [index, [name, server]] of Object.entries(
         parsed.mcpServers,
       ).entries()) {
-        // A freshly issued capability supplied separately wins over a copy
-        // in the generated file. Keep compatibility with callers using only
-        // agentMapMcp as well.
-        if (name === "agent-map" && opts.agentMapMcp) continue;
         if (!isRecord(server))
           throw new InvalidMcpConfigError("Invalid server");
         if (server.type === "http") {
@@ -164,13 +160,6 @@ export function buildCodexMcpConfig(
           addServer(name, config);
         }
       }
-    }
-    if (opts.agentMapMcp) {
-      bindEnv("SAPIOM_AGENT_MAP_CAPABILITY", opts.agentMapMcp.bearerToken);
-      addServer("agent-map", {
-        url: opts.agentMapMcp.url,
-        bearer_token_env_var: "SAPIOM_AGENT_MAP_CAPABILITY",
-      });
     }
   } catch (error) {
     // Parser and filesystem messages can contain credentials or private paths.

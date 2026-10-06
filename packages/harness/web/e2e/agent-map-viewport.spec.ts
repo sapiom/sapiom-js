@@ -14,7 +14,7 @@ const transform = (page: Page) =>
 
 test.beforeEach(async ({ page }) => {
   await page.goto(
-    "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+    "/?seed=0&mockFixtures=deep&mockStudioProjects=present",
   );
   await expect(page.getByTestId("session-context")).toBeVisible();
   await openProject(page, "acme-app");
@@ -43,9 +43,7 @@ test("each project's pan and zoom survive another project and an agent's modal",
   // An agent's modal in between, opened from the map and closed again. The
   // pan may have taken the node offscreen, so the gesture is dispatched rather
   // than aimed, which would scroll the viewport and spoil the comparison.
-  await page
-    .getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101")
-    .dispatchEvent("dblclick");
+  await page.getByTestId("agent-map-node-leasing").dispatchEvent("dblclick");
   await expect(page.getByTestId("agent-modal")).toBeVisible();
   // The map stays mounted under the modal (I9).
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(1);

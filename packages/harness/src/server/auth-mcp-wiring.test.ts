@@ -114,7 +114,6 @@ interface CapturedLaunch {
     url: string;
     headers?: Record<string, string>;
   };
-  agentMapMcp?: LaunchOpts["agentMapMcp"];
   spec?: SpawnSpec;
 }
 
@@ -135,7 +134,6 @@ function capturingCodexAdapter(
     captures.push({
       kind,
       remote: config.mcpServers.sapiom,
-      agentMapMcp: opts.agentMapMcp,
       spec,
     });
     return { ...spec, command: "bash", args: [] };
@@ -164,7 +162,6 @@ function capturingAdapter(
     captures.push({
       kind,
       remote: config.mcpServers.sapiom,
-      agentMapMcp: opts.agentMapMcp,
     });
   };
   const interactiveSpec = (
@@ -527,40 +524,6 @@ describe("Agent Studio MCP authentication wiring", () => {
       persistedSessions.find((candidate) => candidate.id === session.id)
         ?.agentMapIdentity,
     ).toEqual(persistedIdentity);
-  });
-
-  it("keeps a keyless session's Agent Map capability across an account change", async () => {
-    await boot({ machineId: "machine-test" });
-    const session = await server!.sessionManager.create({
-      cwd: projectRoot,
-      harness: "claude-code",
-    });
-    const capability = captures.at(-1)?.agentMapMcp;
-    expect(capability).toBeDefined();
-    const hostContextUrl = `${capability!.url}/host-context`;
-    const headers = {
-      Authorization: `Bearer ${capability!.bearerToken}`,
-    };
-
-    const before = await fetch(hostContextUrl, { headers });
-    expect(before.status).toBe(200);
-
-    authFixture.browserResult = {
-      apiKey: "account-b-key",
-      tenantId: "account-b",
-      organizationName: "Account B",
-      apiKeyId: "account-b-key-id",
-    };
-    expect((await post("/api/auth/start")).status).toBe(200);
-    await waitForAuthenticated();
-
-    const after = await fetch(hostContextUrl, { headers });
-    expect(after.status).toBe(200);
-    expect(await after.json()).toMatchObject({
-      sessionId: session.id,
-      projectId: session.agentMapIdentity!.projectId,
-      userId: "local:machine-test",
-    });
   });
 
   it.each(["claude-code", "codex"] as const)(

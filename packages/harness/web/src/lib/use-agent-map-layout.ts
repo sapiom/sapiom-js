@@ -5,42 +5,50 @@ import {
   useState,
   type RefObject,
 } from "react";
-import type { MapChangeProposal } from "@sapiom/agent-map";
 import {
+  NODE_CHIP_ROW,
   NODE_HEIGHT,
   NODE_WIDTH,
-  type DirectedGraphLayout,
-  type DirectedGraphEdge,
-} from "./directed-graph-layout";
-import type { ElkLayoutEdge } from "./elk-graph-layout";
+  type ElkLayoutInput,
+  type LayoutEdgeInput,
+  type MapLayout,
+} from "./elk-graph-layout";
 import { ElkLayoutWorker } from "./elk-layout-worker";
+import {
+  edgeId,
+  edgeLabel,
+  mapStructureKey,
+  type AgentMap,
+} from "./project-map";
 
 async function measureLabels(
-  edges: readonly DirectedGraphEdge[],
+  edges: readonly LayoutEdgeInput[],
   viewport: HTMLElement,
-): Promise<ElkLayoutEdge[]> {
+): Promise<LayoutEdgeInput[]> {
+  if (!edges.some((edge) => edge.label)) return [...edges];
   await document.fonts.ready;
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.style.cssText = "position:absolute;visibility:hidden;pointer-events:none";
-  const text = document.createElementNS(
-    svg.namespaceURI,
-    "text",
-  ) as SVGTextElement;
+  const text = document.createElementNS(svg.namespaceURI, "text") as SVGTextElement;
   text.setAttribute("class", "agent-map-edge-label");
   text.setAttribute("text-anchor", "middle");
   svg.append(text);
   viewport.append(svg);
   try {
     return edges.map((edge) => {
-      text.textContent = edge.label;
+      if (!edge.label) return edge;
+      text.textContent = edge.label.text;
       const box = text.getBBox(),
         padding = Number.parseFloat(getComputedStyle(text).strokeWidth) / 2 + 2;
       return {
         ...edge,
-        labelWidth: box.width + padding * 2,
-        labelHeight: box.height + padding * 2,
-        labelOffsetX: padding - box.x,
-        labelOffsetY: padding - box.y,
+        label: {
+          text: edge.label.text,
+          width: box.width + padding * 2,
+          height: box.height + padding * 2,
+          offsetX: padding - box.x,
+          offsetY: padding - box.y,
+        },
       };
     });
   } finally {
@@ -48,27 +56,52 @@ async function measureLabels(
   }
 }
 
-export function agentMapGeometry(proposal: MapChangeProposal): string {
-  const byId = (a: { id: string }, b: { id: string }) =>
-    a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  return JSON.stringify({
-    id: proposal.projectId,
-    nodes: proposal.nodes
-      .map(({ id }) => ({
-        id,
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
-      }))
-      .sort(byId),
-    edges: proposal.relationships
-      .map((edge) => ({
-        id: edge.id,
-        from: edge.fromNodeId,
-        to: edge.toNodeId,
-        label: `${edge.kind}${edge.executionMode ? ` · ${edge.executionMode}` : ""}`,
-      }))
-      .sort(byId),
-  });
+/** The layout request for a map, before label measurement. Deterministic in the map. */
+export function agentMapGeometry(projectId: string, map: AgentMap): ElkLayoutInput {
+  const node = (slug: string) => {
+    const agent = map.agents.find((candidate) => candidate.slug === slug);
+    return {
+      id: slug,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT + (agent && agent.shared.length > 0 ? NODE_CHIP_ROW : 0),
+    };
+  };
+  const known = new Set(map.agents.map((agent) => agent.slug));
+  const grouped = new Set(map.systems.flatMap((system) => system.agents));
+  return {
+    id: projectId,
+    groups: map.systems.flatMap((system) => {
+      // A slug the map lists in a system but not as an agent has no card.
+      const members = new Set(system.agents.filter((slug) => known.has(slug)));
+      if (members.size === 0) return [];
+      const seenPairs = new Set<string>();
+      return [{
+        id: system.id,
+        nodes: [...members].map(node),
+        edges: map.edges
+          // An agent calling itself has no line to draw between two cards.
+          .filter((edge) => edge.from !== edge.to && members.has(edge.from) && members.has(edge.to))
+          // One line per pair: two event types from intake to copilot are one hand-off on the map.
+          .filter((edge) => {
+            const pair = `${edge.from}\u0000${edge.to}`;
+            if (seenPairs.has(pair)) return false;
+            seenPairs.add(pair);
+            return true;
+          })
+          .map((edge) => {
+            const text = edgeLabel(edge);
+            return {
+              id: edgeId(edge),
+              from: edge.from,
+              to: edge.to,
+              // Measured in the browser before layout; zeros are placeholders.
+              ...(text ? { label: { text, width: 0, height: 0, offsetX: 0, offsetY: 0 } } : {}),
+            };
+          }),
+      }];
+    }),
+    nodes: map.agents.filter((agent) => !grouped.has(agent.slug)).map((agent) => node(agent.slug)),
+  };
 }
 
 export function quantizedMapAspect(
@@ -80,32 +113,38 @@ export function quantizedMapAspect(
     : null;
 }
 
+/**
+ * Positions by the map's structure and the board's aspect: a refresh or a
+ * remount with no structural change draws from here, so nothing moves.
+ */
+const positions = new Map<string, MapLayout>();
+const POSITION_CACHE_LIMIT = 32;
+function remember(key: string, layout: MapLayout): void {
+  positions.delete(key);
+  positions.set(key, layout);
+  while (positions.size > POSITION_CACHE_LIMIT)
+    positions.delete(positions.keys().next().value!);
+}
+
 export function useAgentMapLayout(
-  proposal: MapChangeProposal,
+  projectId: string,
+  map: AgentMap,
   viewport: RefObject<HTMLDivElement | null>,
 ) {
   const [worker] = useState(() => new ElkLayoutWorker());
   const [attempt, setAttempt] = useState(0);
   const [aspect, setAspect] = useState<number | null>(null);
-  const geometry = agentMapGeometry(proposal);
-  const input = useMemo(
-    () =>
-      JSON.parse(geometry) as {
-        id: string;
-        nodes: { id: string; width: number; height: number }[];
-        edges: DirectedGraphEdge[];
-      },
-    [geometry],
-  );
+  // Labels are part of the structure: a new label changes the geometry.
+  const structure = `${projectId}\u0000${mapStructureKey(map)}\u0000${JSON.stringify(
+    map.edges.map((edge) => edgeLabel(edge) ?? ""),
+  )}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by structure, not identity
+  const input = useMemo(() => agentMapGeometry(projectId, map), [structure]);
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
     const measure = () => {
-      const next = quantizedMapAspect(
-        element.clientWidth,
-        element.clientHeight,
-      );
-      setAspect(next);
+      setAspect(quantizedMapAspect(element.clientWidth, element.clientHeight));
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -120,37 +159,40 @@ export function useAgentMapLayout(
       observer.disconnect();
     };
   }, [viewport]);
+  const cacheKey = aspect === null ? null : `${structure}\u0000${aspect}`;
   const [result, setResult] = useState<{
-    input: typeof input;
-    aspect: number;
+    key: string;
     attempt: number;
-    layout: DirectedGraphLayout | null;
+    layout: MapLayout | null;
   } | null>(null);
   useEffect(() => () => worker.dispose(), [worker]);
   useEffect(() => {
-    if (!viewport.current || aspect === null) return;
+    if (!viewport.current || aspect === null || cacheKey === null) return;
+    if (positions.has(cacheKey) && attempt === 0) return;
     const element = viewport.current;
     // An explicit layout request may precede the pending resize debounce.
-    const measuredAspect = quantizedMapAspect(
-      element.clientWidth,
-      element.clientHeight,
-    );
+    const measuredAspect = quantizedMapAspect(element.clientWidth, element.clientHeight);
     if (measuredAspect !== aspect) {
       setAspect(measuredAspect);
       return;
     }
     const controller = new AbortController();
     let measuring = true;
-    void measureLabels(input.edges, element)
-      .then(async (edges) => {
+    void Promise.all(input.groups.map((group) => measureLabels(group.edges, element)))
+      .then(async (measured) => {
         controller.signal.throwIfAborted();
         measuring = false;
         const layout = await worker.layout(
-          { ...input, edges, options: { "elk.aspectRatio": String(aspect) } },
+          {
+            ...input,
+            groups: input.groups.map((group, index) => ({ ...group, edges: measured[index]! })),
+            options: { "elk.aspectRatio": String(aspect) },
+          },
           controller.signal,
         );
-        if (!controller.signal.aborted)
-          setResult({ input, aspect, attempt, layout });
+        if (controller.signal.aborted) return;
+        remember(cacheKey, layout);
+        setResult({ key: cacheKey, attempt, layout });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -161,17 +203,16 @@ export function useAgentMapLayout(
             ? reason
             : `${measuring ? "Label measurement" : worker.stage} failed`,
         );
-        setResult({ input, aspect, attempt, layout: null });
+        setResult({ key: cacheKey, attempt, layout: null });
       });
     return () => controller.abort();
-  }, [input, aspect, attempt, viewport, worker]);
-  const vertical =
-    result?.input === input && result.attempt === attempt ? result : null;
-  const current = vertical?.aspect === aspect;
+  }, [input, aspect, cacheKey, attempt, viewport, worker]);
+  const cached = cacheKey !== null && attempt === 0 ? positions.get(cacheKey) : undefined;
+  const fresh = result?.key === cacheKey && result.attempt === attempt ? result : null;
+  const layout = fresh ? fresh.layout : (cached ?? null);
   return {
-    layout: vertical?.layout ?? null,
-    state:
-      current && vertical?.layout ? "ready" : current ? "error" : "loading",
+    layout,
+    state: layout ? "ready" : fresh ? "error" : "loading",
     retry: () => setAttempt((value) => value + 1),
-  };
+  } as const;
 }

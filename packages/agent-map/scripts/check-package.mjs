@@ -100,30 +100,16 @@ try {
     `
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
-import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
 import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
-import { resolveAgentMapProject } from "@sapiom/agent-map/node/project-resolution";
 for (const subpath of ${JSON.stringify(exportPaths)}) await import("@sapiom/agent-map" + subpath);
 const stateRoot = join(process.cwd(), "state");
 const catalog = new StudioProjectCatalog(join(stateRoot, "studio-projects.json"));
 const project = await catalog.create("Package smoke");
 await catalog.addRootBinding(project.projectId, process.cwd());
-const scope = await resolveAgentMapProject({ kind: "repository", stateRoot, cwd: process.cwd() });
-assert.equal(scope.kind, "resolved");
-const identity = { projectId: project.projectId, userId: "test-user", sessionId: "test-session" };
-const service = new AgentMapProposalService(new AgentMapWorkspaceStore(scope.agentMapRoot));
-const request = { schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "package-smoke",
-  operations: [{ kind: "add-node", draftRef: "agent", node: { kind: "agent", name: "Example",
-    purpose: "Exercise packaged authoring", ownerAgent: null, contractRefs: [] } }] };
-const result = await service.propose(identity, request);
-const restarted = new AgentMapProposalService(new AgentMapWorkspaceStore(scope.agentMapRoot));
-assert.deepEqual(await restarted.propose(identity, request), result);
-const snapshot = await restarted.read(project.projectId);
-assert.equal(snapshot.proposal.version, 1);
-assert.equal(snapshot.proposal.history.length, 1);
-assert.equal(snapshot.proposal.history[0].actor.sessionId, identity.sessionId);
-console.log("Installed Agent Map authoring, restart, replay, and project resolution passed.");
+const restarted = new StudioProjectCatalog(join(stateRoot, "studio-projects.json"));
+const resolved = await restarted.resolveIdentityForPath(process.cwd());
+assert.equal(resolved?.projectId, project.projectId);
+console.log("Installed Studio project catalog, restart and path resolution passed.");
 `,
   );
   run(process.execPath, ["check.mjs"], consumer);

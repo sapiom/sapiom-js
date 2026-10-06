@@ -313,13 +313,6 @@ export interface DoctorCheck {
   detail: string;
 }
 
-export interface StructuredInferenceOptions {
-  projectId: string;
-  schema: Record<string, unknown>;
-  schemaFile: string;
-  systemPrompt: string;
-}
-
 export interface SpawnSpec {
   command: string;
   args: string[];
@@ -330,16 +323,12 @@ export interface SpawnSpec {
 }
 
 export interface LaunchOpts {
-  /** Internal project-owned inference: no coding capabilities or session configuration. */
-  structuredInference?: StructuredInferenceOptions;
   harnessSessionId: string;
   cwd: string;
   /** Absolute path to the generated system-prompt file (profile). */
   systemPromptFile?: string;
   /** Absolute path to the generated MCP config file. */
   mcpConfigFile?: string;
-  /** Session-private embedded Agent Map MCP. Token must never enter argv. */
-  agentMapMcp?: { url: string; bearerToken: string };
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
   /**
@@ -393,8 +382,6 @@ export type SystemPromptDelivery = "launch-flag" | "post-ready-injection";
  * side-effect free until `launch`/`resume` specs are actually spawned.
  */
 export interface HarnessAdapter {
-  /** False for providers that only support the isolated structured background mode. */
-  supportsCodingTasks?: boolean;
   id: HarnessKind;
   /** Binary present, version acceptable. */
   doctor(): Promise<DoctorCheck[]>;
@@ -587,17 +574,17 @@ export type BusMessage =
       target: "prod" | "local";
     }
   | { type: "workflows.changed" }
-  | {
-      type: "agent-map.proposal.changed";
-      delta: import("@sapiom/agent-map").AcceptedProposalDelta;
-    }
+  /**
+   * Source under an open project's folder changed. The map is recomputed from
+   * code on every read, so the browser reads it again (debounced server-side).
+   */
+  | { type: "project-map.changed"; projectId: string }
   /**
    * Full snapshot of one background task, re-broadcast on every change
    * (spawn, each new status line, completion/failure). Tasks are rare and
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
-  | { type: "agent-map.initialization.changed"; status: import("@sapiom/agent-map/agent-map-initialization").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
@@ -808,13 +795,10 @@ export type UiEventName =
   | "session.created"
   | "mcp.install"
   | "plan.upgrade_clicked"
+  /** The project map drew: `data.load_ms` from request to response, `data.agents`. */
   | "agent_map.entered"
-  | "agent_map.workspace_load_failed"
-  | "agent_map.proposal_created"
-  /** Emitted only when the request that renders the announced delta owns the
-   * snapshot; superseded and recovery loads are intentionally not counted. */
-  | "agent_map.proposal_visible"
-  | "agent_map.validation_failed";
+  /** The project map route failed: `data.code`. */
+  | "agent_map.workspace_load_failed";
 
 export interface UiTrackRequest {
   /** Dot-canonical event name — one of the UiEventName literals. */
@@ -846,17 +830,6 @@ export type AnalyticsEventType =
   | "plan.upgrade_clicked"
   | "agent_map.entered"
   | "agent_map.workspace_load_failed"
-  | "agent_map.proposal_created"
-  | "agent_map.proposal_visible"
-  | "agent_map.validation_failed"
-  | "agent_map.legacy_reset"
-  | "agent_map.empty_legacy_container_migrated"
-  | "agent_map.initialization"
-  | "agent_map.workspace_initialized"
-  | "agent_map.workspace_migrated"
-  | "agent_map.workspace_read_failed"
-  | "agent_map.mcp_tool"
-  | "agent_map.capability"
   | "project_agent.identity_migrated"
   | "project_agent.identity_rejected";
 

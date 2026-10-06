@@ -1,46 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentMapGraph, PlanNodeId, PlanRelationshipId } from "@sapiom/agent-map";
-import { canonicalizeAgentMapGraph, computeGraphContentDigest } from "@sapiom/agent-map/node/canonical";
+import { canonicalDigest, canonicalJson } from "@sapiom/agent-map/node/canonical";
 
-const first = "node_018f0000-0000-7000-8000-000000000001" as PlanNodeId;
-const second = "node_018f0000-0000-7000-8000-000000000002" as PlanNodeId;
-
-describe("Agent Map content canonicalization", () => {
-  it("orders stable identities and set-like contract references without mutation", () => {
-    const graph: AgentMapGraph = {
-      nodes: [
-        { id: second, kind: "agent", name: "Publisher", purpose: "Publish", ownerAgentId: null, contractRefs: ["z", "a"] },
-        { id: first, kind: "agent", name: "Research", purpose: "Research", ownerAgentId: null, contractRefs: [] },
-      ],
-      relationships: [],
-    };
-    const before = JSON.stringify(graph);
-    const canonical = canonicalizeAgentMapGraph(graph);
-    expect(canonical.nodes.map(({ id }) => id)).toEqual([first, second]);
-    expect(canonical.nodes[1]?.contractRefs).toEqual(["a", "z"]);
-    expect(JSON.stringify(graph)).toBe(before);
-    expect(computeGraphContentDigest(graph)).toBe(computeGraphContentDigest(canonical));
+describe("canonical JSON digests", () => {
+  it("orders keys and normalizes line endings so equal values hash equally", () => {
+    expect(canonicalJson({ b: "x\r\ny", a: [2, 1] })).toBe('{"a":[2,1],"b":"x\\ny"}');
+    expect(canonicalDigest("domain", { a: 1, b: 2 })).toBe(canonicalDigest("domain", { b: 2, a: 1 }));
+    expect(canonicalDigest("domain", { a: 1 })).not.toBe(canonicalDigest("other", { a: 1 }));
   });
 
-  it.each([
-    ["node", (graph: AgentMapGraph) => graph.nodes.push({ ...graph.nodes[0]!, contractRefs: [] })],
-    ["relationship", (graph: AgentMapGraph) => {
-      const relationship = { id: "rel_018f0000-0000-7000-8000-000000000001" as PlanRelationshipId,
-        fromNodeId: first, toNodeId: second, kind: "invokes" as const, executionMode: null,
-        contractRef: null, description: "Delegate" };
-      graph.relationships.push(relationship, { ...relationship });
-    }],
-    ["contract", (graph: AgentMapGraph) => graph.nodes[0]!.contractRefs.push("report", "report")],
-  ])("rejects duplicate %s identities", (_name, mutate) => {
-    const graph: AgentMapGraph = {
-      nodes: [
-        { id: first, kind: "agent", name: "Research", purpose: "Research", ownerAgentId: null, contractRefs: [] },
-        { id: second, kind: "agent", name: "Publish", purpose: "Publish", ownerAgentId: null, contractRefs: [] },
-      ],
-      relationships: [],
-    };
-    mutate(graph);
-    expect(() => canonicalizeAgentMapGraph(graph)).toThrow(/duplicate Agent Map/u);
+  it("rejects values that have no canonical form", () => {
+    expect(() => canonicalJson({ a: undefined })).toThrow(/not canonical JSON/u);
+    expect(() => canonicalJson(Number.NaN)).toThrow(/not canonical JSON/u);
+    expect(() => canonicalJson(new Date(0))).toThrow(/not canonical JSON/u);
   });
 });

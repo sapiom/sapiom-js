@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { hasKnownBusMessageType } from "./bus-message-type";
 
 describe("event transport discriminators", () => {
-  it("keeps session, Canvas and durable-map events supported", () => {
+  it("keeps session, Canvas and project-map events supported", () => {
     for (const type of [
       "session.status",
       "canvas.reload",
-      "agent-map.proposal.changed",
+      "project-map.changed",
     ])
       expect(hasKnownBusMessageType({ type })).toBe(true);
   });
@@ -17,6 +17,8 @@ describe("event transport discriminators", () => {
     "canvas.reload",
     {},
     { type: "system-graph.changed" },
+    { type: "agent-map.proposal.changed" },
+    { type: "agent-map.initialization.changed" },
     { type: "future.event" },
     { type: "toString" },
     { type: 1 },

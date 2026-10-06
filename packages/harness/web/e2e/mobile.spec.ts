@@ -79,7 +79,7 @@ test("rail opens as a drawer and closes on selecting a session or a scrim tap", 
 test("a project's Agent Map takes the whole centre on a phone, with no sheet and no chat", async ({
   page,
 }) => {
-  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1");
+  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
   // The project view is the centre at every width (flow-navigation.md 4.3):
   // no right pane beside it, so no sheet to open and no scrim to tap out of.
   await page.getByTestId("rail-expand").click();
@@ -118,7 +118,7 @@ test("a project's Agent Map takes the whole centre on a phone, with no sheet and
 
   // A node names itself on the floating card; the selected session is one
   // rail tap away, and its workbench comes back with it.
-  await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
+  await page.getByTestId("agent-map-node-leasing").click();
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
   await page.getByTestId("rail-expand").click();
   await page.getByTestId("rail-session-select-sess-boot").click();

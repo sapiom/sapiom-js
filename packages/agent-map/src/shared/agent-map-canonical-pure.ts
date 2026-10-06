@@ -1,5 +1,3 @@
-import type { AgentMapGraph, PlanNode, PlanRelationship } from "./agent-map.js";
-
 export const compareCanonicalStrings = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
@@ -34,34 +32,4 @@ export function canonicalJson(value: unknown): string {
     throw new TypeError("unsupported canonical JSON value");
   };
   return JSON.stringify(visit(value));
-}
-
-const canonicalNode = (node: PlanNode): PlanNode => ({
-  ...node,
-  contractRefs: [...node.contractRefs].sort(compareCanonicalStrings),
-});
-
-const canonicalRelationship = (
-  relationship: PlanRelationship,
-): PlanRelationship => ({ ...relationship });
-
-/** Return a defensive graph copy in the semantic digest protocol order. */
-export function canonicalizeAgentMapGraph(graph: AgentMapGraph): AgentMapGraph {
-  const nodes = graph.nodes
-    .map(canonicalNode)
-    .sort((left, right) => compareCanonicalStrings(left.id, right.id));
-  const relationships = graph.relationships
-    .map(canonicalRelationship)
-    .sort((left, right) => compareCanonicalStrings(left.id, right.id));
-  if (new Set(nodes.map(({ id }) => id)).size !== nodes.length)
-    throw new TypeError("duplicate Agent Map node ID");
-  if (new Set(relationships.map(({ id }) => id)).size !== relationships.length)
-    throw new TypeError("duplicate Agent Map relationship ID");
-  if (
-    nodes.some(
-      ({ contractRefs }) => new Set(contractRefs).size !== contractRefs.length,
-    )
-  )
-    throw new TypeError("duplicate Agent Map contract reference");
-  return { nodes, relationships };
 }

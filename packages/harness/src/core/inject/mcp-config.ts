@@ -1,4 +1,4 @@
-import { STUDIO_HOST_CONTEXT_ENV, type StudioHostBootstrap } from "@sapiom/agent-map/host-protocol";
+import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveEnvironment } from "@sapiom/mcp/auth";
@@ -26,10 +26,6 @@ export interface McpDevServerCommand {
 }
 
 export interface McpConfigOptions {
-  /** Verified private host bootstrap, provided only for project sessions. */
-  studioHost?: StudioHostBootstrap;
-  /** Session-scoped embedded Agent Map HTTP MCP authority. */
-  agentMap?: { url: string; bearerToken: string };
   /** Override for the local sapiom-dev server launch — see {@link McpDevServerCommand}. */
   devServer?: McpDevServerCommand;
   /** SAPIOM_ENVIRONMENT to pass through to the sapiom-dev child process. */
@@ -82,7 +78,6 @@ export async function generateMcpConfig(
   const launcherEnv = { ...options.devServer?.env };
   delete launcherEnv[STUDIO_HOST_CONTEXT_ENV];
   const devEnvEntries: Record<string, string> = {
-    ...(options.studioHost ? { [STUDIO_HOST_CONTEXT_ENV]: JSON.stringify(options.studioHost) } : {}),
     ...(sapiomEnvironment ? { SAPIOM_ENVIRONMENT: sapiomEnvironment } : {}),
     ...(options.harnessVersion
       ? { SAPIOM_HARNESS_VERSION: options.harnessVersion }
@@ -123,17 +118,6 @@ export async function generateMcpConfig(
             args: ["-y", "@sapiom/mcp@latest"],
             ...(devEnv ? { env: devEnv } : {}),
           },
-      ...(options.agentMap
-        ? {
-            "agent-map": {
-              type: "http",
-              url: options.agentMap.url,
-              headers: {
-                Authorization: `Bearer ${options.agentMap.bearerToken}`,
-              },
-            },
-          }
-        : {}),
     },
   };
 

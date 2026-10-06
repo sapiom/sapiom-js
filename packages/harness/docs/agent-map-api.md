@@ -1,41 +1,48 @@
 # Agent Map identity and navigation
 
-Studio uses one durable Agent Map per project. Read `GET /api/state` for
-server-issued `studioProjects[].projectId` values and their exact
-`workspaceScopes[].projectId` associations. A scope key identifies an allowed
-workspace root; it is distinct from a durable project ID. Do not derive project
-IDs from paths, names or node labels.
+Studio draws each project's map from the code. Nothing about agents or edges is
+stored: `GET /api/projects/:projectId/map` runs `sapiom_dev_map`'s scan
+(`describeProject` + `buildMap` from `@sapiom/mcp/map`) in process for the
+project's folder on every read. A coding agent calling `sapiom_dev_map` sees the
+same map.
 
-Send the boot token in `X-Harness-Token` for local API requests.
+Read `GET /api/state` for server-issued `studioProjects[].projectId` values and
+their exact `workspaceScopes[].projectId` associations. A scope key identifies an
+allowed workspace root; it is distinct from a durable project ID. Do not derive
+project IDs from paths or names. Send the boot token in `X-Harness-Token`.
 
-| Purpose                                   | Endpoint                                                              |
-| ----------------------------------------- | --------------------------------------------------------------------- |
-| Read the saved map and shared proposal    | `GET /api/projects/:projectId/agent-map/workspace`                    |
-| Resolve an implementation-backed map node | `GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` |
+| Purpose                   | Endpoint                                     |
+| ------------------------- | -------------------------------------------- |
+| Read the map              | `GET /api/projects/:projectId/map`           |
+| Read the map at a git ref | `GET /api/projects/:projectId/map?ref=<ref>` |
 
-Use the exact project and node IDs when resolving an implementation. Missing,
-ambiguous or unavailable implementations remain unresolved. Viewing a project,
-retrying its identity, inspecting a node or navigating to an agent does not
-create, select, resume, bind or prompt a conversation. Explicit session tabs
-open their exact ordinary conversation. An agent's Canvas and Secrets open in
-the agent modal over the map, addressed by the agent's path, never by a session.
+The response is `{ projectId, displayName, map, git }`. `map` is exactly the
+tool's output (systems, agents, edges with their code evidence, unresolved
+calls), with `map.root` set to the folder the project was opened from. `git` is
+`{ branch, branches }` in a git repository and `null` outside one. Errors:
+`404 project_not_found`, `409 project_unavailable` (the folder is not open),
+`400 INVALID_REF` or the scan's own code for a ref git does not know, and
+`500 map_failed`.
 
-When identity is unavailable, Studio preserves the selected project and
-conversation and offers **Reload projects**. An omitted catalog from an older
-server follows the same recovery path. Upgrade older clients and servers
-together; there is no second map protocol or fallback renderer.
+While a project's map has been read, Studio watches its folder and publishes
+`{ type: "project-map.changed", projectId }` on `/ws/events` after a source or
+agent-inventory change (debounced 500 ms). The event carries no map; the client
+reads the route again.
+
+Viewing a project, choosing a ref, refreshing, picking an agent or opening its
+modal does not create, select, resume, bind or prompt a conversation. An agent
+on the map opens by its folder (`map.root` joined with the agent's `path`), the
+same path the agent list uses.
+
+The stored map is removed: the `/api/projects/:projectId/agent-map/*` routes
+(workspace, implementations, node implementation, initialization and its retry),
+the `/mcp/agent-map` endpoint with its `agent_map_read`, `agent_map_validate` and
+`agent_map_propose` tools, and the `agent-map.proposal.changed` and
+`agent-map.initialization.changed` events. Requests to the removed routes return
+the generic API 404. Existing `~/.sapiom/harness/agent-map/projects/` folders are
+no longer read and can be deleted.
 
 The former `GET /api/workspaces/:workspaceKey/system-graph`, its `POST /refresh`
-and `GET /navigation` handlers have been deleted. Without a valid boot token,
-requests return 401. Authenticated requests return the generic API 404, replacing
-the temporary 410 retirement response. Removed and unknown event types are
-ignored before reaching browser state subscribers.
-
-Shared workspace discovery, watch leases, the public `@sapiom/agent`
-PackageInventory contract and individual-agent Canvas source scanning remain
-independent of the removed project topology.
-
-See the [authority and retirement record](../../../docs/plans/agent-studio-plan-first-agent-map/authority-retirement.md)
-for validation evidence and the release recovery boundary. Installed-release
-recovery requires a reverted change released at strictly higher package and
-desktop versions; no in-place downgrade or lossless state reset is promised.
+and `GET /navigation` handlers were deleted earlier and still return the generic
+API 404. Removed and unknown event types are ignored before reaching browser
+state subscribers.

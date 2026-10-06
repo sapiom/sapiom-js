@@ -35,12 +35,12 @@ const projectRows = (page: Page): Promise<string[]> =>
       nodes.map((node) => node.getAttribute("data-testid") ?? ""),
     );
 
-/** The project's agents are listed on its map (flow-navigation.md Q3): the
- *  mock draws no map, so they are cards there. */
-const agentCardsOn = async (page: Page, project: string) => {
+/** The project's agents are the nodes of its computed map. The `leasing`
+ *  node is the registry agent; acme-app's map draws three more beside it. */
+const agentNodesOn = async (page: Page, project: string) => {
   await page.getByTestId(`project-select-${project}`).click();
-  await expect(page.getByTestId("project-map-pane")).toBeVisible();
-  return page.locator('[data-testid^="map-agent-"]:not([data-testid^="map-agent-panel"])');
+  await expect(page.getByTestId("agent-map-live")).toBeVisible();
+  return page.locator('button[data-testid^="agent-map-node-"]');
 };
 
 test.beforeEach(async ({ page }) => {
@@ -153,7 +153,8 @@ test.describe("the header + opens a project", () => {
        rail was unchanged, which is also what would have made the row removal
        irreversible for exactly these folders. */
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(await agentCardsOn(page, "acme-app")).toHaveCount(1);
+    await agentNodesOn(page, "acme-app");
+    await expect(page.getByTestId("agent-map-node-leasing")).toHaveCount(1);
   });
 });
 
@@ -176,7 +177,7 @@ test.describe("Add project is one question", () => {
 
     await page.getByTestId("project-folder-continue").click();
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(page.getByTestId("map-agent-leasing")).toBeVisible();
+    await expect(page.getByTestId("agent-map-node-leasing")).toBeVisible();
   });
 });
 
@@ -206,7 +207,7 @@ test.describe("round trip: removed, then back", () => {
     await page.getByTestId("project-folder-continue").click();
 
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(page.getByTestId("map-agent-leasing")).toBeVisible();
+    await expect(page.getByTestId("agent-map-node-leasing")).toBeVisible();
     // And it STAYS back: the TOMBSTONE is cleared, not merely out-voted by this
     // render. It is the one part of a removal that outlives the page, so a
     // stale entry would bring the project back only until the next reload.
@@ -255,7 +256,7 @@ test.describe("round trip: removed, then back", () => {
        project would resurrect a folder they just removed, and print its agent
        twice to do it. */
     await expect(
-      (await agentCardsOn(page, "demo")).filter({ hasText: "/Users/demo/acme-app/leasing" }),
+      (await agentNodesOn(page, "demo")).filter({ hasText: "leasing" }),
     ).toHaveCount(1);
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
     expect(

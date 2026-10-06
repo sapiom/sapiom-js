@@ -2,22 +2,22 @@
 
 Studio qualifies the selected MCP executable and can supply authenticated session
 context. The MCP advertises one read-only map tool, `sapiom_dev_map`, which
-computes the agent map from code on every call and stores nothing. Studio's
-private `agent_map_*` tools, matching prompts, the Studio map UI and ELK layout
-continue through their existing paths until Studio reads the map from
-`sapiom_dev_map`. No MCP map-authoring tools, viewer or external-edit watcher
-are advertised.
+computes the agent map from code on every call and stores nothing. Studio draws
+its project map from the same scan, run in process by the harness, so a session
+and Studio see one map. Studio's private `agent_map_*` tools and their
+`/mcp/agent-map` endpoint are removed. No MCP map-authoring tools, viewer or
+external-edit watcher are advertised.
 
-| Pair or failure                                        | Behavior                                                                                                                                                                         |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Old Studio / new MCP                                   | `SAPIOM_HARNESS_VERSION` selects legacy Studio classification; no competing map tools or standalone viewer.                                                                      |
-| New Studio / new MCP                                   | Verify the offline descriptor and package fingerprint; pass private session context to the selected executable. Private map tools remain active.                                 |
-| New Studio / old MCP                                   | Missing probe marker means no probe execution. Keep the existing private tools and prompts.                                                                                      |
-| CLI dependency old, missing or unbuilt                 | Retain `npx -y @sapiom/mcp@latest`, explicitly unverified. Never qualify one package and launch a fresh registry resolution under that result.                                   |
-| Desktop offline or failed refresh                      | Reuse a surviving cached installation; retain the installer's existing npx fallback if none survives. Preflight never installs or refreshes. Private map tools remain available. |
-| Desktop entry fails preflight                          | Discard the damaged or unverified command and retain the unqualified npx fallback. Accepted legacy commands keep their existing launch path.                                     |
-| Resume or package rollback                             | Requalify the current executable before generating configuration and rotate the existing session credential.                                                                     |
-| Invalid, revoked or unreachable claimed Studio context | Classify as unavailable Studio. Existing developer tools continue; do not grant standalone map authority.                                                                        |
+| Pair or failure                               | Behavior                                                                                                                                       |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Old Studio / new MCP                          | `SAPIOM_HARNESS_VERSION` selects legacy Studio classification; no competing map tools or standalone viewer.                                    |
+| New Studio / new MCP                          | Verify the offline descriptor and package fingerprint; launch the selected executable. Sessions get no private map tools.                      |
+| New Studio / old MCP                          | Missing probe marker means no probe execution. The session has no `sapiom_dev_map`; Studio still draws the map in process.                     |
+| CLI dependency old, missing or unbuilt        | Retain `npx -y @sapiom/mcp@latest`, explicitly unverified. Never qualify one package and launch a fresh registry resolution under that result. |
+| Desktop offline or failed refresh             | Reuse a surviving cached installation; retain the installer's existing npx fallback if none survives. Preflight never installs or refreshes.   |
+| Desktop entry fails preflight                 | Discard the damaged or unverified command and retain the unqualified npx fallback. Accepted legacy commands keep their existing launch path.   |
+| Resume or package rollback                    | Requalify the current executable before generating configuration.                                                                              |
+| Invalid or unreachable claimed Studio context | Classify as unavailable Studio. Existing developer tools continue.                                                                             |
 
 CLI's verified selection is its installed runtime dependency, not an assertion
 that it equals the registry's current `latest`. Desktop always qualifies its
@@ -33,14 +33,10 @@ neither support nor authority. The fingerprint detects replaced builds, includin
 same-version replacements; it is not a signature or an immutable dependency tree.
 MCP checks it again before using the launch credential.
 
-Studio passes the context URL, opaque credential and expected descriptor through
-private per-session MCP configuration. Its authenticated loopback endpoint derives
-project, custom state root, user/local principal, session and authority generation
-from trusted server state. It rechecks generation after asynchronous lookup and
-returns `Cache-Control: no-store`. Model arguments select none of these fields.
-Codex receives the bootstrap through environment forwarding, outside argv and its
-shell-tool environment. Background and structured-inference tasks receive no
-ambient project authority.
+Studio no longer passes a host context to the MCP: the context endpoint
+(`/mcp/agent-map/host-context`) is removed with the stored map. The MCP still
+resolves `SAPIOM_STUDIO_HOST_CONTEXT` when an older Studio supplies it and logs a
+failure without changing its tools.
 
 `StudioHostContextClient.resolve()` rechecks admission on every call and pins the
 initial scope. A returned context is a snapshot, not durable permission for later
@@ -50,12 +46,11 @@ Current host support is only `session-context`; current MCP support is only
 `studio-context`. No existing binary gains live external edits from this protocol.
 
 Release the shared library and MCP before relying on the verified pairing in
-Studio. Intermediate and mixed releases keep the legacy surface. Map tools,
-viewing/watching and coordinated activation are separate follow-up tickets.
+Studio.
 
 Verification combines source-level authority/lifecycle tests, actual MCP tarballs
 installed outside the workspace (including their local production dependency
 closure), Node 18/20/22 artifact checks and packaged Desktop smoke. The Desktop
-smoke executes a real offline MCP through Electron-as-Node and separately exercises
-the existing private map read/write path. Linux results do not imply a tested
+smoke executes a real offline MCP through Electron-as-Node and separately asks
+the packaged server for a project map, which loads the `@sapiom/mcp/map` scanner. Linux results do not imply a tested
 macOS or Windows artifact; those use the multi-OS Desktop workflow.

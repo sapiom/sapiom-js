@@ -5,58 +5,16 @@
 
 export * from "./shared/types.js";
 export type {
-  AgentMapInitializationError,
-  AgentMapInitializationState,
-  AgentMapInitializationStatus,
-} from "@sapiom/agent-map/agent-map-initialization";
-export {
-  AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
-  EXECUTION_MODES,
-  PLAN_NODE_KINDS,
-  RELATIONSHIP_KINDS,
-} from "@sapiom/agent-map";
-export type {
-  AcceptedProposalDelta,
-  ExecutionMode,
-  MapOperation,
-  MapProposalId,
-  PlanNode,
-  PlanNodeChanges,
-  PlanNodeId,
-  PlanNodeKind,
-  PlanRelationship,
-  PlanRelationshipId,
-  AgentMapVersion,
-  AgentMapVersionId,
-  AgentMapVersionRef,
-  AgentMapGraph,
-  GraphContentDigest,
-  ProjectAgentActorRef,
-  ProjectMutationOrigin,
-  ProjectVersionChangeKind,
-  RecordDigest,
-  RoleNeutralMapOperationRecord,
   ProjectAgentSession,
-  ProposalActor,
-  ProposalOperationId,
-  RelationshipChanges,
-  RelationshipKind,
   StudioProjectId,
 } from "@sapiom/agent-map";
-export {
-  canonicalJson,
-  canonicalizeAgentMapGraph,
-  computeAgentMapVersionRecordDigest,
-  computeArchitectureGraphDigest,
-  computeGraphContentDigest,
-} from "@sapiom/agent-map/node/canonical";
-export { agentMapVersionRefsEqual } from "@sapiom/agent-map/build-plan";
 export type {
-  ArchitectureSourceRef,
-  ProjectMutationReceipt,
-  ProjectMutationTombstone,
-} from "@sapiom/agent-map/build-plan";
-export { parseAgentMapVersionRef } from "@sapiom/agent-map/node/build-plan-codec";
+  AgentMap,
+  MapAgent,
+  MapEdge,
+  MapSystem,
+  ProjectMapResponse,
+} from "./shared/project-map.js";
 export {
   PROJECT_AGENT_PROMPT_APPENDIX,
   projectAgentPromptAppendix,

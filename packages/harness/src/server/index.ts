@@ -1,10 +1,7 @@
-import { STUDIO_HOST_CONTEXT_PATH } from "@sapiom/agent-map/host-protocol";
 import type { McpPreflightResult } from "../core/mcp-compatibility.js";
 import { LocalWorkspaceScopeCatalog } from "../core/workspace-scope-catalog.js";
 import { canonicalGraphPath, refreshCanonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
-import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
-import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
 /**
  * Harness server — integration point for every workstream.
  *
@@ -143,6 +140,7 @@ import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
   createDefinitionSlugResolver,
   resolveAgentsBaseUrl,
+  resolveCoreBaseUrl,
 } from "../core/definition-slug-resolver.js";
 import {
   resolveManifestName,
@@ -155,20 +153,9 @@ import {
   type ApiKeyProvider,
 } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
-import { createAgentMapRouter } from "./agent-map.js";
-import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
-import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
-import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
-import {
-  AgentMapCapabilityRegistry,
-  type AgentMapCapabilityEvent,
-} from "../core/agent-map-capability-registry.js";
+import { createStudioProjectsRouter } from "./studio-projects.js";
+import { createProjectMapRouter, platformForKey } from "./project-map.js";
 import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
-import {
-  createAgentMapMcpRouter,
-  type AgentMapMcpRouter,
-} from "./agent-map-mcp.js";
-import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import { isProjectSessionDispatchAuthorized } from "../core/project-session.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
@@ -545,12 +532,6 @@ function createDefaultBuildLaunchOpts(
     const devServer = prepareSapiomDevMcp
       ? prepared?.kind === "unavailable" ? undefined : prepared?.launch
       : sapiomDevMcp;
-    // Shared map activation is deliberately off. The private tools and their
-    // matching prompt appendix remain the session's only map surface.
-    const studioHost = prepared?.kind === "verified" && context?.agentMapIdentity && context.agentMapMcp
-      ? { contextUrl: new URL(STUDIO_HOST_CONTEXT_PATH, context.agentMapMcp.url).href,
-          bearerToken: context.agentMapMcp.bearerToken, expectedMcp: prepared.descriptor }
-      : undefined;
 
     // Portable continue (SAP-2059). Resolved before the prompt file is
     // written, because for a `launch-flag` harness the brief IS part of that
@@ -619,8 +600,6 @@ function createDefaultBuildLaunchOpts(
         generatedRoot,
         harnessVersion: readVersion(),
         ...(devServer ? { devServer } : {}),
-        ...(studioHost ? { studioHost } : {}),
-        ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
       }),
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
@@ -646,7 +625,6 @@ function createDefaultBuildLaunchOpts(
       settingsFile: settings.settingsPath,
       mcpConfigFile,
       systemPromptFile,
-      ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
       ...(req.harness === "claude-code" || req.harness === "codex"
         ? {
@@ -725,14 +703,6 @@ export const startServer = async (
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
   );
-  let emitAgentMapCapabilityEvent = (
-    _event: AgentMapCapabilityEvent,
-  ): void => {};
-  const agentMapCapabilities = new AgentMapCapabilityRegistry({
-    onEvent: (event) => emitAgentMapCapabilityEvent(event),
-  });
-  let agentMapMcpUrl: string | null = null;
-  let agentMapMcp: AgentMapMcpRouter | null = null;
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
   const projectPrincipal = `local:${machineId}`;
@@ -969,9 +939,8 @@ export const startServer = async (
   // binding before SessionManager itself can be instantiated.
   // eslint-disable-next-line prefer-const
   let sessionManager!: SessionManager;
-  let agentMapInitialization: AgentMapInitializationCoordinator | null = null;
-  let scheduleMapInitializations: (() => Promise<void>) | null = null;
   const pendingProjectCwds = new Set<string>();
+  let restoredScopeDiscovery: Promise<void> | null = null;
   const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
     async () => {
       const settings = await loadSettings(statePaths.settings);
@@ -1431,30 +1400,7 @@ export const startServer = async (
     const initialPrompt = context?.resume
       ? undefined
       : await prepareFirstRequest(req);
-    if (!context?.agentMapIdentity) {
-      return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
-    }
-    if (!agentMapMcpUrl) {
-      throw new Error("Agent Map MCP endpoint is not bound");
-    }
-    if (context.resume) await agentMapMcp?.revokeSession(harnessSessionId);
-    const capability = context.resume
-      ? agentMapCapabilities.rotate(context.agentMapIdentity)
-      : agentMapCapabilities.issue(context.agentMapIdentity);
-    const agentMapMcpMetadata = {
-      url: agentMapMcpUrl,
-      bearerToken: capability.token,
-    };
-    try {
-      const generated = await innerBuildLaunchOpts(harnessSessionId, req, {
-        ...context,
-        agentMapMcp: agentMapMcpMetadata,
-      });
-      return { ...generated, agentMapMcp: agentMapMcpMetadata, ...(initialPrompt ? { initialPrompt } : {}) };
-    } catch (error) {
-      agentMapCapabilities.revokeSession(harnessSessionId);
-      throw error;
-    }
+    return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
   };
 
   const projectIdentityMigrationEvents: Array<{
@@ -1575,10 +1521,6 @@ export const startServer = async (
     },
     onProjectAgentIdentityMigration: (event) => {
       projectIdentityMigrationEvents.push(event);
-    },
-    onAgentMapSessionExit: async (sessionId) => {
-      agentMapCapabilities.revokeSession(sessionId);
-      await agentMapMcp?.revokeSession(sessionId);
     },
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
@@ -1811,6 +1753,61 @@ export const startServer = async (
       markAcceptedInventoryDirty(root);
     },
   });
+  // The project map is recomputed from code on every read; this lease only
+  // tells an open map to read again. One lease per drawn root, held until
+  // shutdown; edits arriving together publish one reload.
+  const PROJECT_MAP_RELOAD_DEBOUNCE_MS = 500;
+  const projectMapWatches = new Map<
+    string,
+    { key: object; timer: ReturnType<typeof setTimeout> | null; projectIds: Set<string> }
+  >();
+  let projectMapWatchesStopped = false;
+  const watchProjectMapRoot = (projectId: string, root: string): void => {
+    if (projectMapWatchesStopped) return;
+    const existing = projectMapWatches.get(root);
+    if (existing) {
+      existing.projectIds.add(projectId);
+      return;
+    }
+    const watch = {
+      key: {},
+      timer: null as ReturnType<typeof setTimeout> | null,
+      projectIds: new Set([projectId]),
+    };
+    projectMapWatches.set(root, watch);
+    const changed = () => {
+      if (watch.timer) clearTimeout(watch.timer);
+      watch.timer = setTimeout(() => {
+        watch.timer = null;
+        for (const id of watch.projectIds) {
+          bus.publish({ type: "project-map.changed", projectId: id });
+        }
+      }, PROJECT_MAP_RELOAD_DEBOUNCE_MS);
+    };
+    void sharedWorkspaceWatchBroker
+      .subscribe(watch.key, {
+        root,
+        listSourceRoots: () => [root],
+        onSourceChange: changed,
+        onInventoryChange: changed,
+      })
+      .then(() => {
+        // Shutdown ran while this lease was starting: release it now.
+        if (projectMapWatchesStopped) sharedWorkspaceWatchBroker.unsubscribe(watch.key);
+      })
+      .catch(() => {
+        // Unwatchable roots still draw; the header's refresh reads them again.
+        projectMapWatches.delete(root);
+      });
+  };
+  const stopProjectMapWatches = (): void => {
+    projectMapWatchesStopped = true;
+    for (const watch of projectMapWatches.values()) {
+      if (watch.timer) clearTimeout(watch.timer);
+      sharedWorkspaceWatchBroker.unsubscribe(watch.key);
+    }
+    projectMapWatches.clear();
+  };
   const workspaceWatcher = new WorkspaceWatcherManager({
     sharedWatchBroker: sharedWorkspaceWatchBroker,
     listSourceRoots: (_harnessSessionId, cwd) =>
@@ -2390,7 +2387,6 @@ export const startServer = async (
             published = await requestAcceptedPublication();
           }
           if (!published) continue;
-          void scheduleMapInitializations?.().catch(() => {});
           if (generation !== flight.generation || flight.pending) {
             continue;
           }
@@ -2704,45 +2700,6 @@ export const startServer = async (
     batcher.enqueue(migrationEvent);
   }
 
-  const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
-    statePaths.agentMap,
-    {
-      onEvent: (event) => {
-        const sessionId = `agent-map-${event.projectId}`;
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: sessionId,
-          agentSessionId: null,
-          harness: "claude-code",
-          type: event.name,
-          payload: {
-            project_id: event.projectId,
-            ...(event.name === "agent_map.workspace_read_failed"
-              ? {
-                  error_code: event.errorCode,
-                  ...(event.schemaVersion !== undefined
-                    ? { schema_version: event.schemaVersion }
-                    : {}),
-                }
-              : event.name === "agent_map.workspace_migrated"
-                ? { from_schema_version: event.fromSchemaVersion }
-                : {}),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
-  // Shared startup reset precedes every bootstrap/map-state recovery. Late reads apply the same policy.
-  await agentMapWorkspaceStore.resetLegacyMaps();
-  // Pristine historical format-2 wrappers require a separate backed-up conversion.
-  await agentMapWorkspaceStore.migrateEmptyLegacyContainers();
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
@@ -2792,91 +2749,6 @@ export const startServer = async (
       await scanWorkflowsAndBroadcast(agentPath, "agent-created", { dirty: true });
       // Backfill can change membership without changing any filesystem row.
       bus.publish({ type: "workflows.changed" });
-    },
-  });
-  const agentMapProposalService = new AgentMapProposalService(
-    agentMapWorkspaceStore,
-    {
-      // Persistence is authoritative and completes before this callback. The
-      // shared event socket gives an already-open map the accepted delta; a
-      // disconnected browser recovers from the durable snapshot on reconnect.
-      onAccepted: (delta) =>
-        bus.publish({ type: "agent-map.proposal.changed", delta }),
-    },
-  );
-  emitAgentMapCapabilityEvent = (event) => {
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next("agent-map-capability"),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: "agent-map-capability",
-      agentSessionId: null,
-      harness: "claude-code",
-      type: "agent_map.capability",
-      payload: {
-        name: event.name,
-        ...(event.reason ? { reason: event.reason } : {}),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-  const implementationOptions = {
-    catalog: studioProjectCatalog, store: agentMapWorkspaceStore, preferences: studioWorkspacePreferences,
-    listWorkflows: () => workflowsCache, isWorkflowScanComplete: (roots: readonly string[]) => isWorkflowScanComplete(roots),
-    listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
-  };
-  const implementationBindings = createAgentMapImplementations(implementationOptions);
-  agentMapMcp = createAgentMapMcpRouter({
-    capabilities: agentMapCapabilities,
-    service: agentMapProposalService,
-    hostContextFor: async (scope) => {
-      const assertScope = () => {
-        const session = sessionManager.get(scope.sessionId);
-        const current = session?.agentMapIdentity;
-        if (!session || session.status === "exited" ||
-          current?.projectId !== scope.projectId ||
-          current.sessionId !== scope.sessionId) {
-          throw new AgentMapMcpProjectUnavailableError();
-        }
-        return session;
-      };
-      const session = assertScope();
-      const project = await studioProjectCatalog.resolveIdentityForPath(session.cwd);
-      assertScope();
-      if (project?.projectId !== scope.projectId) throw new AgentMapMcpProjectUnavailableError();
-      return { stateRoot: statePaths.root };
-    },
-    readSnapshotFor: async ({ projectId }) => {
-      const project = await studioProjectCatalog.resolve(projectId);
-      if (!project) throw new AgentMapMcpProjectUnavailableError();
-      const snapshot = await agentMapProposalService.read(projectId);
-      return { schemaVersion: 1 as const, project, ...snapshot };
-    },
-    onEvent: (event) => {
-      const analyticsEvent: AnalyticsEvent = {
-        eventId: randomUUID(),
-        seq: seqCounter.next("agent-map-mcp"),
-        ts: new Date().toISOString(),
-        userId: identity?.userId ?? null,
-        tenantId: identity?.tenantId ?? null,
-        machineId,
-        harnessSessionId: "agent-map-mcp",
-        agentSessionId: null,
-        harness: "claude-code",
-        type: "agent_map.mcp_tool",
-        payload: {
-          tool: event.tool,
-          outcome: event.outcome,
-          latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
-          ...(event.errorCode ? { error_code: event.errorCode } : {}),
-        },
-      };
-      void eventStore.append(analyticsEvent).catch(() => {});
-      batcher.enqueue(analyticsEvent);
     },
   });
   const isWorkflowScanComplete = async (
@@ -2929,61 +2801,6 @@ export const startServer = async (
     });
   };
 
-  const initializationProject = async (projectId: string) => {
-    const implementations = await readProjectImplementations(implementationOptions, projectId);
-    if (!implementations) return null;
-    const { roots, inventory } = implementations;
-    const agents = inventory.candidates.map(({ agentId, path, name }) => ({ agentId, path, name }));
-    const available = options.availableHarnesses ?? Object.keys(adapters);
-    const recent = sessionManager.list().filter((session) => session.agentMapIdentity.projectId === projectId &&
-      available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
-      .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
-    const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
-    return { userId: projectPrincipal, available: roots.length > 0,
-      discoveryComplete: inventory.discoveryComplete, agents, provider: available.includes(preferred) ? preferred : null };
-  };
-  agentMapInitialization = new AgentMapInitializationCoordinator({
-    store: agentMapWorkspaceStore, proposals: agentMapProposalService, project: initializationProject,
-    infer: ({ projectId, attemptId, provider, prompt, signal }) => taskManager.runStructuredInference({
-      projectId, attemptId, harness: provider, prompt, signal, schema: INITIAL_MAP_OUTPUT_SCHEMA,
-    }),
-    onChange: (status) => {
-      bus.publish({ type: "agent-map.initialization.changed", status });
-      const sessionId = `agent-map-${status.projectId}`;
-      const event: AnalyticsEvent = { eventId: randomUUID(), seq: seqCounter.next(sessionId), ts: new Date().toISOString(),
-        userId: identity?.userId ?? null, tenantId: identity?.tenantId ?? null, machineId,
-        harnessSessionId: sessionId, agentSessionId: null, harness: "claude-code", type: "agent_map.initialization",
-        payload: { project_id: status.projectId, status: status.status, error_code: status.errorCode } };
-      void eventStore.append(event).catch(() => {}); batcher.enqueue(event);
-    },
-  });
-  let initializationSchedule: Promise<void> | null = null;
-  let initializationDiscovery: Promise<void> | null = null;
-  let initializationReschedule = false;
-  const scheduleExistingMaps = (): Promise<void> => {
-    if (initializationSchedule) { initializationReschedule = true; return initializationSchedule; }
-    if (!coordinatorActive) return Promise.resolve();
-    const operation = (async () => {
-      do {
-        initializationReschedule = false;
-        for (const project of await studioProjectCatalog.list()) {
-          if (!coordinatorActive) break;
-          await agentMapInitialization!.schedule(project.projectId).catch(() => {
-            // Invalid/unreadable workspaces remain map-load errors, never missing-map jobs.
-          });
-        }
-      } while (coordinatorActive && initializationReschedule);
-    })();
-    initializationSchedule = operation;
-    const settled = () => {
-      initializationSchedule = null;
-      // A discovery notification can arrive between the loop's last condition
-      // and this promise callback. Keep that final notification too.
-      if (coordinatorActive && initializationReschedule) void scheduleExistingMaps().catch(() => {});
-    };
-    void operation.then(settled, settled);
-    return operation;
-  };
   /**
    * OPENING A FOLDER MINTS ITS PROJECT AND STOPS (flow-creation.md §4.1 step
    * 3, §4.5). The catalog is reconciled so the durable Studio project exists
@@ -3134,16 +2951,30 @@ export const startServer = async (
   );
   app.use(
     "/api",
-    createAgentMapRouter({
-      implementations: implementationBindings,
+    createStudioProjectsRouter({
       catalog: studioProjectCatalog,
-      initialization: agentMapInitialization,
-      store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
       currentUserId: () => projectPrincipal,
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
+    }),
+  );
+  app.use(
+    "/api",
+    createProjectMapRouter({
+      resolveProject: async (projectId) => {
+        const project = await studioProjectCatalog.resolveIdentity(projectId);
+        if (!project) return null;
+        const scopes = await studioWorkspaceScopeCatalog.list();
+        const roots = project.rootBindings
+          .filter((binding) => binding.status === "active" &&
+            scopes.some((scope) => samePath(scope.cwd, binding.localRootRef)))
+          .map((binding) => binding.localRootRef);
+        return { projectId: project.projectId, displayName: project.displayName, roots };
+      },
+      platform: () => platformForKey(apiKeyProvider.getKey(), resolveCoreBaseUrl()),
+      onRootRead: watchProjectMapRoot,
     }),
   );
   app.use(
@@ -3672,10 +3503,6 @@ export const startServer = async (
     }),
   );
 
-  // Capability-authenticated MCP is independent of browser boot-token auth.
-  // Keep it before static/SPA fallback so POST/GET/DELETE remain protocol routes.
-  app.use(agentMapMcp.router);
-
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
   });
@@ -3738,9 +3565,6 @@ export const startServer = async (
       await settle(() => sessionManager.beginShutdown());
       const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
-      scheduleMapInitializations = null;
-      await agentMapInitialization?.close();
-      await initializationSchedule?.catch(() => {});
       coordinatorEpoch += 1;
       clearInterval(sessionSweepTimer);
       clearInterval(ndjsonRetentionTimer);
@@ -3751,6 +3575,7 @@ export const startServer = async (
       await settle(() => canvasWatcher.stopAll());
       await settle(() => workspaceWatcher.stopAll());
       await settle(() => createdAgentWatcher.stopAll());
+      stopProjectMapWatches();
       await settle(() => installWatcher.stopAll());
       for (const tailer of codexTailers.values()) {
         await settle(() => tailer.stop());
@@ -3777,7 +3602,7 @@ export const startServer = async (
       // indefinitely if a store or transport never settles. Timing out this
       // wait leaves the existing writes intact; it never reopens admission.
       const drainsSettled = (async () => {
-        await settle(() => initializationDiscovery ?? Promise.resolve());
+        await settle(() => restoredScopeDiscovery ?? Promise.resolve());
         await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
@@ -3786,7 +3611,6 @@ export const startServer = async (
             await Promise.all([...pendingRecordArchives]);
           }
         });
-        await settle(() => agentMapMcp?.close());
         await settle(() => batcher.close());
       })();
       const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
@@ -3849,14 +3673,13 @@ export const startServer = async (
     const address = httpServer.address();
     actualPort =
       typeof address === "object" && address ? address.port : options.port;
-    agentMapMcpUrl = `http://${host}:${actualPort}/mcp/agent-map`;
     void assistantAccess.refresh();
     // Covers the ephemeral `port: 0` case where only the bound address is real.
     portDetector.addExcludedPort(actualPort);
     await options.startupTestHooks?.afterListen?.(actualPort);
 
     // Discovery owns scheduling; browser navigation only observes status. Resume queued work after listen.
-    initializationDiscovery = initialWorkflowScan.then(async () => {
+    restoredScopeDiscovery = initialWorkflowScan.then(async () => {
       if (!coordinatorActive) return;
       // Discovery completeness belongs to an exact root. Desktop's launchDir
       // scan cannot certify projects elsewhere (or even its own child roots).
@@ -3869,10 +3692,6 @@ export const startServer = async (
             // Incomplete/unavailable scopes remain ineligible; never infer absence.
           });
         }
-      }
-      if (coordinatorActive) {
-        scheduleMapInitializations = scheduleExistingMaps;
-        await scheduleExistingMaps();
       }
     }).catch(() => {});
 

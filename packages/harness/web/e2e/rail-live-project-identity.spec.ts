@@ -70,7 +70,7 @@ const rowIn = (page: Page, project: string, id: string) =>
 
 test.beforeEach(async ({ page }) => {
   await page.goto(
-    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present",
   );
   await expect(page.getByTestId(`workspace-group-${PARENT}`)).toBeVisible();
 });

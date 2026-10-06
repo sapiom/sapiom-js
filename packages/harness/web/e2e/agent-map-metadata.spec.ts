@@ -5,7 +5,7 @@ for (const theme of ["light", "dark"] as const) {
     page,
   }) => {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present",
     );
     await expect(page.getByTestId("session-context")).toBeVisible();
     await page.getByTestId("project-select-acme-app").click();

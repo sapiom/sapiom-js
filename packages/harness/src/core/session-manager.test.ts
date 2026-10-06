@@ -130,7 +130,6 @@ describe("SessionManager", () => {
       resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
       migrateAgentMapIdentity?: SessionManagerOptions["migrateAgentMapIdentity"];
       prepareProjectSession?: SessionManagerOptions["prepareProjectSession"];
-      onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
       onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
       onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
@@ -176,7 +175,6 @@ describe("SessionManager", () => {
         opts.migrateAgentMapIdentity ??
         (async (sessionId) => ({ projectId: "project-test", userId: "user-test", sessionId })),
       prepareProjectSession: opts.prepareProjectSession,
-      onAgentMapSessionExit: opts.onAgentMapSessionExit,
       onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
       onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
       writeWorkspaceContext: opts.writeWorkspaceContext,
@@ -2871,10 +2869,8 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => {
         throw new ProjectSessionScopeUnavailableError(sessionId);
       });
-    const onAgentMapSessionExit = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
 
     await expect(
@@ -2891,7 +2887,6 @@ describe("SessionManager", () => {
         userId: "user-1",
       },
     });
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
   });
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {
@@ -4261,11 +4256,9 @@ describe("SessionManager", () => {
       if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
       return { projectId: "project-1", userId: "user-1", sessionId };
     });
-    const onAgentMapSessionExit = vi.fn();
     const { manager, adapter } = makeManager({
       loadSpawnPty,
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
 
     const creating = manager.create({
@@ -4286,7 +4279,6 @@ describe("SessionManager", () => {
     expect(manager.list()).toEqual([
       expect.objectContaining({ status: "exited" }),
     ]);
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
   });
 
   it("rejects a create whose MCP credential changes after config generation but before PTY admission", async () => {
@@ -4593,11 +4585,9 @@ describe("SessionManager", () => {
       if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
       return { projectId: "project-1", userId: "user-1", sessionId };
     });
-    const onAgentMapSessionExit = vi.fn();
     const { manager, adapter } = makeManager({
       loadSpawnPty,
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
@@ -4628,7 +4618,6 @@ describe("SessionManager", () => {
         sessionId: session.id,
       },
     });
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
   });
 
 
@@ -5239,16 +5228,11 @@ describe("SessionManager", () => {
     "releases project launch authority when create setup fails in $stage",
     async (stage) => {
       const setupError = new Error(`setup failed in ${stage}`);
-      const cleanupError = new Error("cleanup also failed");
-      let claimedSessionId = "";
-      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
-        claimedSessionId = sessionId;
-        return {
-          projectId: "project-1",
-          userId: "user-1",
-          sessionId,
-        };
-      });
+      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }));
       const prepareProjectSession = vi.fn(async () => {
         if (stage === "prepareProjectSession") throw setupError;
         return {};
@@ -5268,15 +5252,11 @@ describe("SessionManager", () => {
           };
         }),
       });
-      const onAgentMapSessionExit = vi.fn(async () => {
-        throw cleanupError;
-      });
       const { manager, spawns } = makeManager({
         adapter,
         resolveAgentMapIdentity,
         prepareProjectSession,
         buildLaunchOpts,
-        onAgentMapSessionExit,
       });
 
       await expect(
@@ -5291,8 +5271,6 @@ describe("SessionManager", () => {
         ),
       ).rejects.toBe(setupError);
 
-      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-      expect(onAgentMapSessionExit).toHaveBeenCalledWith(claimedSessionId);
       expect(manager.list()).toEqual([]);
       expect(spawns).toEqual([]);
     },
@@ -5323,9 +5301,6 @@ describe("SessionManager", () => {
         }
         return {};
       });
-      const onAgentMapSessionExit = vi.fn(async () => {
-        throw new Error("cleanup also failed");
-      });
       const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
         projectId: "project-1",
         userId: "user-1",
@@ -5334,7 +5309,6 @@ describe("SessionManager", () => {
       const { manager, spawns } = makeManager({
         adapter,
         buildLaunchOpts,
-        onAgentMapSessionExit,
         resolveAgentMapIdentity,
       });
       const session = await manager.create({
@@ -5344,15 +5318,12 @@ describe("SessionManager", () => {
       await manager.setAgentSessionId(session.id, "provider-session");
       spawns[0]!.emitExit(0);
       await vi.waitFor(() => {
-        expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+        expect(manager.get(session.id)?.status).toBe("exited");
       });
-      onAgentMapSessionExit.mockClear();
       const beforeResume = structuredClone(manager.get(session.id));
 
       await expect(manager.resume(session.id)).rejects.toBe(setupError);
 
-      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-      expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
       // Preparation now enters the starting lifetime, so its failure clears
       // the old exit result while retaining identity and last real activity.
       expect(manager.get(session.id)).toEqual({
@@ -5365,9 +5336,8 @@ describe("SessionManager", () => {
   );
 
 
-  it("derives one neutral project identity for create/resume and revokes it on exit", async () => {
+  it("derives one neutral project identity for create/resume", async () => {
     const buildLaunchOpts = vi.fn(async () => ({}));
-    const onAgentMapSessionExit = vi.fn();
     const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
       projectId: "project-1",
       userId: "user-1",
@@ -5376,7 +5346,6 @@ describe("SessionManager", () => {
     const { manager, spawns } = makeManager({
       buildLaunchOpts,
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
@@ -5395,7 +5364,6 @@ describe("SessionManager", () => {
     await manager.setAgentSessionId(session.id, "agent-uuid-map");
     spawns[0]?.emitExit(0);
     await manager.flush();
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
     await manager.resume(session.id);
     expect(buildLaunchOpts).toHaveBeenLastCalledWith(
       session.id,

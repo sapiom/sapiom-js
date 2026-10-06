@@ -1,6 +1,3 @@
-import type { AgentMapImplementationsResponse } from "@sapiom/agent-map";
-import { parseAgentMapImplementations } from "./agent-map-deployment";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
  * section of ../../../src/shared/types.ts). Gated at this layer: with
@@ -44,10 +41,6 @@ import {
   type WorkspaceScopeSummary,
 } from "@shared/workspace-scope";
 import type {
-  AcceptedProposalDelta,
-  AgentMapWorkspaceResponse,
-  MapOperation,
-  PlanNodeId,
   PutStudioCurrentWorkspaceRequest,
   StudioCurrentWorkspaceResponse,
   StudioProjectId,
@@ -58,15 +51,10 @@ import type {
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
-import {
-  parseAgentMapNodeTarget,
-  type AgentMapNodeTarget,
-} from "./agent-map-navigation";
 import { refuseAgentName } from "@shared/agent-name";
-import {
-  parseAgentMapWorkspaceResponse,
-  parseStudioCurrentWorkspaceResponse,
-} from "./agent-map";
+import { parseStudioCurrentWorkspaceResponse } from "./agent-map";
+import { mockProjectMap } from "./mock-project-map";
+import type { MapRef, ProjectMapResponse } from "./project-map";
 import { refuseMove, remapUnder } from "./agent-move";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
@@ -366,17 +354,8 @@ export interface HarnessApi {
    */
   authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
-  /** Durable, path-free empty/proposal/revision pointers for one Studio project. */
-  getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
-  retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
-  getAgentMapWorkspace(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapWorkspaceResponse>;
-  getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse>;
-  getAgentMapNodeImplementation(
-    projectId: StudioProjectId,
-    nodeId: PlanNodeId,
-  ): Promise<AgentMapNodeTarget>;
+  /** The project's map, computed from its code by `sapiom_dev_map`; `ref` draws a git ref. */
+  getProjectMap(projectId: StudioProjectId, ref: MapRef): Promise<ProjectMapResponse>;
   getStudioCurrentWorkspace(
     projectId: StudioProjectId,
   ): Promise<StudioCurrentWorkspaceResponse>;
@@ -623,36 +602,11 @@ class RealApi implements HarnessApi {
     return this.request<AppState>("/api/state");
   }
 
-  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization`), projectId);
-  }
-  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization/retry`, { method: "POST" }), projectId);
-  }
-
-  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
-    return parseAgentMapImplementations(await this.request<unknown>(
-      `/api/projects/${encodeURIComponent(projectId)}/agent-map/implementations`,
-    ), projectId);
-  }
-
-  async getAgentMapNodeImplementation(
-    projectId: StudioProjectId,
-    nodeId: PlanNodeId,
-  ): Promise<AgentMapNodeTarget> {
-    const value = await this.request<unknown>(
-      `/api/projects/${encodeURIComponent(projectId)}/agent-map/nodes/${encodeURIComponent(nodeId)}/implementation`,
+  getProjectMap(projectId: StudioProjectId, ref: MapRef): Promise<ProjectMapResponse> {
+    const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+    return this.request<ProjectMapResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/map${query}`,
     );
-    return parseAgentMapNodeTarget(value, projectId, nodeId);
-  }
-
-  async getAgentMapWorkspace(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapWorkspaceResponse> {
-    const value = await this.request<unknown>(
-      `/api/projects/${encodeURIComponent(projectId)}/agent-map/workspace`,
-    );
-    return parseAgentMapWorkspaceResponse(value, projectId);
   }
 
   async getStudioCurrentWorkspace(
@@ -1448,158 +1402,6 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
   ].join("");
 }
 
-function goldenAgentMapFixture(
-  project: StudioProjectSummary,
-  acceptedAt: string,
-  userId: string,
-  sessionId: string,
-): { snapshot: AgentMapWorkspaceResponse; delta: AcceptedProposalDelta } {
-  const proposalId = "proposal_00000000-0000-7000-8000-000000000101";
-  const ids = {
-    research: "node_00000000-0000-7000-8000-000000000101",
-    marketing: "node_00000000-0000-7000-8000-000000000102",
-    database: "node_00000000-0000-7000-8000-000000000103",
-    tiktok: "node_00000000-0000-7000-8000-000000000104",
-    report: "node_00000000-0000-7000-8000-000000000105",
-    editor: "node_00000000-0000-7000-8000-000000000106",
-  } as const;
-  const nodes = [
-    {
-      id: ids.research,
-      kind: "agent",
-      name: "Stock Research",
-      purpose: "Research public-market signals and produce sourced findings.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchRequest", "ResearchReport"],
-    },
-    {
-      id: ids.marketing,
-      kind: "agent",
-      name: "Marketing",
-      purpose: "Turn approved findings into audience-ready campaigns.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchReport", "CampaignBrief"],
-    },
-    {
-      id: ids.database,
-      kind: "resource",
-      name: "Research Database",
-      purpose: "Persist sources, observations, and approved reports.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchRecord"],
-    },
-    {
-      id: ids.tiktok,
-      kind: "connector",
-      name: "TikTok",
-      purpose: "Publish approved short-form campaign content.",
-      ownerAgentId: null,
-      contractRefs: ["TikTokPublishRequest"],
-    },
-    {
-      id: ids.report,
-      kind: "artifact",
-      name: "ResearchReport",
-      purpose:
-        "Carry sourced findings from research into review and marketing.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchReport"],
-    },
-    {
-      id: ids.editor,
-      kind: "subagent",
-      name: "News Editor",
-      purpose: "Check source quality and tighten the report narrative.",
-      ownerAgentId: ids.research,
-      contractRefs: ["EditorialReview"],
-    },
-  ];
-  const relationships = [
-    ["invokes", ids.research, ids.editor, "synchronous", "EditorialReview"],
-    ["feeds", ids.report, ids.marketing, "asynchronous", "ResearchReport"],
-    ["reads", ids.marketing, ids.report, "synchronous", "ResearchReport"],
-    ["writes", ids.research, ids.report, "synchronous", "ResearchReport"],
-    ["uses", ids.research, ids.database, "synchronous", "ResearchRecord"],
-    [
-      "uses",
-      ids.marketing,
-      ids.tiktok,
-      "human-triggered",
-      "TikTokPublishRequest",
-    ],
-    ["triggers", ids.report, ids.marketing, "asynchronous", "CampaignBrief"],
-    ["writes", ids.editor, ids.report, "synchronous", "EditorialReview"],
-  ].map(([kind, fromNodeId, toNodeId, executionMode, contractRef], index) => ({
-    id: `rel_00000000-0000-7000-8000-${String(index + 201).padStart(12, "0")}`,
-    fromNodeId,
-    toNodeId,
-    kind,
-    executionMode,
-    contractRef,
-    description: `${kind} through the declared contract.`,
-  }));
-  const operations = [
-    ...nodes.map((node) => ({ kind: "add-node", node })),
-    ...relationships.map((relationship) => ({
-      kind: "add-relationship",
-      relationship,
-    })),
-  ] as unknown as MapOperation[];
-  const operationIds = operations.map(
-    (_, index) =>
-      `operation_00000000-0000-7000-8000-${String(index + 301).padStart(12, "0")}`,
-  ) as AcceptedProposalDelta["operationIds"];
-  const actor = {
-    userId,
-    sessionId,
-  };
-  const delta: AcceptedProposalDelta = {
-    schemaVersion: 1,
-    projectId: project.projectId,
-    proposalId: proposalId as AcceptedProposalDelta["proposalId"],
-    fromVersion: 0,
-    version: 1,
-    operationIds,
-    operations,
-    actor,
-    acceptedAt,
-  };
-  const snapshot = {
-    schemaVersion: 1,
-    project,
-    workspace: {
-      projectId: project.projectId,
-      schemaVersion: 1,
-      recordVersion: 2,
-      confirmedRevisionId: null,
-      activeProposalId: proposalId,
-      projectBuildPlanId: null,
-      createdAt: project.createdAt,
-      updatedAt: acceptedAt,
-    },
-    proposal: {
-      schemaVersion: 1,
-      id: proposalId,
-      projectId: project.projectId,
-      baseRevisionId: null,
-      version: 1,
-      nodes,
-      relationships,
-      history: operations.map((operation, index) => ({
-        id: operationIds[index],
-        requestId: "golden-stock-research",
-        acceptedVersion: 1,
-        operation,
-        actor,
-        acceptedAt,
-      })),
-      createdAt: acceptedAt,
-      updatedAt: acceptedAt,
-    },
-  } as unknown as AgentMapWorkspaceResponse;
-  return { snapshot, delta };
-}
-
 export class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
@@ -1615,11 +1417,6 @@ export class MockApi implements HarnessApi {
   private studioPreferences = new Map<
     StudioProjectId,
     StudioWorkspaceSelection
-  >();
-  private agentMapTargets = new Map<string, AgentMapNodeTarget>();
-  private agentMapSnapshots = new Map<
-    StudioProjectId,
-    AgentMapWorkspaceResponse
   >();
   async startAuth(): Promise<AuthStartResponse> {
     // Record the call for Playwright assertions (same pattern as runMacro/deploy).
@@ -2031,148 +1828,43 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    const mode = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("mockMapInitialization");
-    if (mode === "error") throw new ApiError(503, "Agent Map storage is unavailable", "Agent Map storage is unavailable");
-    return { projectId, status: mode === "running" || mode === "queued" || mode === "failed" || mode === "completed" ? mode : "idle",
-      errorCode: mode === "failed" ? "provider_failed" : null, retryable: mode === "failed" };
-  }
-  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    return { projectId, status: "queued", errorCode: null, retryable: false };
-  }
-
-  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
-    const snapshot = this.agentMapSnapshots.get(projectId);
-    return { projectId, mapVersionId: null, bindings: (snapshot?.proposal?.nodes ?? [])
-      .filter((node) => node.kind === "agent" || node.kind === "subagent")
-      .map((node) => {
-        const target = this.agentMapTargets.get(`${projectId}:${node.id}`);
-        return { nodeId: node.id, agentId: target?.agentId ?? null, revision: 0,
-          resolution: target ? "bound" : "unbound" };
-      }),
-    };
-  }
-
-  async getAgentMapNodeImplementation(
-    projectId: StudioProjectId,
-    nodeId: PlanNodeId,
-  ): Promise<AgentMapNodeTarget> {
-    await delay();
-    const target = this.agentMapTargets.get(`${projectId}:${nodeId}`);
-    if (!target)
-      throw new ApiError(
-        404,
-        "No implementation is linked yet.",
-        undefined,
-        "unbound",
-      );
-    return parseAgentMapNodeTarget(target, projectId, nodeId);
-  }
-
-  async getAgentMapWorkspace(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapWorkspaceResponse> {
-    const query =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search);
-    const failure = query?.get("mockAgentMapWorkspace") ?? null;
+  async getProjectMap(projectId: StudioProjectId, ref: MapRef): Promise<ProjectMapResponse> {
+    const params =
+      typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
+    const failure = params?.get("mockProjectMap") ?? null;
     const project = this.studioProjects()?.find(
       (candidate) => candidate.projectId === projectId,
     );
-    const goldenFixtureEnabled = query?.get("mockAgentMapGolden") === "1";
-    let seededGoldenFixture = false;
-    if (
-      failure === null &&
-      project &&
-      goldenFixtureEnabled &&
-      !this.agentMapSnapshots.has(projectId)
-    ) {
-      const fixture = goldenAgentMapFixture(
-        project,
-        new Date().toISOString(),
-        "user_mock",
-        "planner_mock",
-      );
-      this.agentMapSnapshots.set(projectId, fixture.snapshot);
-      this.studioWorkflows()
-        .filter((workflow) =>
-          workflow.studioBindings?.some(
-            (binding) => binding.projectId === projectId,
-          ),
-        )
-        .slice(0, 2)
-        .forEach((workflow, index) => {
-          const nodeId = fixture.snapshot.proposal!.nodes.filter(
-            (node) => node.kind === "agent",
-          )[index].id;
-          const agentId = workflow.studioBindings!.find(
-            (binding) => binding.projectId === projectId,
-          )!.agentId;
-          this.agentMapTargets.set(`${projectId}:${nodeId}`, {
-            projectId,
-            nodeId,
-            agentId,
-            workflowPath: workflow.path,
-          });
-        });
-      seededGoldenFixture = true;
-      // Publish before the delayed GET settles so the golden journey covers the
-      // cold-open queue/replay path. Durable recovery already has the same
-      // fixture staged if delivery fails or the client reconnects.
-      setTimeout(() => {
-        void import("./events").then(({ publishMockBusMessage }) => {
-          publishMockBusMessage({
-            type: "agent-map.proposal.changed",
-            delta: fixture.delta,
-          });
-        });
-      }, 0);
-    }
+    const scope = this.workspaceScopes().find((candidate) => candidate.projectId === projectId);
     await delay();
-    if (failure === "error") {
-      throw new ApiError(
-        503,
-        "Agent Map storage is unavailable",
-        "Agent Map storage is unavailable",
-      );
+    if (failure === "error")
+      throw new ApiError(500, "The map could not be computed", "The map could not be computed", "map_failed");
+    if (failure === "gone")
+      throw new ApiError(409, "The project folder no longer exists", "The project folder no longer exists", "project_unavailable");
+    if (failure === "missing" || !project || !scope)
+      throw new ApiError(404, "Studio project not found", "Studio project not found", "project_not_found");
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = win.__HARNESS_TEST__ ?? {};
+      const calls = (win.__HARNESS_TEST__.projectMapCalls as unknown[] | undefined) ?? [];
+      win.__HARNESS_TEST__.projectMapCalls = [...calls, { projectId, ref }];
     }
-    if (failure === "unauthorized") {
-      throw new ApiError(
-        403,
-        "Studio project is not available",
-        "Studio project is not available",
-      );
-    }
-    if (failure === "missing" || !project) {
-      throw new ApiError(
-        404,
-        "Studio project not found",
-        "Studio project not found",
-      );
-    }
-    const stored = this.agentMapSnapshots.get(projectId);
-    if (stored && !seededGoldenFixture) {
-      return parseAgentMapWorkspaceResponse(stored, projectId);
-    }
-    return parseAgentMapWorkspaceResponse(
-      {
-        schemaVersion: 1,
-        project,
-        workspace: {
-          projectId,
-          schemaVersion: 1,
-          recordVersion: 1,
-          confirmedRevisionId: null,
-          activeProposalId: null,
-          projectBuildPlanId: null,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt,
-        },
-        proposal: null,
-      },
+    const value = mockProjectMap({
       projectId,
-    );
+      displayName: project.displayName,
+      root: scope.cwd,
+      workflows: this.studioWorkflows(),
+      ref,
+      params,
+    });
+    if (value === "empty")
+      return {
+        projectId,
+        displayName: project.displayName,
+        map: { root: scope.cwd, systems: [], agents: [], edges: [], unresolved: [], platform: "skipped", labels: "unavailable" },
+        git: null,
+      };
+    return value;
   }
 
   async getStudioCurrentWorkspace(
@@ -2742,6 +2434,13 @@ export class MockApi implements HarnessApi {
 
   async connectWorkflow(path: string): Promise<WorkflowInfo> {
     await delay(250);
+    // `?mockConnectRefuse=<folder name>`: the server finds no agent there.
+    const refused =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("mockConnectRefuse");
+    if (refused && path.split("/").filter(Boolean).pop() === refused)
+      throw new ApiError(422, "No agent found at that path", "No agent found at that path");
     const info: WorkflowInfo = {
       name: path.split("/").filter(Boolean).pop() ?? path,
       path,

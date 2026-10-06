@@ -213,15 +213,15 @@
     "id": "agent-map-pane-icon-identifier",
     "path": "packages/harness/web/src/components/AgentMapPane.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 3,
-    "reason": "The design-system Workflow icon identifier remains private in the Agent Map loading, generating, and empty states."
+    "occurrences": 2,
+    "reason": "The design-system Workflow icon identifier remains private in the Agent Map loading and empty states."
   },
   {
     "id": "agent-map-canvas-icon-identifier",
     "path": "packages/harness/web/src/components/AgentMapCanvas.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 2,
-    "reason": "The design-system Workflow icon identifier remains private for subagent nodes and the loading state in the Agent Map."
+    "occurrences": 1,
+    "reason": "The design-system Workflow icon identifier remains private for the loading state in the Agent Map."
   },
   {
     "id": "canvas-pane-icon-identifier",
@@ -488,30 +488,6 @@
     "pattern": "^/api/workflows/:id/app-link$",
     "occurrences": 1,
     "reason": "Studio localhost API route, beside the existing /api/workflows/:id/secrets and /api/workflows/:id/deploy family."
-  },
-  {
-    "id": "legacy-proposal-actor-decoder",
-    "rule": "unified-agent-model",
-    "path": "packages/agent-map/src/shared/agent-map-legacy-migration.ts",
-    "pattern": "map-planner|agent-builder",
-    "occurrences": 2,
-    "reason": "Read-only E2 proposal-history decoder; live writes use ProjectAgentActorRef and the migration module is reachability-tested."
-  },
-  {
-    "id": "legacy-proposal-actor-decoder-tests",
-    "rule": "unified-agent-model",
-    "path": "packages/harness/src/shared/agent-map-legacy-migration.test.ts",
-    "pattern": "map-planner|agent-builder",
-    "occurrences": 2,
-    "reason": "Exact fixtures prove both retired E2 actor shapes migrate and cannot reach live proposal services."
-  },
-  {
-    "id": "legacy-agent-map-aggregate-fixture",
-    "rule": "unified-agent-model",
-    "path": "packages/harness/src/core/agent-map-aggregate-migration.test.ts",
-    "pattern": "map-planner|agent-builder",
-    "occurrences": 2,
-    "reason": "Migration fixture proves deployed E2 history becomes role-neutral without data loss."
   },
   {
     "id": "legacy-session-migration-fixtures",

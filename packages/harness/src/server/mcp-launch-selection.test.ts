@@ -124,23 +124,16 @@ async function fixture(
 }
 
 it.each<HarnessKind>(["claude-code", "codex"])(
-  "carries the qualified command and rotates context on %s resume",
+  "carries the qualified command on %s create and resume, with no map server",
   async (kind) => {
     const f = await fixture(kind);
     const first = await f.config();
     const dev = first.mcpServers["sapiom-dev"];
     expect({ command: dev.command, args: dev.args }).toEqual(f.command);
-    const bootstrap = JSON.parse(dev.env[STUDIO_HOST_CONTEXT_ENV]);
-    expect(bootstrap.expectedMcp).toEqual(descriptor);
-    expect(bootstrap.bearerToken).toBe(f.launches[0]!.agentMapMcp!.bearerToken);
-    const request = (token: string) =>
-      fetch(bootstrap.contextUrl, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-    expect((await request(bootstrap.bearerToken)).status).toBe(200);
-    expect(first.mcpServers["agent-map"]).toBeDefined();
+    expect(dev.env?.[STUDIO_HOST_CONTEXT_ENV]).toBeUndefined();
+    expect(first.mcpServers["agent-map"]).toBeUndefined();
     expect(await readFile(f.launches[0]!.systemPromptFile!, "utf8")).toContain(
-      "agent_map_read",
+      "sapiom_dev_map",
     );
     await server!.sessionManager.setAgentSessionId(
       f.session.id,
@@ -149,18 +142,12 @@ it.each<HarnessKind>(["claude-code", "codex"])(
     await server!.sessionManager.kill(f.session.id);
     await server!.sessionManager.resume(f.session.id);
     expect(f.prepare).toHaveBeenCalledTimes(2);
-    const resumed = JSON.parse(
-      (await f.config()).mcpServers["sapiom-dev"].env[STUDIO_HOST_CONTEXT_ENV],
-    );
-    expect(resumed.bearerToken).not.toBe(bootstrap.bearerToken);
-    expect((await request(bootstrap.bearerToken)).status).toBe(401);
-    expect(await (await request(resumed.bearerToken)).json()).toMatchObject({
-      generation: 2,
-    });
+    const resumed = (await f.config()).mcpServers["sapiom-dev"];
+    expect({ command: resumed.command, args: resumed.args }).toEqual(f.command);
   },
 );
 
-it("requalifies rollback at resume and retains the private map configuration", async () => {
+it("requalifies rollback at resume", async () => {
   const f = await fixture();
   await server!.sessionManager.setAgentSessionId(
     f.session.id,
@@ -178,7 +165,7 @@ it("requalifies rollback at resume and retains the private map configuration", a
   expect(
     config.mcpServers["sapiom-dev"].env[STUDIO_HOST_CONTEXT_ENV],
   ).toBeUndefined();
-  expect(config.mcpServers["agent-map"]).toBeDefined();
+  expect(config.mcpServers["agent-map"]).toBeUndefined();
 });
 
 it("keeps CLI's latest fallback unqualified when its dependency is old or unbuilt", async () => {
@@ -192,7 +179,7 @@ it("keeps CLI's latest fallback unqualified when its dependency is old or unbuil
     "-y",
     "@sapiom/mcp@latest",
   ]);
-  expect(config.mcpServers["agent-map"]).toBeDefined();
+  expect(config.mcpServers["agent-map"]).toBeUndefined();
   expect(
     config.mcpServers["sapiom-dev"].env[STUDIO_HOST_CONTEXT_ENV],
   ).toBeUndefined();
@@ -214,10 +201,10 @@ it.each(["missing", "rejected"])("falls back from the desktop command when prefl
   expect(
     config.mcpServers["sapiom-dev"].env[STUDIO_HOST_CONTEXT_ENV],
   ).toBeUndefined();
-  expect(config.mcpServers["agent-map"]).toBeDefined();
+  expect(config.mcpServers["agent-map"]).toBeUndefined();
   expect(
     await readFile(f.launches.at(-1)!.systemPromptFile!, "utf8"),
-  ).toContain("agent_map_read");
+  ).toContain("sapiom_dev_map");
 });
 
 it("retains a fresh project's scope through preflight when cwd is a filesystem alias", async () => {
@@ -303,9 +290,7 @@ it.each(
     expect((await state.json()).workspaceScopes).toEqual(
       expect.arrayContaining([expect.objectContaining({ projectId })]),
     );
-    const map = await request(
-      `/projects/${projectId}/agent-map/implementations`,
-    );
+    const map = await request(`/projects/${projectId}/map`);
     expect(map.status).toBe(200);
     const session = await manager.create({
       cwd: healthyCwd,

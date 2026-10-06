@@ -218,29 +218,6 @@ describe("Codex per-session MCP configuration", () => {
     expect(serverArg(resumed, "sapiom")).toBe(serverArg(launched, "sapiom"));
   });
 
-  it("uses a newly issued Agent Map capability over the copy in the generated file", async () => {
-    await writeConfig({
-      "agent-map": {
-        type: "http",
-        url: "http://127.0.0.1:1/mcp",
-        headers: { Authorization: "Bearer old-token" },
-      },
-    });
-    const spec = adapter.launch({
-      ...options(),
-      agentMapMcp: {
-        url: "http://127.0.0.1:2/mcp",
-        bearerToken: "fresh-token",
-      },
-    });
-    expect(
-      spec.args.filter((arg) => arg.startsWith("mcp_servers.agent-map-")),
-    ).toHaveLength(1);
-    expect(spec.args.join(" ")).toContain('"url" = "http://127.0.0.1:2/mcp"');
-    expect(spec.args.join(" ")).not.toMatch(/old-token|fresh-token/);
-    expect(spec.env).toEqual({ SAPIOM_AGENT_MAP_CAPABILITY: "fresh-token" });
-  });
-
   it("escapes Windows paths, quotes, newlines, and TOML control characters", async () => {
     await writeConfig({
       "sapiom-dev": {
