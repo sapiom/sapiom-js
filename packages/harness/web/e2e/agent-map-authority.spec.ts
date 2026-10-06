@@ -109,7 +109,7 @@ MockApi.prototype.listWorkflows = function() {
   });
   try {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present",
     );
     expect(setupErrors, "Authority fixture setup failed").toEqual([]);
     await expect(page.getByTestId("session-context")).toBeVisible();
@@ -353,15 +353,27 @@ test("an older failed catalog response cannot replace a newer successful retry",
   expect(await evidence(page)).toEqual(before);
 });
 
-test("durable map ignores old graph events and opens the exact agent's panel without touching sessions", async ({
+test("durable map ignores old graph events, re-reads only itself on a map change, and opens the exact agent's card without touching sessions", async ({
   page,
 }) => {
   await open(page);
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
   const before = await evidence(page);
-  const eventsBefore = await page.evaluate(() => {
+  const counts = () =>
+    page.evaluate(() => {
+      const probe = (window as TestWindow).__authority;
+      return [probe.states, probe.workflows];
+    });
+  const mapReads = () =>
+    page.evaluate(
+      () =>
+        ((window as TestWindow).__HARNESS_TEST__.projectMapCalls as unknown[] | undefined)
+          ?.length ?? 0,
+    );
+  const countsBefore = await counts();
+  const readsBefore = await mapReads();
+  await page.evaluate(() => {
     const win = window as TestWindow;
-    const counts = [win.__authority.states, win.__authority.workflows];
     for (const workspaceKey of [
       "workspace-mock-1",
       "workspace-mock-2",
@@ -374,19 +386,30 @@ test("durable map ignores old graph events and opens the exact agent's panel wit
         state: "ready",
       });
     }
-    return counts;
   });
-  expect(
-    await page.evaluate(() => {
-      const probe = (window as TestWindow).__authority;
-      return [probe.states, probe.workflows];
-    }),
-  ).toEqual(eventsBefore);
+  // The retired message is dropped: no map read, no catalog or agent re-read.
+  // A fixed wait is the only way to observe that nothing happens, and it
+  // outlasts the 250 ms map debounce.
+  await page.waitForTimeout(600);
+  expect(await counts()).toEqual(countsBefore);
+  expect(await mapReads()).toBe(readsBefore);
 
-  const id = "node_00000000-0000-7000-8000-000000000101";
-  await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000103").click();
+  // The current message re-reads the map and nothing else.
+  const projectId = await page
+    .getByTestId("agent-map-live")
+    .getAttribute("data-project-id");
+  await page.evaluate((id) => {
+    (window as TestWindow).__HARNESS_TEST__.publish({
+      type: "project-map.changed",
+      projectId: id,
+    });
+  }, projectId);
+  await expect.poll(mapReads).toBe(readsBefore + 1);
+  expect(await counts()).toEqual(countsBefore);
+
+  await page.getByTestId("agent-map-node-screening").click();
   expect(await evidence(page)).toEqual(before);
-  await page.getByTestId(`agent-map-node-${id}`).click();
+  await page.getByTestId("agent-map-node-leasing").click();
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
   await expect(page.getByTestId("map-card-open-agent")).toBeVisible();
   await expect(page.getByTestId("agent-map-frame")).toBeVisible();

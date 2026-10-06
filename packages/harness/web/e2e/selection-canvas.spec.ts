@@ -40,7 +40,9 @@ async function closeModal(page: Page): Promise<void> {
 
 /** Another agent on the map that is already showing: pick, Open agent. */
 async function openFromMap(page: Page, agent: string): Promise<void> {
-  await page.getByTestId(`map-agent-${agent}`).click();
+  // Dispatched, not aimed: the previous pick's floating card rests over the
+  // board's bottom-right and, with eight agents packed, can cover this node.
+  await page.getByTestId(`agent-map-node-${agent}`).dispatchEvent("click");
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", agent);
   await page.getByTestId("map-card-open-agent").click();
   await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", agent);

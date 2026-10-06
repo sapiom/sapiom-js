@@ -92,33 +92,36 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       ? "&mockRestoredSessions=1"
       : "";
     await page.goto(
-      `/?seed=0&mockFixtures=deep&mockStudioProjects=present${sibling}${restored}`,
+      `/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockConnectRefuse=screening${sibling}${restored}`,
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("a scaffolded sibling is an agent of its creating project and opening it keeps the same conversation", async ({
+  test("a scaffolded sibling never becomes a project of its own, and opening its creator's map keeps the same conversation", async ({
     page,
   }) => {
-    // Its folder is outside acme-app, but its server binding is acme-app's: it
-    // is on acme-app's map and never becomes a project of its own.
+    // Its folder is outside acme-app, so the map tool, which reads the
+    // project's folder, does not draw it; it must not become a project row.
     await expect(page.getByTestId("rail-project-report-reviewer")).toHaveCount(0);
     const before = await navigationEvidence(page);
     expect(before.selectedSession).toBe("sess-boot");
     await openProjectMap(page, "acme-app");
-    await page.getByTestId("map-agent-report-reviewer").click();
+    await expect(page.getByTestId("agent-map-live")).toBeVisible();
+    await expect(page.getByTestId("agent-map-node-report-reviewer")).toHaveCount(0);
+    await page.getByTestId("agent-map-node-leasing").click();
     await expect(page.getByTestId("map-card")).toHaveAttribute(
       "data-subject",
-      "report-reviewer",
+      "leasing",
     );
     expect(await navigationEvidence(page)).toEqual(before);
     await page.reload();
     await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("rail-project-report-reviewer")).toHaveCount(0);
     await openProjectMap(page, "acme-app");
-    await page.getByTestId("map-agent-report-reviewer").click();
+    await page.getByTestId("agent-map-node-leasing").click();
     await expect(page.getByTestId("map-card")).toHaveAttribute(
       "data-subject",
-      "report-reviewer",
+      "leasing",
     );
     expect(await navigationEvidence(page)).toEqual(before);
   });
@@ -146,11 +149,11 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       });
 
       await openProjectMap(page, "acme-app");
-      await page.getByTestId("map-agent-report-reviewer").click();
+      await page.getByTestId("agent-map-node-leasing").click();
       await expect(page.getByTestId("map-card")).toHaveAttribute(
-      "data-subject",
-      "report-reviewer",
-    );
+        "data-subject",
+        "leasing",
+      );
       expect(await navigationEvidence(page)).toEqual(before);
 
       // The exact conversation comes back with the session, not with the map.
@@ -161,7 +164,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       );
       await expect(page.getByTestId("dead-session-detail")).toContainText(harness);
       await openProjectMap(page, "acme-app");
-      await page.getByTestId("map-agent-report-reviewer").click();
+      await page.getByTestId("agent-map-node-leasing").click();
       await expect(page.locator(".harness-terminal .xterm")).toHaveCount(0);
       expect(await navigationEvidence(page)).toEqual(before);
     });
@@ -275,7 +278,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     page,
   }) => {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+      "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
@@ -354,63 +357,44 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
   });
 
-  test("renders E2 structured state and applies attributed deltas without resetting the viewport", async ({
+  test("draws acme-app's computed map and re-reads on a change without resetting the viewport", async ({
     page,
   }) => {
-    await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
-    );
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openProjectMap(page, "dashboard-keeper");
+    await openProjectMap(page, "acme-app");
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
 
-    const nodes = page.locator(".agent-map-node");
-    await expect(nodes).toHaveCount(6);
-    for (const kind of [
-      "agent",
-      "subagent",
-      "resource",
-      "connector",
-      "artifact",
-    ]) {
-      await expect(
-        page.locator(`[data-node-kind='${kind}']`).first(),
-      ).toBeVisible();
-    }
-    await expect(
-      page.getByText("Stock Research", { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText("Marketing", { exact: true })).toBeVisible();
-    await expect(
-      page.getByText("Research Database", { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText("TikTok", { exact: true })).toBeVisible();
-    await expect(
-      page.getByText("ResearchReport", { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByText("News Editor", { exact: true })).toBeVisible();
+    const nodes = page.locator('button[data-testid^="agent-map-node-"]');
+    await expect(nodes).toHaveCount(4);
+    for (const slug of ["leasing", "screening", "applicant-notifier", "rent-reminder"])
+      await expect(page.getByTestId(`agent-map-node-${slug}`)).toBeVisible();
+    await expect(page.locator("[data-node-kind='agent']")).toHaveCount(4);
     await expect(
       page.getByTestId("agent-map-live").getByText(/capability/i),
     ).toHaveCount(0);
 
-    const researchReport = page.getByRole("button", {
-      name: "ResearchReport, artifact",
-    });
-    // A non-agent pick is a selection only (no inspector, flow §5); Escape
-    // clears it and leaves focus where it was.
-    await researchReport.click();
-    await expect(researchReport).toHaveAttribute("aria-pressed", "true");
+    const screening = page.getByTestId("agent-map-node-screening");
+    // An agent Studio cannot open is a selection only; Escape clears it and
+    // leaves focus where it was.
+    await screening.click();
+    await expect(screening).toHaveAttribute("aria-pressed", "true");
     await page.keyboard.press("Escape");
-    await expect(researchReport).toHaveAttribute("aria-pressed", "false");
-    await expect(researchReport).toBeFocused();
+    await expect(screening).toHaveAttribute("aria-pressed", "false");
+    await expect(screening).toBeFocused();
 
     await page.getByRole("button", { name: "Zoom in" }).click();
     const mapSubject = page.getByTestId("agent-map-subject");
     const transformedView = await mapSubject.evaluate(
       (element) => (element as HTMLElement).style.transform,
     );
+    const calls = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __HARNESS_TEST__: { projectMapCalls?: unknown[] } })
+            .__HARNESS_TEST__.projectMapCalls?.length ?? 0,
+      );
+    const before = await calls();
 
     const projectId = await page
       .getByTestId("agent-map-live")
@@ -422,33 +406,10 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
           __HARNESS_TEST__?: { publish?: (message: unknown) => void };
         }
       ).__HARNESS_TEST__?.publish;
-      publish?.({
-        type: "agent-map.proposal.changed",
-        delta: {
-          schemaVersion: 1,
-          projectId: activeProjectId,
-          proposalId: "proposal_00000000-0000-7000-8000-000000000101",
-          fromVersion: 1,
-          version: 2,
-          operationIds: ["operation_00000000-0000-7000-8000-000000000401"],
-          operations: [
-            {
-              kind: "update-node",
-              nodeId: "node_00000000-0000-7000-8000-000000000102",
-              changes: { name: "Campaign Marketing" },
-            },
-          ],
-          actor: {
-            userId: "user_mock",
-            sessionId: "builder_mock",
-          },
-          acceptedAt: new Date().toISOString(),
-        },
-      });
+      publish?.({ type: "project-map.changed", projectId: activeProjectId });
     }, projectId);
-    await expect(
-      page.getByText("Campaign Marketing", { exact: true }),
-    ).toBeVisible();
+    await expect.poll(calls).toBe(before + 1);
+    await expect(page.getByTestId("project-map-refresh")).toBeEnabled();
     await expect
       .poll(() =>
         mapSubject.evaluate(
@@ -456,7 +417,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
         ),
       )
       .toBe(transformedView);
-    await expect(nodes).toHaveCount(6);
+    await expect(nodes).toHaveCount(4);
   });
 
   test("Plan Agents and every sibling are ordinary exact-session rail rows", async ({
@@ -611,7 +572,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     page,
   }) => {
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapWorkspace=error",
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockProjectMap=error",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     const before = await navigationEvidence(page);
@@ -620,7 +581,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     expect(await navigationEvidence(page)).toEqual(before);
 
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapWorkspace=unauthorized",
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockProjectMap=missing",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openProjectMap(page, "acme-app");

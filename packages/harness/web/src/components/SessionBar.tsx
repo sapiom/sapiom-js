@@ -1,3 +1,4 @@
+import { ProjectMapControls, type ProjectMapHeaderControls } from "./ProjectMapControls";
 import { AssistantActivity } from "./AssistantActivity";
 import type { AssistantProjection } from "../lib/assistant-state";
 import { useEffect, useRef, useState } from "react";
@@ -77,6 +78,8 @@ export interface ProjectViewHeader {
   onNewAgent: () => void;
   /** The project's App Links, deployed and local (flow 4.7.3). */
   appLinks: ProjectAppLinkSources;
+  /** The map's ref selector and refresh, while the map is drawn (D70 to D75). */
+  map?: ProjectMapHeaderControls | null;
 }
 
 /**
@@ -160,6 +163,7 @@ export function SessionBar({
                 Agent Map
               </span>
             </div>
+            {projectView.map && <ProjectMapControls controls={projectView.map} />}
             <ProjectAppLinks sources={projectView.appLinks} />
           </>
         ) : overviewMode ? (

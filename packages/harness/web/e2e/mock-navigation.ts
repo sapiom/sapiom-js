@@ -25,9 +25,9 @@ export async function openProjectMap(page: Page, label: string): Promise<void> {
 
 /**
  * An agent picked on its project's map: the floating card names it
- * (flow-map-chat-overlay.md 4.2). The default mock ships no drawn map, so the
- * project's agents are cards (`map-agent-<name>`); a drawn map's node picks
- * the same way.
+ * (flow-map-chat-overlay.md 4.2). A durable project draws its computed map
+ * (`agent-map-node-<slug>`); any other shows its agents as cards
+ * (`map-agent-<name>`). Both pick the same way.
  */
 export async function openAgentPanel(
   page: Page,
@@ -35,7 +35,10 @@ export async function openAgentPanel(
   agent: string,
 ): Promise<void> {
   await openProjectMap(page, project);
-  await page.getByTestId(`map-agent-${agent}`).click();
+  await page
+    .getByTestId(`map-agent-${agent}`)
+    .or(page.getByTestId(`agent-map-node-${agent}`))
+    .click();
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", agent);
 }
 

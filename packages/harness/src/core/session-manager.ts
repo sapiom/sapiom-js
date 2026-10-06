@@ -371,8 +371,6 @@ export type LaunchOptsBuilder = (
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: ProjectAgentSession;
-    /** Server-composed secret launch metadata, never accepted from REST. */
-    agentMapMcp?: { url: string; bearerToken: string };
     resume?: boolean;
   },
 ) => LaunchOptsBuildResult | Promise<LaunchOptsBuildResult>;
@@ -449,8 +447,6 @@ export interface SessionManagerOptions {
     session: HarnessSession,
     runtimeEpoch: string | null,
   ) => Promise<void> | void;
-  /** Revokes launch capabilities/transports after every exit path. */
-  onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
   now?: () => string;
   generateId?: () => string;
   /** Test seam for deterministic registry persistence failures. Production
@@ -1000,7 +996,6 @@ export class SessionManager {
   private readonly migrateAgentMapIdentity: SessionManagerOptions["migrateAgentMapIdentity"];
   private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
   private readonly rejectedProjectSessionMetadata = new Set<string>();
-  private readonly onAgentMapSessionExit: SessionManagerOptions["onAgentMapSessionExit"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -1063,7 +1058,6 @@ export class SessionManager {
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
     this.migrateAgentMapIdentity = options.migrateAgentMapIdentity;
     this.prepareProjectSession = options.prepareProjectSession;
-    this.onAgentMapSessionExit = options.onAgentMapSessionExit;
     this.onProjectAgentIdentityMigration =
       options.onProjectAgentIdentityMigration;
     this.onRuntimeEpochTransition = options.onRuntimeEpochTransition;
@@ -2951,13 +2945,6 @@ export class SessionManager {
     } = {},
   ): Promise<void> {
     this.revokeIngestToken(session.id);
-    try {
-      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(
-        () => {},
-      );
-    } catch {
-      // Capability cleanup never delays durable session reconciliation.
-    }
     session.status = "exited";
     session.mcpAuthState = "not-applicable";
     session.exitCode = exitCode;
@@ -3236,43 +3223,27 @@ export class SessionManager {
       // when shutdown closed admission. Refuse it before issuing
       // capabilities or writing generated session state.
       if (this.closing) throw new SessionManagerClosingError();
-      let preparedProjectSession:
-        | Awaited<
-            ReturnType<
-              NonNullable<SessionManagerOptions["prepareProjectSession"]>
-            >
-          >
-        | undefined;
-      let opts: LaunchOpts;
-      let spec: SpawnSpec;
-      let mcpCredentialLaunch: McpCredentialLaunch | undefined;
-      try {
-        preparedProjectSession = this.prepareProjectSession
-          ? await this.prepareProjectSession(agentMapIdentity, req)
-          : undefined;
-        this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
-        const promptAppendix = trusted.promptAppendix?.(id);
-        const sessionStartSystemMessage =
-          trusted.sessionStartSystemMessage?.(id);
-        const built = await this.buildLaunchOpts(id, req, {
-          ...(promptAppendix ? { promptAppendix } : {}),
-          ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
-          agentMapIdentity,
-        });
-        ({ mcpCredentialLaunch, ...opts } = {
-          harnessSessionId: id,
-          cwd: req.cwd,
-          ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
-          ...built,
-        });
-        spec = adapter.launch(opts);
-      } catch (error) {
-        // Launch preparation may already have issued a capability. Revoke it
-        // for every setup failure, including prompt composition/config writes,
-        // while preserving the original actionable error.
-        await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-        throw error;
-      }
+      const preparedProjectSession = this.prepareProjectSession
+        ? await this.prepareProjectSession(agentMapIdentity, req)
+        : undefined;
+      this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
+      const promptAppendix = trusted.promptAppendix?.(id);
+      const sessionStartSystemMessage =
+        trusted.sessionStartSystemMessage?.(id);
+      const built = await this.buildLaunchOpts(id, req, {
+        ...(promptAppendix ? { promptAppendix } : {}),
+        ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
+        agentMapIdentity,
+      });
+      const { mcpCredentialLaunch, ...opts }: LaunchOpts & {
+        mcpCredentialLaunch?: McpCredentialLaunch;
+      } = {
+        harnessSessionId: id,
+        cwd: req.cwd,
+        ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
+        ...built,
+      };
+      const spec = adapter.launch(opts);
       const session: HarnessSession = {
         id,
         agentSessionId: null,

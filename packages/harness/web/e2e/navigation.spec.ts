@@ -297,7 +297,7 @@ test("a project with no agents opens the new-agent screen from its header (D36)"
 test("a drawn map's header has New agent and no full-view button", async ({
   page,
 }) => {
-  await page.goto("/?seed=0&mockStudioProjects=present&mockAgentMapGolden=1");
+  await page.goto("/?seed=0&mockStudioProjects=present");
   await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
   await expect(page.getByTestId("project-map-new-agent")).toBeVisible();

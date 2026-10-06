@@ -31,8 +31,8 @@ Session tabs and retained-session rows show independent Assistant activity. Hove
   its sessions. Click a project to open its map. How that discovery is rooted
   and bounded, how a newly-created agent gets registered, and how a stale entry
   leaves: [docs/agent-discovery.md](docs/agent-discovery.md).
-- **Project view** — the project's Agent Map, a floating card for the picked
-  node, a per-project map chat, the project's App Links in its header, and an
+- **Project view** — the project's Agent Map, computed from its code, a floating
+  card for the picked agent, a per-project map chat, the project's App Links in its header, and an
   agent modal with the agent's Canvas, Runs, Secrets, Run and Deploy. See
   [The project view](#the-project-view).
 - **Zero config mutation** — everything is injected per-session via flags;
@@ -44,11 +44,11 @@ Click a project on the rail. The centre shows its Agent Map at full width. A
 card floats over the map's bottom-right corner; it never changes the map's
 width.
 
-| You pick                          | The card shows                                                                                                                                                                                                   |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Nothing (the project)             | One composer, **Ask about this project**                                                                                                                                                                         |
-| An agent                          | One row: the agent's name, **Deployed** or **Draft**, **Open agent** (↗ icon), and **Open in Finder** (folder icon; Windows: **Show in Explorer**; Linux: **Open folder**). Below it, **Ask about &lt;name&gt;** |
-| A resource, connector or artifact | The same row without the two buttons, and the composer                                                                                                                                                           |
+| You pick                                   | The card shows                                                                                                                                                                                                   |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nothing (the project)                      | One composer, **Ask about this project**                                                                                                                                                                         |
+| An agent                                   | One row: the agent's name, **Deployed** or **Draft**, **Open agent** (↗ icon), and **Open in Finder** (folder icon; Windows: **Show in Explorer**; Linux: **Open folder**). Below it, **Ask about &lt;name&gt;** |
+| An agent Studio's agent list does not hold | The same row without the two buttons, and the composer                                                                                                                                                           |
 
 Escape or a click on the empty map returns the card to the project. Double-click
 an agent node to open it, the same as **Open agent**.
@@ -59,8 +59,9 @@ app it goes through the app's bridge; in a browser it calls
 
 ### App Links in the project header
 
-After the project name and **Agent Map**, the header lists the project's App
-Links:
+After the project name and **Agent Map**, the header carries the map's ref
+selector (in a git project) and refresh ([Agent Map](#agent-map)), then lists
+the project's App Links:
 
 - each linked agent's published App Link, labelled with the agent's name;
 - each dev server a live session of this project started, as
@@ -344,8 +345,8 @@ The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
 accounts clears this evidence. Retained indicators do not enable cloud runs.
 
-Codex receives the generated remote Sapiom, local `sapiom-dev`, and optional
-Agent Map MCP configuration on every session launch and resume. Studio uses session-specific
+Codex receives the generated remote Sapiom and local `sapiom-dev` MCP
+configuration on every session launch and resume. Studio uses session-specific
 server names such as `sapiom-dev-<session suffix>` and identifies them in the
 agent's instructions. This keeps existing Codex MCP registrations intact and
 avoids inheriting old credentials or conflicting transports from a server with
@@ -427,13 +428,12 @@ launch flag while preserving unrelated user shell settings.
 
 Every session whose working directory resolves to a Studio project is an
 ordinary writable coding session with the same server-derived
-`{ projectId, sessionId }` identity, project-agent prompt appendix, and Agent
-Map tools. Its persisted `userId` field is attribution only (`local:<machineId>`
+`{ projectId, sessionId }` identity and the project-agent prompt appendix. Its persisted `userId` field is attribution only (`local:<machineId>`
 for new identities, or the account at creation) and is never compared with the
 signed-in account. Session metadata is context only and cannot change the
 prompt profile, tools, filesystem policy, or implementation authority.
 
-Clicking a project name opens its durable Agent Map without creating, resuming,
+Clicking a project name opens its Agent Map without creating, resuming,
 focusing, or prompting a session. Every tab represents one real session ID and
 opens that session's ordinary conversation; agent detail is in the
 [agent modal](#agent-modal), not beside the session. Sessions
@@ -488,8 +488,7 @@ and attachment uploads each allow 30 requests per minute in independent
 buckets.
 
 The browser/host token gates `/api` routes and is never injected into a coding
-agent PTY. Each PTY instead receives session-bound ingest and Agent Map
-capabilities. Project scope is re-derived from trusted server state before every
+agent PTY. Each PTY instead receives session-bound ingest capabilities. Project scope is re-derived from trusted server state before every
 launch or resume; capabilities rotate on resume, revoke on exit, expire when
 inactive, and fail closed outside their project. Signing in or out does not
 revoke a session's capabilities. Disconnecting an account only restarts
@@ -498,9 +497,9 @@ conversation are preserved.
 
 ### Project contract helpers
 
-`@sapiom/harness` exports immutable map record types, exact-version references,
-strict codecs and canonical digest helpers for offline validation. These data
-contracts do not require a live session or an active MCP tool.
+`@sapiom/harness` exports the project map's types (`AgentMap`, `MapSystem`,
+`MapAgent`, `MapEdge`, `ProjectMapResponse`). The stored map's record types,
+codecs, digest helpers and version references are removed with the stored map.
 
 For offline prompt composition, `PROJECT_AGENT_PROMPT_APPENDIX` and
 `projectAgentPromptAppendix()` provide the common Studio project guidance. These
@@ -513,123 +512,49 @@ removed, along with their MCP tools.
 
 ### Existing projects after an update
 
-Desktop and CLI startup reset only files with outer `storageSchemaVersion: 1`.
-The reset deletes that project's `workspace.json` under its normal write lock and
-journals completion; agent source, project identity, sessions, and history remain.
-Format 2 is never reset. A separate compatibility pass recognizes four exact
-historical wrapped-format-2 container shapes, only at their initial revision with
-identical creation/update timestamps, null map/plan pointers, and every proposal,
-receipt, brief, assignment, approval, consent, and history collection empty.
-Under the project lock it durably saves the original bytes to
-`workspace.empty-wrapped-v2.<sha256>.backup.json`, then atomically converts that
-unused container into current format 2. Shared startup and late reads use the same
-conversion, including initialization eligibility reads. A current-format-2 file
-is never rewritten by this pass. Authored or uncertain older wrappers retain
-their storage error and require separate data-preserving compatibility handling.
+The stored Agent Map is removed. Studio no longer reads
+`<state-root>/agent-map/projects/` (each project's `workspace.json`,
+`initialization.json` and `legacy-reset.json`); those folders can be deleted.
+Project identity (`studio-projects.json`) and the current-workspace preference
+are unchanged.
 
-Once discovery completes, projects with agents and no authored map receive one
-background structured inference pass. Valid unused format-2 containers qualify;
-any current map, map version, or accepted operation history prevents automatic
-initialization, even if a user emptied the graph. Generation uses static contract
-evidence, two concurrent tasks at most, and a three-minute timeout. Queued work
-resumes on restart; failed or interrupted work requires **Retry generation**.
-The final write rechecks ownership, project access, and absence under the map lock.
-A coding session that creates a map first wins; automatic output is discarded.
-Static inspection excludes dependency, build, and Studio metadata directories,
-including symlinks at those ignored boundaries. Other source links remain opaque
-and prevent generation from proceeding with incomplete evidence.
+### Agent Map
 
-The pass uses the project's latest available coding provider, otherwise the host
-default, and its configured default model. Authentication/execution failures do
-not switch providers. Claude exposes only its JSON formatter, with coding tools,
-hooks, MCP servers, and optional user authentication helpers disabled. Native
-OAuth or API-key authentication is retained; helper-only logins cannot initialize
-maps in the background. Codex uses an
-ephemeral app-server thread with no code environment and an isolated provider
-configuration; its login snapshot cannot rotate the native refresh token. Native
-file authentication and Mac's direct keychain are supported; unavailable or
-unsupported credential stores fail without changing the user's authentication.
-These restrictions remove the model's project-write capabilities; native CLIs
-still run as the user and remain subject to administrator-managed authentication.
-No background session tab, provisional inventory graph, or raw inference task is
-published to the browser. Relationships need contract evidence; disconnected
-agents remain visible in a compact component layout. Selection survives topology
-updates; the view follows updates until the user pans or zooms, and **Fit** resumes it.
+The map is computed from the project's code by `sapiom_dev_map` in
+`@sapiom/mcp`, the same tool a coding agent can call; nothing about agents or
+edges is stored. `GET /api/projects/:projectId/map` (optionally `?ref=`) runs the
+tool's scan in process for the project's folder and returns its output with the
+folder's git refs ([`docs/agent-map-api.md`](docs/agent-map-api.md)). While a
+map is open, Studio watches the folder and the map reads again after a change.
 
-`GET /api/projects/:projectId/agent-map/initialization` returns bounded lifecycle
-state. The authenticated `POST .../initialization/retry` repeats eligibility checks.
-`agent-map.initialization.changed` announces status only; prompts, source paths,
-credentials, and raw model output are never included.
-While generation is active, the selected project also polls its durable status
-so completion by another Studio process is visible without reloading the page.
+- **Systems** are agents joined by code-proven launches, events, signals and
+  timers, drawn as containers with a name and agent count. Agents in no system
+  stand alone. ELK arranges each system (layered) and packs the systems and
+  loose agents together (rectpacking); a read with no structural change reuses
+  the positions, so nothing moves.
+- **Agents** show **Deployed** or **Draft** (from the signed-in account, else the
+  agent's `sapiom.json` `definitionId`; no badge when unknown), a dot when the
+  agent changed since the drawn ref (at Working copy, since `HEAD`), and the
+  resources it shares with another agent as chips.
+- **Edges** are only the calls the code proves. Hover one for its kind and the
+  file and line that prove it.
+- The project bar carries a **ref selector** in a git project (Working copy,
+  `HEAD`, branches; the choice is the project's and survives leaving it) and a
+  **refresh**.
+- Click an agent to show it in the [project card](#the-project-view); **Open
+  agent** or a double-click opens the [agent modal](#agent-modal); **Open in
+  Finder** opens its folder. An agent folder Studio's agent list does not hold is
+  named on the card without those actions, and the map header says why.
 
-### Agent Map layout
-
-Agent Maps use the **Vertical ELK** layout in both the CLI host and desktop.
-ELK 0.12.0 runs in a bundled local worker and arranges the saved nodes and
-relationships; it does not change the map, its history, or the inference pass.
-Disconnected components pack to the available pane; Fit restores automatic
-framing after a manual pan or zoom. Per-agent Canvas views keep their own layout.
-
-Vertical replaces the previous project map layout for everyone. Existing maps
-open directly, including maps with an older layout preference. Only agents
-without a map use the normal initialization path.
-
-If arrangement fails, **Retry layout** tries again without modifying the saved
-map. Opening a map loads the bundled worker (about 1.6 MB raw / 467 kB gzip).
-
-### Agent Map implementation links
-
-Agent Map nodes resolve to exact same-project Studio implementations. Existing
-generated maps inherit uniquely proven initialization links. Missing or ambiguous
-implementations remain unresolved, preserving the planned node and map history.
-
-The boot-token-protected `GET /api/projects/:projectId/agent-map/implementations`
-returns a path-free projection. `GET .../nodes/:nodeId/implementation` resolves
-the current exact local target for navigation. Both are uncached reads and do
-not start sessions, scans or another model pass.
-
-Click an agent or subagent node to show it in the [project card](#the-project-view);
-**Open agent** or a double-click opens its linked agent in the agent modal. Other
-node kinds are only selected. Unlinked, missing or ambiguous implementations keep
-the map open and say why in the map header.
-
-Agent and subagent nodes show **Draft** until a ready hosted build is confirmed,
-then **Deployed**, including while idle or after local edits. Badges share the
-rail's deployment evidence. Unavailable lookups offer **Retry status** to check
-again without reloading the map. Other node kinds have no deployment badge.
-
-### Agent Map MCP
-
-Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for
-the coding-agent processes it launches. `POST` initializes and calls the
-protocol; `GET` and `DELETE` support the protocol's live stream and session
-shutdown. This route is separate from the browser-token-protected `/api`
-surface. It requires a Studio-issued bearer capability scoped to one trusted
-project/session identity; callers cannot supply or change that identity.
-
-Studio injects the capability privately at process launch. Successful use
-renews its inactivity lease, while session exit, resume rotation, and server
-shutdown revoke it. Consumers should not copy, persist, log, or reuse the
-capability outside the launched session.
-
-Every trusted project session receives the same three project-wide tools:
-
-- `agent_map_read` reads the current confirmed workspace and shared proposal.
-- `agent_map_validate` validates one complete operation batch without mutating
-  shared state or allocating permanent IDs.
-- `agent_map_propose` atomically and idempotently applies one validated batch
-  to the shared Proposed map.
-The map uses an append-only immutable history with optimistic concurrency.
-Proposal state never determines whether a session may use these tools or write
-code.
+Opening a map loads the bundled ELK worker (about 1.6 MB raw / 467 kB gzip). If
+arrangement fails, **Retry layout** tries again.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 
 - [`docs/agent-canvas-graph.md`](docs/agent-canvas-graph.md) — the session-free
   `GET /api/workflows/:path/graph` Canvas route keyed by an agent's path.
-- [`docs/agent-map-api.md`](docs/agent-map-api.md) — durable project identity,
-  map/node navigation, recovery and the removed project graph endpoints.
+- [`docs/agent-map-api.md`](docs/agent-map-api.md) — the project map route, its
+  reload event, and the removed stored-map routes and tools.
 
 ## Testing
 

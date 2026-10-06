@@ -8,7 +8,7 @@ for (const query of ["", "&mapLayout=classic", "&mapLayout=elk"]) {
       localStorage.setItem("sapiom-agent-map-layout", "classic");
     });
     await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1" +
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present" +
         query,
     );
     for (let visit = 0; visit < 2; visit++) {

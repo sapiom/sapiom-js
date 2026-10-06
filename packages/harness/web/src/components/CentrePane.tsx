@@ -1,6 +1,6 @@
 import type { JSX, ReactNode } from "react";
 
-import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
+import type { ProjectMapEntry } from "../lib/use-project-map";
 import { EmptyState } from "./EmptyState";
 
 /**
@@ -29,56 +29,31 @@ export function ProjectView({
   );
 }
 
-const drawsAnAgent = (value: {
-  proposal?: { nodes: readonly { kind: string }[] } | null;
-}): boolean =>
-  (value.proposal?.nodes ?? []).some(
-    (node) => node.kind === "agent" || node.kind === "subagent",
-  );
-
-/** What the project view draws: the map pane, or the agents as cards with a
- *  word on where the map is. */
-export type ProjectMapMode =
-  | { kind: "map" }
-  | { kind: "cards"; map: "not-drawn" | "generating" | "failed" };
+/** What the project view draws: the map pane, or the agents as cards. */
+export type ProjectMapMode = { kind: "map" } | { kind: "cards" };
 
 /**
  * Whether the project view shows the MAP PANE or the agent CARDS.
  *
- * Cards stand in for any map that is not drawn: a project with no durable
- * Studio project behind it (an older server, the mock's default fixtures), a
- * map still being generated, one whose generation failed, or one that came
- * back with nothing in it. The agent panel then works on every project, not
- * only on the ones whose map exists (design.md §3, mock `ProjectAgentGrid`);
- * without the cards, a failed generation would leave a project's agents
- * unreachable. The cards carry the generation state and its Retry.
+ * Cards stand in for a map that cannot be drawn: a project with no durable
+ * Studio project behind it (an older server, the mock's default fixtures), or
+ * a working copy whose map came back with no agent while the agent list has
+ * some. Without the cards those agents would be unreachable.
  *
- * The map pane keeps the states that are about the map's STORAGE, each with
- * its own recovery: loading, a read error with Reload map, and a durable
- * project that is gone or foreign.
+ * The map pane keeps everything else, each state with its own recovery:
+ * loading, a read error with Reload map, a project that is gone, and a git
+ * ref with no agents (the header's ref selector must stay to leave it).
  */
 export function projectMapMode(input: {
-  state: AgentMapWorkspacePaneState;
-  unavailable: string | null;
+  entry: ProjectMapEntry;
   /** The server issued a durable Studio project for this scope. */
   durable: boolean;
-  initialization: { status: string } | null | undefined;
 }): ProjectMapMode {
-  // A drawn map is the map, whatever the catalog says about the project, but
-  // only once it draws an AGENT: a map of resources alone has nothing to
-  // click, and cards hidden behind it would leave every agent unreachable
-  // (flow 4.3.3: the project view shows its agents).
-  if (input.state.status === "ready" && drawsAnAgent(input.state.value))
-    return { kind: "map" };
-  if (!input.durable) return { kind: "cards", map: "not-drawn" };
-  if (input.unavailable || input.state.status !== "ready") return { kind: "map" };
-  if ((input.state.value.proposal?.nodes.length ?? 0) > 0)
-    return { kind: "cards", map: "not-drawn" };
-  const generation = input.initialization?.status;
-  if (generation === "queued" || generation === "running")
-    return { kind: "cards", map: "generating" };
-  if (generation === "failed") return { kind: "cards", map: "failed" };
-  return { kind: "cards", map: "not-drawn" };
+  const { state, mapRef } = input.entry;
+  if (state.status === "ready" && state.value.map.agents.length > 0) return { kind: "map" };
+  if (!input.durable) return { kind: "cards" };
+  if (state.status !== "ready" || mapRef !== null) return { kind: "map" };
+  return { kind: "cards" };
 }
 
 /**

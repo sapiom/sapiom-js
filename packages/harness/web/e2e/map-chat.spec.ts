@@ -24,14 +24,13 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { serveMapChat, type FakeMapChat } from "./map-chat-fixture";
 
 const GOLDEN =
-  "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1";
-const nodeId = (n: number) =>
-  `node_00000000-0000-7000-8000-${String(n).padStart(12, "0")}`;
-/** The golden map's nodes: an agent (resolves to `leasing`), another agent,
- *  and a resource. */
-const STOCK_RESEARCH = 101;
-const MARKETING = 102;
-const RESEARCH_DB = 103;
+  "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockConnectRefuse=screening";
+/** acme-app's computed map: `leasing` is the one registry agent; the others
+ *  are added to Studio's agent list on first pick, except `screening`, which
+ *  the mock refuses (`mockConnectRefuse`), so its card offers no verbs. */
+const STOCK_RESEARCH = "leasing";
+const MARKETING = "applicant-notifier";
+const RESEARCH_DB = "screening";
 
 let chat: FakeMapChat;
 
@@ -60,8 +59,8 @@ const chatInput = (page: Page): Locator =>
   page.getByTestId("map-chat-overlay").getByTestId("chat-input");
 const questions = (page: Page): Locator =>
   page.getByTestId("map-chat-overlay").locator(".map-chat-question");
-const node = (page: Page, n: number): Locator =>
-  page.getByTestId(`agent-map-node-${nodeId(n)}`);
+const node = (page: Page, slug: string): Locator =>
+  page.getByTestId(`agent-map-node-${slug}`);
 
 /** The board's own box: the thing that would shrink if a panel took width. */
 async function boardBox(page: Page) {
@@ -80,8 +79,8 @@ const railRows = (page: Page): Promise<string[]> =>
       ),
     );
 
-async function pick(page: Page, n: number, subject: string): Promise<void> {
-  await node(page, n).click();
+async function pick(page: Page, slug: string, subject: string): Promise<void> {
+  await node(page, slug).click();
   await expect(card(page)).toHaveAttribute("data-subject", subject);
 }
 
@@ -133,7 +132,7 @@ test("the board's width never changes: at rest, a pick, another pick, the map ch
   await expect(card(page)).toHaveAttribute("data-state", "node");
   expect(await boardBox(page)).toEqual(atRest);
 
-  await pick(page, RESEARCH_DB, "Research Database");
+  await pick(page, RESEARCH_DB, "screening");
   expect(await boardBox(page)).toEqual(atRest);
 
   await ask(page, "What reads from it?");
@@ -144,7 +143,7 @@ test("the board's width never changes: at rest, a pick, another pick, the map ch
   expect(await boardBox(page)).toEqual(atRest);
 });
 
-test("the node card is one header row with Open agent and Open in Finder; a resource has neither", async ({ page }) => {
+test("the node card is one header row with Open agent and Open in Finder; an agent Studio cannot open has neither", async ({ page }) => {
   await expect(cardInput(page)).toHaveAttribute("placeholder", "Ask about this project");
 
   await pick(page, STOCK_RESEARCH, "leasing");
@@ -176,17 +175,19 @@ test("the node card is one header row with Open agent and Open in Finder; a reso
   await reveal.click();
   await expect(page.getByTestId("toast")).toHaveCount(0);
 
-  // An agent node whose folder is not on this machine: the row names it,
-  // with nothing to open or reveal, and the map says why.
-  await pick(page, MARKETING, "Marketing");
-  await expect(card(page)).toHaveAttribute("data-kind", "agent");
-  await expect(page.getByTestId("map-card-open-agent")).toHaveCount(0);
-  await expect(page.getByTestId("agent-map-open-error")).toBeVisible();
+  // An agent the agent list does not hold yet: Studio adds its folder on the
+  // pick, so the row opens it like any other.
+  await pick(page, MARKETING, "applicant-notifier");
+  await expect(page.getByTestId("map-card-open-agent")).toBeVisible();
+  await expect(page.getByTestId("agent-map-open-error")).toHaveCount(0);
 
-  await pick(page, RESEARCH_DB, "Research Database");
-  await expect(card(page)).toHaveAttribute("data-kind", "resource");
-  await expect(page.getByTestId("map-card-state")).toHaveText("resource");
-  await expect(cardInput(page)).toHaveAttribute("placeholder", "Ask about Research Database");
+  // One Studio cannot add (`mockConnectRefuse=screening`): the row names it,
+  // with nothing to open or reveal, and the map says why.
+  await pick(page, RESEARCH_DB, "screening");
+  await expect(page.getByTestId("agent-map-open-error")).toBeVisible();
+  await expect(card(page)).toHaveAttribute("data-kind", "agent");
+  await expect(page.getByTestId("map-card-state")).toHaveText("agent");
+  await expect(cardInput(page)).toHaveAttribute("placeholder", "Ask about screening");
   await expect(page.getByTestId("map-card-open-agent")).toHaveCount(0);
   await expect(page.getByTestId("map-card-reveal")).toHaveCount(0);
 
@@ -218,12 +219,12 @@ test("the map chat is not a session: nothing joins the rail, and every Enter ext
   await expect(page.getByTestId("map-chat-overlay")).toContainText("Answer: What does it check?");
 
   // A pick mid-chat moves the chip for the next message; same conversation.
-  await pick(page, RESEARCH_DB, "Research Database");
-  await expect(chatInput(page)).toHaveAttribute("placeholder", "Ask about Research Database");
+  await pick(page, RESEARCH_DB, "screening");
+  await expect(chatInput(page)).toHaveAttribute("placeholder", "Ask about screening");
   await ask(page, "Who writes to it?");
   await expect(questions(page).getByTestId("chat-context-chip")).toHaveText([
     "Asking about leasing · agent",
-    "Asking about Research Database · resource",
+    "Asking about screening · agent",
   ]);
 
   // × closes it and keeps it; the next Enter from the card extends it.
@@ -281,7 +282,7 @@ test("a question asked while the chat connects keeps the pick it was asked about
   await cardInput(page).fill("What does it check?");
   await cardInput(page).press("Enter");
   // A different pick while the chat is still attaching.
-  await pick(page, RESEARCH_DB, "Research Database");
+  await pick(page, RESEARCH_DB, "screening");
   await expect(questions(page)).toHaveCount(1, { timeout: 8_000 });
   await settled(page);
   expect(chat.prompts(projectId!)).toEqual([
@@ -292,14 +293,14 @@ test("a question asked while the chat connects keeps the pick it was asked about
   );
 });
 
-test("Escape with a resource picked closes the map chat first and keeps the pick", async ({ page }) => {
-  await pick(page, RESEARCH_DB, "Research Database");
+test("Escape with an unopenable agent picked closes the map chat first and keeps the pick", async ({ page }) => {
+  await pick(page, RESEARCH_DB, "screening");
   await ask(page, "Who writes to it?");
   // Focus on the map, where its own Escape would clear the pick.
   await node(page, RESEARCH_DB).focus();
   await page.keyboard.press("Escape");
   await expect(card(page)).toHaveAttribute("data-state", "node");
-  await expect(card(page)).toHaveAttribute("data-subject", "Research Database");
+  await expect(card(page)).toHaveAttribute("data-subject", "screening");
   await page.keyboard.press("Escape");
   await expect(card(page)).toHaveAttribute("data-state", "project");
 });

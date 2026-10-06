@@ -8,7 +8,7 @@ import type { Page } from "@playwright/test";
  * project ROOT.
  */
 async function openEmptyProjectMap(page: Page, failure = ""): Promise<void> {
-  await page.goto(`/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockNoLiveSessions=1${failure ? `&mockAgentMapWorkspace=${failure}` : ""}`);
+  await page.goto(`/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockNoLiveSessions=1${failure ? `&mockProjectMap=${failure}` : ""}`);
   await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("project-map-pane")).toBeVisible();
 }
@@ -21,8 +21,9 @@ async function createRequests(page: Page): Promise<Array<{ req: { cwd: string } 
 
 test("a project with no sessions starts its first conversation from the header's +, at the project root", async ({ page }) => {
   await openEmptyProjectMap(page);
-  // No map is drawn yet, so its agents are cards; nothing has started.
-  await expect(page.getByTestId("project-agent-grid")).toBeVisible();
+  // A durable project with agents draws its map; nothing has started.
+  await expect(page.getByTestId("agent-map-live")).toBeVisible();
+  await expect(page.getByTestId("project-agent-grid")).toHaveCount(0);
   await expect(page.getByTestId("agent-view")).toHaveCount(0);
   expect(await createRequests(page)).toHaveLength(0);
   await page.getByTestId("project-new-chat-acme-app").click();
@@ -33,7 +34,7 @@ test("a project with no sessions starts its first conversation from the header's
   expect(calls[0]?.req.cwd).toBe("/Users/demo/acme-app");
 });
 
-for (const [journey, failure] of [["deleted", "missing"], ["foreign", "unauthorized"]]) {
+for (const [journey, failure] of [["deleted or foreign", "missing"]]) {
   test(`a ${journey} project shows an unavailable state instead of a permanent retry`, async ({ page }) => {
     await openEmptyProjectMap(page, failure);
     const unavailable = page.getByTestId("agent-map-project-unavailable");

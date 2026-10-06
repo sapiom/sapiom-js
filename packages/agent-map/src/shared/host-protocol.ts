@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { isStudioProjectId } from "./project-id.js";
-import { isAgentMapBoundedText } from "./agent-map-codec.js";
 
 // Protocol, persisted schema, package release and map revision are independent.
 export const AGENT_MAP_HOST_PROTOCOL_VERSION = 1;
@@ -9,8 +8,21 @@ export const STUDIO_HOST_CONTEXT_ENV = "SAPIOM_STUDIO_HOST_CONTEXT";
 export const STUDIO_HOST_CONTEXT_PATH = "/mcp/agent-map/host-context";
 export const HOST_MESSAGE_MAX_BYTES = 16_384;
 
+/** Non-empty, trimmed, bounded, and free of control characters. */
+function isBoundedText(value: string, maximum: number): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= maximum &&
+    value.trim() === value &&
+    ![...value].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || codePoint === 0x7f;
+    })
+  );
+}
+
 const text = (max: number) =>
-  z.string().refine((value) => isAgentMapBoundedText(value, max));
+  z.string().refine((value) => isBoundedText(value, max));
 const versions = z.array(z.number().int().positive().safe()).max(16);
 const features = z.array(text(128)).max(32);
 

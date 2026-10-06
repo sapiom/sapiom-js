@@ -32,7 +32,7 @@ import {
 import { samePath } from "../lib/paths";
 import { projectIdForAgent, type ShellProjects } from "../lib/shell-projects";
 import type { AgentVerbs } from "../lib/use-agent-verbs";
-import type { useAgentMapEntry } from "../lib/use-agent-map-entry";
+import type { ProjectMapEntry } from "../lib/use-project-map";
 import type { HarnessStateHook } from "../lib/use-harness-state";
 import type { MapChatState } from "../lib/use-map-chat";
 import type { ProjectActions } from "../lib/use-project-actions";
@@ -57,7 +57,7 @@ export function projectViewChrome({
   centre: Centre;
   state: AppState;
   projects: ShellProjects;
-  agentMapEntry: ReturnType<typeof useAgentMapEntry>;
+  agentMapEntry: ProjectMapEntry;
   projectActions: ProjectActions;
   /** Dev servers detected per session (`port.detected`). */
   previewBySession: ReadonlyMap<string, LocalPreview>;
@@ -67,13 +67,11 @@ export function projectViewChrome({
   const mapMode =
     centre.kind === "project-map"
       ? projectMapMode({
-          state: agentMapEntry.state.workspace,
-          unavailable: agentMapEntry.state.unavailable,
+          entry: agentMapEntry,
           durable:
             state.studioProjects?.some(
               (project) => project.projectId === centre.projectId,
             ) ?? false,
-          initialization: agentMapEntry.initialization,
         })
       : null;
   // A locally running app is an App Link that is not deployed (4.7.3): the
@@ -104,6 +102,18 @@ export function projectViewChrome({
               shownScope.cwd,
               projects.projectLabelOf(shownProject),
             ),
+          map:
+            mapMode?.kind === "map"
+              ? {
+                  git: agentMapEntry.git,
+                  mapRef: agentMapEntry.mapRef,
+                  onSelectRef: agentMapEntry.setMapRef,
+                  refreshing:
+                    agentMapEntry.state.status === "ready" &&
+                    agentMapEntry.state.refreshing,
+                  onRefresh: agentMapEntry.refresh,
+                }
+              : null,
         }
       : null;
   return { mapMode, header };
@@ -158,7 +168,7 @@ export function ProjectView({
   /** The agent whose modal is open over the map, or null. */
   agentPath: string | null;
   mapMode: ProjectMapMode | null;
-  agentMapEntry: ReturnType<typeof useAgentMapEntry>;
+  agentMapEntry: ProjectMapEntry;
   viewportStore: GraphViewportStore;
   agentsInProject: (projectId: string) => WorkflowInfo[];
   /** The agent picked on the map, by path: the card names it (4.2). */
@@ -175,9 +185,9 @@ export function ProjectView({
   sessions: SessionActions;
   verbs: AgentVerbs;
 }): JSX.Element {
-  // A picked node that is not an agent (a resource, a step, a group). The
-  // agent pick is the shell's (`mapPanelPath`), so the rail and the finder can
-  // set it; this one only the map makes.
+  // A picked map agent Studio cannot open (its folder is not in the agent
+  // list). The agent pick is the shell's (`mapPanelPath`), so the rail and the
+  // finder can set it; this one only the map makes.
   const [nodePick, setNodePick] = useState<MapNodePick | null>(null);
   useEffect(() => setNodePick(null), [projectId]);
 
@@ -413,16 +423,15 @@ export function ProjectView({
         <AgentMapPane
           key={`${projectId}:${harness.authRevision}`}
           viewportStore={viewportStore}
-          visible
-          api={harness.api}
           workflows={state.workflows}
           refreshWorkflows={harness.refreshWorkflows}
+          connectAgent={harness.connectWorkflow}
           onPickAgent={(workflow) => {
             setNodePick(null);
             onPickAgent(workflow.path);
           }}
           onEnterAgent={(workflow) => onOpenAgent(projectId, workflow.path)}
-          agentPicked={pickedAgent != null}
+          pickedPath={pickedAgent?.path ?? null}
           nodePick={nodePick}
           onNodePick={(node) => {
             setNodePick(node);
@@ -431,22 +440,11 @@ export function ProjectView({
           onClearPick={clearPick}
           chatOpen={chatOpen}
           card={card}
-          state={agentMapEntry.state.workspace}
-          unavailable={agentMapEntry.state.unavailable}
-          onRetry={agentMapEntry.retryWorkspace}
-          initialization={agentMapEntry.initialization}
-          onRetryGeneration={agentMapEntry.retryGeneration}
+          entry={agentMapEntry}
         />
       ) : (
         <ProjectAgentGrid
           agents={agentsInProject(projectId)}
-          map={mapMode?.kind === "cards" ? mapMode.map : "not-drawn"}
-          onRetryGeneration={
-            agentMapEntry.initialization?.status === "failed" &&
-            agentMapEntry.initialization.retryable
-              ? agentMapEntry.retryGeneration
-              : null
-          }
           selectedPath={pickedAgent?.path ?? null}
           onPick={(agent) => onPickAgent(agent.path)}
           onEnter={(agent) => onOpenAgent(projectId, agent.path)}

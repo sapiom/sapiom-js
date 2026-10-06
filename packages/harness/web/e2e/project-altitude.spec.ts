@@ -71,7 +71,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("a project's fold, its agent's modal and Back all preserve the exact conversation", async ({ page }) => {
-  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1");
+  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
   await expect(page.getByTestId("session-context")).toBeVisible();
   const before = await selectedRow(page);
   const beforeActions = await actions(page);
@@ -85,7 +85,7 @@ test("a project's fold, its agent's modal and Back all preserve the exact conver
   await expect(map).toBeVisible();
   await page.getByTestId("project-disclosure-acme-app").click();
   await expect(page.getByTestId("rail-session-sess-boot")).toBeVisible();
-  await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
+  await page.getByTestId("agent-map-node-leasing").click();
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
   await page.getByTestId("map-card-open-agent").click();
   await expect(page.getByTestId("agent-modal")).toBeVisible();
@@ -134,7 +134,7 @@ test("E3.4 — an agent on the map names itself on the card and moves NOTHING el
   const before = await selectedRow(page);
   const rowsBefore = await rowsOf(page, "acme-app");
 
-  await page.getByTestId("map-agent-leasing").click();
+  await page.getByTestId("agent-map-node-leasing").click();
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", "leasing");
 
   // The card changed in place; the session pointer and the rail rows held.
@@ -145,7 +145,7 @@ test("E3.4 — an agent on the map names itself on the card and moves NOTHING el
 
 test("E3.3 — sessions bound to different agents all stay in their project's rail rows", async ({ page }) => {
   await page.goto(
-    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present",
   );
   await page.getByTestId("project-select-polsia").click();
   const map = page.getByTestId("agent-map-live");
@@ -162,7 +162,7 @@ test("E3.3 — sessions bound to different agents all stay in their project's ra
   await expect(map).toBeVisible();
   const before = await rowsOf(page, "polsia");
   // Looking at another agent's map changes neither the rows nor the session.
-  await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
+  await page.getByTestId("agent-map-node-rollup").click();
   await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
   expect(await selectedRow(page)).toEqual(["rail-session-sess-polsia-mailer"]);
   expect(await rowsOf(page, "polsia")).toEqual(before);
@@ -175,7 +175,7 @@ test("Cmd/Ctrl+1..9 addresses the rows the rail renders for the shown project", 
      strip this replaced resolved its list twice and the two drifted whenever a
      project was selected over an exited session. */
   await page.goto(
-    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present",
   );
   await page.getByTestId("project-select-polsia").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();

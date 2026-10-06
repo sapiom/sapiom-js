@@ -78,7 +78,7 @@ import {
   usePaneWidths,
 } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
-import { useAgentMapEntry } from "./lib/use-agent-map-entry";
+import { useProjectMap } from "./lib/use-project-map";
 import { shellProjects } from "./lib/shell-projects";
 import { useDialogs } from "./lib/use-dialogs";
 import { useSessionActions, type ShellNav } from "./lib/use-session-actions";
@@ -147,11 +147,10 @@ export const App = (): JSX.Element => {
   /** See `ShellNav.navGenerationRef`. */
   const navGenerationRef = useRef(0);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
-  const agentMapEntry = useAgentMapEntry({
+  const agentMapEntry = useProjectMap({
     projectId: viewProjectId,
     api: harness.api,
-    subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
-    subscribeInitializationChanges: harness.subscribeAgentMapInitializationChanges,
+    subscribeProjectMapChanges: harness.subscribeProjectMapChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
   // Panel collapse: the rail unmounts (no state to preserve).
