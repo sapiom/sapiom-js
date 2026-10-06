@@ -187,8 +187,8 @@ try {
 
 The authorization is `ceil(maxDurationMinutes / 60) × $1`, using 20 minutes when omitted.
 For example, 60 minutes authorizes $1, 61 minutes authorizes $2, and 240 minutes authorizes $4.
-This payment authorization does not impose a provider usage or traffic limit. Proxy usage can
-exceed it, which can cause settlement to fail.
+This payment authorization does not impose a provider usage or traffic limit. Settlement
+captures the reported usage, up to the authorized amount.
 
 Sessions expire at the configured maximum duration, but expiry does not guarantee payment
 settlement. Always close sessions when finished. `withSession` attempts to close the session;

@@ -485,7 +485,7 @@ export async function createSessionWithIdentity(
 /**
  * Close a session and settle its billing. Returns a `SessionSettlement` with
  * `capturedAmountUsd` (the amount captured on successful settlement) and `creditsUsed`.
- * Settlement can fail if usage exceeds the payment authorization. Session expiry does not
+ * Settlement captures reported usage up to the payment authorization. Session expiry does not
  * guarantee settlement. Failed requests throw {@link BrowserAutomationHttpError}.
  */
 export async function closeSession(
