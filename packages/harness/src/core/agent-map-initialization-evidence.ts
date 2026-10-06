@@ -10,7 +10,7 @@ import {
 import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,
-} from "./canvas-interconnections.js";
+} from "@sapiom/mcp/map";
 import { AgentMapInitializationFailure } from "@sapiom/agent-map/node/agent-map-initialization-record";
 import { parseProposalBatchRequest } from "@sapiom/agent-map/schema";
 import { RELATIONSHIP_ENDPOINT_MATRIX } from "@sapiom/agent-map/validation";

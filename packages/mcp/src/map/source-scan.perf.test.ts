@@ -16,7 +16,7 @@ import * as path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { scanWorkflowSources } from "./canvas-interconnections.js";
+import { scanWorkflowSources } from "./source-scan.js";
 
 const SOURCE_FILE_COUNT = 200;
 const AGENT_FILE_INTERVAL = 10;

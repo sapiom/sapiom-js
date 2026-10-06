@@ -11,6 +11,7 @@ import { register as registerSandbox } from "./tools/sandbox.js";
 import { register as registerAppPublish } from "./tools/app-publish.js";
 import { register as registerAppManage } from "./tools/app-manage.js";
 import { register as registerFeedback } from "./tools/feedback.js";
+import { register as registerMap } from "./tools/map.js";
 import { studioHostContext } from "./studio-host-context.js";
 import { resolveInstructions } from "./instructions-fetch.js";
 
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
   registerAppPublish(server, env);
   registerAppManage(server, env);
   registerFeedback(server, env);
+  registerMap(server, env);
 
   // Connect via stdio transport
   const transport = new StdioServerTransport();

@@ -1,10 +1,12 @@
 # Studio and local MCP compatibility
 
 Studio qualifies the selected MCP executable and can supply authenticated session
-context. Shared map activation remains **off**: private `agent_map_*`, build-plan
-and delegation tools, matching prompts, the Studio map UI and ELK layout continue
-through their existing paths. No MCP map-authoring tools, viewer or external-edit
-watcher are advertised by this change.
+context. The MCP advertises one read-only map tool, `sapiom_dev_map`, which
+computes the agent map from code on every call and stores nothing. Studio's
+private `agent_map_*` tools, matching prompts, the Studio map UI and ELK layout
+continue through their existing paths until Studio reads the map from
+`sapiom_dev_map`. No MCP map-authoring tools, viewer or external-edit watcher
+are advertised.
 
 | Pair or failure                                        | Behavior                                                                                                                                                                         |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -6,7 +6,7 @@ const DEBOUNCE_MS = 150;
 const POLL_INTERVAL_MS = 500;
 
 /** Directories a workflow-source walk never descends into (heavy or generated)
- *  — mirrors core/canvas-interconnections.ts's `listSourceFiles`. */
+ *  — mirrors `@sapiom/mcp/map`'s `listSourceFiles`. */
 const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "dist", "build", ".sapiom"]);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 /** Bounds the polling snapshot walk — the extraction itself already caps at

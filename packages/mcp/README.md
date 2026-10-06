@@ -104,6 +104,7 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_app_list`                | ✓                | List the org's App Links: URL, visibility, webhooks, spend cap, wake state      |
 | `sapiom_dev_app_settings`            | ✓                | Change a link's `webhooksEnabled`, visibility, spend cap, wake rate limit       |
 | `sapiom_dev_app_delete`              | ✓                | Delete a link (URL stops resolving, slug freed); `confirm: true` required       |
+| `sapiom_dev_map`                     | optional         | The agent map: systems, agents, steps and the code-proven edges between them    |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
@@ -124,6 +125,57 @@ stripped and the body forwarded byte-exact, so Slack/Stripe/GitHub signature
 checks run inside the app). These settings need the `org.write` permission —
 publish authority alone is not enough — and a refusal comes back as a message
 naming the permission and the fields, for the agent to relay rather than retry.
+
+## The agent map
+
+`sapiom_dev_map` returns the map Agent Studio draws, computed from code on every
+call; nothing is stored. Pass a project folder (`root`, default the working
+directory) and optionally a git `ref` (`HEAD`, a branch, a commit) to draw that
+version:
+
+```json
+{ "root": "~/agents/support-desk", "ref": "HEAD" }
+```
+
+The scan finds every folder with a `sapiom.json` or a `defineAgent` and reads:
+
+- **Edges**, agent to agent, each with the file and line that proves it:
+  `agents.run` / `agents.launch` (`launch`), `schedules.create` on another agent
+  (`timer`), and `events.emit` matched to the agents an event type triggers
+  (`event`). A target counts when the code makes it knowable: a literal, a const
+  (local or imported), every value of a const map indexed at run time, a zod
+  `.default()` on the input field the call reads, or a `process.env` key set in
+  `sapiom.json`. Anything else is listed under `unresolved`.
+- **Systems**: connected components over those edges. Agents that only share a
+  vault key, database or connector are not joined; the shared resource shows in
+  each agent's `shared` list. Name a system in a committed `.sapiom/map.json`:
+  `{ "systems": [{ "agent": "intake", "name": "Support desk" }] }`.
+- **Steps** from `agents check` (needs the agent's dependencies installed).
+- **Triggers and deploy state** from the signed-in account, plus a `fleet.json`'s
+  declared triggers. Signed out, `platform` says so and the map still draws.
+- **`changedSinceRef`**: the agent's folder differs from `ref` (from `HEAD` when
+  drawing the working copy).
+
+To map agents you describe yourself, without scanning, pass `agents`:
+
+```json
+{
+  "agents": [
+    { "slug": "intake", "emits": [{ "eventType": "ticket.opened" }] },
+    {
+      "slug": "triage",
+      "triggers": [{ "kind": "event", "eventType": "ticket.opened" }],
+      "calls": [{ "to": "notify", "kind": "launch" }]
+    },
+    { "slug": "notify", "resources": ["connector:slack"] }
+  ]
+}
+```
+
+Each agent takes `slug` and optionally `path`, `description`, `deployed`,
+`steps` (`{ entry, steps: [{ id }], transitions: [{ from, to, kind }] }`),
+`calls` (`{ to, kind: "launch" | "signal" | "timer", evidence? }`), `emits`,
+`triggers` and `resources`. The same systems rule applies.
 
 ## How capabilities fit in
 

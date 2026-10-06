@@ -49,6 +49,7 @@ const ALL_TOOL_NAMES = [
   "sapiom_dev_app_list",
   "sapiom_dev_app_publish",
   "sapiom_dev_app_settings",
+  "sapiom_dev_map",
   "sapiom_dev_sandbox_check",
   "sapiom_dev_sandbox_configure",
   "sapiom_dev_sandbox_preview",

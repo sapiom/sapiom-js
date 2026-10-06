@@ -8,7 +8,7 @@ import {
   detectStepCapabilities,
   detectWorkflowLaunches,
   listSourceFilesWithObservations,
-} from "./canvas-interconnections.js";
+} from "./source-scan.js";
 
 const FIXTURES_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
