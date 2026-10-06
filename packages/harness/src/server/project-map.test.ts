@@ -178,6 +178,21 @@ describe("createProjectMapRouter", () => {
     expect(await response.json()).toEqual({ code: "UNKNOWN_REF", error: 'No commit "nope"' });
   });
 
+  it("answers 409 project_unavailable when the project's folder no longer exists", async () => {
+    const f = await start({
+      describe: async () => {
+        throw new MapInputError("NOT_A_DIRECTORY", "/gone is not a directory");
+      },
+    });
+    const response = await f.get();
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: "project_unavailable",
+      error: "The project folder no longer exists",
+    });
+  });
+
   it("answers 500 map_failed for any other error without leaking its message", async () => {
     const f = await start({
       describe: async () => {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { realpathSync } from "node:fs";
 import type { BootResult } from "./boot.js";
 
 /**
@@ -24,11 +25,20 @@ export async function checkProjectMap(boot: BootResult): Promise<string> {
   const state = (await get("/state")) as {
     workspaceScopes?: Array<{ projectId?: string }>;
   };
-  const scope = state.workspaceScopes?.find((candidate) => candidate.projectId) as
-    | { projectId?: string; cwd?: string }
-    | undefined;
+  // The launch folder's project: other checks create (and delete) workspaces of their own.
+  const launch = process.env.SAPIOM_LAUNCH_DIR ? realpathSync(process.env.SAPIOM_LAUNCH_DIR) : null;
+  const scopes = (state.workspaceScopes ?? []) as Array<{ projectId?: string; cwd?: string }>;
+  const sameFolder = (cwd: string | undefined): boolean => {
+    if (!cwd || !launch) return false;
+    try {
+      return realpathSync(cwd) === launch;
+    } catch {
+      return false;
+    }
+  };
+  const scope = scopes.find((candidate) => candidate.projectId && sameFolder(candidate.cwd));
   const projectId = scope?.projectId;
-  assert(projectId, "the launch folder has no Studio project");
+  assert(projectId, `the launch folder ${launch ?? "(SAPIOM_LAUNCH_DIR unset)"} has no Studio project`);
   const body = (await get(`/projects/${projectId}/map`)) as {
     map: { systems: unknown[]; agents: unknown[]; edges: unknown[] };
   };

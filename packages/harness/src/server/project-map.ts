@@ -149,6 +149,11 @@ export function createProjectMapRouter(options: ProjectMapRouterOptions): Router
     try {
       res.json(await pending);
     } catch (error) {
+      // The folder was moved or deleted after the project was added.
+      if (error instanceof MapInputError && error.code === "NOT_A_DIRECTORY") {
+        res.status(409).json({ code: "project_unavailable", error: "The project folder no longer exists" });
+        return;
+      }
       if (error instanceof MapInputError) {
         res.status(400).json({ code: error.code, error: error.message });
         return;
