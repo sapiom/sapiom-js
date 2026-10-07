@@ -34,9 +34,11 @@ import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import { issueSla } from "../../_shared/sla";
 import {
+  PERSON_SUBTYPES,
   SlackBlockActions,
   SlackMessageCreated,
   SlackReactionAdded,
+  messageText,
   type SlackRef,
 } from "../../_shared/events";
 import {
@@ -269,7 +271,8 @@ const guard = defineStep({
       const m = SlackMessageCreated.safeParse(input);
       if (!m.success) return terminate({ skipped: "malformed message" });
       const e = m.data.event;
-      if (e.subtype || e.bot_id)
+      // A reply with a screenshot arrives as `file_share`: dropping it lost the team's answer.
+      if ((e.subtype && !PERSON_SUBTYPES.has(e.subtype)) || e.bot_id)
         return terminate({ skipped: "bot or edited message" });
       // The bot only receives events from channels it was invited to, so the invite is the control:
       // an outsider posting in any of them is a customer. The connector has no conversations.info, so
@@ -306,7 +309,7 @@ const guard = defineStep({
         ts: e.ts,
         threadTs: e.thread_ts,
         user: e.user,
-        text: e.text,
+        text: messageText(e),
       } satisfies Incoming);
     }
 
@@ -338,7 +341,7 @@ const internal = defineStep({
           ? { channel: e.channel, ts: e.ts, threadTs: root }
           : { channel: e.channel, ts: e.ts },
         userId: e.user,
-        text: e.text,
+        text: messageText(e),
       });
       if (issue) await recordRun(db, ctx, AGENT, issue.id);
       return terminate({
@@ -356,7 +359,8 @@ const internal = defineStep({
 /**
  * A teammate's message in a customer channel. It is never the customer waiting: no reaction, no
  * Jev call, no issue, no event (so copilot does not draft and the controller does not nudge). A
- * reply in an issue's thread is recorded as the team's answer and hands the ball to the customer.
+ * reply in an issue's thread is recorded as the team's answer, hands the ball to the customer, and
+ * makes the poster the owner of an unowned issue.
  *
  * The superseded drafts' cards are not redrawn: that needs copilot's card builder and knowledge
  * base. The card's buttons still resolve, and `decideDraft` refuses a draft that is not pending.
@@ -385,7 +389,7 @@ const team = defineStep({
           direction: "agent",
           slack,
           userId: e.user,
-          text: e.text,
+          text: messageText(e),
         });
         return terminate({
           outcome: "team_message",
@@ -404,7 +408,7 @@ const team = defineStep({
         slack,
         userId: e.user,
         userName: poster.name,
-        text: e.text,
+        text: messageText(e),
       });
       // A redelivery, or a team message older than the customer's latest, must not undo what that
       // later message did: it would hand the ball back and supersede the follow-up's draft.
@@ -416,12 +420,13 @@ const team = defineStep({
           return { issue: locked, applied: false };
         // Under the row lock, so a customer message landing now keeps its On You: the later write wins
         // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
-        return {
-          issue: canTransition(locked.status, "on_customer")
-            ? await setStatus(tx, locked.id, "on_customer")
-            : locked,
-          applied: true,
-        };
+        let issue = canTransition(locked.status, "on_customer")
+          ? await setStatus(tx, locked.id, "on_customer")
+          : locked;
+        // Whoever answers an unowned issue owns it, as if they had clicked Take; no_owner stops.
+        if (!issue.ownerSlackId && issue.status !== "closed")
+          issue = await assign(tx, issue.id, e.user);
+        return { issue, applied: true };
       });
       const issue = moved.issue;
       // Their reply answers what the drafts were for; an Approve now would answer twice.
@@ -444,7 +449,7 @@ const team = defineStep({
           await post(ctx, {
             channel: triageChannel,
             threadTs: issue.triageRootTs,
-            text: `*${escapeMrkdwn(poster.name)}* (team): ${plain(stripClientFooter(e.text))} ${mrkdwnLink(
+            text: `*${escapeMrkdwn(poster.name)}* (team): ${plain(stripClientFooter(messageText(e)))} ${mrkdwnLink(
               permalink(e.channel, e.ts, root ?? undefined),
               "view",
             )}`,

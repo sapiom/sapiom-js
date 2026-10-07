@@ -41,8 +41,6 @@ const issue = (over: Partial<DigestIssue> & { ageHours?: number } = {}) => {
     title: `Issue ${n}`,
     accountName: "Acme",
     ownerSlackId: null,
-    triageRootTs: `1790000000.${String(n).padStart(6, "0")}`,
-    triageChannel: null,
     createdAt: new Date(NOW.getTime() - ageHours * HOUR),
     ...rest,
   };
@@ -117,20 +115,14 @@ describe("digest message", () => {
     expect(out.text).toBe("Daily digest for Support: 3 open, 0 past SLA");
   });
 
-  it("writes number, account, title, age, owner name and the card link", () => {
-    const a = issue({
-      ageHours: 5,
-      ownerSlackId: "U1",
-      triageRootTs: "1790000000.123456",
-    });
-    const b = issue({ ageHours: 2, title: null, triageRootTs: null });
+  it("writes number, account, title, age and owner name, with no link to the card", () => {
+    const a = issue({ ageHours: 5, ownerSlackId: "U1" });
+    const b = issue({ ageHours: 2, title: null });
     const c = issue({ ageHours: 1, ownerSlackId: "U9" });
     const lines = body(
       message([a, b, c], new Map([["U1", "Ada"]])).blocks,
     ).split("\n");
-    expect(lines[1]).toBe(
-      `<https://slack.com/archives/C0TRIAGE001/p1790000000123456|#${a.number}> Acme: Issue ${a.number} · 5h 0m · Ada`,
-    );
+    expect(lines[1]).toBe(`#${a.number} Acme: Issue ${a.number} · 5h 0m · Ada`);
     expect(lines[2]).toBe(`#${b.number} Acme: (untitled) · 2h 0m · unassigned`);
     // An owner whose name could not be read shows as the id, never as a mention.
     expect(lines[3]).toContain("· U9");
@@ -178,7 +170,7 @@ describe("digest message", () => {
       held.number,
     ]);
     const line = (i: DigestIssue) =>
-      lines.find((l) => l.includes(`|#${i.number}>`))!;
+      lines.find((l) => l.startsWith(`#${i.number} `))!;
     expect(line(late)).toContain("*past SLA*");
     expect(line(held)).toContain("*past SLA*");
     expect(line(odd)).toContain("*past SLA*");
@@ -211,7 +203,7 @@ describe("digest message", () => {
     expect(out.blocks.length).toBeLessThanOrEqual(50);
     for (const t of texts(out.blocks))
       expect(t.length).toBeLessThanOrEqual(3000);
-    const listed = body(out.blocks).match(/\|#\d+>/g)!.length;
+    const listed = body(out.blocks).match(/^#\d+ /gm)!.length;
     const last = texts(out.blocks).at(-1)!;
     expect(last).toBe(`+${1500 - listed} more open issues, see the Console`);
     expect(body(out.blocks).match(/past SLA/g)).toHaveLength(40);
@@ -305,7 +297,7 @@ describe("digest run", () => {
     await open("C0CUSTOMER2", "billing one", { owner: "U0GONE" });
   });
 
-  it("after a desk's triage channel moves, posts in the new channel and links each card where it was posted", async () => {
+  it("after a desk's triage channel moves, posts in the new channel and links no card", async () => {
     const moved = await open("C0CUSTOMER1", "moved card");
     await setTriageRoot(db, moved.id, "C0TRIAGE001", moved.triageRootTs!);
     await upsertDesk(
@@ -316,10 +308,9 @@ describe("digest run", () => {
     const { ctx, posts } = slackCtx();
     await digest(ctx as never, db);
     const post = posts().find((p) => p.args.channel === "C0NEW")!;
-    const ts = moved.triageRootTs!.replace(".", "");
-    expect(textOf(post)).toContain(
-      `<https://slack.com/archives/C0TRIAGE001/p${ts}|#${moved.number}>`,
-    );
+    // Slack would attach a frozen preview of a linked card, with buttons that send nothing.
+    expect(textOf(post)).toContain(`#${moved.number} `);
+    expect(textOf(post)).not.toContain("slack.com/archives");
   });
 
   it("posts each desk's own issues in its own triage channel, desk-less issues on the default desk", async () => {

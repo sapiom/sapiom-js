@@ -526,6 +526,64 @@ describe("intake agent", () => {
       expect(await messagesForIssue(db, issueId)).toHaveLength(2);
     });
 
+    it("a team reply makes the poster the owner of an unowned issue", async () => {
+      const issueId = await openBug();
+      expect((await getIssue(db, issueId)).ownerSlackId).toBeNull();
+      await run(teamReply(), makeCtx("exec-team").ctx);
+      expect((await getIssue(db, issueId)).ownerSlackId).toBe("U0TEAMENG01");
+    });
+
+    it("a team reply keeps an existing owner", async () => {
+      const issueId = await openBug();
+      await db.query("update issues set owner_slack_id = $2 where id = $1", [
+        issueId,
+        "U0TEAMMATE1",
+      ]);
+      await run(teamReply(), makeCtx("exec-team").ctx);
+      expect((await getIssue(db, issueId)).ownerSlackId).toBe("U0TEAMMATE1");
+    });
+
+    it("a team reply with a screenshot (file_share) is the team's answer", async () => {
+      const issueId = await openBug();
+      const reply = structuredClone(teamReply()) as {
+        event: Record<string, unknown>;
+      };
+      reply.event.subtype = "file_share";
+      reply.event.text = "";
+      reply.event.files = [{ id: "F0SHOT", name: "image.png" }];
+      const t = makeCtx("exec-team-file");
+      expect((await run(reply, t.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        issueId,
+        status: "on_customer",
+      });
+      expect(await messageBySourceEventId(db, "Ev0INTAKETEAM1")).toMatchObject({
+        direction: "agent",
+        text: "(attached image.png)",
+      });
+      expect(t.slack("chat.postMessage")).toEqual([
+        expect.objectContaining({
+          text: expect.stringContaining("(team): (attached image.png)"),
+        }),
+      ]);
+    });
+
+    it("an edited or deleted message is still skipped", async () => {
+      await openBug();
+      for (const subtype of ["message_changed", "message_deleted"]) {
+        const edit = structuredClone(teamReply()) as {
+          event: Record<string, unknown>;
+        };
+        edit.event.subtype = subtype;
+        expect(
+          (await run(edit, makeCtx(`exec-${subtype}`).ctx)).output,
+        ).toEqual({
+          skipped: "bot or edited message",
+        });
+      }
+      expect(await messageBySourceEventId(db, "Ev0INTAKETEAM1")).toBeNull();
+    });
+
     it("a redelivered team reply after a newer customer follow-up changes nothing", async () => {
       const issueId = await openBug();
       await run(teamReply(), makeCtx("exec-team").ctx);

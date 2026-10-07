@@ -2,9 +2,9 @@
  * The pure half of the digest: SLA per priority, issue age, and the Slack message for one desk.
  * No I/O, so the grouping, ordering and size limits are unit-tested (`digest.test.ts`).
  */
-import { escapeMrkdwn, mrkdwnLink, statusLabel } from "../../_shared/blocks";
+import { escapeMrkdwn, statusLabel } from "../../_shared/blocks";
 import { OPEN_STATUSES, type IssueStatus } from "../../_shared/issues";
-import { permalink, type Block } from "../../_shared/slack";
+import type { Block } from "../../_shared/slack";
 
 export const DEFAULT_SLA_HOURS = { urgent: 4, high: 24, normal: 72, low: 168 };
 export type SlaHours = typeof DEFAULT_SLA_HOURS;
@@ -23,9 +23,6 @@ export interface DigestIssue {
   title: string | null;
   accountName: string;
   ownerSlackId: string | null;
-  triageRootTs: string | null;
-  /** Where the card was posted; null falls back to the desk's channel. */
-  triageChannel: string | null;
   createdAt: Date;
 }
 
@@ -102,12 +99,9 @@ export function digestMessage(input: {
   const text = `Daily digest for ${deskName}: ${summary}`;
 
   const line = (i: Ranked) => {
-    const ref = i.triageRootTs
-      ? mrkdwnLink(
-          permalink(i.triageChannel ?? desk.triageChannel, i.triageRootTs),
-          `#${i.number}`,
-        )
-      : `#${i.number}`;
+    // Plain text: Slack attaches a preview to a link to the card, and the preview's Take and Close
+    // buttons send nothing.
+    const ref = `#${i.number}`;
     const title = field(i.title ?? "(untitled)");
     const owner = i.ownerSlackId
       ? field(owners.get(i.ownerSlackId) ?? i.ownerSlackId)
