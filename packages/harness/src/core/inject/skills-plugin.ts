@@ -50,7 +50,7 @@ import {
   fetchServedContent,
   resolveEnvironment,
   servedContentFetchDisabled,
-  stripStampFooter,
+  validateStampedBody,
 } from "@sapiom/mcp/auth";
 
 import { HARNESS_PATHS } from "../../shared/types.js";
@@ -82,14 +82,17 @@ export const AUTHORING_RULES_FETCH_DISABLED_ENV =
 /** The served platform rules, footer stripped, with the stamp they were served under. */
 export interface ServedAuthoringRules {
   body: string;
-  release: string | null;
-  digest: string | null;
+  release: string;
+  digest: string;
 }
 
 /**
  * Fetch the served platform rules for `environment`. `null` when disabled,
- * when the environment cannot be resolved, or on any fetch failure. The
- * serve-time footer is stripped: the session copy states its own source.
+ * when the environment cannot be resolved, on any fetch failure, or when the
+ * body does not carry a complete stamp it hashes to. Accepting the served copy
+ * drops the bundled summaries, so a truncated or unstamped body must fall back
+ * to the bundled skill rather than replace it. The serve-time footer is
+ * stripped: the session copy states its own source.
  */
 export async function fetchServedAuthoringRules(
   environment?: string,
@@ -102,9 +105,9 @@ export async function fetchServedAuthoringRules(
       disableEnv: AUTHORING_RULES_FETCH_DISABLED_ENV,
     });
     if (!served) return null;
-    const body = stripStampFooter(served.body);
-    if (body.length === 0) return null;
-    return { body, release: served.release, digest: served.digest };
+    const stamped = validateStampedBody(served.body, served);
+    if (!stamped) return null;
+    return { body: stamped.canonical, release: stamped.release, digest: stamped.digest };
   } catch {
     return null;
   }

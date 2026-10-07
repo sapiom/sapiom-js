@@ -6,6 +6,7 @@
  * a fixture skill dir (not a real require.resolve) to stay hermetic.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -232,8 +233,15 @@ const SERVED_BODY = [
   "Served rule text.",
 ].join("\n");
 
-const SERVED_FOOTER =
-  "\n\n_Sapiom teaching content · authoring-rules · release 1.2 · abcdefabcdef · served live._";
+/** First twelve hex of sha-256 over the footer-free body: what the server puts in the digest header. */
+const SERVED_DIGEST = createHash("sha256").update(SERVED_BODY, "utf8").digest("hex").slice(0, 12);
+
+const SERVED_FOOTER = `\n\n_Sapiom teaching content · authoring-rules · release 1.2 · ${SERVED_DIGEST} · served live._`;
+
+const SERVED_HEADERS = {
+  "x-sapiom-content-release": "1.2",
+  "x-sapiom-content-digest": SERVED_DIGEST,
+};
 
 describe("inlineServedAuthoringRules", () => {
   const served = { body: SERVED_BODY, release: "1.2", digest: "abcdefabcdef" };
@@ -327,13 +335,7 @@ describe("generateSkillsPlugin — served platform rules", () => {
 
   it("inlines the served body into the session copy only, with a served footer", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(SERVED_BODY + SERVED_FOOTER, {
-        status: 200,
-        headers: {
-          "x-sapiom-content-release": "1.2",
-          "x-sapiom-content-digest": "abcdefabcdef",
-        },
-      }),
+      new Response(SERVED_BODY + SERVED_FOOTER, { status: 200, headers: SERVED_HEADERS }),
     );
     globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
 
@@ -347,7 +349,7 @@ describe("generateSkillsPlugin — served platform rules", () => {
     expect(skill).not.toContain("Bundled summary of one-off vs agent.");
     // The serve-time footer is replaced by the session copy's own source line.
     expect(skill).not.toContain("served live._");
-    expect(skill.endsWith("source: served · release 1.2 · digest abcdefabcdef\n")).toBe(true);
+    expect(skill.endsWith(`source: served · release 1.2 · digest ${SERVED_DIGEST}\n`)).toBe(true);
     // The installed package's copy is never touched.
     await expect(fs.readFile(sourceSkill, "utf8")).resolves.toBe(BUNDLED_SKILL);
   });
@@ -356,6 +358,17 @@ describe("generateSkillsPlugin — served platform rules", () => {
     ["a non-200", () => Promise.resolve(new Response("nope", { status: 503 }))],
     ["an empty body", () => Promise.resolve(new Response("   ", { status: 200 }))],
     ["a network error", () => Promise.reject(new Error("offline"))],
+    [
+      "an unstamped body",
+      () => Promise.resolve(new Response(SERVED_BODY + SERVED_FOOTER, { status: 200 })),
+    ],
+    [
+      "a body that does not hash to its digest (truncated mid-rollout)",
+      () =>
+        Promise.resolve(
+          new Response(SERVED_BODY.slice(0, 40), { status: 200, headers: SERVED_HEADERS }),
+        ),
+    ],
   ])("keeps the bundled copy with a bundled footer on %s", async (_label, impl) => {
     globalThis.fetch = vi.fn(impl) as unknown as typeof globalThis.fetch;
 

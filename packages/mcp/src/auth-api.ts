@@ -28,4 +28,4 @@ export {
   type ServedContent,
   type FetchServedContentOptions,
 } from "./served-content.js";
-export { stripStampFooter } from "./content-stamp.js";
+export { validateStampedBody } from "./content-stamp.js";
