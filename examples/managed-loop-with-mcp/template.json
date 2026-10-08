@@ -12,7 +12,7 @@
     "Query an internal MCP tool",
     "Repository Q&A"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you, then run it from the agent page.\n\nWith no input it uses DeepWiki's public MCP server (`https://mcp.deepwiki.com/mcp`), which needs no credentials. To use your own server, pass `{ \"mcpUrl\": \"https://your-server.example.com/mcp\", \"question\": \"...\" }`. The server must speak Streamable HTTP and be reachable from the internet. If it needs a bearer token, set the optional `MCP_AUTH_TOKEN` secret. The run fails, and says why, if the model run fails or returns no answer.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow with no Sapiom capability spend; stub `models.launch` in the `ask` step to choose what the paused step resumes with.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no input it uses DeepWiki's public MCP server (`https://mcp.deepwiki.com/mcp`), which needs no credentials. To use your own server, pass `{ \"mcpUrl\": \"https://your-server.example.com/mcp\", \"question\": \"...\" }`. The server must speak Streamable HTTP and be reachable from the internet. If it needs a bearer token, set the optional `MCP_AUTH_TOKEN` secret. The run fails, and says why, if the model run fails or returns no answer.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow with no Sapiom capability spend; stub `models.launch` in the `ask` step to choose what the paused step resumes with.",
   "examples": [
     {
       "title": "Default question",
