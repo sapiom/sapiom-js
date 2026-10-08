@@ -12,7 +12,7 @@
     "Query an internal MCP tool",
     "Repository Q&A"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no input it uses DeepWiki's public MCP server (`https://mcp.deepwiki.com/mcp`), which needs no credentials. To use your own server, pass `{ \"mcpUrl\": \"https://your-server.example.com/mcp\", \"question\": \"...\" }`. The server must speak Streamable HTTP and be reachable from the internet. If it needs a bearer token, set the optional `MCP_AUTH_TOKEN` secret. The run fails, and says why, if the model run fails or returns no answer.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow with no Sapiom capability spend; stub `models.launch` in the `ask` step to choose what the paused step resumes with.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no input it uses DeepWiki's public MCP server (`https://mcp.deepwiki.com/mcp`), which needs no credentials. To use your own server, pass `{ \"mcpUrl\": \"https://your-server.example.com/mcp\", \"question\": \"...\" }`. The server must speak Streamable HTTP and be reachable from the internet. If it needs a bearer token, set the `MCP_URL` and `MCP_AUTH_TOKEN` secrets: the token is sent only to the `MCP_URL` origin, never to a server passed in the run input. The run fails, and says why, if the model run fails or returns no answer.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow with no Sapiom capability spend; stub `models.launch` in the `ask` step to choose what the paused step resumes with.",
   "examples": [
     {
       "title": "Default question",
@@ -42,11 +42,18 @@
   ],
   "requiredSecrets": [
     {
+      "key": "MCP_URL",
+      "label": "Your MCP server URL",
+      "provider": "mcp",
+      "description": "An https Streamable HTTP MCP server. It becomes the default server and the only origin `MCP_AUTH_TOKEN` is sent to. Leave empty to use DeepWiki's public server.",
+      "optional": true
+    },
+    {
       "key": "MCP_AUTH_TOKEN",
       "label": "MCP server bearer token",
       "provider": "mcp",
       "credentialKind": "bearer_token",
-      "description": "Sent as `authorization: Bearer <token>` to the MCP server. Leave empty for a server that needs no auth, such as the default.",
+      "description": "Sent as `authorization: Bearer <token>`, only to the origin of `MCP_URL`; a server passed in the run input never receives it. Leave empty for a server that needs no auth, such as the default.",
       "optional": true
     }
   ],

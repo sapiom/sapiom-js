@@ -37,7 +37,7 @@ if (run.result?.success)
 
 - **Omit `model`.** The platform routes the run. `model` takes a model label (`"small"`, `"medium"`, `"large"`), never a raw provider model id. An unrecognized label routes via the platform default and is reported in `result.warnings`.
 
-- **`run` blocks until the run finishes; `launch` doesn't.** `run` polls to completion, which for a coding task can take several minutes. Use `launch` to start the run and either check on it yourself with `handle.status()` / `handle.wait()`, or hand the handle to `pauseUntilSignal(handle, { resumeStep })` so the step pauses and `resumeStep` receives the result. This applies to both `models.run`/`models.launch` and `models.coding.run`/`models.coding.launch`.
+- **`run` blocks until the run finishes; `launch` doesn't.** `run` polls to completion, which for a coding task can take several minutes. Use `launch` to start the run and either check on it yourself with `handle.status()` / `handle.wait()`, or hand the handle to `pauseUntilSignal(handle, { resumeStep })` so the step pauses and `resumeStep` receives the result. Only `models.launch` and `models.coding.launch` return a handle; `models.run` and `models.coding.run` return the finished result, which cannot be paused on.
 
 - **`gitRepository` sets up a managed checkout for you.** Pass a repository returned by `repositories.create()`, `repositories.get()`, or `repositories.list()`. `repositories.attach()` can rehydrate one of those handles but cannot import an external Git repository. Without `gitRepository`, the coding agent works in an empty sandbox and there's nothing to push.
 
