@@ -533,6 +533,41 @@ describe("intake agent", () => {
       expect((await getIssue(db, issueId)).ownerSlackId).toBe("U0TEAMENG01");
     });
 
+    it("a team reply whose run fails before the move commits is applied in full by the retry", async () => {
+      const issueId = await openBug();
+      // Fails the owner update once, after the reply row was written in the same transaction.
+      let failed = false;
+      const flaky = (inner: Db): Db => ({
+        ...inner,
+        async query(text, params) {
+          if (!failed && text.includes("set owner_slack_id")) {
+            failed = true;
+            throw new Error("connection reset");
+          }
+          return inner.query(text, params);
+        },
+        transaction: (fn) => inner.transaction((tx) => fn(flaky(tx))),
+      });
+      setLocalDb(flaky(db));
+      await expect(run(teamReply(), makeCtx("exec-team").ctx)).rejects.toThrow(
+        "connection reset",
+      );
+      expect(await messageBySourceEventId(db, "Ev0INTAKETEAM1")).toBeNull();
+
+      const retry = makeCtx("exec-team-retry");
+      expect((await run(teamReply(), retry.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        duplicate: false,
+        status: "on_customer",
+      });
+      expect(await getIssue(db, issueId)).toMatchObject({
+        status: "on_customer",
+        ownerSlackId: "U0TEAMENG01",
+      });
+      expect(retry.slack("chat.postMessage")).toHaveLength(1);
+      setLocalDb(db);
+    });
+
     it("a team reply keeps an existing owner", async () => {
       const issueId = await openBug();
       await db.query("update issues set owner_slack_id = $2 where id = $1", [

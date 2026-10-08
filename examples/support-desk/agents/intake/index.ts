@@ -400,34 +400,39 @@ const team = defineStep({
       }
 
       const poster = await userInfo(ctx, e.user);
-      const { message, duplicate } = await linkMessage(db, {
-        issueId,
-        source: "slack",
-        sourceEventId: input.eventId,
-        direction: "agent",
-        slack,
-        userId: e.user,
-        userName: poster.name,
-        text: messageText(e),
-      });
-      // A redelivery, or a team message older than the customer's latest, must not undo what that
-      // later message did: it would hand the ball back and supersede the follow-up's draft.
-      const moved = await db.transaction(async (tx) => {
-        const locked = await lockIssue(tx, issueId);
-        if (duplicate) return { issue: locked, applied: false };
-        const customerTs = await latestCustomerTs(tx, issueId);
-        if (customerTs && compareSlackTs(e.ts, customerTs) < 0)
-          return { issue: locked, applied: false };
-        // Under the row lock, so a customer message landing now keeps its On You: the later write wins
-        // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
-        let issue = canTransition(locked.status, "on_customer")
-          ? await setStatus(tx, locked.id, "on_customer")
-          : locked;
-        // Whoever answers an unowned issue owns it, as if they had clicked Take; no_owner stops.
-        if (!issue.ownerSlackId && issue.status !== "closed")
-          issue = await assign(tx, issue.id, e.user);
-        return { issue, applied: true };
-      });
+      // The message is stored in the same transaction as the move, so a run that fails before the
+      // commit leaves no stored row behind and its retry applies the move instead of skipping it as
+      // a duplicate. A redelivery, or a team message older than the customer's latest, must not
+      // undo what that later message did: it would hand the ball back and supersede the
+      // follow-up's draft.
+      const { message, duplicate, ...moved } = await db.transaction(
+        async (tx) => {
+          const locked = await lockIssue(tx, issueId);
+          const { message, duplicate } = await linkMessage(tx, {
+            issueId,
+            source: "slack",
+            sourceEventId: input.eventId,
+            direction: "agent",
+            slack,
+            userId: e.user,
+            userName: poster.name,
+            text: messageText(e),
+          });
+          const skip = { message, duplicate, issue: locked, applied: false };
+          if (duplicate) return skip;
+          const customerTs = await latestCustomerTs(tx, issueId);
+          if (customerTs && compareSlackTs(e.ts, customerTs) < 0) return skip;
+          // Under the row lock, so a customer message landing now keeps its On You: the later write wins
+          // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
+          let issue = canTransition(locked.status, "on_customer")
+            ? await setStatus(tx, locked.id, "on_customer")
+            : locked;
+          // Whoever answers an unowned issue owns it, as if they had clicked Take; no_owner stops.
+          if (!issue.ownerSlackId && issue.status !== "closed")
+            issue = await assign(tx, issue.id, e.user);
+          return { message, duplicate, issue, applied: true };
+        },
+      );
       const issue = moved.issue;
       // Their reply answers what the drafts were for; an Approve now would answer twice.
       if (moved.applied)
