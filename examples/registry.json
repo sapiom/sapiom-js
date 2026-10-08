@@ -501,6 +501,51 @@
       "rank": 10
     },
     {
+      "id": "managed-loop-with-mcp",
+      "name": "Answer With MCP Tools",
+      "description": "Answer a question with a model that calls the tools of a remote MCP server you choose.",
+      "tags": ["mcp", "managed-loop", "tool-use", "pause-resume"],
+      "category": "data-knowledge",
+      "discipline": "Research",
+      "cadence": "on-demand",
+      "complexity": "simple",
+      "sourcePath": "examples/managed-loop-with-mcp",
+      "capabilities": ["models.run"],
+      "steps": [
+        {
+          "name": "prepare",
+          "description": "Read the question and the MCP server URL, and reject a URL that is not https.",
+          "kind": "compute",
+          "next": ["ask", "rejected"]
+        },
+        {
+          "name": "ask",
+          "description": "Start the managed loop with the question and the MCP server as its tools, then pause until the run finishes.",
+          "kind": "pause",
+          "capability": "models.run",
+          "next": ["report"]
+        },
+        {
+          "name": "report",
+          "description": "Return the model's answer with its turn count, or fail the run if the model run failed or returned nothing.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Terminal off-ramp when the MCP server URL is unusable.",
+          "kind": "compute",
+          "terminal": true
+        }
+      ],
+      "setup": {
+        "runsWithNoSetup": true,
+        "connectionCount": 1,
+        "settingCount": 2,
+        "degradedWithoutSetup": "Asks DeepWiki's public MCP server about a public GitHub repository and returns the model's answer."
+      }
+    },
+    {
       "id": "newsletter-autopilot",
       "name": "Newsletter Autopilot",
       "description": "On a schedule, it researches a niche, dedupes and self-edits the issue against a quality bar, and emails it to your list.",
