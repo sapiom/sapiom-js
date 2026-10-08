@@ -3,11 +3,16 @@
 Private, in-network git repositories — create, get, list, delete, and push a working tree straight from a sandbox.
 
 ```ts
-import { repositories, agent } from "@sapiom/tools";
+import { repositories, models } from "@sapiom/tools";
 
 const repo = await repositories.create("landing-page");
-const run = await agent.coding.run({ task: "Build index.html", gitRepository: repo });
-const { pushed, sha } = await repo.pushFromSandbox(run.sandbox, { message: "build: landing" });
+const run = await models.coding.run({
+  task: "Build index.html",
+  gitRepository: repo,
+});
+const { pushed, sha } = await repo.pushFromSandbox(run.sandbox, {
+  message: "build: landing",
+});
 ```
 
 ## Things to know

@@ -60,7 +60,7 @@ Prefer `launch` over `create` when:
   open for the whole generate+store, so it is bounded by Core's 30s router cap —
   the failure mode a fan-out of concurrent `create` calls hits. The `launch`
   submit is a quick enqueue and never meets that cap.
-- **the call is a workflow step that should not hold a socket.** Pause the step
+- **the call is an agent step that should not hold a socket.** Pause the step
   on the handle and the engine resumes it from the completion webhook instead of
   running a step that sits waiting.
 
@@ -87,7 +87,7 @@ see [`IMAGE_RESULT_SIGNAL`](#image_result_signal) below.
 
 The handle is `{ requestId, resolvedModel, cost?, preferSatisfied?, dispatch,
 wait() }`. `requestId` is the queue request id, and it is also the
-`dispatch.correlationId` a workflow resumes on. `resolvedModel`, `cost`, and
+`dispatch.correlationId` a paused run resumes on. `resolvedModel`, `cost`, and
 `preferSatisfied` resolve at submit, so a caller can read what ran and what it
 was quoted off the handle without awaiting `wait()`; `wait()` merges the same
 values onto its result.

@@ -4,8 +4,8 @@
 //
 // Publish all public @sapiom/* packages to the LOCAL Verdaccio registry
 // (http://localhost:4873) so the Sapiom monorepo + a customer-like MCP session
-// can consume local SDK edits without a real npm publish. See
-// docs/guides/workflows-authoring-quickstart.md §4.
+// can consume local SDK edits without a real npm publish. See the Sapiom repo's
+// .claude/skills/sapiom-workflow-local-dev/SKILL.md, "Local SDK loop (Verdaccio)".
 //
 // Each run stamps a FRESH version (patch-bump beyond whatever the local registry
 // already has, and beyond the source version so it never collides with real npm):
