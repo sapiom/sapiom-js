@@ -12,7 +12,13 @@ import {
   type AgentExecutionContext,
   type AgentManifest,
 } from "@sapiom/agent";
-import { CODING_RESULT_SIGNAL } from "@sapiom/tools";
+import {
+  AGENTS_RESULT_SIGNAL,
+  CODING_RESULT_SIGNAL,
+  MODEL_RUN_RESULT_SIGNAL,
+  type AgentRunResultPayload,
+  type ModelRunResultPayload,
+} from "@sapiom/tools";
 import { z } from "zod/v4";
 
 import { runLocal } from "./run-local.js";
@@ -713,6 +719,142 @@ describe("runLocal", () => {
 
     expect(result.outcome).toBe("failed");
     expect(result.steps.map((s) => s.step)).toEqual(["launch", "finalize"]);
+  });
+
+  // A parent that launches a child agent and pauses on the handle resumes
+  // locally with the child result stubbed under `agents.launch` in the
+  // launching step, delivered in the AgentRunResultPayload wire shape.
+  function parentOfChild() {
+    const launch = defineStep({
+      name: "launch",
+      next: [],
+      pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "collect" },
+      async run(_input, ctx) {
+        return pauseUntilSignal(
+          ctx.sapiom.agents.launch({
+            definition: "enrich-lead",
+            input: { id: "lead-1" },
+          }),
+          { resumeStep: "collect" },
+        );
+      },
+    });
+    const collect = defineStep({
+      name: "collect",
+      next: [],
+      terminal: true,
+      canFail: true,
+      async run(child: AgentRunResultPayload<{ score: number }>) {
+        if (child.status !== "completed") return fail("child agent failed");
+        return terminate({
+          child: child.definition,
+          score: child.output.score,
+        });
+      },
+    });
+    return defineAgent({
+      name: "parent-of-child",
+      entry: "launch",
+      steps: { launch, collect },
+    });
+  }
+
+  it("resumes an agents.launch pause with the stubbed child result", async () => {
+    const def = parentOfChild();
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: {},
+      stubs: {
+        version: 1,
+        steps: { launch: { "agents.launch": { output: { score: 7 } } } },
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.output).toEqual({ child: "enrich-lead", score: 7 });
+    expect(result.steps.map((s) => s.step)).toEqual(["launch", "collect"]);
+    const launchTrace = result.steps.find((s) => s.step === "launch");
+    const collectTrace = result.steps.find((s) => s.step === "collect");
+    const correlationId = (
+      launchTrace?.directive as { signal?: { correlationId?: string } }
+    ).signal?.correlationId;
+    expect(collectTrace?.input).toMatchObject({
+      status: "completed",
+      executionId: correlationId,
+      definition: "enrich-lead",
+      output: { score: 7 },
+    });
+    expect(result.unusedStubs).toEqual([]);
+  });
+
+  it("drives the child-failure branch from a failed agents.launch stub", async () => {
+    const def = parentOfChild();
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: {},
+      stubs: {
+        version: 1,
+        steps: {
+          launch: {
+            "agents.launch": { status: "failed", error: { message: "boom" } },
+          },
+        },
+      },
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.steps.find((s) => s.step === "collect")?.input).toMatchObject(
+      { status: "failed", error: { message: "boom" } },
+    );
+  });
+
+  it("resumes a models.launch pause with the stubbed managed-loop result", async () => {
+    const launch = defineStep({
+      name: "launch",
+      next: [],
+      pause: { signal: MODEL_RUN_RESULT_SIGNAL, resumeStep: "use" },
+      async run(_input, ctx) {
+        return pauseUntilSignal(ctx.sapiom.models.launch({ prompt: "p" }), {
+          resumeStep: "use",
+        });
+      },
+    });
+    const use = defineStep({
+      name: "use",
+      next: [],
+      terminal: true,
+      async run(run: ModelRunResultPayload) {
+        return terminate({ status: run.status, output: run.output });
+      },
+    });
+    const def = defineAgent({
+      name: "model-pause",
+      entry: "launch",
+      steps: { launch, use },
+    });
+
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+      input: {},
+      stubs: {
+        version: 1,
+        steps: {
+          launch: {
+            "models.launch": { status: "completed", output: "three bullets" },
+          },
+        },
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.output).toEqual({
+      status: "completed",
+      output: "three bullets",
+    });
+    expect(result.unusedStubs).toEqual([]);
   });
 
   // A correctly-shaped `repositories.list` stub yields method-capable handles and

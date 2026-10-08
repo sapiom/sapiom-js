@@ -137,7 +137,11 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   // The dispatcher runs each step body + its completion inline, so one advance()
   // fully processes one step. Drive on the execution's resulting status: keep
   // advancing while running; auto-resume a pause (feeding the recorded signal
-  // result as the resumed step's input); stop on a terminal state.
+  // result as the resumed step's input); stop on a terminal state. Every stubbed
+  // launch (agents.launch, models.launch, models.coding.launch, media launches)
+  // records its result under the handle's correlationId, so a pause on that
+  // handle resumes with the stubbed child/run result. A pause on a signal no
+  // stubbed launch produced (a webhook, an approval) resumes with {}.
   let guard = 0;
   while (guard++ < MAX_ADVANCES) {
     await core.advance(executionId, max);

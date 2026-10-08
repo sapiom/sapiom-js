@@ -44,6 +44,11 @@ describe("local agent tool contracts", () => {
     expect(runLocal).not.toContain("agent.coding.launch");
     expect(runLocal).toContain("Author code is ordinary local code");
     expect(runLocal).not.toContain("instant");
+    // A launched child agent's stubbed result is what the paused parent resumes
+    // with, and the {} fallback is named for pauses no stubbed launch produced.
+    expect(runLocal).toContain("agents.launch");
+    expect(runLocal).toContain("AgentRunResultPayload");
+    expect(runLocal).toContain("resumes with {}");
 
     const stubs =
       schemas.get("sapiom_dev_agents_run_local")?.stubs?.description ?? "";
