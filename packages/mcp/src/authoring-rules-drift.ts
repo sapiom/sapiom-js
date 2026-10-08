@@ -28,15 +28,13 @@ import {
 } from "@sapiom/agent-core";
 
 import type { ResolvedEnvironment } from "./credentials.js";
+import { fetchServedContent } from "./served-content.js";
 
 /** The project files that carry a stamp, relative to the project directory. */
 export const STAMPED_PROJECT_FILES = [
   "AGENTS.md",
   path.join(".claude", "skills", "sapiom-agent-authoring", "SKILL.md"),
 ] as const;
-
-/** How long to wait for the rules endpoint before giving up on the comparison. */
-const FETCH_TIMEOUT_MS = 5000;
 
 /**
  * Read the served release and digest from the endpoint's stamp headers. `null`
@@ -46,24 +44,13 @@ const FETCH_TIMEOUT_MS = 5000;
 export async function fetchServedAuthoringRulesStamp(
   env: Pick<ResolvedEnvironment, "apiURL">,
 ): Promise<AuthoringRulesStamp | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${env.apiURL}${AUTHORING_RULES_PATH}`, {
-      headers: { Accept: "text/markdown, text/plain" },
-      signal: controller.signal,
-    });
-    if (!response.ok) return null;
-    const release = response.headers.get("x-sapiom-content-release");
-    const digest = response.headers.get("x-sapiom-content-digest");
-    // The body is not needed; release the connection without reading it.
-    await response.body?.cancel().catch(() => undefined);
-    return release && digest ? { release, digest } : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const served = await fetchServedContent(env, {
+    path: AUTHORING_RULES_PATH,
+    headersOnly: true,
+  });
+  return served?.release && served.digest
+    ? { release: served.release, digest: served.digest }
+    : null;
 }
 
 /**

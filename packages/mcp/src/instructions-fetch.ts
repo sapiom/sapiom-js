@@ -9,9 +9,7 @@ import {
   AUTHORING_INSTRUCTIONS_DIGEST,
   AUTHORING_INSTRUCTIONS_RELEASE,
 } from "./instructions.js";
-
-/** How long to wait for the instructions endpoint before falling back. */
-const FETCH_TIMEOUT_MS = 5000;
+import { fetchServedContent } from "./served-content.js";
 
 /**
  * Where the served primer came from, in order of preference:
@@ -131,7 +129,8 @@ export async function resolveInstructions(
 }
 
 /**
- * The live fetch: `GET {apiURL}/v1/mcp/instructions` (public, no auth). The
+ * The live fetch: `GET {apiURL}/v1/mcp/instructions` (public, no auth),
+ * through the shared {@link fetchServedContent}. The
  * body is accepted only when it carries both stamp headers and its
  * footer-stripped sha-256 starts with the digest header
  * ({@link validateStampedBody}); an unstamped, malformed or tampered 200 is
@@ -141,35 +140,24 @@ export async function resolveInstructions(
 async function fetchServedInstructions(
   apiURL: string,
 ): Promise<ServedInstructions | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${apiURL}/v1/mcp/instructions`, {
-      headers: { Accept: "text/markdown, text/plain" },
-      signal: controller.signal,
-    });
-    if (!response.ok) return null;
-    const stamped = validateStampedBody(await response.text(), {
-      release: response.headers.get("x-sapiom-content-release"),
-      digest: response.headers.get("x-sapiom-content-digest"),
-    });
-    if (!stamped) return null;
-    return {
-      delivered: stamped.delivered,
-      record: {
-        body: stamped.canonical,
-        release: stamped.release,
-        digest: stamped.digest,
-        key: response.headers.get("x-sapiom-content-key"),
-        fetchedAt: new Date().toISOString(),
-        apiURL,
-      },
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const served = await fetchServedContent(
+    { apiURL },
+    { path: "/v1/mcp/instructions" },
+  );
+  if (!served) return null;
+  const stamped = validateStampedBody(served.body, served);
+  if (!stamped) return null;
+  return {
+    delivered: stamped.delivered,
+    record: {
+      body: stamped.canonical,
+      release: stamped.release,
+      digest: stamped.digest,
+      key: served.key,
+      fetchedAt: new Date().toISOString(),
+      apiURL,
+    },
+  };
 }
 
 /**

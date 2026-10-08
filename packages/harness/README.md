@@ -371,7 +371,7 @@ strings and usage fields remain local.
 
 ## Outbound requests
 
-Agent Studio makes one Sapiom request of its own, separate from telemetry
+Agent Studio makes two Sapiom requests of its own, separate from telemetry
 (above), from the calls your own actions make (sign-in, Deploy, Prod Run), and
 from what its other components do on their own (the app's product analytics, and
 `npx @sapiom/mcp@latest` fetching and running the local MCP server each session):
@@ -385,6 +385,15 @@ from what its other components do on their own (the app's product analytics, and
   package on any failure, so an offline session behaves exactly as before.
   `SAPIOM_HARNESS_PROMPT_FETCH_DISABLED=1` (or `true`) skips the request entirely
   and always uses the bundled prompt.
+- **Platform authoring rules, on every session start** — an unauthenticated
+  `GET https://api.sapiom.ai/v1/agents/authoring-rules`, inlined into the
+  session's copy of the `sapiom-agent-authoring` skill so a change to Sapiom's
+  platform rules reaches your coding agent without you upgrading. Same terms as
+  the system prompt: no session content, identifiers or API key, not gated on
+  telemetry, bounded at 5 seconds, and on any failure the session gets the
+  skill bundled in this package. The skill's last line says which it got
+  (`source: served` or `source: bundled`). `SAPIOM_AUTHORING_RULES_FETCH_DISABLED=1`
+  (or `true`) skips the request.
 
 ## Development
 
