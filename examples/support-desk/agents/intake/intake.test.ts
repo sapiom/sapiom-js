@@ -603,9 +603,13 @@ describe("intake agent", () => {
       ]);
     });
 
-    it("an edited or deleted message is still skipped", async () => {
+    it("an edit, a delete or a thread broadcast is still skipped", async () => {
       await openBug();
-      for (const subtype of ["message_changed", "message_deleted"]) {
+      for (const subtype of [
+        "message_changed",
+        "message_deleted",
+        "thread_broadcast",
+      ]) {
         const edit = structuredClone(teamReply()) as {
           event: Record<string, unknown>;
         };

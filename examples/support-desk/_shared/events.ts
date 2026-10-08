@@ -39,12 +39,13 @@ export const SlackMessage = z.object({
 export type SlackMessage = z.infer<typeof SlackMessage>;
 
 /**
- * Subtypes a person posts as a new message: a file with or without a comment, a thread reply also
- * sent to the channel, and `/me`. Every other subtype (edits, deletes, joins, bot posts) is not one.
+ * Subtypes a person posts as a new message: a file with or without a comment, and `/me`. Every other
+ * subtype (edits, deletes, joins, bot posts) is not one. `thread_broadcast` is left out: Slack
+ * describes it as a pointer to a thread reply that may also arrive on its own, and recording both
+ * would store one reply twice.
  */
 export const PERSON_SUBTYPES: ReadonlySet<string> = new Set([
   "file_share",
-  "thread_broadcast",
   "me_message",
 ]);
 
