@@ -59,7 +59,6 @@ async function main() {
       gitInitialized ? "initialized" : "NOT initialized — git unavailable"
     }${install ? ", dependencies installed" : ""})`,
   );
-  console.log(`  .sapiom/canvas/index.html  (opening canvas visualization)`);
   console.log("");
   console.log(`Next: cd ${displayRoot} && sapiom-harness`);
 }

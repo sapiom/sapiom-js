@@ -271,3 +271,139 @@ describe("classifyUpdateError", () => {
     }
   });
 });
+
+describe("classifyUpdateError: a network answering for GitHub", () => {
+  // builder-util-runtime's exact shape (httpExecutor.js createHttpError):
+  // `${status} ${statusMessage}\n<JSON description>\nHeaders: <JSON headers>`.
+  // For releases.atom the HttpError reaches us intact; for /releases/latest
+  // GitHubProvider embeds `e.stack` — the same text — inside its own sentence.
+  function httpError(status: number, statusMessage: string, body: string, headers: Record<string, string>): string {
+    const description = {
+      method: "GET",
+      url: "https://github.com/sapiom/sapiom-js/releases.atom",
+      data: body,
+    };
+    return `${status} ${statusMessage}\n${JSON.stringify(description, null, "  ")}\nHeaders: ${JSON.stringify(headers, null, 2)}`;
+  }
+  const SIGN_IN_PAGE = '<!DOCTYPE html><html lang="en"><head><title>Sign in</title></head><body>Sign in to continue</body></html>';
+  const GITHUB = {
+    server: "github.com",
+    "content-type": "text/html; charset=utf-8",
+    "x-github-request-id": "C0DE:1234:ABCD:5678:66F1A2B3",
+  };
+
+  it("keeps a GitHub 429 with retry-after and a request id as rate-limited", () => {
+    const raw = httpError(429, "Too Many Requests", "<!DOCTYPE html><html>…</html>", {
+      ...GITHUB,
+      "retry-after": "60",
+      "x-ratelimit-remaining": "0",
+    });
+    expect(classifyUpdateError(raw).kind).toBe("rate-limited");
+  });
+
+  it("keeps a GitHub 429 as rate-limited on its request id alone, even without throttle headers", () => {
+    expect(classifyUpdateError(httpError(429, "Too Many Requests", "", GITHUB)).kind).toBe("rate-limited");
+  });
+
+  it("keeps a 429 with a throttle header as rate-limited, whoever sent it", () => {
+    // Waiting and retrying is the right advice for any throttle.
+    expect(classifyUpdateError(httpError(429, "Too Many Requests", "", { "retry-after": "30" })).kind).toBe("rate-limited");
+  });
+
+  it("reads a 403 with throttle headers as GitHub's secondary rate limit, signed or not", () => {
+    const throttle = { "retry-after": "60", "x-ratelimit-remaining": "0" };
+    expect(classifyUpdateError(httpError(403, "Forbidden", "", { ...GITHUB, ...throttle })).kind).toBe("rate-limited");
+    expect(classifyUpdateError(httpError(403, "Forbidden", "", throttle)).kind).toBe("rate-limited");
+  });
+
+  it("calls a 429 text/html with no GitHub headers an interception, not a rate limit", () => {
+    const raw = httpError(429, "Too Many Requests", SIGN_IN_PAGE, {
+      "content-type": "text/html",
+      server: "corp-proxy/2.1",
+    });
+    const { kind, summary } = classifyUpdateError(raw);
+    expect(kind).toBe("intercepted");
+    expect(summary).not.toMatch(/rate-limit|429|<html/);
+  });
+
+  it("calls a 429 with headers that name neither GitHub nor a throttle an interception", () => {
+    // No body, no content-type: the absence of every GitHub header is the evidence.
+    expect(classifyUpdateError(httpError(429, "Too Many Requests", "", { via: "1.1 gateway" })).kind).toBe(
+      "intercepted",
+    );
+  });
+
+  it("calls a 403 with an HTML body an interception", () => {
+    const raw = httpError(403, "Forbidden", SIGN_IN_PAGE, { "content-type": "text/html; charset=utf-8" });
+    expect(classifyUpdateError(raw).kind).toBe("intercepted");
+  });
+
+  it("calls a bare 403 / 401 with no GitHub headers an interception (was: 'Couldn't check: 403 Forbidden')", () => {
+    expect(classifyUpdateError("403 Forbidden").kind).toBe("intercepted");
+    expect(classifyUpdateError("HttpError: 401 Unauthorized").kind).toBe("intercepted");
+  });
+
+  it("calls a 407 an interception whatever else it carries", () => {
+    expect(classifyUpdateError(httpError(407, "Proxy Authentication Required", "", {})).kind).toBe("intercepted");
+    expect(classifyUpdateError("407 Proxy Authentication Required").kind).toBe("intercepted");
+    // A retry-after on a challenge does not make it a rate limit.
+    const throttle = { "retry-after": "60" };
+    expect(classifyUpdateError(httpError(407, "Proxy Authentication Required", "", throttle)).kind).toBe("intercepted");
+    expect(classifyUpdateError(httpError(401, "Unauthorized", "", throttle)).kind).toBe("intercepted");
+  });
+
+  it("trusts only GitHub's own identity headers — 'github' in a proxy's name is not GitHub", () => {
+    expect(classifyUpdateError(httpError(403, "Forbidden", "", GITHUB)).kind).not.toBe("intercepted");
+    expect(classifyUpdateError(httpError(403, "Forbidden", "", { server: "github.com" })).kind).not.toBe("intercepted");
+    expect(classifyUpdateError(httpError(403, "Forbidden", "", { server: "github-proxy" })).kind).toBe("intercepted");
+    expect(classifyUpdateError(httpError(403, "Forbidden", "", { server: "notgithub.com" })).kind).toBe("intercepted");
+  });
+
+  it("reads the same 403 when GitHubProvider has wrapped it as a no-release message", () => {
+    // /releases/latest failing is wrapped in "Unable to find latest version …",
+    // with the HttpError's stack — and therefore its headers — embedded.
+    const inner = httpError(403, "Forbidden", SIGN_IN_PAGE, { "content-type": "text/html" });
+    const wrapped =
+      "Unable to find latest version on GitHub (https://github.com/sapiom/sapiom-js/releases.atom), " +
+      `please ensure a production release exists: HttpError: ${inner}\n    at GitHubProvider.getLatestTagName (…/GitHubProvider.js:173:55)`;
+    expect(classifyUpdateError(wrapped).kind).toBe("intercepted");
+  });
+
+  it("recognises an HTML page where the Atom feed should be", () => {
+    const raw =
+      "Cannot parse releases feed: Error: No element \"link\"\n    at XElement.element (…/xml.js:36:19)" +
+      ",\nXML:\n" +
+      SIGN_IN_PAGE;
+    expect(classifyUpdateError(raw).kind).toBe("intercepted");
+  });
+
+  it("says github.com is not reachable and what to check, without a vendor, a status code, an em dash or a semicolon", () => {
+    const { summary } = classifyUpdateError("403 Forbidden");
+    expect(summary).toBe(
+      "github.com isn't reachable from this network. Check that you can open github.com, then try again.",
+    );
+    expect(summary).not.toMatch(/okta|403|\u2014|;/i);
+    expect(summary.length).toBeLessThanOrEqual(160);
+  });
+
+  it("never reads a status code out of a URL", () => {
+    // A 4xx-looking path segment with no HttpError head is not a status.
+    for (const code of [403, 429]) {
+      const raw = `Cannot download "https://github.com/sapiom/sapiom-js/releases/download/v0.4.9/x-${code}-y.zip"`;
+      expect(classifyUpdateError(raw).kind).toBe("other");
+    }
+  });
+
+  it("puts status, server and content-type — and nothing else — in the log detail", () => {
+    const raw = httpError(403, "Forbidden", SIGN_IN_PAGE, {
+      Server: "corp-proxy/2.1",
+      "Content-Type": "text/html; charset=utf-8",
+      Location: "https://sso.example.com/login?state=SECRET",
+      "Set-Cookie": "session=SECRET; Path=/; HttpOnly",
+    });
+    const { detail } = classifyUpdateError(raw);
+    expect(detail).toBe("status=403 server=corp-proxy/2.1 content-type=text/html; charset=utf-8");
+    expect(classifyUpdateError("403 Forbidden").detail).toBe("status=403");
+    expect(classifyUpdateError("connect ECONNREFUSED 140.82.121.3:443").detail).toBeUndefined();
+  });
+});

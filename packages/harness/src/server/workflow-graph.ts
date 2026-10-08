@@ -1,17 +1,10 @@
 /**
  * `GET /api/workflows/:path/graph` — the WORKFLOW-keyed canvas route (IA-01).
  *
- * The canvas has only ever been reachable through a session: boards live at
- * `/canvas/:harnessSessionId/` and resolve by the session's current binding
- * (server/canvas.ts), so an agent that has never hosted a session has no board
- * at all. Reading agent F's board while working in agent B's session is
- * therefore impossible, which is what the selection-driven rail needs.
- *
- * This route is the second, session-free entry point onto the SAME derivation.
- * It renders nothing new: it calls `deriveWorkflowCanvas` (core/canvas-render.ts),
- * the exact pipeline the write path uses, so `document` here is byte-identical
- * to the render file a bound session's canvas serves for the same workflow.
- * Nothing is written to disk.
+ * The agent modal's Canvas reads its board here, keyed by the agent rather than
+ * by a session, so an agent that has never hosted a session still has a board.
+ * The route calls `deriveWorkflowCanvas` (core/canvas-document.ts) and returns
+ * the document and graph in the response. Nothing is written to disk.
  *
  * Keying: `:path` is the agent's absolute directory path, URI-encoded into one
  * segment — `encodeURIComponent(agentPath)`, the same convention
@@ -68,7 +61,8 @@ import { renderCanvasMessageDocument } from "../core/canvas-template.js";
 import {
   deriveWorkflowCanvas,
   type RenderableWorkflow,
-} from "../core/canvas-render.js";
+} from "../core/canvas-document.js";
+import { parseCanvasMapInput } from "../core/canvas-map-steps.js";
 import type { CanvasGraph } from "../core/canvas-graph.js";
 import type { CanvasEnrichment } from "../core/canvas-enrichment.js";
 import { hasTraversalSegment, resolveWithinRoot } from "../core/path-safety.js";
@@ -91,8 +85,7 @@ export interface WorkflowGraphResponse {
   /** True when the graph came from the extraction cache — no child process ran. */
   cached: boolean;
   /**
-   * The finished canvas document, byte-identical to what `/canvas/:sessionId/`
-   * serves for a session bound to this workflow. Present for EVERY status —
+   * The finished canvas document the pane renders via `srcdoc`. Present for EVERY status —
    * an empty board is still a renderable page, not a hole.
    */
   document: string;
@@ -123,7 +116,7 @@ const EMPTY_REASONS = {
     "This agent's marker changed before its graph extraction could start.",
 } as const;
 
-/** The empty board — the same message document server/canvas.ts serves, with
+/** The empty board — a message document with
  *  the specific reason as its subtitle so the pane is never mutely blank. */
 function emptyResponse(
   agentPath: string,
@@ -184,7 +177,20 @@ export function createWorkflowGraphRouter(
 
   const router = Router();
 
-  router.get("/api/workflows/:path/graph", async (req, res) => {
+  // GET draws the working copy from `agents check`. POST carries the agent's
+  // entry in the project map (`{ map, atRef? }`): its steps and its edges to
+  // other agents, drawn at the board's border. At a git ref the map's steps
+  // are the board; an agent with no sapiom.json is drawn from the map alone.
+  const handle = async (req: import("express").Request, res: import("express").Response) => {
+    const body = (req.body ?? {}) as { map?: unknown; atRef?: unknown };
+    const map = req.method === "POST" ? parseCanvasMapInput(body.map) : null;
+    // A map that came but does not parse is a client bug: say so rather than
+    // quietly draw the working copy, which at a ref would be the wrong board.
+    if (req.method === "POST" && body.map != null && map === null) {
+      res.status(400).json({ error: "the map request is malformed" });
+      return;
+    }
+    const atRef = req.method === "POST" && body.atRef === true;
     const raw = req.params.path;
     if (typeof raw !== "string" || raw.trim() === "") {
       res.status(400).json({ error: "agent path is required" });
@@ -247,9 +253,16 @@ export function createWorkflowGraphRouter(
     // instead of answering the request.
     try {
       const inspection = await inspectMarker(realDir);
-      if (inspection.status !== "valid") {
+      const mapOnly = Boolean(map?.steps) && (atRef || inspection.status !== "valid");
+      if (inspection.status !== "valid" && !mapOnly) {
         res.json(
-          emptyResponse(agentPath, name, EMPTY_REASONS[inspection.status]),
+          emptyResponse(
+            agentPath,
+            name,
+            map?.stepsUnavailable
+              ? `The map has no steps for this agent: ${map.stepsUnavailable}`
+              : EMPTY_REASONS[inspection.status],
+          ),
         );
         return;
       }
@@ -264,6 +277,8 @@ export function createWorkflowGraphRouter(
         {
           authorizeBeforeExtraction: async () =>
             (await inspectMarker(realDir)).status === "valid",
+          map,
+          mapOnly,
         },
       );
       if (derived.status === "cancelled") {
@@ -289,7 +304,9 @@ export function createWorkflowGraphRouter(
     } catch (err) {
       res.json(errorResponse(agentPath, name, failureReason(err)));
     }
-  });
+  };
+  router.get("/api/workflows/:path/graph", handle);
+  router.post("/api/workflows/:path/graph", handle);
 
   return router;
 }

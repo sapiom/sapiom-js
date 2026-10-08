@@ -16,7 +16,7 @@ import {
   extractWorkflowGraphCached,
   type CachedExtractionOptions,
 } from "./canvas-cache.js";
-import { listSourceFiles } from "./canvas-interconnections.js";
+import { listSourceFiles } from "@sapiom/mcp/map";
 
 export type ManifestNameInspection =
   | { status: "found"; name: string }

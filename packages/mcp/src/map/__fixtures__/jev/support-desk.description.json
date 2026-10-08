@@ -1,0 +1,234 @@
+{
+ "root": null,
+ "agents": [
+  {
+   "slug": "intake",
+   "description": "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close, Resolved and the ticket reaction, and resets each changed issue's controller timer.",
+   "emits": [
+    {
+     "eventType": "issue.created",
+     "evidence": [
+      {
+       "file": "agents/intake/index.ts",
+       "line": 1,
+       "text": "ctx.sapiom.events.emit(\"issue.created\", payload)"
+      }
+     ]
+    },
+    {
+     "eventType": "issue.message_added",
+     "evidence": [
+      {
+       "file": "agents/intake/index.ts",
+       "line": 1,
+       "text": "ctx.sapiom.events.emit(\"issue.message_added\", payload)"
+      }
+     ]
+    }
+   ],
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "slack.block_actions",
+     "source": "code"
+    },
+    {
+     "kind": "event",
+     "eventType": "slack.message.created",
+     "source": "code"
+    },
+    {
+     "kind": "event",
+     "eventType": "slack.reaction_added",
+     "source": "code"
+    }
+   ],
+   "calls": [
+    {
+     "to": "controller",
+     "kind": "timer",
+     "evidence": [
+      {
+       "file": "agents/_shared/timers.ts",
+       "line": 9,
+       "text": "ctx.sapiom.schedules.create({ definition: \"controller\" })"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "copilot",
+   "description": "Support desk copilot: drafts a reply card for each issue event and handles Approve / Escalate / Dismiss.",
+   "emits": [
+    {
+     "eventType": "issue.escalate",
+     "evidence": [
+      {
+       "file": "agents/copilot/index.ts",
+       "line": 1,
+       "text": "ctx.sapiom.events.emit(\"issue.escalate\", payload)"
+      }
+     ]
+    }
+   ],
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "issue.created",
+     "source": "code"
+    },
+    {
+     "kind": "event",
+     "eventType": "issue.message_added",
+     "source": "code"
+    },
+    {
+     "kind": "event",
+     "eventType": "slack.block_actions",
+     "source": "code"
+    }
+   ],
+   "calls": [
+    {
+     "to": "controller",
+     "kind": "timer",
+     "evidence": [
+      {
+       "file": "agents/_shared/timers.ts",
+       "line": 9,
+       "text": "ctx.sapiom.schedules.create({ definition: \"controller\" })"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "escalation",
+   "description": "Support desk escalation: on issue.escalate, opens one Linear issue, replies 'Tracked as SAP-n' in the triage thread and a neutral line in the customer thread, emits issue.on_hold, and moves the issue On Hold.",
+   "emits": [
+    {
+     "eventType": "issue.on_hold",
+     "evidence": [
+      {
+       "file": "agents/escalation/index.ts",
+       "line": 1,
+       "text": "ctx.sapiom.events.emit(\"issue.on_hold\", payload)"
+      }
+     ]
+    }
+   ],
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "issue.escalate",
+     "source": "code"
+    }
+   ],
+   "calls": [
+    {
+     "to": "controller",
+     "kind": "timer",
+     "evidence": [
+      {
+       "file": "agents/_shared/timers.ts",
+       "line": 9,
+       "text": "ctx.sapiom.schedules.create({ definition: \"controller\" })"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "controller",
+   "description": "Support desk controller: runs for one ticket when its timer fires, pings the triage thread while a condition stays stale (no owner, no draft, draft pending, customer waiting), escalates to on-call and a support group past a desk's escalation levels, reads Linear for On Hold tickets, and sets the ticket's next timer.",
+   "emits": [
+    {
+     "eventType": "issue.nudged",
+     "evidence": [
+      {
+       "file": "agents/controller/index.ts",
+       "line": 1,
+       "text": "ctx.sapiom.events.emit(\"issue.nudged\", payload)"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "urgent-pager",
+   "description": "Support desk urgent-pager: on issue.created with priority urgent, DMs the on-call user the title and a triage link.",
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "issue.created",
+     "source": "code"
+    }
+   ]
+  },
+  {
+   "slug": "watchdog",
+   "description": "Support desk watchdog: on sapiom.run.failed, posts each failed support desk run to Slack with the failed step, the fault class and what to do.",
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "sapiom.run.failed",
+     "source": "code"
+    }
+   ]
+  },
+  {
+   "slug": "digest",
+   "description": "Support desk digest: a daily cron that posts each desk's open issues, grouped by status with age, owner and SLA, in its triage channel.",
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "cron 0 9 * * *",
+     "source": "code"
+    }
+   ]
+  },
+  {
+   "slug": "setup",
+   "description": "Support desk setup: creates and migrates the fleet database, seeds desks and config, probes Slack and Linear, and lists Linear ids. Run by hand."
+  },
+  {
+   "slug": "smoke-ingest",
+   "description": "Support desk E2 smoke: a customer-channel message becomes an issue row, a triage card, and an issue.created event.",
+   "emits": [
+    {
+     "eventType": "issue.created",
+     "evidence": [
+      {
+       "file": "agents/smoke-ingest/index.ts",
+       "line": 1,
+       "text": "ctx.sapiom.events.emit(\"issue.created\", payload)"
+      }
+     ]
+    }
+   ],
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "slack.message.created",
+     "source": "code"
+    }
+   ]
+  },
+  {
+   "slug": "smoke-consume",
+   "description": "Support desk E2 smoke: consumes issue.created and records its run against the issue.",
+   "triggers": [
+    {
+     "kind": "event",
+     "eventType": "issue.created",
+     "source": "code"
+    }
+   ]
+  },
+  {
+   "slug": "scratch",
+   "description": ""
+  }
+ ]
+}

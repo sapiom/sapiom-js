@@ -228,21 +228,16 @@ describe("generateMcpConfig", () => {
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
-  it("writes a private Agent Map HTTP entry without disturbing existing servers", async () => {
-    const filePath = await generateMcpConfig("session-map", {
-      agentMap: {
-        url: "http://127.0.0.1:4123/mcp/agent-map",
-        bearerToken: "map-secret",
-      },
-    });
-    const config = JSON.parse(await fs.readFile(filePath, "utf8"));
-    expect(config.mcpServers["agent-map"]).toEqual({
-      type: "http",
-      url: "http://127.0.0.1:4123/mcp/agent-map",
-      headers: { Authorization: "Bearer map-secret" },
-    });
-    expect(config.mcpServers.sapiom).toBeDefined();
-    expect(config.mcpServers["sapiom-dev"]).toBeDefined();
-    expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
-  });
+});
+
+it("ignores host-context authority supplied through the launcher env", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-private-context-"));
+  try {
+    const devServer = { command: process.execPath, args: ["/mcp/index.js"], env: { SAPIOM_STUDIO_HOST_CONTEXT: "foreign" } };
+    const file = await generateMcpConfig("scoped", { generatedRoot: root, devServer });
+    const config = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(config.mcpServers["sapiom-dev"].env.SAPIOM_STUDIO_HOST_CONTEXT).toBeUndefined();
+    expect(config.mcpServers["agent-map"]).toBeUndefined();
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

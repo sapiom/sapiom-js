@@ -1,0 +1,63 @@
+{
+  "description": "decisions.evaluate answers per fixture, for unit tests and run_local stubs.",
+  "bug": {
+    "is_issue": {
+      "type": "noul",
+      "noul": 0.94
+    },
+    "category": {
+      "type": "choice",
+      "choice": "bug",
+      "probabilities": {
+        "bug": 0.9
+      },
+      "confidence": 0.8
+    },
+    "priority": {
+      "type": "choice",
+      "choice": "high",
+      "probabilities": {
+        "high": 0.8
+      },
+      "confidence": 0.7
+    },
+    "linked_issue": {
+      "type": "choice",
+      "choice": "new",
+      "probabilities": {
+        "new": 0.9
+      },
+      "confidence": 0.8
+    }
+  },
+  "thank-you": {
+    "is_issue": {
+      "type": "noul",
+      "noul": 0.08
+    },
+    "category": {
+      "type": "choice",
+      "choice": "other",
+      "probabilities": {
+        "other": 0.9
+      },
+      "confidence": 0.8
+    },
+    "priority": {
+      "type": "choice",
+      "choice": "low",
+      "probabilities": {
+        "low": 0.8
+      },
+      "confidence": 0.7
+    },
+    "linked_issue": {
+      "type": "choice",
+      "choice": "new",
+      "probabilities": {
+        "new": 0.9
+      },
+      "confidence": 0.8
+    }
+  }
+}

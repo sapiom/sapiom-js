@@ -214,7 +214,6 @@ async function openSql(ctx: Ctx, handle: string): Promise<Sql | null> {
   } catch {
     db = await ctx.sapiom.database.create({
       handle,
-      duration: "7d",
       name: "Meeting Notes CRM",
       description: "Contacts + action items extracted from meeting transcripts",
     });

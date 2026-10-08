@@ -1,15 +1,18 @@
+import { ProjectMapControls, type ProjectMapHeaderControls } from "./ProjectMapControls";
+import { AssistantActivity } from "./AssistantActivity";
+import type { AssistantProjection } from "../lib/assistant-state";
 import { useEffect, useRef, useState } from "react";
-import type { JSX, ReactNode, RefObject } from "react";
+import type { JSX } from "react";
 import type { HarnessSession } from "@shared/types";
 
 import { HARNESS_LABELS } from "../lib/history-meta";
 import { basenameOf } from "../lib/paths";
 import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
-import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
-import { SessionTabs } from "./SessionTabs";
+import { ProjectAppLinks, type ProjectAppLinkSources } from "./ProjectAppLinks";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
+import type { ConversationMode } from "./SessionView";
 
 /** The workspace a session belongs to is its directory's basename — the
  *  same label the rail's workspace group carries. */
@@ -17,9 +20,8 @@ function workspaceLabelOf(path: string): string {
   return basenameOf(path);
 }
 
-const EMPTY_BUSY_SESSION_IDS: ReadonlySet<string> = new Set();
-
 interface SessionBarProps {
+  assistant?: AssistantProjection;
   /** The main panel is showing the Overview/intro, not a session. */
   overviewMode?: boolean;
   /** Set while an agent is open whose workspace has no live session. */
@@ -28,6 +30,9 @@ interface SessionBarProps {
   reviewTitle?: string | null;
   /** Set while the composer-first "new session" home is up — no session yet. */
   composing?: boolean;
+  /** The project the new-agent screen is creating in, stated in the header
+   *  chip (flow-creation.md §4.3): "New agent in {label}". */
+  composerProjectLabel?: string | null;
   /** Leaves the composer for the session it was opened over. Set only when such
    *  a session exists — the bar then reads as the Back affordance itself. */
   onBack?: (() => void) | null;
@@ -43,13 +48,8 @@ interface SessionBarProps {
   busy: boolean;
   /** Set while the rail is collapsed — renders the expand affordance first. */
   onExpandRail: (() => void) | null;
-  /** Set while the right pane is collapsed — renders the expand affordance last. */
-  onExpandRight: (() => void) | null;
-  /** Accessible (and optionally visible) name for the right-pane affordance. */
-  expandRightLabel?: string;
-  showExpandRightLabel?: boolean;
-  expandRightRef?: RefObject<HTMLButtonElement | null>;
-  /** Ends a live session — kills its PTY; it stays resumable from history. */
+  /** Ends a live session at once, no confirm (flow-map-chat-overlay.md 4.5):
+   *  kills its PTY; the row stays, exited, and resumable from history. */
   onCloseSession: (id: string) => void;
   /** Opens the session's directory in the user's editor. */
   onOpenInEditor: (path: string) => void;
@@ -58,35 +58,45 @@ interface SessionBarProps {
   /** Push a message onto the app's toast rail. Defaults to the "error" tone;
    *  result announcements opt into "info". */
   onToast: (message: string, tone?: ToastTone) => void;
-  /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
-  actions?: ReactNode;
-  /** Start a sibling session (the + pinned after the live-session tabs). */
-  onNewSession?: (() => void) | null;
-  /** Disables fresh-session creation until its create/bind transaction settles. */
-  newSessionPending?: boolean;
-  /** Agent name (or bare folder name) used by the new-session affordance. */
-  subjectName?: string | null;
-  /** The focused agent/folder's live sessions, rendered oldest first as tabs. */
-  sessions?: HarnessSession[];
-  /** Live output state for every visible session, including background tabs. */
-  busySessionIds?: ReadonlySet<string>;
-  /** Switch the active session (clicking another session's tab). */
-  onSelectSession?: ((id: string) => void) | null;
-  /** Display name for a tab (rename > title > folder). */
-  labelOf?: (session: HarnessSession) => string;
+  /**
+   * Set while a project's Agent Map is the centre (flow-navigation.md 4.3).
+   * The header reads `project · Agent Map`, then the project's App Links
+   * (flow-map-chat-overlay.md 4.7.3), and carries New agent (Q11), over the
+   * agents it adds to. An agent opens in a modal over the map
+   * (flow-map-chat-overlay.md 4.2b), so the header never names one.
+   */
+  projectView?: ProjectViewHeader | null;
+  /** The session's Terminal / Assistant switch, while the Assistant is on. */
+  conversation?: {
+    mode: ConversationMode;
+    onChange: (mode: ConversationMode) => void;
+  } | null;
+}
+
+export interface ProjectViewHeader {
+  label: string;
+  onNewAgent: () => void;
+  /** The project's App Links, deployed and local (flow 4.7.3). */
+  appLinks: ProjectAppLinkSources;
+  /** The map's ref selector and refresh, while the map is drawn (D70 to D75). */
+  map?: ProjectMapHeaderControls | null;
 }
 
 /**
- * The single main-panel header. Live sessions for the focused agent/folder are
- * browser-style tabs on the left, followed by a pinned + for a fresh sibling.
- * The active tab owns Copy path / Rename / Open in editor / End session through
- * its caret, while agent actions remain right-anchored on the same row.
+ * The single main-panel header. The rail is the session switcher now
+ * (flow-navigation.md Q2), so there is no tab strip: the header names the
+ * session on screen, and its title IS the session's options menu (Copy path /
+ * Rename / Open in editor / End session), live or exited alike. No agent
+ * verbs beside a session: agent detail is the project view's
+ * (flow-map-chat-overlay.md 4.4.1).
  */
 export function SessionBar({
+  assistant,
   overviewMode = false,
   openedAgentName = null,
   reviewTitle = null,
   composing = false,
+  composerProjectLabel = null,
   onBack = null,
   activeSession,
   sessionName,
@@ -94,24 +104,13 @@ export function SessionBar({
   boundWorkflowName,
   busy,
   onExpandRail,
-  onExpandRight,
-  expandRightLabel = "Expand canvas panel",
-  showExpandRightLabel = false,
-  expandRightRef,
   onCloseSession,
   onOpenInEditor,
   editorLabel,
   onToast,
-  actions = null,
-  onNewSession = null,
-  newSessionPending = false,
-  subjectName = null,
-  sessions = [],
-  busySessionIds = EMPTY_BUSY_SESSION_IDS,
-  onSelectSession = null,
-  labelOf,
+  projectView = null,
+  conversation = null,
 }: SessionBarProps): JSX.Element {
-  const [confirmingClose, setConfirmingClose] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
@@ -124,7 +123,6 @@ export function SessionBar({
   useEffect(() => {
     setMenuOpen(false);
     setRenaming(false);
-    setConfirmingClose(false);
   }, [activeSession?.id]);
 
   return (
@@ -146,7 +144,29 @@ export function SessionBar({
         data-testid="session-context"
         data-session-id={activeSession?.id ?? ""}
       >
-        {overviewMode ? (
+        {projectView ? (
+          /* A project is selected: the centre is its Agent Map, and the
+             project's App Links follow its name (4.7.3). */
+          <>
+            <div className="session-current session-current-static">
+              <Icon name="Waypoints" size={14} />
+              <span
+                className="session-context-title"
+                data-testid="session-context-title"
+              >
+                {projectView.label}
+              </span>
+              <span
+                className="session-project-chip"
+                data-testid="session-project-map-chip"
+              >
+                Agent Map
+              </span>
+            </div>
+            {projectView.map && <ProjectMapControls controls={projectView.map} />}
+            <ProjectAppLinks sources={projectView.appLinks} />
+          </>
+        ) : overviewMode ? (
           <div className="session-current session-current-static">
             <Icon name="Radio" size={13} />
             <span
@@ -195,59 +215,39 @@ export function SessionBar({
             </span>
           </div>
         ) : composing ? (
-          /* Composer-first "new session": there is no session to name here, so
-             the slot carries the one thing it can do — go back to the session
-             the composer was opened over. Nothing when there is none (first
-             run, every session closed): the bar keeps only the + . */
-          onBack ? (
-            <button
-              type="button"
-              className="session-current session-back"
-              data-testid="composer-back"
-              onClick={onBack}
-            >
-              <Icon name="ArrowLeft" size={13} />
-              <span
-                className="session-context-title"
-                data-testid="session-context-title"
+          /* The new-agent screen: there is no session to name here. The slot
+             STATES the project the agent is being created in (§4.3, the
+             header chip) and, when the screen was opened over a live session,
+             carries the way back to it. */
+          <div className="session-current session-composing">
+            {onBack && (
+              <button
+                type="button"
+                className="session-current session-back"
+                data-testid="composer-back"
+                onClick={onBack}
               >
-                Back
+                <Icon name="ArrowLeft" size={13} />
+                <span
+                  className="session-context-title"
+                  data-testid="session-context-title"
+                >
+                  Back
+                </span>
+              </button>
+            )}
+            {composerProjectLabel && (
+              <span
+                className="session-project-chip"
+                data-testid="session-project-chip"
+                title={composerProjectLabel}
+              >
+                <Icon name="Folder" size={12} />
+                New agent in {composerProjectLabel}
               </span>
-            </button>
-          ) : null
-        ) : sessions.length > 0 &&
-          onSelectSession &&
-          onNewSession &&
-          labelOf ? (
-          <SessionTabs
-            sessions={sessions}
-            activeSessionId={activeSession?.id ?? null}
-            busySessionIds={busySessionIds}
-            labelOf={labelOf}
-            subjectName={
-              subjectName ??
-              (activeSession ? workspaceLabelOf(activeSession.cwd) : "project")
-            }
-            onSelect={onSelectSession}
-            onNew={onNewSession}
-            newSessionPending={newSessionPending}
-            menuOpen={menuOpen}
-            onToggleMenu={() => setMenuOpen((open) => !open)}
-            menuTriggerRef={menuTriggerRef}
-            menuTooltip={
-              activeSession
-                ? `${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`
-                : undefined
-            }
-            renaming={renaming}
-            renameDraft={renameDraft}
-            onRenameDraftChange={setRenameDraft}
-            onCommitRename={commitRename}
-            onCancelRename={() => setRenaming(false)}
-          />
+            )}
+          </div>
         ) : activeSession ? (
-          /* An exited session is historical context, not a live tab. Keep its
-             compact title/menu while still allowing a fresh sibling below. */
           <div className="session-current-wrap">
             {renaming ? (
               <input
@@ -292,10 +292,9 @@ export function SessionBar({
                   className="session-context-title"
                   data-testid="session-context-title"
                 >
-                  {labelOf
-                    ? labelOf(activeSession)
-                    : (sessionName ?? activeSession.title)}
+                  {sessionName ?? activeSession.title}
                 </span>
+                <AssistantActivity assistant={assistant} sessionId={activeSession.id} />
                 <Icon name="ChevronDown" size={13} />
               </button>
             )}
@@ -371,69 +370,50 @@ export function SessionBar({
               data-testid="session-end-btn"
               onClick={() => {
                 closeMenu();
-                setConfirmingClose(true);
+                onCloseSession(activeSession.id);
               }}
             >
               <Icon name="X" size={13} />
-              End session…
+              End session
             </button>
           )}
         </AnchoredPopover>
       )}
 
-      {/* Ended sessions do not join the live strip, but their + still starts a
-          fresh session from the same folder/provider/binding. Live-session +
-          is pinned inside SessionTabs, outside its scrolling list. */}
-      {onNewSession &&
-        activeSession?.status === "exited" &&
-        sessions.length === 0 &&
-        !composing && (
-          <button
-            type="button"
-            className="theme-toggle session-tab-new"
-            data-testid="session-tab-new"
-            aria-label={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
-            aria-busy={newSessionPending}
-            data-tooltip={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
-            disabled={newSessionPending}
-            onClick={onNewSession}
-          >
-            {newSessionPending ? (
-              <span className="session-busy" aria-hidden="true" />
-            ) : (
-              <Icon name="Plus" size={14} />
-            )}
-          </button>
-        )}
-
-      {actions}
-
-      {onExpandRight && (
-        <button
-          ref={expandRightRef}
-          className={
-            "theme-toggle" +
-            (showExpandRightLabel ? " right-expand-labeled" : "")
-          }
-          data-testid="right-expand"
-          aria-label={expandRightLabel}
-          title={expandRightLabel}
-          onClick={onExpandRight}
+      {conversation && activeSession && !projectView && (
+        <div
+          className="studio-conversation-switch"
+          role="group"
+          aria-label="Conversation view"
         >
-          <Icon name="PanelRightOpen" size={15} />
-          {showExpandRightLabel && <span>{expandRightLabel}</span>}
-        </button>
+          {(["Terminal", "Assistant"] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              className="btn-ghost"
+              aria-pressed={conversation.mode === view}
+              onClick={() => conversation.onChange(view)}
+            >
+              {view}
+            </button>
+          ))}
+        </div>
       )}
 
-      {confirmingClose && activeSession && (
-        <EndSessionConfirm
-          triggerRef={menuTriggerRef}
-          onCancel={() => setConfirmingClose(false)}
-          onConfirm={() => {
-            setConfirmingClose(false);
-            onCloseSession(activeSession.id);
-          }}
-        />
+      {projectView && (
+        <div className="project-view-actions">
+          {/* New agent, in the project view's header (Q11): the map is where
+              a project's agents are, so the verb that adds one sits over it. */}
+          <button
+            type="button"
+            className="btn-line project-map-new-agent"
+            data-testid="project-map-new-agent"
+            data-tooltip={`New agent in ${projectView.label}`}
+            onClick={projectView.onNewAgent}
+          >
+            <Icon name="Plus" size={13} /> New agent
+          </button>
+        </div>
       )}
     </div>
   );

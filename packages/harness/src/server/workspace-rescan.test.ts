@@ -12,7 +12,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 
-import { CachedAgentInvocationProvider } from "../core/system-graph-relationships.js";
 import { startServer, type HarnessServer } from "./index.js";
 import type { BusMessage, HarnessAdapter, LaunchOpts, SpawnSpec, WorkflowInfo } from "../shared/types.js";
 
@@ -88,10 +87,6 @@ describe("mid-session workflow rescan", () => {
     "adds a scaffolded workflow and drops it when its marker is removed, broadcasting each change",
     { retry: 1, timeout: 20_000 },
     async () => {
-      const invocationObservations = vi.spyOn(
-        CachedAgentInvocationProvider.prototype,
-        "invocationObservations",
-      );
       server = await startServer({
         port: 0,
         bootToken: "test-token",
@@ -118,8 +113,21 @@ describe("mid-session workflow rescan", () => {
         },
         { timeout: 8_000, interval: 150 },
       );
-      expect(invocationObservations).not.toHaveBeenCalled();
 
+      // Rescans never bind (SAP-3834); bind explicitly so marker removal has a
+      // stale binding to clear.
+      const bind = await fetch(
+        `http://127.0.0.1:${port}/api/sessions/${session.id}/workflow`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Harness-Token": "test-token",
+          },
+          body: JSON.stringify({ workflowPath: join(cwd, "hn-story-images") }),
+        },
+      );
+      expect(bind.status).toBe(200);
       expect(server.sessionManager.get(session.id)?.boundWorkflowPath).toBe(
         join(cwd, "hn-story-images"),
       );
@@ -137,7 +145,6 @@ describe("mid-session workflow rescan", () => {
         },
         { timeout: 8_000, interval: 150 },
       );
-      expect(invocationObservations).not.toHaveBeenCalled();
     },
   );
 });

@@ -16,7 +16,9 @@
 //      draft-07 cannot express readably. See scripts/examples-discipline-check.mjs.
 //   5. every template.json validates against examples/template.schema.json,
 //      including the declaration surface (requiredSecrets, settings,
-//      defaultInput, zeroSetup) — see scripts/examples-manifest-check.mjs.
+//      defaultInput, zeroSetup, app) — see scripts/examples-manifest-check.mjs.
+//   5a. a declared `app.entry` is a real directory in the example — the subtree
+//      the publish step uploads as the dashboard bundle (SAP-3252).
 //   5b. the manifest's renderable projection (defaultInput / settings) only
 //      names paths the code's entry `inputSchema` declares — a projection onto
 //      a field the schema never declares is the drift SAP-2226 exists to catch.
@@ -44,6 +46,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
+  checkAppEntry,
   checkResourceReuse,
   checkResourceSeeds,
   checkSetupSync,
@@ -65,6 +68,7 @@ import {
   ONE_SHOT_LLM_TEMPLATE_IDS,
   checkLlmCopySurface,
   checkNoSliceParse,
+  checkStructuredOutputCap,
   checkOneShotLlmTemplate,
   checkStubStructuredOutput,
 } from "./lib/examples-llm-surface.mjs";
@@ -212,10 +216,24 @@ for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
 // `index.ts`, and the whole point is that a NEW template can't reintroduce it
 // (SAP-2892).
 for (const sourcePath of collectTemplateSources(EXAMPLES_DIR)) {
+  const relativePath = path
+    .relative(ROOT, sourcePath)
+    .split(path.sep)
+    .join("/");
+  const source = readFileSync(sourcePath, "utf8");
+  errors.push(...checkNoSliceParse({ path: relativePath, source }));
+  errors.push(...checkStructuredOutputCap({ path: relativePath, source }));
+}
+
+// AUTHORING.md is the snippet an example author copies, so it is held to the same
+// cap floor as the templates. It sat outside every check while teaching the shape
+// they are all checked for (SAP-3280).
+const authoringDoc = path.join(EXAMPLES_DIR, "AUTHORING.md");
+if (existsSync(authoringDoc)) {
   errors.push(
-    ...checkNoSliceParse({
-      path: path.relative(ROOT, sourcePath).split(path.sep).join("/"),
-      source: readFileSync(sourcePath, "utf8"),
+    ...checkStructuredOutputCap({
+      path: path.relative(ROOT, authoringDoc).split(path.sep).join("/"),
+      source: readFileSync(authoringDoc, "utf8"),
     }),
   );
 }
@@ -310,6 +328,16 @@ for (const t of templates) {
     ...checkResourceSeeds(t.id, manifest, (seed) =>
       existsSync(path.join(dir, seed)),
     ),
+  );
+
+  // 5a. A declared dashboard must ship its source: `app.entry` names the subtree
+  // the publish step uploads, so a missing directory is an empty bundle that
+  // reports a dashboard which never starts.
+  errors.push(
+    ...checkAppEntry(t.id, manifest, (entry) => {
+      const entryPath = path.join(dir, entry);
+      return existsSync(entryPath) && statSync(entryPath).isDirectory();
+    }),
   );
 
   // 5b. The manifest's renderable projection (defaultInput / settings) may only

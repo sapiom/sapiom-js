@@ -1,0 +1,9 @@
+node_modules/
+.sapiom/
+pnpm-lock.yaml
+agents/_scratch/
+apps/console/dist/
+.q.ts
+.pgcheck.ts
+fleet.local.json
+agents/*/sapiom.json

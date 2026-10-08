@@ -6,6 +6,7 @@
  * a fixture skill dir (not a real require.resolve) to stay hermetic.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -63,7 +64,12 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 // Import AFTER the mock is registered.
-import { generateSkillsPlugin } from "./skills-plugin.js";
+import {
+  AUTHORING_RULES_FETCH_DISABLED_ENV,
+  generateSkillsPlugin,
+  inlineServedAuthoringRules,
+  markBundledAuthoringRules,
+} from "./skills-plugin.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -172,4 +178,216 @@ describe("generateSkillsPlugin", () => {
     const result = await generateSkillsPlugin("sess-empty-skill", { generatedRoot });
     expect(result).toBeUndefined();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Served platform rules (SAP-3225)
+// ---------------------------------------------------------------------------
+
+/** A bundled skill shaped like the shipped one: intro, stamp, summary chapters. */
+const BUNDLED_SKILL = [
+  "---",
+  "name: sapiom-agent-authoring",
+  "description: test",
+  "---",
+  "",
+  "# Building Sapiom Agents",
+  "",
+  "Opening paragraph.",
+  "",
+  "**Two kinds of content live here, and they update differently.** Platform rules are",
+  "only summarized here.",
+  "",
+  "<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->",
+  "",
+  "<!-- section: one-off-vs-agent -->",
+  "",
+  "## One-off summary",
+  "",
+  "Bundled summary of one-off vs agent.",
+  "",
+  "<!-- /section: one-off-vs-agent -->",
+  "",
+  "## Lifecycle from Zero",
+  "",
+  "Scaffold, then run.",
+  "",
+  "<!-- section: trigger-kinds -->",
+  "",
+  "## Triggers summary",
+  "",
+  "<!-- /section: trigger-kinds -->",
+  "",
+  "## Determinism",
+  "",
+  "Be deterministic.",
+  "",
+].join("\n");
+
+const SERVED_BODY = [
+  "# Sapiom platform rules for agent authors",
+  "",
+  "<!-- section: one-off-vs-agent -->",
+  "## One-off call, or an agent?",
+  "",
+  "Served rule text.",
+].join("\n");
+
+/** First twelve hex of sha-256 over the footer-free body: what the server puts in the digest header. */
+const SERVED_DIGEST = createHash("sha256").update(SERVED_BODY, "utf8").digest("hex").slice(0, 12);
+
+const SERVED_FOOTER = `\n\n_Sapiom teaching content · authoring-rules · release 1.2 · ${SERVED_DIGEST} · served live._`;
+
+const SERVED_HEADERS = {
+  "x-sapiom-content-release": "1.2",
+  "x-sapiom-content-digest": SERVED_DIGEST,
+};
+
+describe("inlineServedAuthoringRules", () => {
+  const served = { body: SERVED_BODY, release: "1.2", digest: "abcdefabcdef" };
+
+  it("drops the summary chapters and the stamp, keeps the mechanics, and appends the served body with a served footer", () => {
+    const out = inlineServedAuthoringRules(BUNDLED_SKILL, served);
+
+    expect(out.startsWith("---\nname: sapiom-agent-authoring\n")).toBe(true);
+    expect(out).not.toContain("Bundled summary of one-off vs agent.");
+    expect(out).not.toContain("## Triggers summary");
+    expect(out).not.toContain("<!-- /section:");
+    expect(out).not.toContain("sapiom-authoring-rules release=");
+    expect(out).not.toContain("only summarized here");
+    expect(out).toContain("## Lifecycle from Zero\n\nScaffold, then run.");
+    expect(out).toContain("## Determinism\n\nBe deterministic.");
+    expect(out).toContain("inlined in full at the end of this skill");
+    expect(out.indexOf("## Determinism")).toBeLessThan(
+      out.indexOf("# Sapiom platform rules for agent authors"),
+    );
+    expect(out.endsWith(`${SERVED_BODY}\n\n---\n\nsource: served · release 1.2 · digest abcdefabcdef\n`)).toBe(
+      true,
+    );
+  });
+
+  it("splices the shipped skill without leaving a summary chapter or the summaries intro behind", async () => {
+    const shipped = await fs.readFile(
+      new URL("../../../../agent-core/skills/sapiom-agent-authoring/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    const out = inlineServedAuthoringRules(shipped, served);
+
+    expect(out.startsWith("---\nname: sapiom-agent-authoring\n")).toBe(true);
+    expect(out).not.toMatch(/<!-- \/section: /);
+    expect(out).not.toContain("only summarized here");
+    expect(out).not.toContain("sapiom-authoring-rules release=");
+    expect(out).toContain("## Lifecycle from Zero");
+    expect(out).toContain("inlined in full at the end of this skill");
+    expect(out).toContain("source: served · release 1.2 · digest abcdefabcdef");
+  });
+});
+
+describe("markBundledAuthoringRules", () => {
+  it("keeps the bundled copy unchanged and appends a bundled footer with its stamp", () => {
+    const out = markBundledAuthoringRules(BUNDLED_SKILL);
+    expect(out.startsWith(BUNDLED_SKILL.trimEnd())).toBe(true);
+    expect(out.endsWith("\n\n---\n\nsource: bundled · release 1.1 · digest 8ed17f08af11\n")).toBe(
+      true,
+    );
+  });
+
+  it("names the release and digest unknown when the bundled copy carries no stamp", () => {
+    expect(markBundledAuthoringRules("# Skill\n")).toBe(
+      "# Skill\n\n---\n\nsource: bundled · release unknown · digest unknown\n",
+    );
+  });
+});
+
+describe("generateSkillsPlugin — served platform rules", () => {
+  let originalFetch: typeof globalThis.fetch;
+  let originalFlag: string | undefined;
+  let sourceSkill: string;
+
+  beforeEach(async () => {
+    exposePackageJson = true;
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-skills-plugin-"));
+    await seedAgentCoreFixture(tmpDir);
+    sourceSkill = path.join(tmpDir, "agent-core", "skills", "sapiom-agent-authoring", "SKILL.md");
+    await fs.writeFile(sourceSkill, BUNDLED_SKILL);
+    originalFetch = globalThis.fetch;
+    originalFlag = process.env[AUTHORING_RULES_FETCH_DISABLED_ENV];
+    // src/test-setup.ts disables the fetch suite-wide; these specs exercise it.
+    delete process.env[AUTHORING_RULES_FETCH_DISABLED_ENV];
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    if (originalFlag === undefined) delete process.env[AUTHORING_RULES_FETCH_DISABLED_ENV];
+    else process.env[AUTHORING_RULES_FETCH_DISABLED_ENV] = originalFlag;
+    vi.restoreAllMocks();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function sessionSkill(sessionId: string): Promise<string> {
+    const pluginDir = await generateSkillsPlugin(sessionId, {
+      generatedRoot: path.join(tmpDir, "generated"),
+      environment: "production",
+    });
+    expect(pluginDir).toBeDefined();
+    return fs.readFile(path.join(pluginDir!, "skills", "sapiom-agent-authoring", "SKILL.md"), "utf8");
+  }
+
+  it("inlines the served body into the session copy only, with a served footer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(SERVED_BODY + SERVED_FOOTER, { status: 200, headers: SERVED_HEADERS }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    const skill = await sessionSkill("sess-served");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.sapiom.ai/v1/agents/authoring-rules",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(skill).toContain("Served rule text.");
+    expect(skill).not.toContain("Bundled summary of one-off vs agent.");
+    // The serve-time footer is replaced by the session copy's own source line.
+    expect(skill).not.toContain("served live._");
+    expect(skill.endsWith(`source: served · release 1.2 · digest ${SERVED_DIGEST}\n`)).toBe(true);
+    // The installed package's copy is never touched.
+    await expect(fs.readFile(sourceSkill, "utf8")).resolves.toBe(BUNDLED_SKILL);
+  });
+
+  it.each([
+    ["a non-200", () => Promise.resolve(new Response("nope", { status: 503 }))],
+    ["an empty body", () => Promise.resolve(new Response("   ", { status: 200 }))],
+    ["a network error", () => Promise.reject(new Error("offline"))],
+    [
+      "an unstamped body",
+      () => Promise.resolve(new Response(SERVED_BODY + SERVED_FOOTER, { status: 200 })),
+    ],
+    [
+      "a body that does not hash to its digest (truncated mid-rollout)",
+      () =>
+        Promise.resolve(
+          new Response(SERVED_BODY.slice(0, 40), { status: 200, headers: SERVED_HEADERS }),
+        ),
+    ],
+  ])("keeps the bundled copy with a bundled footer on %s", async (_label, impl) => {
+    globalThis.fetch = vi.fn(impl) as unknown as typeof globalThis.fetch;
+
+    const skill = await sessionSkill("sess-fallback");
+
+    expect(skill).toBe(`${BUNDLED_SKILL.trimEnd()}\n\n---\n\nsource: bundled · release 1.1 · digest 8ed17f08af11\n`);
+  });
+
+  it.each(["1", "true"])(
+    "makes no request and keeps the bundled copy when %s disables the fetch",
+    async (value) => {
+      process.env[AUTHORING_RULES_FETCH_DISABLED_ENV] = value;
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+      const skill = await sessionSkill("sess-disabled");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(skill).toContain("source: bundled · release 1.1 · digest 8ed17f08af11");
+    },
+  );
 });

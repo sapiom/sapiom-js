@@ -13,6 +13,9 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@shared/assistant-state": fileURLToPath(
+        new URL("src/shared/assistant-state.ts", import.meta.url),
+      ),
       "@shared/initial-prompt": fileURLToPath(
         new URL("src/shared/initial-prompt.ts", import.meta.url),
       ),
@@ -22,15 +25,8 @@ export default defineConfig({
       "@shared/types": fileURLToPath(
         new URL("src/shared/types.ts", import.meta.url),
       ),
-      "@shared/system-graph": fileURLToPath(
-        new URL("src/shared/system-graph.ts", import.meta.url),
-      ),
-      "@shared/agent-map-initialization": fileURLToPath(new URL("src/shared/agent-map-initialization.ts", import.meta.url)),
-      "@shared/agent-map": fileURLToPath(
-        new URL("src/shared/agent-map.ts", import.meta.url),
-      ),
-      "@shared/agent-map-codec": fileURLToPath(
-        new URL("src/shared/agent-map-codec.ts", import.meta.url),
+      "@shared/workspace-scope": fileURLToPath(
+        new URL("src/shared/workspace-scope.ts", import.meta.url),
       ),
       "@shared/agent-name": fileURLToPath(
         new URL("src/shared/agent-name.ts", import.meta.url),

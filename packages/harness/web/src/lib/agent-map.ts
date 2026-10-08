@@ -1,17 +1,11 @@
+import { isStudioProjectId } from "@sapiom/agent-map/project-id";
 import type {
-  AcceptedProposalDelta,
-  AgentMapWorkspaceResponse,
-  AgentMapWorkspaceState,
   StudioProjectBindingSummary,
   StudioProjectSummary,
   StudioCurrentWorkspaceResponse,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
-import {
-  parseAcceptedProposalDelta as parseSharedAcceptedProposalDelta,
-  parseMapChangeProposal,
-} from "@shared/agent-map-codec";
-import type { WorkspaceScopeSummary } from "@shared/system-graph";
+} from "@sapiom/agent-map";
+import type { WorkspaceScopeSummary } from "@shared/workspace-scope";
 import type { WorkflowInfo } from "@shared/types";
 import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
 
@@ -52,14 +46,7 @@ function isOpaqueId(value: unknown): value is string {
   );
 }
 
-function isProjectId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^project_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      value,
-    )
-  );
-}
+const isProjectId = isStudioProjectId;
 
 function isTimestamp(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -125,121 +112,6 @@ function parseProject(value: unknown): StudioProjectSummary | null {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
   };
-}
-
-function parseWorkspace(
-  value: unknown,
-  expectedProjectId: string,
-): AgentMapWorkspaceState | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "projectId",
-      "schemaVersion",
-      "recordVersion",
-      "confirmedRevisionId",
-      "activeProposalId",
-      "projectBuildPlanId",
-      "createdAt",
-      "updatedAt",
-    ]) ||
-    value.projectId !== expectedProjectId ||
-    !Number.isSafeInteger(value.schemaVersion) ||
-    value.schemaVersion !== 1 ||
-    !Number.isSafeInteger(value.recordVersion) ||
-    (value.recordVersion as number) < 1 ||
-    ![
-      value.confirmedRevisionId,
-      value.activeProposalId,
-      value.projectBuildPlanId,
-    ].every((candidate) => candidate === null || isOpaqueId(candidate)) ||
-    !isTimestamp(value.createdAt) ||
-    !isTimestamp(value.updatedAt)
-  ) {
-    return null;
-  }
-  return value as unknown as AgentMapWorkspaceState;
-}
-
-function parseProposal(
-  value: unknown,
-  projectId: string,
-  activeProposalId: string | null,
-): AgentMapWorkspaceResponse["proposal"] | undefined {
-  if (value === null) return activeProposalId === null ? null : undefined;
-  if (activeProposalId === null) return undefined;
-  try {
-    return parseMapChangeProposal(value, projectId, activeProposalId);
-  } catch {
-    return undefined;
-  }
-}
-
-/** Strictly validates the path-free Agent Map HTTP boundary. */
-export function parseAgentMapWorkspaceResponse(
-  value: unknown,
-  expectedProjectId?: string,
-): AgentMapWorkspaceResponse {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "schemaVersion",
-      "project",
-      "workspace",
-      "proposal",
-    ]) ||
-    value.schemaVersion !== 1
-  ) {
-    throw new Error("Invalid Agent Map workspace response");
-  }
-  const project = parseProject(value.project);
-  if (
-    !project ||
-    (expectedProjectId && project.projectId !== expectedProjectId)
-  ) {
-    throw new Error("Invalid Agent Map workspace response");
-  }
-  const workspace = parseWorkspace(value.workspace, project.projectId);
-  if (!workspace) throw new Error("Invalid Agent Map workspace response");
-  const proposal = parseProposal(
-    value.proposal,
-    project.projectId,
-    workspace.activeProposalId,
-  );
-  if (proposal === undefined)
-    throw new Error("Invalid Agent Map workspace response");
-  return { schemaVersion: 1, project, workspace, proposal };
-}
-
-/** Strict browser boundary for one attributed post-commit notification. */
-export function parseAcceptedProposalDelta(
-  value: unknown,
-  expectedProjectId?: string,
-): AcceptedProposalDelta {
-  try {
-    return parseSharedAcceptedProposalDelta(value, expectedProjectId);
-  } catch {
-    throw new Error("Invalid Agent Map proposal delta");
-  }
-}
-
-export type AgentMapDeltaRoute =
-  | { status: "accepted"; delta: AcceptedProposalDelta }
-  | { status: "malformed-active" }
-  | { status: "ignored" };
-
-/** Route by the announced project before deciding whether parse failure is visible. */
-export function routeAcceptedProposalDelta(
-  value: unknown,
-  activeProjectId: string,
-): AgentMapDeltaRoute {
-  try {
-    return { status: "accepted", delta: parseAcceptedProposalDelta(value) };
-  } catch {
-    return isRecord(value) && value.projectId === activeProjectId
-      ? { status: "malformed-active" }
-      : { status: "ignored" };
-  }
 }
 
 function parseSelection(

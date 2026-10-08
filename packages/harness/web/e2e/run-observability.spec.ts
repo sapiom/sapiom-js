@@ -1,6 +1,19 @@
+/**
+ * The unified run entry, opened from the agent modal's Run locally and Run
+ * (flow-map-chat-overlay.md 4.2b, 4.4b): input collection, validation, the
+ * exact payload, and the saved input. The run it starts lands in the modal's
+ * Runs tab (4.7.1); a deploy reports in the header and `</>` holds the
+ * snippets (4.7.2).
+ */
 import { expect, test, type Page } from "@playwright/test";
 
-import { focusRfqAgent } from "./mock-navigation";
+import { openAgentModal } from "./mock-navigation";
+
+/** The Runs tab: the run workspace for the agent's shown run. */
+async function openRuns(page: Page): Promise<void> {
+  await page.getByTestId("agent-modal-tab-runs").click();
+  await expect(page.getByTestId("agent-modal-panel-runs")).toBeVisible();
+}
 
 type DirectAction = { action: string; req: Record<string, unknown> };
 type ProductEvent = { event: string; properties?: Record<string, unknown> };
@@ -8,11 +21,11 @@ type ProductEvent = { event: string; properties?: Record<string, unknown> };
 async function loadStudio(page: Page): Promise<void> {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect(page.getByTestId("session-steps")).toBeVisible();
+  await openAgentModal(page, "acme-app", "leasing");
 }
 
 async function openLocalSheet(page: Page): Promise<void> {
-  await page.getByTestId("session-step-local").click();
+  await page.getByTestId("agent-modal-run-local").click();
   await expect(page.getByRole("dialog", { name: "Run leasing" })).toBeVisible();
   await expect(
     page.getByText("Local execution", { exact: true }),
@@ -20,8 +33,7 @@ async function openLocalSheet(page: Page): Promise<void> {
 }
 
 async function openCloudSheet(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Choose run target" }).click();
-  await page.getByRole("menuitemradio", { name: /Cloud/ }).click();
+  await page.getByTestId("agent-modal-prod-run").click();
   await expect(page.getByRole("dialog", { name: "Run leasing" })).toBeVisible();
   await expect(
     page.getByText("Cloud execution", { exact: true }),
@@ -63,6 +75,7 @@ async function productEvents(page: Page): Promise<ProductEvent[]> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Every test here launches or deploys from the modal's Run / Deploy verbs.
   await loadStudio(page);
 });
 
@@ -70,8 +83,6 @@ test.describe("unified run entry", () => {
   test("defaults to Local, validates JSON, sends the exact input, and restores it", async ({
     page,
   }) => {
-    const main = page.getByTestId("session-step-local");
-    await expect(main).toHaveAccessibleName("Run using Local");
     await openLocalSheet(page);
 
     const fieldsTab = page.getByRole("tab", { name: "Fields" });
@@ -80,7 +91,7 @@ test.describe("unified run entry", () => {
     await fieldsTab.press("ArrowRight");
     await expect(jsonTab).toBeFocused();
     await expect(jsonTab).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("tabpanel")).toHaveAttribute(
+    await expect(page.getByRole("dialog", { name: "Run leasing" }).getByRole("tabpanel")).toHaveAttribute(
       "aria-labelledby",
       "run-sheet-json-tab",
     );
@@ -94,9 +105,8 @@ test.describe("unified run entry", () => {
 
     await editor.fill('{"topic":"commercial leasing"}');
     await page.getByTestId("run-sheet-submit").click();
+    await expect(page.getByRole("dialog", { name: "Run leasing" })).toHaveCount(0);
 
-    await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-    await expect(page.getByTestId("run-workspace")).toBeVisible();
     const action = await directAction(page);
     expect(action).toEqual({
       action: "runLocal",
@@ -106,7 +116,11 @@ test.describe("unified run entry", () => {
       },
     });
 
-    await main.click();
+    // The launch still binds a session until SAP-3839 and may move the
+    // centre to it; the input is saved by agent path either way.
+    if ((await page.getByTestId("agent-modal").count()) === 0)
+      await openAgentModal(page, "acme-app", "leasing");
+    await openLocalSheet(page);
     await expect(page.getByLabel(/Topic/)).toHaveValue("commercial leasing");
   });
 
@@ -204,8 +218,39 @@ test.describe("unified run entry", () => {
   test("reuses the visible entry contract when extraction reports unavailable", async ({
     page,
   }) => {
-    await page.getByTestId("right-tab-steps").click();
-    await expect(page.getByTestId("canvas-step-row-intake")).toBeVisible();
+    // The fallback reads `useAgentVerbs`' visible-contract map, which the
+    // modal's board writes when its document posts its graph. The board
+    // posts one whose entry declares a `topic` with a default.
+    const frame = page.locator(".agent-modal .canvas-iframe");
+    await expect(frame).toBeVisible();
+    const board = await (await frame.elementHandle())!.contentFrame();
+    await board!.evaluate(() => {
+      parent.postMessage(
+        {
+          type: "sapiom-canvas:graph",
+          graph: {
+            name: "leasing",
+            entry: "intake",
+            nodes: [
+              {
+                id: "intake",
+                kind: "entry",
+                label: "intake",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    topic: { type: "string", default: "indie game development" },
+                  },
+                  required: ["topic"],
+                },
+              },
+            ],
+            edges: [],
+          },
+        },
+        "*",
+      );
+    });
     await page.evaluate(() => {
       (
         window as unknown as {
@@ -215,7 +260,7 @@ test.describe("unified run entry", () => {
     });
 
     await openLocalSheet(page);
-    await expect(page.getByLabel(/Topic/)).toHaveValue(
+    await expect(page.getByLabel(/topic/i)).toHaveValue(
       "indie game development",
     );
     await expect(
@@ -227,31 +272,7 @@ test.describe("unified run entry", () => {
     );
   });
 
-  test("lays out Local and Cloud as distinct two-line target rows", async ({
-    page,
-  }) => {
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    const local = page.getByRole("menuitemradio", { name: /Local/ });
-    const cloud = page.getByRole("menuitemradio", { name: /Cloud/ });
-    const [localBox, cloudBox] = await Promise.all([
-      local.boundingBox(),
-      cloud.boundingBox(),
-    ]);
-
-    expect(localBox).not.toBeNull();
-    expect(cloudBox).not.toBeNull();
-    expect(localBox!.height).toBeGreaterThanOrEqual(52);
-    expect(cloudBox!.height).toBeGreaterThanOrEqual(52);
-    expect(localBox!.y + localBox!.height).toBeLessThanOrEqual(cloudBox!.y);
-    await expect(local).toContainText(
-      "Agent code runs here with Sapiom calls stubbed",
-    );
-    await expect(cloud).toContainText(
-      "Run the deployed agent with real capabilities",
-    );
-  });
-
-  test("explicit Cloud selection persists and sends the exact cloud payload", async ({
+  test("Cloud sends the exact cloud payload", async ({
     page,
   }) => {
     await openCloudSheet(page);
@@ -263,42 +284,6 @@ test.describe("unified run entry", () => {
       action: "run",
       req: { definitionId: "4821", input: { topic: "warehouse renewals" } },
     });
-    await expect(page.getByTestId("run-workspace")).toContainText("Cloud");
-
-    await page.reload();
-    await expect(page.getByTestId("session-step-local")).toHaveAccessibleName(
-      "Run using Cloud",
-    );
-  });
-
-  test("an unavailable saved Cloud target falls back to Local without overwriting it", async ({
-    page,
-  }) => {
-    const rfqPath = "/Users/demo/rfq-agent";
-    await page.evaluate((path) => {
-      localStorage.setItem(
-        `sapiom.studio.run-target.v1:${encodeURIComponent(path)}`,
-        "prod",
-      );
-    }, rfqPath);
-
-    await focusRfqAgent(page);
-    await page.getByTestId("open-agent-start-session").click();
-    const main = page.getByTestId("session-step-local");
-    await expect(main).toHaveAccessibleName("Run using Local");
-    await page.getByRole("button", { name: "Choose run target" }).click();
-    await expect(
-      page.getByRole("menuitemradio", { name: /Cloud/ }),
-    ).toBeDisabled();
-    expect(
-      await page.evaluate(
-        (path) =>
-          localStorage.getItem(
-            `sapiom.studio.run-target.v1:${encodeURIComponent(path)}`,
-          ),
-        rfqPath,
-      ),
-    ).toBe("prod");
   });
 });
 
@@ -310,6 +295,8 @@ test.describe("artifact-first completion", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openLocalSheet(page);
     await page.getByTestId("run-sheet-submit").click();
+    await expect(page.getByRole("dialog", { name: "Run leasing" })).toHaveCount(0);
+    await openRuns(page);
 
     const workspace = page.getByTestId("run-workspace");
     await expect(workspace).toBeVisible();
@@ -337,6 +324,7 @@ test.describe("artifact-first completion", () => {
   }) => {
     await openLocalSheet(page);
     await page.getByTestId("run-sheet-submit").click();
+    await openRuns(page);
     await expect(page.getByTestId("run-artifact")).toBeVisible({
       timeout: 8_000,
     });
@@ -405,16 +393,20 @@ test.describe("artifact-first completion", () => {
       .toBe(2);
   });
 
-  test("Deploy still lands in Steps and links to the Code integration", async ({
+  test("Deploy reports in the header, and </> holds the integration snippets", async ({
     page,
   }) => {
-    await page.getByTestId("session-step-deploy").click();
-    await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-    const banner = page.getByTestId("deploy-status-banner");
-    await expect(banner).toHaveAttribute("data-phase", "ready", {
-      timeout: 6_000,
-    });
-    await page.getByTestId("deploy-open-code").click();
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    await page.getByTestId("agent-modal-deploy").click();
+    const progress = page.getByTestId("agent-modal-progress");
+    await expect(progress).toHaveText("Deployed", { timeout: 6_000 });
+    await expect(progress).toHaveAttribute("data-tone", "done");
+    // A deploy this tab watched says when (4.7.2).
+    await expect(page.getByTestId("agent-modal-state")).toHaveText(
+      "Deployed just now",
+    );
+    await page.getByTestId("agent-modal-snippets").click();
+    await expect(
+      page.getByTestId("agent-modal-snippets-popover").getByTestId("snippet-panel"),
+    ).toBeVisible();
   });
 });

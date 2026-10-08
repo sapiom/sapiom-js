@@ -36,7 +36,7 @@ import type {
   StudioRailFileResponse,
   StudioRailLaunchEdgesResponse,
 } from "../shared/types.js";
-import { detectWorkflowLaunches } from "../core/canvas-interconnections.js";
+import { detectWorkflowLaunches } from "@sapiom/mcp/map";
 import { hasTraversalSegment, resolveWithinRoot } from "../core/path-safety.js";
 
 /** The directory the file lives in: already a live convention (canvas renders,
@@ -149,7 +149,7 @@ export async function removeStudioRailFile(root: string): Promise<void> {
 /**
  * Launch edges across every registered agent, as parent-name to child-slug.
  *
- * Uses the shared syntax-only extractor (`core/canvas-interconnections.ts`) —
+ * Uses the shared syntax-only extractor (`@sapiom/mcp/map`) —
  * the same detector the canvas and system graph use for direct agent invocations. A
  * second edge detector would be a second answer to "what does this launch",
  * and the Group axis and system graph are supposed to read one graph.

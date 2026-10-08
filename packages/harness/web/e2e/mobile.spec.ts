@@ -1,15 +1,14 @@
 /**
- * Mobile shell (<=768px) — the three-pane layout folds to one column: the
- * center pane owns the viewport, the workspace rail opens as an overlay
- * drawer and the right pane as a bottom sheet, both reusing the desktop
- * collapse state. Same mock fixtures as smoke.spec.ts.
+ * Mobile shell (<=768px) — the layout folds to one column: the center pane
+ * owns the viewport and the workspace rail opens as an overlay drawer,
+ * reusing the desktop collapse state. Same mock fixtures as smoke.spec.ts.
  */
 import { expect, test } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 
 test.use({ viewport: { width: 375, height: 812 } });
 
-/** Geometry assertions must not race the 300ms drawer/sheet entrance —
+/** Geometry assertions must not race the 300ms drawer entrance —
  *  boundingBox() reads mid-flight transforms otherwise. */
 async function settled(el: Locator): Promise<void> {
   await el.evaluate((node) =>
@@ -22,20 +21,18 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".session-bar")).toBeVisible();
 });
 
-test("folds to one column: both side panes start collapsed and nothing overflows sideways", async ({
+test("folds to one column: the rail starts collapsed and nothing overflows sideways", async ({
   page,
 }) => {
-  // Collapsed panes surface their expand affordances in the session bar.
+  // The collapsed rail surfaces its expand affordance in the session bar.
   await expect(page.getByTestId("rail-expand")).toBeVisible();
-  await expect(page.getByTestId("right-expand")).toBeVisible();
-  // The rail unmounts when collapsed; the right pane only CSS-hides so a
-  // running Visualize enrichment survives (same contract as desktop).
+  // The rail unmounts when collapsed. Nothing sits beside the session, so
+  // there is no sheet to open (flow-map-chat-overlay.md 4.4.1).
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toBeHidden();
-  await expect(page.locator(".right-pane")).toHaveCount(1);
+  await expect(page.getByTestId("right-expand")).toHaveCount(0);
+  await expect(page.locator(".right-pane")).toHaveCount(0);
   // Drag handles are desktop-only — overlays have no boundary to drag.
   await expect(page.getByTestId("resize-handle-rail")).toHaveCount(0);
-  await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
 
   // The whole page fits 375 edge to edge — no horizontal scroll or clipping.
   const overflow = await page.evaluate(() => {
@@ -47,7 +44,7 @@ test("folds to one column: both side panes start collapsed and nothing overflows
   await page.screenshot({ path: "web/e2e/screenshots/mobile-shell.png" });
 });
 
-test("rail opens as a drawer and closes on opening a workflow or a scrim tap", async ({
+test("rail opens as a drawer and closes on selecting a session or a scrim tap", async ({
   page,
 }) => {
   await page.getByTestId("rail-expand").click();
@@ -61,17 +58,13 @@ test("rail opens as a drawer and closes on opening a workflow or a scrim tap", a
   expect(box?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(375);
   await page.screenshot({ path: "web/e2e/screenshots/mobile-drawer.png" });
 
-  // This row is both a Project root and an agent, and the row IS the agent:
-  // opening it focuses that agent and closes the drawer. It used to take the
-  // long way round, opening a one-node dependency graph and then clicking the
-  // node, because the Project action won the row's click unconditionally.
-  await page
-    .getByTestId("workflow-rfq")
-    .locator(".workspace-row-main")
-    .click();
+  // A session row is the rail's one-click verb: selecting a session in
+  // another project closes the drawer and puts that session in the centre.
+  await page.getByTestId("rail-session-select-sess-bg").click();
   await expect(rail).toHaveCount(0);
-  await expect(page.getByTestId("open-agent-empty")).toContainText(
-    "No running session for rfq",
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-bg",
   );
 
   // The scrim's exposed sliver (right of the drawer) dismisses on tap.
@@ -83,61 +76,32 @@ test("rail opens as a drawer and closes on opening a workflow or a scrim tap", a
   await expect(rail).toHaveCount(0);
 });
 
-test("right pane opens as a bottom sheet and dismisses from its own collapse control", async ({
+test("a project's Agent Map takes the whole centre on a phone, with no sheet and no chat", async ({
   page,
 }) => {
-  await page.getByTestId("right-expand").click();
-  const pane = page.locator(".right-pane");
-  await expect(pane).toBeVisible();
-  await settled(pane);
-  // Sheet anatomy: full width, anchored to the bottom, one header height of
-  // the page left visible above as context.
-  const box = await pane.boundingBox();
-  expect(box?.width).toBe(375);
-  expect((box?.y ?? 0) + (box?.height ?? 0)).toBe(812);
-  expect(box?.y ?? 0).toBeGreaterThan(0);
-  await page.screenshot({ path: "web/e2e/screenshots/mobile-sheet.png" });
-
-  await page.getByTestId("right-collapse").click();
-  await expect(pane).toBeHidden();
-  // Hidden, not unmounted — the keep-alive contract holds on mobile too.
-  await expect(pane).toHaveCount(1);
-});
-
-test("a workspace graph opens in the right sheet, over a workbench that is still there", async ({
-  page,
-}) => {
-  // It used to be a full-main destination that hid BOTH panes — the mode
-  // switch SAP-2980 removes. On mobile the map is the right pane's map, so it
-  // arrives in the sheet, and the conversation is one dismissal away rather
-  // than gone.
+  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
+  // The project view is the centre at every width (flow-navigation.md 4.3):
+  // no right pane beside it, so no sheet to open and no scrim to tap out of.
   await page.getByTestId("rail-expand").click();
   await page.getByTestId("project-select-acme-app").click();
 
-  const graph = page.getByTestId("workspace-graph-view");
+  const graph = page.getByTestId("agent-map-frame");
   await expect(graph).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toBeVisible();
-  // A sheet, so it brings the sheet's own scrim — the tap-out back to the
-  // conversation, which a full-main destination could not offer.
-  await expect(page.getByTestId("right-sheet-scrim")).toBeVisible();
-  await expect(page.locator(".center-pane")).toHaveCount(1);
+  await expect(page.getByTestId("right-sheet-scrim")).toHaveCount(0);
+  await expect(page.getByTestId("right-expand")).toHaveCount(0);
+  await expect(page.getByTestId("agent-view")).toHaveCount(0);
 
-  // Sheet anatomy, same as the board's: full width, anchored to the bottom,
-  // one header height of the page left visible above as context.
-  await settled(page.locator(".right-pane"));
-  const sheet = await page.locator(".right-pane").boundingBox();
-  expect(sheet?.x).toBe(0);
-  expect(sheet?.width).toBe(375);
-  expect((sheet?.y ?? 0) + (sheet?.height ?? 0)).toBe(812);
-  expect(sheet?.y ?? 0).toBeGreaterThan(0);
-  const bounds = await graph.boundingBox();
-  expect(bounds?.x).toBe(0);
-  expect(bounds?.width).toBe(375);
-  expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBe(812);
+  // Full width, ending at the bottom edge (once the drawer's exit settles).
+  await expect
+    .poll(async () => {
+      const box = await graph.boundingBox();
+      return [box?.x, box?.width, Math.round((box?.y ?? 0) + (box?.height ?? 0))];
+    })
+    .toEqual([0, 375, 812]);
 
   const controls = await page
-    .getByTestId("system-graph-controls")
+    .getByRole("group", { name: "Agent Map view controls" })
     .boundingBox();
   expect((controls?.x ?? -1) + (controls?.width ?? 0)).toBeLessThanOrEqual(375);
   expect((controls?.y ?? -1) + (controls?.height ?? 0)).toBeLessThanOrEqual(
@@ -149,13 +113,15 @@ test("a workspace graph opens in the right sheet, over a workbench that is still
   });
   expect(overflow).toBe(0);
   await page.screenshot({
-    path: "web/e2e/screenshots/mobile-workspace-graph.png",
+    path: "web/e2e/screenshots/mobile-agent-map.png",
   });
 
-  // Drilling into a node cuts to board altitude; the sheet's own collapse
-  // control then hands the whole screen back to the conversation.
-  await page.getByTestId("system-graph-node-leasing").click();
+  // A node names itself on the floating card; the selected session is one
+  // rail tap away, and its workbench comes back with it.
+  await page.getByTestId("agent-map-node-leasing").click();
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-state", "node");
+  await page.getByTestId("rail-expand").click();
+  await page.getByTestId("rail-session-select-sess-boot").click();
   await expect(graph).toHaveCount(0);
-  await page.getByTestId("right-collapse").click();
-  await expect(page.locator(".center-pane")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toBeVisible();
 });

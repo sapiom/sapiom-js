@@ -16,6 +16,7 @@
  * response objects 1:1 with the wire contract.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { capabilityCall } from "../_client/capability-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, MemoryHttpError } from "./errors.js";
 
@@ -236,15 +237,23 @@ export async function append(
   if (input.metadata !== undefined) body.metadata = input.metadata;
   if (input.occurredAt !== undefined) body.occurredAt = input.occurredAt;
 
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/memory/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to append memory",
-  );
-  return (await res.json()) as AppendResult;
+  return capabilityCall<AppendResult>("memory.append", body, {
+    transport,
+    makeError: (message, status, body) =>
+      new MemoryHttpError(message, status, body),
+    errorPrefix: "Failed to append memory",
+    legacyCall: async () => {
+      const res = await ensureOk(
+        await transport.fetch(`${baseUrl}/v1/memory/append`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        "Failed to append memory",
+      );
+      return (await res.json()) as AppendResult;
+    },
+  });
 }
 
 /**
@@ -268,15 +277,23 @@ export async function recall(
   if (input.weight !== undefined) body.weight = input.weight;
   if (input.filter !== undefined) body.filter = input.filter;
 
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/memory/recall`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to recall memories",
-  );
-  return (await res.json()) as RecallResponse;
+  return capabilityCall<RecallResponse>("memory.recall", body, {
+    transport,
+    makeError: (message, status, body) =>
+      new MemoryHttpError(message, status, body),
+    errorPrefix: "Failed to recall memories",
+    legacyCall: async () => {
+      const res = await ensureOk(
+        await transport.fetch(`${baseUrl}/v1/memory/recall`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        "Failed to recall memories",
+      );
+      return (await res.json()) as RecallResponse;
+    },
+  });
 }
 
 /**
@@ -291,26 +308,35 @@ export async function forget(
   const body: Record<string, unknown> = { ids: input.ids };
   if (input.namespace !== undefined) body.namespace = input.namespace;
 
-  const res = await transport.fetch(`${baseUrl}/v1/memory`, {
-    method: "DELETE",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+  await capabilityCall<Record<string, never>>("memory.forget", body, {
+    transport,
+    makeError: (message, status, body) =>
+      new MemoryHttpError(message, status, body),
+    errorPrefix: "Failed to forget memories",
+    legacyCall: async () => {
+      const res = await transport.fetch(`${baseUrl}/v1/memory`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = text;
+        }
+        throw new MemoryHttpError(
+          `Failed to forget memories: ${res.status} ${text}`,
+          res.status,
+          parsed,
+        );
+      }
+      // 204 No Content — nothing to parse.
+      return {};
+    },
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    throw new MemoryHttpError(
-      `Failed to forget memories: ${res.status} ${text}`,
-      res.status,
-      parsed,
-    );
-  }
-  // 204 No Content — nothing to parse.
 }
 
 /**
@@ -323,23 +349,36 @@ export async function drop(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<void> {
-  const res = await transport.fetch(
-    `${baseUrl}/v1/memory/namespaces/${encodeURIComponent(namespace)}`,
-    { method: "DELETE" },
+  await capabilityCall<Record<string, never>>(
+    "memory.drop",
+    { namespace },
+    {
+      transport,
+      makeError: (message, status, body) =>
+        new MemoryHttpError(message, status, body),
+      errorPrefix: "Failed to drop namespace",
+      legacyCall: async () => {
+        const res = await transport.fetch(
+          `${baseUrl}/v1/memory/namespaces/${encodeURIComponent(namespace)}`,
+          { method: "DELETE" },
+        );
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = text;
+          }
+          throw new MemoryHttpError(
+            `Failed to drop namespace '${namespace}': ${res.status} ${text}`,
+            res.status,
+            parsed,
+          );
+        }
+        // 204 No Content — nothing to parse.
+        return {};
+      },
+    },
   );
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    throw new MemoryHttpError(
-      `Failed to drop namespace '${namespace}': ${res.status} ${text}`,
-      res.status,
-      parsed,
-    );
-  }
-  // 204 No Content — nothing to parse.
 }

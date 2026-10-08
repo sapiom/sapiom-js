@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { applyMove, planMove, refuseMove, remapUnder } from "./agent-move";
+import { refuseMove, remapUnder } from "./agent-move";
 
 const ROOT = "/Users/demo/polsia";
 const ADS = `${ROOT}/backend/src/agents/ads`;
@@ -22,83 +22,7 @@ const ROLLUP = `${ROOT}/scripts/tools/rollup`;
 const ADS_WORKER = `${ROOT}/services/workers/ads`;
 const ALL = [ADS, OUTREACH, ROLLUP, ADS_WORKER];
 
-describe("planMove", () => {
-  it("plans a move into another directory", () => {
-    expect(planMove(ROLLUP, `${ROOT}/services`, ALL)).toEqual({
-      ok: true,
-      from: ROLLUP,
-      to: `${ROOT}/services/rollup`,
-      name: "rollup",
-    });
-  });
-
-  it("refuses a move that would land on an agent of the same name", () => {
-    const plan = planMove(ADS_WORKER, `${ROOT}/backend/src/agents`, ALL);
-    expect(plan.ok).toBe(false);
-    if (!plan.ok) expect(plan.reason).toBe("agents already has an agent called ads.");
-  });
-
-  it("refuses a destination that is a DIRECTORY holding an agent", () => {
-    // Nothing is registered at `services/workers` itself, but an agent lives
-    // inside it, so the directory exists and a move onto it would land on top
-    // of a tree. A path list can see that much; the endpoint stats the rest.
-    const plan = planMove(ROLLUP, `${ROOT}/services`, [...ALL, `${ROOT}/services/rollup/inner`]);
-    expect(plan.ok).toBe(false);
-    if (!plan.ok) expect(plan.reason).toContain("already has an agent called rollup");
-  });
-
-  it("treats a drop into its CURRENT folder as a silent no-op", () => {
-    const plan = planMove(ADS, `${ROOT}/backend/src/agents`, ALL);
-    expect(plan.ok).toBe(false);
-    // An empty reason is the whole point: nothing to say, so nothing is said.
-    if (!plan.ok) expect(plan.reason).toBe("");
-  });
-
-  it("is silent about the current folder even when it is spelled with a trailing slash", () => {
-    const plan = planMove(ADS, `${ROOT}/backend/src/agents/`, ALL);
-    expect(plan.ok).toBe(false);
-    if (!plan.ok) expect(plan.reason).toBe("");
-  });
-
-  it("refuses moving a directory inside its own subtree", () => {
-    const plan = planMove(ADS, `${ADS}/steps`, ALL);
-    expect(plan.ok).toBe(false);
-    if (!plan.ok) expect(plan.reason).toBe("Can't move ads inside itself.");
-  });
-
-  it("refuses moving an agent onto itself", () => {
-    const plan = planMove(ADS, ADS, ALL);
-    expect(plan.ok).toBe(false);
-    if (!plan.ok) expect(plan.reason).toBe("Can't move ads into itself.");
-  });
-
-  it("does not let the moving subtree refuse its own move", () => {
-    // `ads` plus an agent nested inside it. Both travel, so neither is the
-    // thing already at the destination — without that exclusion every move of
-    // a directory with children would refuse itself.
-    const nested = `${ADS}/reporter`;
-    expect(planMove(ADS, `${ROOT}/packages`, [ADS, nested]).ok).toBe(true);
-  });
-
-  it("is not fooled by a destination that merely shares a name prefix", () => {
-    // `agents/ads-v2` is not `agents/ads`; a startsWith check without the
-    // separator would have called the destination occupied.
-    expect(planMove(`${ROOT}/packages/ads-v2`, `${ROOT}/backend/src/agents`, ALL)).toEqual({
-      ok: true,
-      from: `${ROOT}/packages/ads-v2`,
-      to: `${ROOT}/backend/src/agents/ads-v2`,
-      name: "ads-v2",
-    });
-  });
-
-  it("keeps the destination in the source's native separator on Windows", () => {
-    const plan = planMove("C:\\Users\\demo\\polsia\\ads", "C:\\Users\\demo\\polsia\\services", []);
-    expect(plan.ok).toBe(true);
-    if (plan.ok) expect(plan.to).toBe("C:\\Users\\demo\\polsia\\services\\ads");
-  });
-});
-
-describe("refuseMove — the mover's own guard, planner bypassed", () => {
+describe("refuseMove — the panel's and the mover's guard", () => {
   it("allows a move to an unoccupied destination", () => {
     expect(refuseMove(ALL, ROLLUP, `${ROOT}/services/rollup`)).toBeNull();
   });
@@ -159,20 +83,5 @@ describe("remapUnder", () => {
     expect(remapUnder(`${ADS}/sub`, `${ADS}/`, `${ROOT}/services/ads`)).toBe(
       `${ROOT}/services/ads/sub`,
     );
-  });
-});
-
-describe("applyMove", () => {
-  it("moves the parent and everything under it, and nothing else", () => {
-    const nested = `${ADS}/sub/creative`;
-    expect(applyMove([ADS, nested, OUTREACH], ADS, `${ROOT}/services/ads`)).toEqual([
-      `${ROOT}/services/ads`,
-      `${ROOT}/services/ads/sub/creative`,
-      OUTREACH,
-    ]);
-  });
-
-  it("leaves unrelated paths untouched", () => {
-    expect(applyMove(ALL, `${ROOT}/nope`, `${ROOT}/elsewhere`)).toEqual(ALL);
   });
 });

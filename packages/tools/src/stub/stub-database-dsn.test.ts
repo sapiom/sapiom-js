@@ -23,7 +23,7 @@ describe("stub database DSN is unroutable", () => {
   });
 
   it("database.create returns a host that cannot resolve", async () => {
-    const db = await createStubClient({}).database.create({ duration: "1h" });
+    const db = await createStubClient({}).database.create({});
 
     expect(db.connection?.host).toMatch(UNROUTABLE);
     expect(db.connection?.connectionString).toContain(".invalid:5432");
@@ -40,7 +40,7 @@ describe("stub database DSN is unroutable", () => {
   it("never points at localhost — the author's own Postgres", async () => {
     const client = createStubClient({});
     const got = await client.database.get("my-handle");
-    const created = await client.database.create({ duration: "1h" });
+    const created = await client.database.create({});
 
     for (const conn of [got.connection, created.connection]) {
       expect(conn?.host).not.toBe("localhost");

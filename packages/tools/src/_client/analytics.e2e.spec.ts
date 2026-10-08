@@ -23,9 +23,11 @@ import {
 import { Transport, type TransportConfig } from "./index.js";
 import type { AnalyticsHolder } from "./analytics.js";
 import { createClient } from "../client.js";
+import { ExecutionClient } from "../executions/client.js";
 import { scrape, SearchHttpError, type ScrapeResult } from "../search/index.js";
 import { Sandbox } from "../sandboxes/index.js";
 import { Repository } from "../repositories/index.js";
+import { managedBrowserApi } from "../browser-automation/managed.js";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -83,7 +85,9 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     }
     // Sandbox the identity file into a temp HOME, pre-seeded so the identity is
     // deterministic and the one-time first-run notice never prints from tests.
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "sapiom-tools-analytics-"));
+    tempHome = fs.mkdtempSync(
+      path.join(os.tmpdir(), "sapiom-tools-analytics-"),
+    );
     process.env.HOME = tempHome;
     process.env.USERPROFILE = tempHome;
     fs.mkdirSync(path.join(tempHome, ".sapiom"), { recursive: true });
@@ -168,6 +172,198 @@ describe("capability.call analytics (e2e, mock collector)", () => {
   // Event emission
   // -------------------------------------------------------------------------
 
+  it("labels a prefixed Core execution with its canonical capability", async () => {
+    enableTelemetry();
+    const state = {
+      version: 1,
+      id: "11111111-1111-4111-8111-111111111111",
+      capabilityId: "fixture.echo",
+      status: "succeeded",
+      result: null,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    const { transport } = makeTransport(() => jsonResponse(state), {
+      coreBaseUrl: "https://core.test/proxy",
+    });
+    await new ExecutionClient(transport).get(state.id);
+    const logical = (await flushedEvents(transport)).filter(
+      (event) => event.event_type === "capability.call",
+    );
+    expect(logical).toHaveLength(1);
+    expect(logical[0].data).toMatchObject({
+      capability: "fixture.echo",
+      url: "https://core.test/proxy/v1/capabilities/fixture.echo",
+    });
+  });
+
+  it("does not observe or cache a mismatched handle result before a corrected direct get", async () => {
+    enableTelemetry();
+    const receipt = {
+      version: 1 as const,
+      id: "11111111-1111-4111-8111-111111111111",
+      capabilityId: "fixture.echo",
+      status: "queued" as const,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    let capabilityId = "email.find";
+    const { transport } = makeTransport(
+      () =>
+        jsonResponse({
+          ...receipt,
+          capabilityId,
+          status: "succeeded",
+          result: 42,
+        }),
+      { coreBaseUrl: "https://core.test" },
+    );
+    const client = new ExecutionClient(transport);
+    await expect(
+      client.wait({
+        receipt,
+        submissionKey: "saved-key",
+        coreBaseUrl: "https://core.test",
+      }),
+    ).rejects.toMatchObject({
+      name: "ExecutionProtocolError",
+      executionId: receipt.id,
+      submissionKey: "saved-key",
+    });
+    expect(
+      (await flushedEvents(transport)).filter(
+        (event) => event.event_type === "capability.call",
+      ),
+    ).toHaveLength(0);
+    expect(
+      (transport as unknown as { analyticsHolder: AnalyticsHolder })
+        .analyticsHolder.executionCompletions?.size ?? 0,
+    ).toBe(0);
+    capabilityId = receipt.capabilityId;
+    await expect(client.get(receipt.id)).resolves.toMatchObject({ result: 42 });
+    const logical = (await flushedEvents(transport)).filter(
+      (event) => event.event_type === "capability.call",
+    );
+    expect(logical).toHaveLength(1);
+    expect(logical[0].data).toMatchObject({
+      capability: "fixture.echo",
+      ok: true,
+    });
+  });
+
+  it("separates execution transport from one logical failed outcome across concurrent attributed waits", async () => {
+    enableTelemetry();
+    const receipt = {
+      version: 1,
+      id: "11111111-1111-4111-8111-111111111111",
+      capabilityId: "fixture.echo",
+      status: "queued",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    const { transport } = makeTransport(
+      ({ init }) =>
+        jsonResponse(
+          init.method === "POST"
+            ? receipt
+            : {
+                ...receipt,
+                status: "failed",
+                error: { code: "execution_failed", message: "safe failure" },
+              },
+        ),
+      { coreBaseUrl: "https://core.test" },
+    );
+    const client = new ExecutionClient(transport);
+    const derived = new ExecutionClient(
+      transport.withAttribution({ agentName: "derived" }),
+    );
+    const handle = await client.submit(
+      client.prepare("fixture.echo", { secret: "never record me" }),
+    );
+    await Promise.all([
+      client.wait(handle).catch(() => {}),
+      derived.wait(handle).catch(() => {}),
+    ]);
+    await client.get(handle.receipt.id);
+    const events = await flushedEvents(transport);
+    const logical = events.filter(
+      (event) => event.event_type === "capability.call",
+    );
+    expect(logical).toHaveLength(1);
+    expect(logical[0].data).toMatchObject({
+      ok: false,
+      execution_status: "failed",
+      execution_id: receipt.id,
+    });
+    expect(logical[0].data.status).toBeUndefined();
+    expect(
+      events.filter(
+        (event) => event.event_type === "capability.execution.transport",
+      ),
+    ).toHaveLength(4);
+    expect(JSON.stringify(events)).not.toContain("never record me");
+  });
+
+  it("reports interruption separately, observes a later result and bounds the shared completion cache", async () => {
+    enableTelemetry();
+    let done = false;
+    const receipt = {
+      version: 1 as const,
+      id: "11111111-1111-4111-8111-111111111111",
+      capabilityId: "fixture.echo",
+      status: "queued" as const,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    const { transport } = makeTransport(
+      () =>
+        jsonResponse(
+          done ? { ...receipt, status: "succeeded", result: null } : receipt,
+        ),
+      { coreBaseUrl: "https://core.test" },
+    );
+    const client = new ExecutionClient(transport);
+    await expect(
+      client.wait(receipt.id, { waitTimeoutMs: 10 }),
+    ).rejects.toMatchObject({ name: "ExecutionWaitInterruptedError" });
+    let events = await flushedEvents(transport);
+    expect(events.some((event) => event.event_type === "capability.call")).toBe(
+      false,
+    );
+    expect(
+      events.some(
+        (event) => event.event_type === "capability.execution.wait_interrupted",
+      ),
+    ).toBe(true);
+    done = true;
+    await client.wait(receipt.id);
+    events = await flushedEvents(transport);
+    expect(
+      events.filter((event) => event.event_type === "capability.call"),
+    ).toHaveLength(1);
+    const holder = (
+      transport as unknown as { analyticsHolder: AnalyticsHolder }
+    ).analyticsHolder;
+    const cache = holder.executionCompletions!;
+    for (let n = 0; n < 999; n++) cache.set(`other:${n}`, Date.now());
+    transport.observeExecution("https://core.test", {
+      ...receipt,
+      id: "22222222-2222-4222-8222-222222222222",
+      status: "succeeded",
+      result: null,
+    });
+    expect(cache.size).toBeLessThanOrEqual(1000);
+    expect(cache.has(`https://core.test:${receipt.id}`)).toBe(false);
+    cache.set("expired", Date.now() - 3_600_001);
+    transport.observeExecution("https://core.test", {
+      ...receipt,
+      status: "succeeded",
+      result: null,
+    });
+    expect(cache.has("expired")).toBe(false);
+  });
+
   it("a routed capability call emits one full capability.call envelope", async () => {
     enableTelemetry();
     const { result, transport } = await scrapeOnce();
@@ -211,7 +407,9 @@ describe("capability.call analytics (e2e, mock collector)", () => {
   it("handle methods emit events too — one per HTTP call (sandbox read/write)", async () => {
     enableTelemetry();
     const { transport } = makeTransport(({ init }) =>
-      init.method === "PUT" ? jsonResponse({}) : jsonResponse({ content: "hi" }),
+      init.method === "PUT"
+        ? jsonResponse({})
+        : jsonResponse({ content: "hi" }),
     );
 
     const sandbox = Sandbox.attach(
@@ -234,11 +432,18 @@ describe("capability.call analytics (e2e, mock collector)", () => {
   it("transport.request() capability calls are counted exactly once", async () => {
     enableTelemetry();
     const { transport } = makeTransport(() =>
-      jsonResponse({ slug: "my-repo", cloneUrl: "https://git.test/my-repo.git" }),
+      jsonResponse({
+        slug: "my-repo",
+        cloneUrl: "https://git.test/my-repo.git",
+      }),
     );
 
     // Repository.create goes through transport.request → transport.fetch.
-    const repo = await Repository.create("my-repo", transport, "https://git.test");
+    const repo = await Repository.create(
+      "my-repo",
+      transport,
+      "https://git.test",
+    );
     expect(repo.slug).toBe("my-repo");
 
     const events = await flushedEvents(transport);
@@ -262,6 +467,46 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(events[0]!.data.capability).toBe("/v1/files");
     // Nothing anywhere in the envelope carries the query string.
     expect(JSON.stringify(events[0])).not.toContain("SECRET");
+  });
+
+  it("records route templates, not the secret IDs in managed browser paths", async () => {
+    enableTelemetry();
+    const { transport, calls } = makeTransport(({ url }) => {
+      // A fetch error can repeat the request URL, secret ID included.
+      if (url.includes("/profiles/"))
+        throw new TypeError(`fetch failed: ${url}`);
+      return jsonResponse({ data: { status: "success" } });
+    });
+    const api = managedBrowserApi("https://browser.test", transport);
+
+    await api.tasks.pause({ taskId: "SECRET-TASK", idempotencyKey: "key-1" });
+    await api.sessions.recover("SECRET-CREATE-KEY");
+    await api.recordings.delete({
+      sessionId: "SECRET-SESSION",
+      recordingId: "SECRET-RECORDING",
+    });
+    // The caller still receives the original error.
+    await expect(api.profiles.get("SECRET-PROFILE")).rejects.toThrow(
+      "fetch failed: https://browser.test/v1/browser/profiles/SECRET-PROFILE",
+    );
+    // The requests themselves still carry the real IDs.
+    expect(calls[0]!.url).toBe(
+      "https://browser.test/v1/browser/tasks/SECRET-TASK/pause",
+    );
+
+    const events = await flushedEvents(transport);
+    expect(events.map((event) => event.data.capability)).toEqual([
+      "/v1/browser/tasks/:taskId/pause",
+      "/v1/browser/sessions/recovery/:idempotencyKey",
+      "/v1/browser/sessions/:sessionId/recordings/:recordingId",
+      "/v1/browser/profiles/:profileId",
+    ]);
+    expect(events[0]!.data.url).toBe(
+      "https://browser.test/v1/browser/tasks/:taskId/pause",
+    );
+    expect(events[3]!.data.error).toBe("TypeError");
+    expect(events[3]!.data.error_message).toBe("Request failed");
+    expect(JSON.stringify(events)).not.toContain("SECRET");
   });
 
   it("captures the HTTP status on a failed call — and the typed error is unchanged", async () => {
@@ -332,7 +577,8 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     for (let i = 0; i < 12; i++) {
       const client = createClient({
         apiKey: "test-key",
-        fetch: (async () => jsonResponse(SCRAPE_RAW)) as typeof globalThis.fetch,
+        fetch: (async () =>
+          jsonResponse(SCRAPE_RAW)) as typeof globalThis.fetch,
       });
       await client.search.scrape({ url: "https://example.com" });
       // The lazily-created emitter registered exactly one exit hook…
@@ -390,7 +636,9 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(analyticsOf(transport)?.enabled).toBe(true);
     expect(collector.requests.length).toBeGreaterThan(0);
     // The identity file is written (first-run on a fresh HOME).
-    expect(fs.existsSync(path.join(tempHome, ".sapiom", "analytics.json"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(tempHome, ".sapiom", "analytics.json")),
+    ).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -399,7 +647,10 @@ describe("capability.call analytics (e2e, mock collector)", () => {
 
   const failureModes = [
     ["down", () => collector.setMode({ kind: "down" })],
-    ["responding 500", () => collector.setMode({ kind: "status", status: 500 })],
+    [
+      "responding 500",
+      () => collector.setMode({ kind: "status", status: 500 }),
+    ],
     ["slow (150ms)", () => collector.setMode({ kind: "slow", delayMs: 150 })],
   ] as const;
 
@@ -437,7 +688,11 @@ describe("capability.call analytics (e2e, mock collector)", () => {
         () => new Response("upstream exploded", { status: 502 }),
       );
       try {
-        await scrape({ url: "https://example.com" }, transport, "https://api.test");
+        await scrape(
+          { url: "https://example.com" },
+          transport,
+          "https://api.test",
+        );
       } catch (error) {
         return error as SearchHttpError;
       }

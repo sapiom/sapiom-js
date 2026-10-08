@@ -25,6 +25,7 @@ const session = (over: Partial<HarnessSession> & { id: string }): HarnessSession
   harness: "claude-code",
   cwd: "/Users/demo/acme-app",
   title: "acme-app",
+  agentMapIdentity: { projectId: "project_00000000-0000-4000-8000-000000000001", userId: "user_test", sessionId: "s1" },
   status: "running",
   createdAt: minutesAgo(60),
   lastActiveAt: minutesAgo(30),
@@ -81,9 +82,13 @@ describe("buildPaletteItems display names", () => {
     expect(agent?.meta).toBe("/Users/demo/team-tools/slack-notifier");
   });
 
-  it("live sessions get the rail's numbered default names", () => {
+  it("live sessions show the default names the server assigned them", () => {
     const first = session({ id: "s1", createdAt: minutesAgo(90) });
-    const second = session({ id: "s2", createdAt: minutesAgo(10) });
+    const second = session({
+      id: "s2",
+      title: "acme-app 2",
+      createdAt: minutesAgo(10),
+    });
     const items = buildPaletteItems(sources({ sessions: [first, second] }));
     expect(items.filter((item) => item.kind === "session").map((item) => item.label)).toEqual([
       "acme-app",

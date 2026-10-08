@@ -283,8 +283,10 @@ export function bootCanvasView(): void {
     // card or the header/legend push the graph past the pane and it clips
     // vertically. offsetWidth/Height are the layout border-box, unaffected by
     // any transform, so this is correct even if a view was already applied.
-    const width = root.offsetWidth;
-    const height = root.offsetHeight;
+    // Plus anything that overflows the card's box: a board wider than the
+    // frame (a border column of other agents) is still part of the card.
+    const width = Math.max(root.offsetWidth, root.scrollWidth);
+    const height = Math.max(root.offsetHeight, root.scrollHeight);
     if (!width || !height) return;
     window.parent.postMessage(
       { type: "sapiom-canvas:size", width: width, height: height, insetTop: 0, insetBottom: 0, insetX: 0 },

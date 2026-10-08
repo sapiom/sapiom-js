@@ -1,0 +1,21 @@
+{
+  "type": "slack.message.created",
+  "description": "A new bug report, top level in the customer channel: opens an issue.",
+  "payload": {
+    "event": {
+      "ts": "1790890000.000100",
+      "team": "T0EXAMPLE01",
+      "user_team": "T0CUSTOMER1",
+      "text": "Our CSV export returns a 500 since this morning <!here>. Can someone look?",
+      "type": "message",
+      "user": "U0CUSTOMER1",
+      "channel": "C0CUSTOMER1",
+      "event_ts": "1790890000.000100",
+      "channel_type": "channel"
+    },
+    "teamId": "T0EXAMPLE01",
+    "eventId": "Ev0INTAKEBUG1",
+    "apiAppId": "A0DESKAPP1",
+    "eventTime": 1790890000
+  }
+}

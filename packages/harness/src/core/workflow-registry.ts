@@ -37,7 +37,7 @@ import {
   AgentSourceDiscovery,
   AgentSourceScanBudget,
 } from "./agent-source-discovery.js";
-import { rememberCanonicalGraphPath } from "./canonical-graph-path.js";
+import { rememberCanonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import { hasTraversalSegment, resolveWithinRoot } from "./path-safety.js";
 
 function expandHome(inputPath: string): string {

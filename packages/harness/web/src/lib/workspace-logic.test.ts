@@ -76,14 +76,12 @@ describe("macro gating", () => {
     expect(findVisualizeMacro(macros)?.id).toBe("visualize");
   });
 
-  it("requires a session before anything runs", () => {
-    expect(macroDisabledReason(macros[0], null, null)).toBe(
-      "Start a session first",
-    );
+  it("runs with no session: verbs are addressed by agent path (flow 4.4b)", () => {
+    expect(macroDisabledReason(macros[0], null)).toBeNull();
   });
 
   it("requires a selected workflow for requiresWorkflow macros", () => {
-    expect(macroDisabledReason(macros[1], null, "sess-1")).toBe(
+    expect(macroDisabledReason(macros[1], null)).toBe(
       "Select an agent first",
     );
   });
@@ -91,9 +89,9 @@ describe("macro gating", () => {
   it("blocks definitionId-dependent macros until deployed", () => {
     const undeployed = workflow({ definitionId: null });
     const deployed = workflow({ definitionId: 42 });
-    expect(macroDisabledReason(macros[2], undeployed, "sess-1")).toBe(
+    expect(macroDisabledReason(macros[2], undeployed)).toBe(
       "Not deployed yet",
     );
-    expect(macroDisabledReason(macros[2], deployed, "sess-1")).toBeNull();
+    expect(macroDisabledReason(macros[2], deployed)).toBeNull();
   });
 });

@@ -1,12 +1,11 @@
 /**
  * SAP-2982 — the rail's grammar, and the card that names the two nouns.
  *
- * The rail must keep four different actions legible:
+ * The rail must keep its actions legible:
  *
- *   1. The project-row `+` starts a coding-agent SESSION at that root. It is a
- *      frequent shortcut, not another way to scaffold a Sapiom agent.
- *   2. The `⋮` holds explicitly named PROJECT management actions and the
- *      legacy-server create-agent compatibility action.
+ *   1. The project header's `+` starts a new chat at that root
+ *      (flow-navigation.md Q11). New agent lives in the project view's header.
+ *   2. Remove from the rail is the header's hover action, naming its subject.
  *   3. Only the chevron folded a project. Double-clicking the label, the
  *      platform convention for a disclosure row, did nothing — which reads as
  *      a row that has stopped responding, not as a feature that is absent.
@@ -19,85 +18,110 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
-
+/** A project's header row (`workspace-group-*` is the header itself). */
 const ROW = (page: Page, label: string) =>
-  page
-    .getByTestId(`workspace-group-${label}`)
-    .locator(":scope > .workspace-row");
+  page.getByTestId(`workspace-group-${label}`);
 
-test.describe("legacy-server project row grammar", () => {
+test.describe("project header grammar", () => {
   test.beforeEach(async ({ page }) => {
-    // Direct create/scaffold controls survive only for older server payloads
-    // that do not include the durable Studio project catalog.
-    await page.goto("/?seed=0&mockStudioProjects=absent");
+    await page.goto("/?seed=0");
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
-  test("a session shortcut sits immediately before the named project menu", async ({
+  test("the header's verbs are New chat and Remove, each naming its own subject", async ({
     page,
   }) => {
-    const row = ROW(page, "acme-app");
-    // The frequent session action is one click away. Destructive project
-    // management remains behind the named overflow menu instead of returning
-    // as an adjacent `×`.
-    const actions = row.locator(".workspace-row-action");
+    // flow-navigation.md Q11: the header's `+` is New chat. New agent moved to
+    // the project view's header; Remove stays a hover action on the row.
+    const actions = ROW(page, "acme-app").locator(".workspace-row-action");
     await expect(actions).toHaveCount(2);
     await expect(actions.nth(0)).toHaveAttribute(
       "data-testid",
-      "project-start-session-acme-app",
-    );
-    await expect(actions.nth(0)).toHaveAttribute(
-      "aria-label",
-      "Start a session in acme-app",
+      "project-new-chat-acme-app",
     );
     await expect(actions.nth(1)).toHaveAttribute(
       "data-testid",
-      "project-menu-acme-app",
+      "project-remove-acme-app",
     );
-
-    // And the actions themselves state their subject in words.
-    await openProjectMenu(page, "acme-app");
-    await expect(page.getByTestId("project-create-agent-acme-app")).toHaveText(
-      "Create an agent in acme-app",
+    await expect(page.getByTestId("project-new-chat-acme-app")).toHaveAttribute(
+      "aria-label",
+      "New chat in acme-app",
     );
-    await expect(page.getByTestId("project-remove-acme-app")).toHaveText(
+    await expect(page.getByTestId("project-remove-acme-app")).toHaveAttribute(
+      "aria-label",
       "Remove acme-app from the rail",
     );
+    await expect(page.locator(".rail-list [data-testid^='project-create-agent-']")).toHaveCount(0);
   });
 
-  test("a bare project's session shortcut stays distinct from scaffolding", async ({
+  test("every rail tooltip names its action in at most 15 characters", async ({
     page,
   }) => {
-    // `scratch` has live sessions and no Sapiom agent. The row `+` can start
-    // another coding session; the legacy scaffold operation remains named in
-    // the menu so the two operations do not masquerade as one another.
-    const row = ROW(page, "scratch");
-    await expect(row.locator(".workspace-row-action")).toHaveCount(2);
-    await expect(
-      page.getByTestId("project-start-session-scratch"),
-    ).toBeVisible();
-    await openProjectMenu(page, "scratch");
-    await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveText(
-      "Scaffold an agent in scratch",
+    // flow-map-chat-overlay.md 4.6: a tooltip names the action in one to
+    // three words; the aria-label carries the object's name. Eight strings
+    // had grown explanation clauses ("Hide from the rail (History keeps it)").
+    // The brand header at the top of the rail counts. `title`s count too
+    // (TooltipLayer shows them, stashed after a hover), except row titles
+    // that show a path, which are content.
+    await page.getByTestId("project-select-acme-app").click();
+    await expect(page.getByTestId("workspace-group-acme-app")).toHaveAttribute(
+      "data-selected",
+      "true",
     );
-    await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
+    const tips = await page.locator(".rail-workflows").evaluate((rail) =>
+      [...rail.querySelectorAll("[data-tooltip], [title], [data-tip-stash]")]
+        // TooltipLayer's precedence: data-tooltip, then the (stashed) title.
+        .map(
+          (el) =>
+            el.getAttribute("data-tooltip") ||
+            el.getAttribute("title") ||
+            el.getAttribute("data-tip-stash") ||
+            "",
+        )
+        .filter((tip) => !tip.includes("/")),
+    );
+    // Brand header, session marks, both project-row verbs, Hide and End,
+    // Add project, Sort.
+    expect(new Set(tips)).toEqual(
+      new Set([
+        "Collapse rail",
+        "Past sessions",
+        "Go back",
+        "Go forward",
+        "Add project",
+        "Sort projects",
+        "Collapse",
+        "Agent Map",
+        "New chat",
+        "Remove",
+        "Live",
+        "Exited",
+        "End session",
+        "Hide",
+        "Demo mode",
+      ]),
+    );
+    expect(tips.filter((tip) => tip.length > 15)).toEqual([]);
   });
 
-  test("creating from the menu creates IN that project, and only then talks", async ({
+  test("New chat is visible at rest; Remove only on hover", async ({ page }) => {
+    // A project with no sessions shows its header and + and nothing else
+    // (4.6.1), so a hover-only + would leave that row saying nothing.
+    await page.locator(".rail-header-label").hover();
+    const opacity = (testid: string) =>
+      page.getByTestId(testid).evaluate((el) => Number(getComputedStyle(el).opacity));
+    expect(await opacity("project-new-chat-onboarding-flow")).toBeGreaterThan(0);
+    expect(await opacity("project-remove-onboarding-flow")).toBe(0);
+    await page.getByTestId("project-select-onboarding-flow").hover();
+    await expect.poll(() => opacity("project-remove-onboarding-flow")).toBe(1);
+  });
+
+  test("New agent from the project view creates IN that project, and only then talks", async ({
     page,
   }) => {
-    // The menu changed what the control SAYS; SAP-2981 changed what it does —
-    // it opens the create dialog instead of starting a pty and asking the
-    // coding agent, in English, to scaffold. What must not change is the
-    // SUBJECT: the project named on the row is the project it creates in, and
-    // the session that follows is rooted there.
-    //
-    // THE REQUEST, not a tab count. This spec first counted
-    // `[data-testid^='session-tab-']` and was worthless: `/?seed=0` renders two
-    // session tabs plus `session-tab-new` before anything is clicked, so the
-    // assertion held with the handler stubbed to a no-op — a spec that cannot
-    // fail, guarding the one behaviour this PR promises it did not change.
+    // THE REQUEST, not a row count: the subject the header names is the
+    // project the agent is scaffolded in, and the session that follows is
+    // rooted there.
     const order = (): Promise<string[]> =>
       page.evaluate(
         () =>
@@ -108,17 +132,17 @@ test.describe("legacy-server project row grammar", () => {
           ).__HARNESS_TEST__?.createOrder ?? []) as string[],
       );
 
-    await openProjectMenu(page, "acme-app");
-    await page.getByTestId("project-create-agent-acme-app").click();
-    await expect(page.getByTestId("project-menu-card-acme-app")).toHaveCount(0);
-    await expect(page.getByTestId("create-agent-project")).toHaveText(
-      "acme-app",
+    await page.getByTestId("project-select-acme-app").click();
+    await page.getByTestId("project-map-new-agent").click();
+    // The screen STATES the project the header named (flow-creation.md §4.3).
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
+      "New agent in acme-app",
     );
-    // Nothing has started yet — the old handler started a pty on this click.
+    // Nothing has started yet.
     expect(await order()).toEqual([]);
 
-    await page.getByTestId("create-agent-name").fill("menu-made");
-    await page.getByTestId("create-agent-submit").click();
+    await page.getByTestId("composer-input").fill("Build a menu made agent");
+    await page.getByTestId("composer-send").click();
     await expect
       .poll(order)
       .toEqual([
@@ -139,54 +163,28 @@ test.describe("double-click toggles disclosure", () => {
   }) => {
     const row = ROW(page, "acme-app");
     const label = page.getByTestId("project-select-acme-app");
-    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+    const sessions = page.getByTestId("rail-project-acme-app").locator(".rail-session-row");
+    await expect(sessions.first()).toBeVisible();
 
     await label.dblclick();
     await expect(row).toHaveClass(/is-collapsed/);
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
+    await expect(sessions).toHaveCount(0);
 
     await label.dblclick();
     await expect(row).not.toHaveClass(/is-collapsed/);
-    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+    await expect(sessions.first()).toBeVisible();
   });
 
   test("it does not fight the single click: the project is still selected", async ({
     page,
   }) => {
-    // A double-click fires two clicks underneath. Both of this row's clicks
-    // are idempotent — selecting the already-selected project is the same
-    // state twice — so the row must end up BOTH selected and folded, never one
-    // at the cost of the other.
+    // A double-click fires two clicks underneath. Both select the project,
+    // which is the same state twice, so the row ends up BOTH selected and
+    // folded, never one at the cost of the other.
     const row = ROW(page, "acme-app");
     await page.getByTestId("project-select-acme-app").dblclick();
     await expect(row).toHaveClass(/is-collapsed/);
     await expect(row).toHaveClass(/is-selected/);
-  });
-});
-
-test.describe("double-click on a folder row", () => {
-  // THE DEEP FIXTURE, because the default mock has no branching directory row
-  // and this spec used to `test.skip` on it unconditionally. A permanent skip
-  // is not a pending test, it is an absent one — and the third-toggle trick is
-  // the subtlest thing in this change, with the quietest failure mode: nothing
-  // happens. `?mockFixtures=deep` is the same fixture `project-axis.spec.ts`
-  // uses, and it carries `polsia/services` as a real branch point.
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/?mockFixtures=deep");
-    await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
-  });
-
-  test("a folder row's double-click lands where its single click does", async ({
-    page,
-  }) => {
-    // Two clicks toggled twice and cancelled out, so double-clicking a folder
-    // did visibly nothing — the same absent convention, one level down.
-    const dirRow = page.getByTestId("dir-row-services");
-    await expect(dirRow).not.toHaveClass(/is-collapsed/);
-    await dirRow.locator(".workspace-row-main").dblclick();
-    await expect(dirRow).toHaveClass(/is-collapsed/);
-    await dirRow.locator(".workspace-row-main").dblclick();
-    await expect(dirRow).not.toHaveClass(/is-collapsed/);
   });
 });
 

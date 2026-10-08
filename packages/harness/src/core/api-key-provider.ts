@@ -40,6 +40,10 @@ import { readCredentialsOrThrow, resolveEnvironment } from "@sapiom/mcp/auth";
 export interface ApiKeyProvider {
   /** The current API key, or null when the harness is not signed in. */
   getKey(): string | null;
+  /** Atomically read the key and the generation that owns it. */
+  snapshot(): ApiKeySnapshot;
+  /** Observe effective key changes. The key-bearing snapshot stays in-process. */
+  subscribe(listener: ApiKeyChangeListener): () => void;
   /**
    * Re-read the shared credential store. A successful read is authoritative;
    * a failed read preserves and returns the last-known key. Never throws.
@@ -51,6 +55,14 @@ export interface ApiKeyProvider {
    */
   clear(): void;
 }
+
+/** Private launch-time identity for one effective credential value. */
+export interface ApiKeySnapshot {
+  apiKey: string | null;
+  generation: number;
+}
+
+export type ApiKeyChangeListener = (snapshot: ApiKeySnapshot) => void;
 
 /** Overridable reads for the credential store — a test seam. Defaults hit the
  *  real `@sapiom/mcp/auth` store the CLI login writes to. */
@@ -92,21 +104,41 @@ export function createApiKeyProvider(
   deps: ApiKeyProviderDeps = {},
 ): ApiKeyProvider {
   let current = initialKey;
-  const adopt = (next: string | null): void => {
-    if (next === current) return;
-    current = next;
-    deps.onKeyChanged?.();
-  };
+  let generation = 0;
+  const listeners = new Set<ApiKeyChangeListener>();
+  // `clear()` is synchronous so disconnect removes the in-memory key
+  // immediately. Advancing this barrier also prevents a refresh whose store
+  // read is already in flight from adopting its now-stale result afterward.
+  let mutationBarrier = 0;
   const resolveEnvName =
     deps.resolveEnvironmentName ??
     (() => defaultResolveEnvironmentName(deps.environment));
   const readApiKey = deps.readApiKeyForEnv ?? defaultReadApiKeyForEnv;
   let refreshQueue: Promise<void> = Promise.resolve();
 
-  const refreshFromStore = async (): Promise<string | null> => {
+  const adopt = (next: string | null): void => {
+    if (next === current) return;
+    current = next;
+    generation++;
+    deps.onKeyChanged?.();
+    const snapshot = { apiKey: current, generation };
+    for (const listener of listeners) {
+      try {
+        listener({ ...snapshot });
+      } catch {
+        // Observation cannot make the provider's documented refresh() path
+        // throw or prevent another independent lifecycle observer from running.
+      }
+    }
+  };
+
+  const refreshFromStore = async (
+    expectedBarrier: number,
+  ): Promise<string | null> => {
     try {
       const envName = await resolveEnvName();
       const latest = await readApiKey(envName);
+      if (expectedBarrier !== mutationBarrier) return current;
       // A completed strict read is authoritative. Null/empty means the
       // credential was deliberately removed; only a thrown read preserves the
       // last-known key.
@@ -122,10 +154,18 @@ export function createApiKeyProvider(
     getKey(): string | null {
       return current;
     },
+    snapshot(): ApiKeySnapshot {
+      return { apiKey: current, generation };
+    },
+    subscribe(listener: ApiKeyChangeListener): () => void {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     refresh(): Promise<string | null> {
       // Queue the whole resolve+read+adopt transaction. Without this, a slower
       // older refresh can finish after a newer one and restore stale state.
-      const result = refreshQueue.then(refreshFromStore);
+      const expectedBarrier = mutationBarrier;
+      const result = refreshQueue.then(() => refreshFromStore(expectedBarrier));
       refreshQueue = result.then(
         () => undefined,
         () => undefined,
@@ -133,6 +173,7 @@ export function createApiKeyProvider(
       return result;
     },
     clear(): void {
+      mutationBarrier++;
       adopt(null);
     },
   };
@@ -147,6 +188,8 @@ export function createApiKeyProvider(
 export function staticApiKeyProvider(key: string | null): ApiKeyProvider {
   return {
     getKey: () => key,
+    snapshot: () => ({ apiKey: key, generation: 0 }),
+    subscribe: () => () => {},
     refresh: () => Promise.resolve(key),
     clear: () => {
       /* static key — clear is a no-op */

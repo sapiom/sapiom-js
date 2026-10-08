@@ -12,6 +12,17 @@ follow `.github/pull_request_template.md` gets the **`contribution: incomplete`*
 label (the workflow logs say which check failed). The classifier re-runs on
 `edited`/`synchronize`, so the fix is always: repair the body, never close the PR.
 
+## Draft first
+
+Every new PR opens as a draft (`gh pr create --draft`), including each layer of
+a native stack — never open one ready-for-review. The labeler still runs on
+drafts: its triggers include `opened`, `synchronize`, `edited`,
+`ready_for_review`, and `converted_to_draft`, so you get the body verdict
+without leaving draft. Mark a PR ready (`gh pr ready <num>`) only when all of
+these hold: CI is green, the body passes the local classifier (step 3), a
+changeset exists if a published package changed, and the user explicitly asks.
+Agents never flip a draft to ready on their own.
+
 ## The contract (what the classifier actually checks)
 
 Start from `.github/pull_request_template.md` **verbatim** and fill it in. The
@@ -65,14 +76,18 @@ import('./scripts/pr-label-classifier.mjs').then(async (m) => {
 });"
 # → must print "complete": true with empty "reasons" (each reason names the fix)
 
-# 4. Open (or repair) the PR:
-gh pr create --base main --title "type(scope): imperative summary" --body-file /tmp/pr-body.md
+# 4. Open (or repair) the PR — always as a draft:
+gh pr create --draft --base main --title "type(scope): imperative summary" --body-file /tmp/pr-body.md
 gh pr edit <num> --body-file /tmp/pr-body.md    # fixing a flagged PR — labeler re-runs on edit
+
+# 5. Mark ready — only when CI is green, the classifier passes, the changeset
+#    (if needed) exists, AND the user explicitly asks:
+gh pr ready <num>
 ```
 
 For a native stack targeting `main`, later PRs use the preceding branch as
-their base. Keep that base when you create or edit the PR. Each PR still needs
-its own complete description.
+their base. Keep that base when you create or edit the PR. Each layer opens as
+a draft and still needs its own complete description.
 
 ## Reading the labels it applies
 
@@ -93,6 +108,10 @@ its own complete description.
   must appear exactly once.
 - Leaving the Validation placeholder block untouched reads as empty.
 - `Changeset: N/A` without a reason fails; `N/A — docs only` passes.
+- `classifyPullRequest` keeps trusted authors (resolved from live repository
+  access) outside the labeling pipeline, so `contribution: incomplete` only
+  lands on external PRs. For a team member the local classifier in step 3 is
+  the only body check you will ever see — run it; GitHub will not tell you.
 - The title is NOT checked by the classifier, but follow the repo's
   conventional-commit style anyway (`feat(harness): …`) — it becomes the squash
   commit subject.

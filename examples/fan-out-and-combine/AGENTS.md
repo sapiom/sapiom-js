@@ -40,3 +40,10 @@ off-ramp. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapi
   offline, and honest.
 - Deployed, a run with `{}` fans a sample goal into three parallel child runs of
   itself and returns one combined answer.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters.

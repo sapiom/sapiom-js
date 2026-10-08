@@ -115,5 +115,8 @@ to the client and the draft PDF stays on file.
 - `index.ts` — the agent (edit this). The PDF layout lives in `RENDER_SCRIPT` at
   the bottom; change it to make the document your own.
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
+- `app/` — the quote review dashboard (`node server.mjs`): the drafted
+  proposal's line items and totals, where it stands at the sign-off gate, and
+  its PDF. See `app/README.md`.
 
 Run `npm run typecheck` to confirm it compiles.

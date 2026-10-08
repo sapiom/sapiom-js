@@ -1,0 +1,115 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "158193",
+    "definitionId": "519",
+    "startedAt": "2026-08-05T00:12:14.910Z",
+    "finishedAt": "2026-08-05T00:13:33.348Z",
+    "status": "completed",
+    "input": {},
+    "note": "Terminal output and shared state of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 158193 on 2026-10-01, verbatim except `downloadUrl`. That run's PDF link was a 15-minute presigned storage URL, long expired, so it is blanked here; sample/Q-158193.pdf is the same proposal re-rendered with this template's RENDER_SCRIPT from the shared state below."
+  },
+  "output": {
+    "note": "The proposal is drafted and nothing was sent to the client. Set an `approver` email and re-run to have it emailed for sign-off, or fire the `proposal.decision` signal with `{ \"decision\": \"approve\" }` to continue this run. Drafted from the built-in sample brief. Pass your own `request` to quote a real one.",
+    "sent": false,
+    "title": "AI Triage & First-Response Layer for Logistics Support Inbox",
+    "total": 51800,
+    "unmet": ["approver"],
+    "fileId": "de4d70f4-774c-4c6a-8a46-e3991c875b0c",
+    "outcome": "pending-approval",
+    "pending": true,
+    "currency": "USD",
+    "downloadUrl": null,
+    "quoteNumber": "Q-158193"
+  },
+  "sharedState": {
+    "from": {},
+    "note": "Drafted from the built-in sample brief. Pass your own `request` to quote a real one.",
+    "draft": {
+      "scope": [
+        "Phase 1 — Pilot (6 weeks, cap $25,000): joint discovery & integration-design workshop; current-state mapping of Zendesk, shipment API, and support workflow; success metrics and pilot acceptance criteria; Zendesk inbound/outbound integration with ticket threading, email drafting, and agent-side visibility; secure read-only connector to shipment API with response-schema normalization, short-TTL cache, fault-tolerant retries, and PII-safe logging; LLM intent classifier plus grounded “where is my shipment” first-response generator with retrieval over live tracking data, hallucination guardrails, and refusal rules; confidence-gated auto-reply vs. human escalation with structured summary attachment and queue prioritization; pilot analytics dashboard tracking deflection rate, AHT delta, escalation accuracy, CSAT proxy, and cost-per-resolution; UAT support, pilot go-live, and 2 weeks of live-traffic stabilization and threshold tuning.",
+        "Phase 2 — Full build (separate SOW, begins only after pilot review): delivery-address-change automation with intent + slot-filling against the OMS endpoint, write-back confirmation flow, and multi-step confirmation handling for ambiguous cases; invoice-copy automation against the billing API or PDF store with follow-up handling for unresolved lookups; damage-claim intake with structured form capture from email, photo attachment handling, validation against policy rules, and ticket handoff to the claims team; unified escalation routing, structured logging, observability, cost and latency guardrails, on-call alerting, and weekly performance review; runbooks, agent training, and enablement materials for your 40-person support org; a 4-week optimization sprint against labeled production traffic."
+      ],
+      "terms": "Proposal valid 30 days from issue. Phase 1 (pilot) billed 50% on kickoff (week 0) and 50% on pilot go-live (week 6); Phase 1 hard cap of $25,000 as specified. Phase 2 begins only after a pilot review meeting and a signed Change Order / SOW; billed monthly against time-and-materials at the rates shown above. Rates held for a 6-month engagement window and revisited thereafter. Excludes customer-side procurement, third-party SaaS fees beyond our own tooling, and customer IT time required for shipment-API firewall, SSO, or vendor-access changes. Annual support and managed-hosting options available on request.",
+      "title": "AI Triage & First-Response Layer for Logistics Support Inbox",
+      "summary": "We will deploy an LLM-driven triage and first-response layer in front of your Zendesk inbox that resolves your four high-volume question types — shipment status, delivery-address change, invoice reissue, and damage claims — by querying your live shipment API and grounding its replies in current tracking data, while routing everything else to your human agents with a structured summary attached. The engagement is split: a focused 6-week pilot on the “where is my shipment” case so you can measure deflection and AHT impact on production traffic before committing, followed by a separately scoped full rollout of the remaining three cases plus hardening, monitoring, and team handoff.",
+      "lineItems": [
+        {
+          "quantity": 12,
+          "unitPrice": 200,
+          "description": "Phase 1 — Discovery workshop, current-state mapping, integration architecture, success metrics, and pilot acceptance criteria"
+        },
+        {
+          "quantity": 25,
+          "unitPrice": 200,
+          "description": "Phase 1 — Zendesk integration: inbound email fetch via webhooks, ticket threading, outbound email drafting through Zendesk API, agent-side status visibility"
+        },
+        {
+          "quantity": 18,
+          "unitPrice": 200,
+          "description": "Phase 1 — Secure shipment-API connector: read adapter, response-schema normalization, short-TTL cache, fault-tolerant retries, PII-safe logging"
+        },
+        {
+          "quantity": 32,
+          "unitPrice": 200,
+          "description": "Phase 1 — AI agent: intent classifier + grounded “where is my shipment” responder with retrieval over live tracking data, hallucination guardrails, and refusal rules"
+        },
+        {
+          "quantity": 15,
+          "unitPrice": 200,
+          "description": "Phase 1 — Confidence-gated auto-reply vs. human escalation with structured summary attachment and queue prioritization"
+        },
+        {
+          "quantity": 12,
+          "unitPrice": 200,
+          "description": "Phase 1 — Pilot analytics dashboard: deflection rate, AHT delta, escalation accuracy, CSAT proxy, cost-per-resolution"
+        },
+        {
+          "quantity": 10,
+          "unitPrice": 200,
+          "description": "Phase 1 — UAT support, pilot go-live, and 2 weeks of live-traffic stabilization and threshold tuning"
+        },
+        {
+          "quantity": 35,
+          "unitPrice": 200,
+          "description": "Phase 2 — Delivery-address-change automation: intent + slot-filling against OMS endpoint, write-back confirmation, multi-step confirmation workflow for ambiguous cases"
+        },
+        {
+          "quantity": 22,
+          "unitPrice": 200,
+          "description": "Phase 2 — Invoice-copy automation: secure lookup against billing API or PDF store, PDF generation and forwarding, follow-up handling for unresolved cases"
+        },
+        {
+          "quantity": 30,
+          "unitPrice": 200,
+          "description": "Phase 2 — Damage-claim intake: structured form capture from email, photo attachment handling, validation against policy rules, ticket handoff to claims team"
+        },
+        {
+          "quantity": 22,
+          "unitPrice": 200,
+          "description": "Phase 2 — Unified escalation routing, logging, observability, cost and latency guardrails, on-call alerting"
+        },
+        {
+          "quantity": 26,
+          "unitPrice": 200,
+          "description": "Phase 2 — Runbooks, agent training, enablement, and 4-week optimization sprint against labeled production traffic"
+        }
+      ]
+    },
+    "client": {},
+    "dryRun": false,
+    "fileId": "de4d70f4-774c-4c6a-8a46-e3991c875b0c",
+    "totals": {
+      "tax": 0,
+      "total": 51800,
+      "subtotal": 51800
+    },
+    "request": "We're a 40-person logistics company and our customer support inbox is drowning. About 300 emails a day, and roughly half are the same four questions: where is my shipment, can I change the delivery address, how do I get an invoice copy, and how do I file a damage claim.\n\nWe want an automated first-response layer that answers those four cases directly from our shipment database, and routes everything else to a human with a summary attached. Must integrate with our existing Zendesk and our internal shipment API. We'd like a pilot on the \"where is my shipment\" case first so we can measure it before committing to the rest.\n\nTimeline: pilot live within six weeks. Budget is not fixed but we'll need the pilot under $25k to get it approved. Please break out the pilot separately from the full build.",
+    "taxRate": 0,
+    "approver": null,
+    "currency": "USD",
+    "downloadUrl": null,
+    "quoteNumber": "Q-158193",
+    "recipientEmail": null
+  }
+}

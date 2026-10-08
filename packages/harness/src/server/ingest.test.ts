@@ -9,10 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { createEventStore } from "../core/collector/store.js";
-import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { createSessionRecordReader } from "../core/session-record.js";
-import type { SessionManager } from "../core/session-manager.js";
-import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
+import type { AnalyticsEvent } from "../shared/types.js";
 import {
   createIngestRouter,
   processIngest,
@@ -353,9 +351,8 @@ describe("createIngestRouter", () => {
         context.agentSessionId = agentSessionId;
         return true;
       },
-      decorateEvent: (event) => {
+      onNormalizedEvent: (event) => {
         decorated.push(event);
-        return event;
       },
       store: { append: async (event) => void appended.push(event) },
       batcher: { enqueue: (event) => batched.push(event) },
@@ -531,9 +528,8 @@ describe("createIngestRouter", () => {
         await identityCommit.promise;
         return true;
       },
-      decorateEvent: (event) => {
+      onNormalizedEvent: (event) => {
         decorated.push(event);
-        return event;
       },
       store: { append: async (event) => void appended.push(event) },
       batcher: { enqueue: () => {} },
@@ -801,120 +797,6 @@ describe("createIngestRouter", () => {
     const [event] = onNormalizedEvent.mock.calls[0];
     expect(event.type).toBe("tool.call");
     expect(event.payload.toolResponseSummary).toContain("localhost:5555");
-  });
-
-  it("keeps local annotations and sends only the telemetry projection remotely", async () => {
-    start({
-      decorateEvent: (event) => ({
-        ...event,
-        payload: { ...event.payload, projectBootstrapOrigin: "infrastructure" },
-      }),
-      projectTelemetryEvent: (event) => ({
-        ...event,
-        payload: { bootstrap: true, origin: event.payload.projectBootstrapOrigin },
-      }),
-    });
-
-    await postIngest(baseUrl, {
-      hookEvent: "UserPromptSubmit",
-      harnessSessionId: "session-1",
-      payload: { session_id: "agent-1", prompt: "private control prompt" },
-    });
-
-    await vi.waitFor(() => expect(stored).toHaveLength(1));
-    expect(stored[0].payload).toMatchObject({
-      prompt: "private control prompt",
-      projectBootstrapOrigin: "infrastructure",
-    });
-    expect(enqueued[0].payload).toEqual({
-      bootstrap: true,
-      origin: "infrastructure",
-    });
-    expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");
-  });
-
-  it("bounds hostile bootstrap source, model, and usage before batching", async () => {
-    const bootstrapSession = {
-      agentSessionId: "agent-1",
-      projectBootstrap: {
-        projectId: "project-1",
-        userId: "user-1",
-        targetSessionId: "session-1",
-        bootstrap: { status: "generating", attemptId: "attempt-1" },
-        queuedInputIds: [],
-      },
-    } as unknown as HarnessSession;
-    const privacy = new ProjectBootstrapCoordinator({
-      root: "/unused",
-      sessionManager: {
-        get: () => bootstrapSession,
-      } as unknown as SessionManager,
-    });
-    start({
-      enrichFromTranscript: async (event) => ({
-        ...event,
-        payload: {
-          ...event.payload,
-          model: "secret/customer_key_123",
-          usage: {
-            inputTokens: 10 ** 30,
-            outputTokens: -7,
-            secret: "/private/customer-token",
-          },
-        },
-      }),
-      projectTelemetryEvent: (event) => privacy.redactForTelemetry(event),
-    });
-
-    await postIngest(baseUrl, {
-      hookEvent: "SessionStart",
-      harnessSessionId: "session-1",
-      payload: {
-        session_id: "agent-1",
-        source: "/private/customer-token",
-      },
-    });
-    await postIngest(baseUrl, {
-      hookEvent: "UserPromptSubmit",
-      harnessSessionId: "session-1",
-      payload: {
-        session_id: "/private/envelope-secret",
-        prompt: "private prompt text",
-      },
-    });
-    await postIngest(baseUrl, {
-      hookEvent: "Stop",
-      harnessSessionId: "session-1",
-      payload: {
-        session_id: "/private/envelope-secret",
-        transcript_path: "/private/transcript.jsonl",
-        last_assistant_message: "private assistant text",
-      },
-    });
-
-    await vi.waitFor(() => expect(enqueued).toHaveLength(3));
-    expect(enqueued.map((event) => event.payload)).toEqual([
-      { projectBootstrap: true, source: "unknown" },
-      { projectBootstrap: true, origin: "user" },
-      {
-        projectBootstrap: true,
-        hasAssistantText: true,
-        modelReported: true,
-        usage: { inputTokens: 1_000_000_000_000, outputTokens: null },
-      },
-    ]);
-    expect(enqueued.map((event) => event.agentSessionId)).toEqual([
-      null,
-      null,
-      null,
-    ]);
-    expect(stored.map((event) => event.agentSessionId)).toEqual([
-      "agent-1",
-      "agent-1",
-      "agent-1",
-    ]);
-    expect(JSON.stringify(enqueued)).not.toContain("private");
-    expect(JSON.stringify(enqueued)).not.toContain("secret");
   });
 
   it("does not call onNormalizedEvent for a hook with no analytics mapping", async () => {

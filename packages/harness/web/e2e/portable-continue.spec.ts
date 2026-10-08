@@ -33,11 +33,7 @@ test.beforeEach(async ({ page }) => {
 async function openPastRow(page: Page, testid: string): Promise<void> {
   // Past-session rows moved out of the ⋯ menu into a sub-card that opens off
   // the "Past sessions" row: ⋯ → Past sessions → the row.
-  await page.getByTestId("history-trigger").click();
-  await expect(page.getByTestId("history-menu")).toBeVisible();
-  // The flyout opens on hover onto its row (a click would toggle the
-  // hover-open straight back shut).
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId(testid).click();
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();
@@ -81,9 +77,12 @@ test("continuing it opens a NEW session rather than resuming the old one", async
   // A real fresh id is present — `/.+/` proves the attribute EXISTS and is
   // non-empty (a bare not-"" also passes when the attribute is absent).
   await expect(context).toHaveAttribute("data-session-id", /.+/);
-  // The old session is not what came back — exited sessions never appear in
-  // the live tab strip.
-  await expect(page.getByTestId("session-tab-sess-pricing")).toHaveCount(0);
+  // The old session is not what came back: its rail row still wears the
+  // exited mark, beside the fresh one.
+  await expect(page.getByTestId("rail-session-sess-pricing")).toHaveAttribute(
+    "data-mark",
+    "exited",
+  );
   // And no failure toast: this path never attempts the resume that would 409.
   await expect(page.getByTestId("toast")).toHaveCount(0);
 });

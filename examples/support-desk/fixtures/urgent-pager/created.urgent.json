@@ -1,0 +1,17 @@
+{
+  "type": "issue.created",
+  "description": "Intake opened an urgent issue: production is down. urgent-pager DMs on-call.",
+  "payload": {
+    "issueId": "a1b2c3d4-0000-4000-8000-0000000000a9",
+    "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "source": "slack",
+    "causationId": "Ev0EXAMPLE09",
+    "slack": {
+      "channel": "C0CUSTOMER1",
+      "ts": "1790889355.981329"
+    },
+    "category": "bug",
+    "priority": "urgent",
+    "title": "Production API returning 500s for every request"
+  }
+}

@@ -1,3 +1,4 @@
+import type { AssistantStateSnapshot } from "./assistant-state.js";
 /**
  * Sapiom Harness — shared interface contract.
  *
@@ -5,11 +6,6 @@
  * the types in this file. Change them only by agreement — this file is the
  * integration boundary.
  */
-
-import type {
-  SystemGraphLifecycleState,
-  WorkspaceKey,
-} from "./system-graph.js";
 
 // ---------------------------------------------------------------------------
 // Constants & well-known paths
@@ -65,26 +61,6 @@ export const HARNESS_PATHS = {
  * a "kept in sync with" comment admitting the duplication. Import it.
  */
 export const AGENT_PROJECT_MARKER = "sapiom.json";
-
-/**
- * Canvas convention: Studio-owned deterministic renders and optional custom
- * HTML live here, relative to the session cwd. The server watches this
- * directory and serves the active workflow at `/canvas/<harnessSessionId>/`.
- * Deterministic workflow files use `CANVAS_RENDERS_DIR`; `index.html` remains
- * the optional custom-canvas fallback and is never rewritten by that pipeline.
- */
-export const CANVAS_DIR = ".sapiom/canvas";
-export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
-
-/**
- * Deterministic per-workflow renders live here (one `<slug>.html` per
- * workflow, slugged by `slugForWorkflowPath` in core/canvas-render.ts),
- * relative to the session cwd. `GET /canvas/:sessionId/` serves the bound
- * workflow's render from this directory; `index.html` above stays the
- * agent-authored/custom canvas and is never rewritten by the deterministic
- * pipeline.
- */
-export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
 
 /** Renderer-only files are materialized here before their paths are included
  * in a new session's first prompt. Disk-backed attachments never get copied. */
@@ -151,6 +127,13 @@ export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
+/** Browser-safe projection of a live session's private MCP credential stamp. */
+export type McpAuthState =
+  | "current"
+  | "restart-required"
+  | "restarting"
+  | "not-applicable";
+
 /** A harness session = one pty running one agent process in one directory. */
 export interface HarnessSession {
   /** Our id (uuid). */
@@ -163,6 +146,13 @@ export interface HarnessSession {
   /** Display title (first prompt, or directory basename until known). */
   title: string;
   status: SessionStatus;
+  /**
+   * Whether this live process was launched against the current Sapiom MCP
+   * credential. The underlying generation and key remain server-private.
+   * Absent on records written by older versions and never persisted by the
+   * current SessionManager.
+   */
+  mcpAuthState?: McpAuthState;
   createdAt: string;
   lastActiveAt: string;
   /**
@@ -219,10 +209,8 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
-  /** Durable lifecycle state for a new project's one automatic map seed. */
-  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
+  agentMapIdentity: import("@sapiom/agent-map").ProjectAgentSession;
 }
 
 /**
@@ -305,13 +293,6 @@ export interface DoctorCheck {
   detail: string;
 }
 
-export interface StructuredInferenceOptions {
-  projectId: string;
-  schema: Record<string, unknown>;
-  schemaFile: string;
-  systemPrompt: string;
-}
-
 export interface SpawnSpec {
   command: string;
   args: string[];
@@ -322,16 +303,12 @@ export interface SpawnSpec {
 }
 
 export interface LaunchOpts {
-  /** Internal project-owned inference: no coding capabilities or session configuration. */
-  structuredInference?: StructuredInferenceOptions;
   harnessSessionId: string;
   cwd: string;
   /** Absolute path to the generated system-prompt file (profile). */
   systemPromptFile?: string;
   /** Absolute path to the generated MCP config file. */
   mcpConfigFile?: string;
-  /** Session-private embedded Agent Map MCP. Token must never enter argv. */
-  agentMapMcp?: { url: string; bearerToken: string };
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
   /**
@@ -385,8 +362,6 @@ export type SystemPromptDelivery = "launch-flag" | "post-ready-injection";
  * side-effect free until `launch`/`resume` specs are actually spawned.
  */
 export interface HarnessAdapter {
-  /** False for providers that only support the isolated structured background mode. */
-  supportsCodingTasks?: boolean;
   id: HarnessKind;
   /** Binary present, version acceptable. */
   doctor(): Promise<DoctorCheck[]>;
@@ -551,6 +526,7 @@ export type TerminalControlMessage = TerminalResizeMessage;
 // ---------------------------------------------------------------------------
 
 export type BusMessage =
+  | { type: "assistant.state"; snapshot: AssistantStateSnapshot }
   | { type: "session.status"; session: HarnessSession }
   /**
    * A prompt or completed turn is now durable in the local event store.
@@ -578,23 +554,17 @@ export type BusMessage =
       target: "prod" | "local";
     }
   | { type: "workflows.changed" }
-  | {
-      type: "system-graph.changed";
-      workspaceKey: WorkspaceKey;
-      revision: number;
-      state: SystemGraphLifecycleState;
-    }
-  | {
-      type: "agent-map.proposal.changed";
-      delta: import("./agent-map.js").AcceptedProposalDelta;
-    }
+  /**
+   * Source under an open project's folder changed. The map is recomputed from
+   * code on every read, so the browser reads it again (debounced server-side).
+   */
+  | { type: "project-map.changed"; projectId: string }
   /**
    * Full snapshot of one background task, re-broadcast on every change
    * (spawn, each new status line, completion/failure). Tasks are rare and
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
-  | { type: "agent-map.initialization.changed"; status: import("./agent-map-initialization.js").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
@@ -805,13 +775,10 @@ export type UiEventName =
   | "session.created"
   | "mcp.install"
   | "plan.upgrade_clicked"
+  /** The project map drew: `data.load_ms` from request to response, `data.agents`. */
   | "agent_map.entered"
-  | "agent_map.workspace_load_failed"
-  | "agent_map.proposal_created"
-  /** Emitted only when the request that renders the announced delta owns the
-   * snapshot; superseded and recovery loads are intentionally not counted. */
-  | "agent_map.proposal_visible"
-  | "agent_map.validation_failed";
+  /** The project map route failed: `data.code`. */
+  | "agent_map.workspace_load_failed";
 
 export interface UiTrackRequest {
   /** Dot-canonical event name — one of the UiEventName literals. */
@@ -843,46 +810,8 @@ export type AnalyticsEventType =
   | "plan.upgrade_clicked"
   | "agent_map.entered"
   | "agent_map.workspace_load_failed"
-  | "agent_map.proposal_created"
-  | "agent_map.proposal_visible"
-  | "agent_map.validation_failed"
-  | "agent_map.legacy_reset"
-  | "agent_map.empty_legacy_container_migrated"
-  | "agent_map.initialization"
-  | "agent_map.workspace_initialized"
-  | "agent_map.workspace_migrated"
-  | "agent_map.workspace_read_failed"
-  | "agent_map.mcp_tool"
-  | "agent_map.capability"
-  | "build_plan.operation"
-  | "agent_brief.refresh"
-  | "subsession.store_initialized"
-  | "subsession.binding_reserved"
-  | "subsession.duplicate_prevented"
-  | "subsession.spawn_claimed"
-  | "subsession.requested"
-  | "subsession.created"
-  | "subsession.reused"
-  | "subsession.released"
-  | "subsession.ready"
-  | "subsession.failed"
-  | "subsession.kickoff_claimed"
-  | "subsession.kickoff_submitted"
-  | "subsession.kickoff_acknowledged"
-  | "subsession.kickoff_uncertain"
-  | "subsession.context_stale"
-  | "subsession.manual_session_protected"
   | "project_agent.identity_migrated"
-  | "project_agent.identity_rejected"
-  | "project_bootstrap.scheduled"
-  | "project_bootstrap.recovered"
-  | "project_bootstrap.attempted"
-  | "project_bootstrap.retried"
-  | "project_bootstrap.delivered"
-  | "project_bootstrap.failed"
-  | "project_bootstrap.preempted"
-  | "project_bootstrap.skipped"
-  | "project_bootstrap.input_delivery_uncertain";
+  | "project_agent.identity_rejected";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -1080,6 +1009,7 @@ export interface SessionRecord {
 // POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
+// POST   /api/sessions/:id/restart-mcp  → HarnessSession (replace exact stale resumable runtime)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
@@ -1096,6 +1026,7 @@ export interface SessionRecord {
 // GET    /api/templates                 → TemplateListResponse (relays core's gallery)
 // GET    /api/templates/:id             → TemplateDetailView
 // GET    /api/account/plan              → AccountPlanView (relays core's plan + usage readout)
+// GET    /api/workflows/:id/app-link    → DefinitionAppLinkView (relays the definition's App Link)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
 // GET    /api/studio-rail?root=         → StudioRailFileResponse (the rail's stored groups)
 // PUT    /api/studio-rail?root=         { raw } → { ok: true }
@@ -1137,13 +1068,24 @@ export interface CreateSessionRequest {
     | { kind: "path"; path: string }
     | ({ kind: "inline" } & AttachFileRequest)
   >;
-  /** Create a new project at cwd using the same guarded scaffold as agent +.
-   * Omitted for sessions in existing projects. */
-  scaffold?: { template: string };
   /**
-   * Content-free lifecycle hint: the UI already owns a real first input that
-   * will be delivered after readiness/attachments. A new-project bootstrap
-   * yields to that input instead of racing it. This never affects authority.
+   * Links the user listed as sources on the new-agent screen (flow-creation.md
+   * §4.6 step 1). Handed to the first prompt by URL, never fetched by the
+   * harness: the agent reads them as context.
+   */
+  initialSources?: string[];
+  /**
+   * Session setup that rides the first prompt after the idea and the
+   * resources: the planning instructions (§4.6 step 2). It is not the user's
+   * words, and the client shows it as a quiet setup disclosure rather than as
+   * the user's turn. Never a request to scaffold; the harness already did.
+   */
+  initialSetup?: string;
+  /**
+   * Content-free lifecycle hint, kept for embedders and older clients: the UI
+   * already owns a real first input. New sessions no longer enrol in the
+   * automatic map bootstrap, so this has no effect on them; it still tells a
+   * resumed legacy bootstrap session to yield. This never affects authority.
    */
   initialUserInputPending?: boolean;
   /**
@@ -1213,27 +1155,16 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
-  /**
-   * Optional idempotency key used only when the new-project bootstrap FIFO
-   * owns this submitted turn. Ordinary post-bootstrap input remains one
-   * intentional message per request.
-   */
-  requestId?: string;
 }
 
 export interface InjectInputResponse {
   ok: true;
-  /** Present only when the durable bootstrap FIFO handled this request. */
-  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
 }
 
 /** Internal server boundary shared by the canonical route and rolling alias. */
 export type SessionInputSubmissionResult =
   | { ok: false }
-  | {
-      ok: true;
-      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
-    };
+  | { ok: true };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
  *  must be a path already known to the workflow registry (scan/connect). */
@@ -1272,6 +1203,7 @@ export interface HarnessWorkspaceContext {
 }
 
 export interface AppState {
+  assistant?: AssistantStateSnapshot;
   version: string;
   authenticated: boolean;
   userId: string | null;
@@ -1316,9 +1248,9 @@ export interface AppState {
   workflows: WorkflowInfo[];
   /** Opaque identities for the workspace folders currently known to Studio.
    * Optional for compatibility with older servers and test fixtures. */
-  workspaceScopes?: import("./system-graph.js").WorkspaceScopeSummary[];
+  workspaceScopes?: import("./workspace-scope.js").WorkspaceScopeSummary[];
   /** Path-free durable project identities for the plan-first Agent Map. */
-  studioProjects?: import("./agent-map.js").StudioProjectSummary[];
+  studioProjects?: import("@sapiom/agent-map").StudioProjectSummary[];
   macros: MacroDef[];
   /** The directory the CLI was launched against — the SPA prefills the
    *  new-session modal with this instead of recentDirs[0]. */
@@ -1704,6 +1636,12 @@ export interface WorkflowInfo {
     unavailable: boolean;
   };
   /**
+   * Visibility of the linked definition for the signed-in account, from the
+   * tenant-scoped list at serve time. "unavailable" = another account or
+   * deleted. Absent = unknown. Never persisted to workflows.json.
+   */
+  definitionAccess?: "visible" | "unavailable";
+  /**
    * Provenance from sapiom.json: the gallery template this project was cloned
    * from. Distinct from `source` below, which records how the REGISTRY learned
    * of the path. Optional for compatibility with older harness servers; null
@@ -1721,7 +1659,7 @@ export interface WorkflowInfo {
    * overlapping opened roots, so this is a list rather than one global id.
    */
   studioBindings?: Array<{
-    projectId: import("./agent-map.js").StudioProjectId;
+    projectId: import("@sapiom/agent-map").StudioProjectId;
     agentId: string;
   }>;
 }
@@ -1781,6 +1719,22 @@ export interface AgentSecret {
   hasLocalCopy: boolean;
 }
 
+/**
+ * The durable App Link bound to an agent's cloud definition (SAP-3255), as the
+ * session bar's running-app slot reads it. Relayed from core's
+ * `GET /v1/workflows/definitions/:id/app-link`, which withholds the URL until a
+ * bundle is published.
+ *
+ * `status: null` covers every "nothing to show" case at once: no link bound,
+ * an unlinked agent, signed out, unreachable, or a drifted shape. The slot
+ * renders nothing for all of them, so the harness does not distinguish them.
+ */
+export interface DefinitionAppLinkView {
+  /** An `https:` URL, present exactly when `status` is `"live"`. */
+  url: string | null;
+  status: "live" | "unpublished" | null;
+}
+
 export interface AgentSecretsView {
   secrets: AgentSecret[];
   /** Whether a cloud definition exists yet. Unlinked agents can still hold
@@ -1818,11 +1772,11 @@ export interface SecretWriteReport {
 
 /**
  * A macro injects text into the active session's pty, opens a URL, or (the
- * one exception to "always goes through the agent's session") runs the
- * deterministic canvas render + AI enrichment refresh server-side. Template
- * placeholders, substituted server-side before "inject"/"open-url" execution:
+ * one exception to "always goes through the agent's session") re-reads the
+ * board, which the SPA does itself. Template placeholders, substituted
+ * server-side before "inject"/"open-url" execution:
  *   {{workflow.path}} {{workflow.name}} {{workflow.definitionId}}
- *   {{session.cwd}}   {{canvas.path}}   {{subject}}
+ *   {{session.cwd}}   {{subject}}
  */
 export interface MacroDef {
   id: string;
@@ -1832,10 +1786,8 @@ export interface MacroDef {
   action:
     | { kind: "inject"; text: string; submit?: boolean }
     | { kind: "open-url"; url: string }
-    /** Refresh of the bound workflow's canvas: invalidates the extraction
-     *  cache and re-renders the fully deterministic diagram (structure +
-     *  derived annotations, no LLM, no user token) — no pty involved. A cheap
-     *  no-op when the session is unbound. */
+    /** Re-read of the agent's board (GET /api/workflows/:path/graph). The SPA
+     *  performs it; the server has no render step and rejects a run request. */
     | { kind: "render-canvas" };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;

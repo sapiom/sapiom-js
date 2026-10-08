@@ -98,5 +98,12 @@
       { "path": "messageId", "assert": "nonEmptyString" }
     ],
     "narrative": "Researches the default niche, writes and self-edits the issue against a quality bar, illustrates it, and emails it to the agent's own Sapiom-hosted demo inbox; set subscribers to send it to your list instead."
+  },
+  "app": {
+    "name": "Newsletter issue dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4175,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/newsletter-autopilot/preview.png"
   }
 }

@@ -2,8 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { isAgentProjectScanIgnoredDir } from "./agent-project-discovery.js";
-import { normalizeWatchPath } from "./canvas-watcher.js";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import {
   snapshotWorkflowSourceRootsAsync,
   snapshotWorkspaceWorkflowsAsync,
@@ -17,6 +16,19 @@ const MAX_INVENTORY_RETRIES = 3;
 const MAX_SOURCE_RETRIES = 3;
 const POLL_INTERVAL_MS = 2_000;
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+
+/**
+ * Normalize an `fs.watch`-reported relative path to forward-slash form.
+ *
+ * `fs.watch` reports NATIVE separators (`node_modules\\pkg\\index.ts` on
+ * Windows) while the skip-dir comparisons here are POSIX. Splitting on
+ * `path.sep` (not a blanket backslash replace) keeps POSIX filenames that
+ * legitimately CONTAIN a backslash intact. Exported, with the separator
+ * injectable, so the Windows behavior is provable from POSIX CI.
+ */
+export function normalizeWatchPath(filename: string, sep: string = path.sep): string {
+  return sep === "/" ? filename : filename.split(sep).join("/");
+}
 
 function ignoredRelativePath(relativePath: string): boolean {
   const segments = relativePath.split("/").filter(Boolean);

@@ -54,6 +54,7 @@ describe("Codex per-session MCP configuration", () => {
           SAPIOM_ENVIRONMENT: "staging",
           SAPIOM_HARNESS_VERSION: "0.14.0",
           SAPIOM_API_KEY: "private-stdio-api-key",
+          SAPIOM_STUDIO_HOST_CONTEXT: "private-studio-bootstrap",
         },
       },
       "agent-map": {
@@ -78,6 +79,9 @@ describe("Codex per-session MCP configuration", () => {
         "private-sapiom-api-key",
       );
 
+      expect(spec.env.SAPIOM_STUDIO_HOST_CONTEXT).toBe("private-studio-bootstrap");
+      expect(spec.args.join(" ")).not.toContain("private-studio-bootstrap");
+      expect(spec.args.join(" ")).toContain("shell_environment_policy.set.SAPIOM_STUDIO_HOST_CONTEXT");
       const local = serverArg(spec, "sapiom-dev");
       expect(local).toContain(
         '"command" = "/Applications/Agent Studio.app/Contents/MacOS/Agent Studio"',
@@ -85,7 +89,7 @@ describe("Codex per-session MCP configuration", () => {
       expect(local).toContain(
         '"args" = ["/Applications/Agent Studio.app/Contents/Resources/mcp.js"]',
       );
-      expect(local).toContain('"env_vars" = ["SAPIOM_API_KEY"]');
+      expect(local).toContain('"env_vars" = ["SAPIOM_API_KEY", "SAPIOM_STUDIO_HOST_CONTEXT"]');
       expect(local).toContain(
         '"env" = { "ELECTRON_RUN_AS_NODE" = "1", "SAPIOM_ENVIRONMENT" = "staging", "SAPIOM_HARNESS_VERSION" = "0.14.0" }',
       );
@@ -212,29 +216,6 @@ describe("Codex per-session MCP configuration", () => {
     expect(resumed.env.SAPIOM_CODEX_MCP_0_HEADER_0).toBe("new-session-key");
     expect(resumed.args.slice(0, 2)).toEqual(["resume", "rollout-1"]);
     expect(serverArg(resumed, "sapiom")).toBe(serverArg(launched, "sapiom"));
-  });
-
-  it("uses a newly issued Agent Map capability over the copy in the generated file", async () => {
-    await writeConfig({
-      "agent-map": {
-        type: "http",
-        url: "http://127.0.0.1:1/mcp",
-        headers: { Authorization: "Bearer old-token" },
-      },
-    });
-    const spec = adapter.launch({
-      ...options(),
-      agentMapMcp: {
-        url: "http://127.0.0.1:2/mcp",
-        bearerToken: "fresh-token",
-      },
-    });
-    expect(
-      spec.args.filter((arg) => arg.startsWith("mcp_servers.agent-map-")),
-    ).toHaveLength(1);
-    expect(spec.args.join(" ")).toContain('"url" = "http://127.0.0.1:2/mcp"');
-    expect(spec.args.join(" ")).not.toMatch(/old-token|fresh-token/);
-    expect(spec.env).toEqual({ SAPIOM_AGENT_MAP_CAPABILITY: "fresh-token" });
   });
 
   it("escapes Windows paths, quotes, newlines, and TOML control characters", async () => {

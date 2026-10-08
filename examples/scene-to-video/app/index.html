@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scene video dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --accent: #2a78d6;
+        --chip: #f3f2ef;
+        --screen: #0b0b0b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --accent: #3987e5;
+          --chip: #2a2a28;
+          --screen: #000000;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      a {
+        color: var(--accent);
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 28px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 60%;
+      }
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 20px;
+        font-weight: 650;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+      .kpi .value a {
+        text-decoration: none;
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .facts {
+          max-width: 100%;
+          justify-content: flex-start;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+      .screen {
+        background: var(--screen);
+        border-radius: 8px;
+        overflow: hidden;
+        aspect-ratio: 16 / 9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .screen video {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: contain;
+      }
+      .screen .empty {
+        color: #c3c2b7;
+        padding: 24px;
+        text-align: center;
+      }
+      .filmstrip {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .frame {
+        margin: 0;
+        min-width: 0;
+      }
+      .frame canvas {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: contain;
+        display: block;
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+      }
+      .frame figcaption {
+        font-size: 11px;
+        color: var(--text-3);
+        text-align: center;
+        margin-top: 3px;
+        font-variant-numeric: tabular-nums;
+      }
+      .note {
+        margin: 12px 0 0;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .shots {
+        max-height: 620px;
+        overflow: auto;
+      }
+      .shot {
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+      .shot:first-child {
+        padding-top: 0;
+        border-top: 0;
+      }
+      .shot .head {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }
+      .shot .head b {
+        font-size: 14px;
+        font-weight: 650;
+      }
+      .shot .head .chip {
+        padding: 1px 8px;
+        font-size: 11px;
+      }
+      .beats {
+        margin: 0;
+        padding-left: 0;
+        list-style: none;
+        display: grid;
+        gap: 4px;
+      }
+      .beats li {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .beats li span:first-child {
+        color: var(--text-3);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding-top: 2px;
+      }
+      .shot p {
+        margin: 0;
+        font-size: 13px;
+      }
+      details {
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      summary {
+        cursor: pointer;
+        color: var(--text-2);
+      }
+      details p {
+        margin: 6px 0 0;
+        color: var(--text-2);
+      }
+      .source {
+        margin: 14px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source b {
+        color: var(--text-2);
+        font-weight: 600;
+      }
+      .muted {
+        color: var(--text-3);
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Scene to Video</p>
+          <h1>Scene video dashboard</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+
+      <section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+      <div class="grid">
+        <section class="card" aria-labelledby="video-h">
+          <h2 id="video-h">Finished video</h2>
+          <div class="screen" id="screen"></div>
+          <div class="filmstrip" id="filmstrip" hidden></div>
+          <div id="note"></div>
+        </section>
+        <div class="stack">
+          <section class="card shots" aria-labelledby="shots-h">
+            <h2 id="shots-h">Shot list the model planned</h2>
+            <div id="shots"></div>
+          </section>
+        </div>
+      </div>
+
+      <p class="source" id="source"></p>
+    </div>
+
+    <script>
+      // Everything below renders `/api/run`, the agent's own terminal output,
+      // into the page. The only thing computed here is the filmstrip, and
+      // those are frames decoded from the video the run returned, at times
+      // spread evenly across its length.
+
+      const FRAMES = 6;
+
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      /** Inline markdown on an already-escaped line: code and bold. */
+      const inline = (text) =>
+        text
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+      const fmtSeconds = (s) =>
+        Number.isFinite(s)
+          ? `${Number.isInteger(s) ? s : s.toFixed(1)} s`
+          : "—";
+      const fmtClock = (s) => {
+        const m = Math.floor(s / 60);
+        const r = s - m * 60;
+        return `${m}:${r.toFixed(1).padStart(4, "0")}`;
+      };
+
+      function kpi(label, value, sub) {
+        return `<article class="card kpi"><p class="label">${label}</p><div class="value">${value}</div>${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      /**
+       * The planner orders every motion prompt subject -> action -> camera ->
+       * duration -> lighting -> style, so a prompt written that way is shown
+       * as those beats. One written any other way is shown as it came.
+       */
+      const BEATS = ["Subject", "Action", "Camera", "Time", "Light", "Style"];
+      function renderMotion(prompt) {
+        const parts = String(prompt)
+          .split(/\s*->\s*/)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length < 3 || parts.length > BEATS.length) {
+          return `<p>${esc(prompt)}</p>`;
+        }
+        return `<ol class="beats">${parts
+          .map(
+            (p, i) => `<li><span>${BEATS[i]}</span><span>${esc(p)}</span></li>`,
+          )
+          .join("")}</ol>`;
+      }
+
+      function renderShots(shots) {
+        if (!Array.isArray(shots) || shots.length === 0) {
+          return `<p class="muted">This run planned no shots.</p>`;
+        }
+        return shots
+          .map((shot, i) => {
+            const duration = Number(shot?.duration);
+            return `<article class="shot">
+              <div class="head"><b>Shot ${i + 1}</b><span class="chip">${fmtSeconds(duration)}</span>${
+                shot?.transition
+                  ? `<span class="chip" title="${esc(shot.transition)}">${esc(shot.transition)}</span>`
+                  : ""
+              }</div>
+              ${renderMotion(shot?.motion_prompt ?? "")}
+              ${
+                shot?.image_prompt
+                  ? `<details><summary>Keyframe prompt</summary><p>${esc(shot.image_prompt)}</p></details>`
+                  : ""
+              }
+            </article>`;
+          })
+          .join("");
+      }
+
+      /**
+       * Decode FRAMES stills from the video, evenly spaced, into the strip.
+       * Seeks are sequential: one hidden video element, one `seeked` at a
+       * time. Any failure (a codec the browser lacks, a link that no longer
+       * resolves) leaves the strip hidden; the player above still stands.
+       */
+      function renderFilmstrip(videoUrl) {
+        const strip = document.getElementById("filmstrip");
+        return new Promise((resolve) => {
+          const v = document.createElement("video");
+          v.muted = true;
+          v.preload = "auto";
+          v.src = videoUrl;
+          const done = () => {
+            v.removeAttribute("src");
+            v.load();
+            resolve();
+          };
+          v.addEventListener("error", done, { once: true });
+          v.addEventListener(
+            "loadedmetadata",
+            async () => {
+              const total = v.duration;
+              if (!Number.isFinite(total) || total <= 0) return done();
+              const ratio =
+                v.videoWidth && v.videoHeight
+                  ? v.videoWidth / v.videoHeight
+                  : 4 / 3;
+              strip.innerHTML = Array.from({ length: FRAMES }, () => {
+                return `<figure class="frame"><canvas width="320" height="${Math.round(320 / ratio)}" style="aspect-ratio:${ratio}"></canvas><figcaption></figcaption></figure>`;
+              }).join("");
+              strip.hidden = false;
+              const frames = strip.querySelectorAll(".frame");
+              for (let i = 0; i < FRAMES; i++) {
+                const t = (total * (i + 0.5)) / FRAMES;
+                const seeked = new Promise((r) => {
+                  v.addEventListener("seeked", r, { once: true });
+                  v.addEventListener("error", r, { once: true });
+                });
+                v.currentTime = t;
+                await seeked;
+                const canvas = frames[i].querySelector("canvas");
+                try {
+                  canvas
+                    .getContext("2d")
+                    .drawImage(v, 0, 0, canvas.width, canvas.height);
+                } catch {
+                  // A frame that will not draw stays blank.
+                }
+                frames[i].querySelector("figcaption").textContent = fmtClock(t);
+              }
+              done();
+            },
+            { once: true },
+          );
+        });
+      }
+
+      async function render({ source, media, output }) {
+        const o = output ?? {};
+        const src = source ?? {};
+        const shots = Array.isArray(o.shots) ? o.shots : [];
+        const runtime = shots.reduce(
+          (sum, s) => sum + (Number(s?.duration) || 0),
+          0,
+        );
+        const scene =
+          typeof src.input?.scene === "string" && src.input.scene.trim()
+            ? src.input.scene.trim()
+            : null;
+
+        document.getElementById("facts").innerHTML = [
+          `<span class="chip" title="${esc(scene ?? "built-in sample scene")}">Scene <b>${esc(scene ?? "built-in sample")}</b></span>`,
+          `<span class="chip">Finished <b>${fmtWhen(src.finishedAt)}</b></span>`,
+        ].join("");
+
+        const videoUrl = media?.videoUrl ?? null;
+        document.getElementById("kpis").innerHTML = [
+          kpi("Shots", String(shots.length), "planned and rendered"),
+          kpi(
+            "Runtime",
+            fmtSeconds(runtime),
+            shots.length > 1 ? "stitched from every clip" : "a single clip",
+          ),
+          kpi(
+            "Video file",
+            o.videoFileId
+              ? `<code>${esc(String(o.videoFileId).slice(0, 8))}</code>`
+              : "—",
+            o.videoFileId
+              ? "stored durably in file storage"
+              : "no durable file",
+          ),
+          kpi(
+            "Video link",
+            o.downloadUrl || videoUrl
+              ? `<a href="${esc(o.downloadUrl || videoUrl)}" target="_blank" rel="noreferrer">Open ↗</a>`
+              : o.dryRun
+                ? "Dry run"
+                : "—",
+            o.downloadUrl
+              ? "the run's public permalink"
+              : videoUrl
+                ? "the run's render, bundled here"
+                : o.dryRun
+                  ? "planned only, nothing rendered"
+                  : "link no longer available",
+          ),
+        ].join("");
+
+        const screen = document.getElementById("screen");
+        if (videoUrl) {
+          const poster = media?.posterUrl
+            ? ` poster="${esc(media.posterUrl)}"`
+            : "";
+          screen.innerHTML = `<video controls playsinline preload="auto"${poster} src="${esc(videoUrl)}" aria-label="The finished video"></video>`;
+        } else {
+          screen.innerHTML = `<p class="empty">${
+            o.dryRun
+              ? "This run was a dry run: the shot list was planned and nothing was rendered."
+              : "This run returned no video link."
+          }</p>`;
+        }
+
+        document.getElementById("shots").innerHTML = renderShots(shots);
+
+        // The run's own account of what it did (shot the sample scene, planned
+        // only) belongs under the video it qualifies, not in the page chrome.
+        document.getElementById("note").innerHTML = o.note
+          ? `<p class="note">${inline(esc(o.note))}</p>`
+          : "";
+
+        const where =
+          src.kind === "live"
+            ? `Live — latest completed run`
+            : `Captured zero-setup run`;
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}` +
+          (src.liveError
+            ? ` · <span class="muted">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+
+        if (videoUrl) {
+          // Bounded, so a video that never decodes cannot hold the page in a
+          // loading state (the screenshot helper waits on data-ready). The
+          // player is waited on too, so its buffering indicator is gone by
+          // the time the page says it is ready.
+          const player = screen.querySelector("video");
+          const playable = new Promise((r) => {
+            if (player.readyState >= 3) return r();
+            player.addEventListener("canplay", r, { once: true });
+            player.addEventListener("error", r, { once: true });
+          });
+          await Promise.race([
+            Promise.all([playable, renderFilmstrip(videoUrl)]),
+            new Promise((r) => setTimeout(r, 10_000)),
+          ]);
+          // The browser's own loading overlay fades out a moment after the
+          // player becomes playable; let it, so the capture shows the frame.
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+
+      fetch("/api/run", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("shots").innerHTML =
+            `<p class="muted">Could not load the run: ${esc(err?.message ?? err)}</p>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>

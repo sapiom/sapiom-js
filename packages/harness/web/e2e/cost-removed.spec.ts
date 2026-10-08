@@ -7,11 +7,12 @@
  * /transactions routes).
  *
  * Surfaces walked:
- *   1. App shell chrome: brand header, rail, session bar, macro strip
+ *   1. App shell chrome: brand header, rail, session bar, the agent modal's
+ *      header (name, state, verbs)
  *   2. Canvas overview panel (board-level, before step selection)
- *   3. Canvas step inspector (board pick, post-run)
- *   4. Steps accordion tab (pre-run and with run truth)
- *   5. Code tab — snippet panel (leasing is deployed)
+ *   3. The step card (board pick in the agent modal, post-run)
+ *   4. (The Steps tab and its snippet panel were removed with the right
+ *      pane; the agent modal has Canvas and Secrets only, flow 4.2b.2.)
  *   6. Settings popover
  *   7. History menu + dead-session pane
  *   8. DOM: WalletCard / run-cost / wallet-related class names are absent
@@ -51,7 +52,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { selectMockSessionFromPalette } from "./mock-navigation";
+import { openAgentModal } from "./mock-navigation";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,12 +74,8 @@ function armNetworkSentinel(page: Page): { hits: string[] } {
 
 /** Load the board so the canvas overview panel renders. */
 async function loadBoard(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  // leasing's board in its agent modal.
+  await openAgentModal(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
 }
 
@@ -184,10 +181,12 @@ test.describe("cost-removed guard", () => {
     await loadBoard(page);
     await triggerRun(page);
 
-    // Navigate through every inspectable surface
-    await page.getByTestId("right-tab-steps").click();
-    await page.getByTestId("steps-snippets-toggle").click();
-    await page.getByTestId("right-tab-canvas").click();
+    // Navigate through every inspectable surface of the agent modal
+    await page.getByTestId("agent-modal-tab-secrets").click();
+    await expect(page.getByTestId("agent-modal-panel-secrets")).toBeVisible();
+    await page.getByTestId("agent-modal-tab-canvas").click();
+    await page.getByTestId("agent-modal-close").click();
+    await expect(page.getByTestId("agent-modal")).toHaveCount(0);
 
     // Settings
     await page.getByTestId("brand-identity").click();
@@ -220,25 +219,23 @@ test.describe("cost-removed guard", () => {
     await assertNoCostAffordance(sessionBar, "session bar");
   });
 
-  test("workflow macro strip has no cost affordances", async ({ page }) => {
-    // The agent action cluster kept its testid ("session-steps") but its CSS
-    // class is now ".session-actions", so address it by testid.
-    const stepsBar = page.getByTestId("session-steps");
-    await expect(stepsBar).toBeVisible();
-    await assertNoDollarInChrome(stepsBar, "macro strip");
-    await assertNoCostAffordance(stepsBar, "macro strip");
+  test("the agent modal's header (state and verbs) has no cost affordances", async ({ page }) => {
+    // The agent's verbs left the strip beside a session for the agent modal's
+    // header row (flow 4.2b, 4.4b): visible icon controls, no menu.
+    await loadBoard(page);
+    const header = page.locator(".agent-modal-head");
+    await expect(header).toBeVisible();
+    await assertNoDollarInChrome(header, "agent modal header");
+    await assertNoCostAffordance(header, "agent modal header");
+    for (const verb of ["visualize", "run-local", "prod-run", "deploy"]) {
+      const label = (await page.getByTestId(`agent-modal-${verb}`).getAttribute("aria-label")) ?? "";
+      expect(label).not.toMatch(/\$|wallet|balance|spend|price|transaction/i);
+    }
 
-    // The lifecycle pill left the macro strip: a deployed agent's pill now lives
-    // once in the right-pane header as "workflow-dashboard-link", rendered on the
-    // Canvas tab. It reads lowercase "deployed" — a lifecycle word, never a cost
-    // term (and the focused agent, leasing, is deployed).
-    await page.getByTestId("right-tab-canvas").click();
-    const deployedPill = page.getByTestId("workflow-dashboard-link");
-    await expect(deployedPill).toBeVisible();
-    await expect(deployedPill).toContainText("deployed");
-    await expect(deployedPill).not.toContainText("wallet");
-    await expect(deployedPill).not.toContainText("spend");
-    await expect(deployedPill).not.toContainText("price");
+    // The lifecycle state reads "Deployed": a lifecycle word, never a cost
+    // term (and the agent, leasing, is deployed).
+    const state = page.getByTestId("agent-modal-state");
+    await expect(state).toHaveText("Deployed");
   });
 
   // -------------------------------------------------------------------------
@@ -256,9 +253,9 @@ test.describe("cost-removed guard", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Surface 3: Canvas step inspector — board pick of a run-populated step
+  // Surface 3: the step card — board pick of a run-populated step
   // -------------------------------------------------------------------------
-  test("canvas step inspector after a run carries status/latency only — no cost affordances", async ({ page }) => {
+  test("the step card after a run carries no cost affordances", async ({ page }) => {
     await loadBoard(page);
     await triggerRun(page);
 
@@ -271,6 +268,12 @@ test.describe("cost-removed guard", () => {
     // in canvas-inspector.spec.ts. A null box after that guard is an error,
     // not a silent skip — a silent skip would let the later inspector
     // assertion time out with a confusing message.
+    // The bundled interactive board (it answers pick with node) in the same
+    // frame, as canvas-inspector.spec.ts does.
+    await page.evaluate(async () => {
+      const html = await (await fetch("/canvas/sess-boot/index.html")).text();
+      (document.querySelector(".agent-modal .canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+    });
     const frame = page.frameLocator(".canvas-iframe");
     const node = frame.locator('[data-node-id="credit-check"]');
     await expect(node).toBeVisible({ timeout: 5_000 });
@@ -279,84 +282,13 @@ test.describe("cost-removed guard", () => {
     if (!box) throw new Error("credit-check node has no bounding box");
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
-    const inspector = page.getByTestId("canvas-step-inspector");
-    await expect(inspector).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByTestId("canvas-inspector-title")).toHaveText("credit-check");
-
-    // The run block must show status + latency
-    const run = page.getByTestId("canvas-inspector-run");
-    await expect(run).toBeVisible();
-    await expect(run).toContainText("passed");
-    await expect(run).toContainText("1.9s");
-
-    // Inspector chrome: no cost affordances and no "$"
-    await assertNoDollarInChrome(inspector, "canvas step inspector");
-    await assertNoCostAffordance(inspector, "canvas step inspector");
-
-    // Explicitly: no dollar sign in the run block
-    await expect(run).not.toContainText("$");
-  });
-
-  // -------------------------------------------------------------------------
-  // Surface 4: Steps accordion tab (pre-run and with run truth)
-  // -------------------------------------------------------------------------
-  test("steps tab has no cost affordances (empty state)", async ({ page }) => {
-    // Scratch session has no board — clean empty state on the Steps tab
-    await selectMockSessionFromPalette(page, "scratch");
-    // Focusing scratch (no canvas board) auto-collapses the right pane — reopen it first.
-    await page.getByTestId("right-expand").click();
-    await page.getByTestId("right-tab-steps").click();
-
-    const stepsEmpty = page.locator(".canvas-empty");
-    await expect(stepsEmpty).toBeVisible();
-    await assertNoDollarInChrome(stepsEmpty, "steps tab empty state");
-    await assertNoCostAffordance(stepsEmpty, "steps tab empty state");
-  });
-
-  test("steps tab with a populated run has no cost affordances", async ({ page }) => {
-    // Must be on leasing / boot session with its board loaded first
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
-    await loadBoard(page);
-    await page.getByTestId("right-tab-steps").click();
-    await triggerRun(page);
-    await page.waitForTimeout(300);
-
-    // The steps list renders under .canvas-pane (the right-pane container)
-    const stepsPanel = page.locator(".canvas-pane");
-    await assertNoDollarInChrome(stepsPanel, "steps tab with run");
-    await assertNoCostAffordance(stepsPanel, "steps tab with run");
-
-    // Explicit: the compact run header shows status + target, never cost.
-    const runHeader = page.locator(".run-workspace-header");
-    await expect(runHeader).toContainText("Completed");
-    await expect(runHeader).toContainText("Cloud");
-    await expect(runHeader).not.toContainText("$");
-    await expect(runHeader).not.toContainText("wallet");
-    await expect(runHeader).not.toContainText("spend");
-  });
-
-  // -------------------------------------------------------------------------
-  // Surface 5: the deploy surface's snippet panel (leasing is deployed).
-  // It lived behind a Code tab until SAP-2980 rehomed it onto Steps, beside
-  // the deploy banner that reports the build that made the agent callable.
-  // -------------------------------------------------------------------------
-  test("snippet panel has no cost affordances", async ({ page }) => {
-    await page.getByTestId("right-tab-steps").click();
-    await page.getByTestId("steps-snippets-toggle").click();
-
-    const snippetPanel = page.getByTestId("snippet-panel");
-    await expect(snippetPanel).toBeVisible();
-
-    // Chrome text (labels, hint, slugs) has no cost terms
-    await assertNoDollarInChrome(snippetPanel, "snippet panel");
-    await assertNoCostAffordance(snippetPanel, "snippet panel");
-
-    // Verify the cURL snippet has no $VAR-style shell expansions
-    // (the API key placeholder is a literal string, not a $VAR)
-    await page.getByTestId("snippet-tab-curl").click();
-    const curlText = await page.getByTestId("snippet-code").textContent();
-    expect(curlText).not.toMatch(/\$\w/); // no $ENV_VAR expansions
-    expect(curlText).not.toMatch(/wallet|balance|spend|price|transaction/i);
+    // The step card carries description, inputs, outputs and calls only
+    // (4.2b.4, Q8); a metered capability says "metered", never a price.
+    const card = page.getByTestId("step-card");
+    await expect(card).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("step-card-title")).toHaveText("credit-check");
+    await assertNoDollarInChrome(card, "step card");
+    await assertNoCostAffordance(card, "step card");
   });
 
   // -------------------------------------------------------------------------
@@ -387,18 +319,19 @@ test.describe("cost-removed guard", () => {
   // -------------------------------------------------------------------------
   // Surface 7: History menu + dead-session pane
   // -------------------------------------------------------------------------
-  test("history menu and dead-session pane have no cost affordances", async ({ page }) => {
+  test("options menu, history card and dead-session pane have no cost affordances", async ({ page }) => {
     await page.getByTestId("history-trigger").click();
 
-    const historyMenu = page.getByTestId("history-menu");
-    await expect(historyMenu).toBeVisible();
-    await assertNoDollarInChrome(historyMenu, "history menu");
-    await assertNoCostAffordance(historyMenu, "history menu");
+    const optionsMenu = page.getByTestId("rail-options-menu");
+    await expect(optionsMenu).toBeVisible();
+    await assertNoDollarInChrome(optionsMenu, "options menu");
+    await assertNoCostAffordance(optionsMenu, "options menu");
+    await page.keyboard.press("Escape");
 
-    // Past sessions moved into a flyout sub-card: it opens on hover (a click
-    // would hover-open then toggle it shut in the same gesture). Assert its
-    // chrome — the rows a dead session is reached through — carries no cost terms.
-    await page.getByTestId("past-sessions-trigger").hover();
+    // Past sessions opens from the history glyph in the rail's top bar
+    // (flow-creation.md §4.7). Assert its chrome — the rows a dead session is
+    // reached through — carries no cost terms.
+    await page.getByTestId("rail-history").click();
     const pastCard = page.getByTestId("past-sessions-card");
     await expect(pastCard).toBeVisible();
     await assertNoDollarInChrome(pastCard, "past sessions card");
@@ -429,7 +362,7 @@ test.describe("cost-removed guard", () => {
   });
 
   // -------------------------------------------------------------------------
-  // End-to-end: full run+inspect flow — canvas, steps, code, settings
+  // End-to-end: full run+inspect flow — canvas, secrets, settings
   //
   // The route interception is registered BEFORE page.goto so that any
   // /spend or /transactions call fired synchronously at page load is caught.
@@ -451,18 +384,18 @@ test.describe("cost-removed guard", () => {
     await assertNoDollarInChrome(overviewPanel, "canvas overview — e2e");
     await assertNoCostAffordance(overviewPanel, "canvas overview — e2e");
 
-    // Steps tab
-    await page.getByTestId("right-tab-steps").click();
-    const stepsPane = page.locator(".canvas-pane");
-    await assertNoDollarInChrome(stepsPane, "steps tab — e2e");
-    await assertNoCostAffordance(stepsPane, "steps tab — e2e");
+    // The whole board after the run
+    const board = page.getByTestId("agent-modal-panel-canvas");
+    await assertNoDollarInChrome(board, "agent board — e2e");
+    await assertNoCostAffordance(board, "agent board — e2e");
 
-    // Deploy surface: snippet panel (Steps, disclosed)
-    await page.getByTestId("steps-snippets-toggle").click();
-    const snippetPanel = page.getByTestId("snippet-panel");
-    await expect(snippetPanel).toBeVisible();
-    await assertNoDollarInChrome(snippetPanel, "snippet panel — e2e");
-    await assertNoCostAffordance(snippetPanel, "snippet panel — e2e");
+    // Secrets tab
+    await page.getByTestId("agent-modal-tab-secrets").click();
+    const secrets = page.getByTestId("agent-modal-panel-secrets");
+    await expect(secrets).toBeVisible();
+    await assertNoDollarInChrome(secrets, "secrets — e2e");
+    await assertNoCostAffordance(secrets, "secrets — e2e");
+    await page.getByTestId("agent-modal-close").click();
 
     // Settings popover
     await page.getByTestId("brand-identity").click();

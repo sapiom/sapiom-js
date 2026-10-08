@@ -1,0 +1,12 @@
+{
+  "definitionId": "40",
+  "resources": {
+    "door": {
+      "type": "sandbox",
+      "env": {
+        "MAX_INFLIGHT": "6",
+        "DEFINITION_SLUG": "analyze"
+      }
+    }
+  }
+}

@@ -1,0 +1,78 @@
+name: OpenCode native
+
+# The @sapiom/opencode native suite (src/**/*.native.test.ts) launches the real
+# pinned OpenCode binary. It used to run inside the Test workflow's matrix job,
+# where `pnpm test` runs several packages' suites at once and Vitest runs every
+# file in parallel workers. On a GitHub-hosted runner that contention pushed a
+# cold native startup past its deadline often enough to turn pull requests that
+# never touched packages/opencode red, and the matrix's fail-fast then cancelled
+# the sibling Node job too (SAP-3605).
+#
+# So the native suite now has its own workflow: path-filtered to this package
+# and the shared build inputs, run one file at a time (vitest.native.config.ts),
+# and never fail-fast across Node versions. A PR that touches nothing in the
+# paths list cannot be turned red by this suite. Keep the list in sync if the
+# package gains a workspace dependency (today it has none).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, stacked]
+    branches: [main]
+    paths:
+      - "packages/opencode/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
+      - ".github/workflows/opencode-native.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/opencode/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
+      - ".github/workflows/opencode-native.yml"
+
+# Minimal token scope: these jobs only read the checked-out code.
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  opencode-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One Node version timing out must not cancel the other: the whole
+      # point of this workflow is that a slow native startup is reported for
+      # what it is, not amplified into a second red job.
+      fail-fast: false
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        # pnpm version comes from package.json `packageManager` (pnpm 10+)
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+
+      # The package has no workspace dependencies, so a filtered install is
+      # enough. It still runs opencode-ai's postinstall (allowed in
+      # pnpm-workspace.yaml), which is what places the pinned binary.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@sapiom/opencode..."
+
+      - name: Test against the pinned OpenCode runtime
+        run: pnpm --filter @sapiom/opencode test:native

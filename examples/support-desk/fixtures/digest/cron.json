@@ -1,0 +1,5 @@
+{
+  "type": "schedule_cron",
+  "description": "A scheduled digest fire: the cron trigger's stored input is empty.",
+  "payload": {}
+}

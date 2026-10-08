@@ -1,27 +1,77 @@
 import { expect, type Page } from "@playwright/test";
 
 /**
- * A project whose root is also an agent has one rail row, and that row IS the
- * agent: clicking it focuses the agent.
- *
- * This helper used to be called `focusRfqAgentThroughProjectGraph`,
- * and the name was the defect's own fingerprint. The row's click used to belong to the
- * Project axis unconditionally, so it opened a dependency graph that had
- * exactly one node in it, and the only way to reach the agent was to click that
- * node. Eleven specs went the long way round, which is how a user-visible bug
- * ("I have to click that in order to see my agent") sat behind a green suite:
- * the detour had been written into the fixture's own vocabulary.
- *
- * The graph is still one click away, on the row's own map control.
+ * Navigation helpers for Project › Sessions (plans/studio-navigation/
+ * flow-navigation.md). The rail lists sessions, not agents; an agent is
+ * reached on its project's map, in the centre.
  */
-export async function focusRfqAgent(page: Page): Promise<void> {
-  const row = page.getByTestId("workflow-rfq");
-  await expect(row).toBeVisible();
-  await row.locator(".workspace-row-main").click();
-  await expect(row).toHaveClass(/is-focused/);
+
+/** The selected session, as the header states it. */
+export async function activeSessionId(page: Page): Promise<string | null> {
+  return page.getByTestId("session-context").getAttribute("data-session-id");
 }
 
-/** Bare-project labels now open graphs, so live sessions remain reachable through the finder. */
+/** One click on a session row selects it, from anywhere in the rail. */
+export async function selectSession(page: Page, id: string): Promise<void> {
+  await page.getByTestId(`rail-session-select-${id}`).click();
+  await expect.poll(() => activeSessionId(page)).toBe(id);
+}
+
+/** A project header's name: its Agent Map is the centre. */
+export async function openProjectMap(page: Page, label: string): Promise<void> {
+  await page.getByTestId(`project-select-${label}`).click();
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+}
+
+/**
+ * An agent picked on its project's map: the floating card names it
+ * (flow-map-chat-overlay.md 4.2). A durable project draws its computed map
+ * (`agent-map-node-<slug>`); any other shows its agents as cards
+ * (`map-agent-<name>`). Both pick the same way.
+ */
+export async function openAgentPanel(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<void> {
+  await openProjectMap(page, project);
+  await page
+    .getByTestId(`map-agent-${agent}`)
+    .or(page.getByTestId(`agent-map-node-${agent}`))
+    .click();
+  await expect(page.getByTestId("map-card")).toHaveAttribute("data-subject", agent);
+}
+
+/** Open agent on the card: the agent's modal over the map (4.2b), on its
+ *  Canvas tab. */
+export async function openAgentModal(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<void> {
+  await openAgentPanel(page, project, agent);
+  await page.getByTestId("map-card-open-agent").click();
+  await expect(page.getByTestId("agent-modal")).toHaveAttribute("data-agent", agent);
+}
+
+/** The agent modal's Secrets tab. */
+export async function openAgentSecrets(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<void> {
+  await openAgentModal(page, project, agent);
+  await page.getByTestId("agent-modal-tab-secrets").click();
+  await expect(page.getByTestId("agent-modal-panel-secrets")).toBeVisible();
+}
+
+/** Remove from the rail: the project header's hover × opens the confirm. */
+export async function openRemoveProject(page: Page, label: string): Promise<void> {
+  await page.getByTestId(`workspace-group-${label}`).hover();
+  await page.getByTestId(`project-remove-${label}`).click();
+}
+
+/** The finder reaches any session, including one under no open project. */
 export async function selectMockSessionFromPalette(
   page: Page,
   name: string,
@@ -37,16 +87,58 @@ export async function selectMockSessionFromPalette(
   await item.click();
 }
 
+
+/** A folder that is NOTHING yet in the mock filesystem: no agent, no session,
+ *  no `recentDirs` entry. The browser host's folder step lands on it. */
+export const BLANK_PROJECT_ROOT = "/Users/demo/blank-slate";
+
 /**
- * Open a project row's ⋮ menu.
- *
- * Every action a project row offers now lives behind one control (SAP-2982).
- * `+` and `×` used to sit on the row itself — adjacent, same size, same
- * hover-reveal — while acting on different nouns: `+` created an AGENT in the
- * project, `×` removed the PROJECT. A menu of named items has no adjacency to
- * misread, and the specs open it before acting.
+ * ADD PROJECT on the browser host (flow-creation.md §4.5): the header's
+ * folder-plus opens the one-field folder dialog (there is no OS picker in
+ * Playwright), the folder is typed, and the dialog's one action opens it as a
+ * project. Nothing follows: no screen, no session.
  */
-export async function openProjectMenu(page: Page, label: string): Promise<void> {
-  await page.getByTestId(`project-menu-${label}`).click();
-  await expect(page.getByTestId(`project-menu-card-${label}`)).toBeVisible();
+export async function addProject(page: Page, root: string): Promise<void> {
+  await page.getByTestId("rail-add-project").click();
+  await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
+  await page.getByTestId("folder-field-input").fill(root);
+  await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
+  await page.getByTestId("project-folder-continue").click();
+  await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
+}
+
+/**
+ * NEW PROJECT on the browser host (flow-creation.md §4.1): the rail's one CTA
+ * runs the folder step, the folder opens as a project, and the new-agent
+ * screen opens scoped to it. On desktop the OS picker replaces the dialog;
+ * `folder-step.test.ts` proves that half.
+ */
+export async function openNewAgentScreen(
+  page: Page,
+  root: string = BLANK_PROJECT_ROOT,
+): Promise<void> {
+  await page.getByTestId("rail-new-project").click();
+  await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
+  await page.getByTestId("folder-field-input").fill(root);
+  await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
+  await page.getByTestId("project-folder-continue").click();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+}
+
+/**
+ * NEW AGENT in a project you already have: New agent in the project view's
+ * header (flow-navigation.md Q11). A project with no agents opens the same
+ * screen from its name alone (D36).
+ */
+export async function openNewAgentInProject(
+  page: Page,
+  label: string,
+): Promise<void> {
+  await page.getByTestId(`project-select-${label}`).click();
+  const composer = page.getByTestId("new-session-composer");
+  const newAgent = page.getByTestId("project-map-new-agent");
+  await expect(composer.or(newAgent)).toBeVisible();
+  if (!(await composer.isVisible())) await newAgent.click();
+  await expect(composer).toBeVisible();
+  await expect(page.getByTestId("new-agent-project")).toContainText(label);
 }

@@ -1,5 +1,222 @@
 # @sapiom/mcp
 
+## 0.19.2
+
+### Patch Changes
+
+- efef2da: Studio's agent map now shows Jev's role and edge labels, as `sapiom_dev_map` does: cached per project and shown only at p ≥ 0.8. Edges from different agents no longer merge into one shared line, so each line shows who calls whom. `accountEvaluate` is exported from `@sapiom/mcp/map`.
+
+## 0.19.1
+
+### Patch Changes
+
+- Updated dependencies [45c2846]
+  - @sapiom/agent-map@0.4.0
+
+## 0.19.0
+
+### Minor Changes
+
+- 5a88d10: `@sapiom/mcp` adds `sapiom_dev_map`. It computes the agent map from code on every call and stores nothing. You can pass a project folder, optionally with a git `ref`, or your own description of agents.
+
+  - **Systems** are agents joined by code-proven calls, events and timers. Each edge carries the file and line that proves it.
+  - **Shared resources** (vault keys, databases, connectors) show on each agent that uses them and never join two agents into a system.
+  - **Steps** come from `agents check`.
+  - **Triggers and deploy state** come from the signed-in account.
+
+  The source scan Studio's agent Canvas uses now lives in `@sapiom/mcp/map`, and `@sapiom/harness` imports it from there. The Canvas behaves the same.
+
+- ec3d07a: `sapiom_dev_map` labels the map with Jev when you are signed in. Each described agent gets a `role` (intake, worker, orchestrator, reporter, monitor or utility) and each launch or event edge a `label` (hands work to, feeds data to or monitors), shown only when its probability is at least 0.8. One batched call to `jev-1.13.0` per map, and only for questions not already in `.sapiom/cache/map-labels.json`, so an unchanged map makes no call and its labels never flip. Signed out, with `platform: false`, or when Jev fails or is slow, the map says `labels: "unavailable"` and is otherwise unchanged.
+
+### Patch Changes
+
+- Updated dependencies [600ac11]
+  - @sapiom/agent-map@0.3.0
+  - @sapiom/agent-core@0.15.4
+  - @sapiom/sandbox-preview@0.1.30
+
+## 0.18.0
+
+### Minor Changes
+
+- 5bb66c6: Emit custom events from the SDK, the CLI and the MCP — the start verb next to
+  `signal`'s resume verb.
+
+  `emitEvent({ type, payload, id? })` posts to `POST /v1/workflows/events`
+  and returns the receipt verbatim: `{ receiptId, outcome, duplicate, fireIds }`.
+  It fans out by type to every active `event` trigger the tenant armed and starts
+  0..N new runs. `outcome: "unmatched"` is a success, not an error — nothing
+  subscribes to that type. `id` is the sender's dedup identity, so reposting
+  it returns the original receipt and starts nothing new; omit it and every call
+  is a distinct event. `sapiom agents emit <type> --payload <json> [--event-id
+<id>]` and `sapiom_dev_agents_emit_event` wrap it, and `parseEventPayload`
+  rejects a payload that is not a JSON object, which the run-input fold would
+  otherwise drop silently.
+
+  Events start runs, signals resume them, so `signal()` stays the resume verb and
+  now surfaces the server's `message` next to `matched` — `matched` counts the
+  runs that actually resumed, so it under-reports a partial fanout and a `0` does
+  not prove nothing was waiting.
+
+### Patch Changes
+
+- c3b6f26: `sapiom_dev_agents_inspect` and `sapiom_dev_agents_signal` now reject a non-numeric `executionId` at the schema, with a message naming where a real id comes from. Passing a step name or a variable (`result`, `child-expert-1`) previously reached the server and came back as "execution not found", which reads as "the run is gone" rather than "that is not an id".
+- Updated dependencies [89d91d4]
+- Updated dependencies [5bb66c6]
+- Updated dependencies [06adb78]
+  - @sapiom/agent-core@0.15.0
+  - @sapiom/sandbox-preview@0.1.26
+
+## 0.17.0
+
+### Minor Changes
+
+- d532e49: Verify Studio host context over bounded authenticated loopback requests. Recognize
+  legacy Studio launches and keep invalid or unavailable Studio context distinct
+  from standalone access. No shared map tools or new instructions activate yet.
+- c8c706e: Serve the authoring primer live → last-known-good → bundled, and stop pinning the bundled copy
+  to the backend by digest (SAP-3579).
+
+  - **Last-known-good cache.** After every successful `GET /v1/mcp/instructions`, the body and
+    its `X-Sapiom-Content-Release` / `-Digest` / `-Key` stamp are written next to
+    `~/.sapiom/credentials.json`, one file per `apiURL` so production and staging never overwrite
+    each other. Written atomically (temp file + rename). When the live fetch fails, that copy is
+    served before the compiled-in snapshot; a missing, unreadable or corrupt cache is ignored.
+  - **Generated snapshot.** The compiled-in fallback is now `instructions.generated.ts`, written
+    by `scripts/mcp-instructions-snapshot.mjs` from the served endpoint together with the release
+    and digest it was taken from. `instructions.ts` re-exports it, so `AUTHORING_INSTRUCTIONS`
+    keeps working; `AUTHORING_INSTRUCTIONS_RELEASE` and `AUTHORING_INSTRUCTIONS_DIGEST` are new.
+    Regenerating it is a release step (see `PUBLISHING.md`); nothing fetches the network at
+    install or publish time.
+  - **Startup provenance.** One line on stderr at server start names the source being served,
+    its release and its digest prefix, e.g.
+    `sapiom-dev: authoring primer source=cached release=2.14 digest=055076ab6773`. stdout stays
+    the MCP transport.
+  - **Digest pin retired.** The test that froze a sha-256 of the bundled body against the
+    backend's current content release is gone, replaced by a self-consistency check
+    (sha-256 of the generated body equals the digest the generator stamped beside it). A backend
+    content release no longer needs a paired sapiom-js PR to keep this package green; the
+    backend's matching `SAPIOM_JS_FALLBACK_DIGEST` pin is removed in sapiom/Sapiom separately.
+
+- b052979: Add a browser-safe Studio host protocol and an offline MCP capability descriptor.
+  The probe reports the installed package identity without starting the server; map
+  features remain inactive until their implementations and Studio activation land.
+
+### Patch Changes
+
+- 1a3db42: Re-sync the offline `AUTHORING_INSTRUCTIONS` fallback with the served 2.14 primer (SAP-3178,
+  SAP-3217). The fallback had stayed on the 2.10 body while the backend shipped four content
+  releases, so a session whose startup fetch of `GET /v1/mcp/instructions` failed never saw them:
+  2.11 (Vault semantics, `ctx.sapiom.agents.launch`, receipts and replay, App Link webhooks), 2.12
+  (the two servers named by role, and the App Link management tools `sapiom_dev_app_list` /
+  `_settings` / `_delete` taught inside the webhook paragraph), 2.13 (a Sapiom Postgres is
+  permanent), and 2.14 (an App Link is a redirector, not a reverse proxy, plus the `/hook/*`
+  exposure caveats). The tools themselves shipped in 0.15.0; this moves only the offline copy of
+  the text that teaches them. The digest pin now matches the backend's `SAPIOM_JS_FALLBACK_DIGEST`.
+- Updated dependencies [0c6e945]
+- Updated dependencies [b052979]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [85610db]
+  - @sapiom/agent-core@0.14.3
+  - @sapiom/agent-map@0.2.0
+  - @sapiom/sandbox-preview@0.1.25
+
+## 0.16.0
+
+### Minor Changes
+
+- 4c9bafb: Stop restating the platform rules in npm-shipped files; point at the served copy
+  and stamp the pointer (SAP-3181).
+
+  The rules that are true of Sapiom regardless of the installed SDK — one-off call
+  vs agent, the capability catalog, database lifetime, trigger kinds, App Links,
+  which capability calls an LLM, composing deployed agents, platform vocabulary —
+  are served by the Sapiom API at `GET /v1/agents/authoring-rules`. Every copy
+  this repo used to ship of them was frozen at publish or scaffold time and could
+  never be corrected; that is how the 7-day database claim and the two-kind
+  trigger list reached customers.
+
+  - The `sapiom-agent-authoring` skill's platform chapters are now a short
+    summary plus a pointer to the served section, bracketed by
+    `<!-- section: … -->` markers so a Studio session can splice the served text
+    in. The authoring mechanics (step model, directives, `ctx.shared`,
+    pause/resume, stubs) are unchanged.
+  - Every scaffolded `AGENTS.md` (both `@sapiom/agent-core` templates, the
+    `@sapiom/cli` template and all gallery examples) and `examples/AUTHORING.md`
+    carry a one-paragraph pointer and a stamp:
+    `<!-- sapiom-authoring-rules release=… digest=… -->`.
+  - `@sapiom/tools`' JSDoc on the `model` field of `llm.run`, `llm.submit`,
+    `models.run` and `models.coding.run` points at the served rule instead of
+    restating it.
+  - `sapiom_dev_agents_check` reads the stamps in the project's `AGENTS.md` and
+    skill, makes one best-effort anonymous read of the served endpoint's
+    `X-Sapiom-Content-*` headers, and warns when a stamp differs from the served
+    copy. No stamp means no request; unreachable means no warning. The wording is
+    "differs from", never "older than" — digests do not order.
+  - `@sapiom/agent-core` exports the stamp vocabulary
+    (`AUTHORING_RULES_*`, `parseAuthoringRulesStamp`,
+    `renderAuthoringRulesStamp`, `authoringRulesDriftWarning`), and
+    `node scripts/authoring-rules-stamp.mjs --from-served` moves every stamp in
+    the repo to the current release at once.
+
+- fefb4f8: Expose the shared credential-store path to authenticated local integrations and stop affected Studio-managed Claude sessions and background tasks when the current Sapiom connection is removed.
+- d7f5c04: Let Studio request and privately retain a delegated signed-in user credential alongside its existing organization connection. Serialize user-token refresh with Studio login/sign-out, persist rotations atomically, and revoke the user-token family on sign-out when the backend is reachable. Existing CLI callers and legacy project ownership remain unchanged.
+- 5d18ba3: Expose all four backend trigger kinds from the local authoring MCP (SAP-3174).
+  `sapiom_dev_agents_schedule` now accepts `kind: "event"` (+ `eventType`) and
+  `kind: "webhook"` alongside `schedule_cron` / `schedule_once`. A webhook create
+  returns the public hook URL, the shown-once signing secret, and the signing
+  scheme in the tool result (HMAC-SHA256 over `timestamp.eventId.rawBody`, sent as
+  `X-Sapiom-Timestamp` / `X-Sapiom-Event-Id` / `X-Sapiom-Signature`), and the
+  description says when a webhook trigger fits versus an App Link `/hook/*`
+  receiver (third-party senders cannot produce our HMAC). `_schedule_inspect` and
+  `_schedule_cancel` describe every kind; the new `sapiom_dev_agents_schedule_secret`
+  tool rotates, completes a rotation of, or revokes a webhook secret.
+
+  `@sapiom/agent-core` gains the matching `ScheduleKind` members, the webhook /
+  event fields on `ScheduleSummary`, `CreateScheduleResult`, and
+  `rotateScheduleSecret` / `completeScheduleSecretRotation` / `revokeScheduleSecret`.
+
+  **Breaking (types only, `@sapiom/agent-core`):** `ScheduleFireRecord.scheduledFor`
+  is now `string | null` — an event or webhook fire has no occurrence time, so code
+  that did `new Date(fire.scheduledFor)` must guard for `null` (or read
+  `fire.receiptId` for those kinds). `ScheduleSummary` gains five required fields
+  (`eventType`, `publicId`, `secretVersion`, `graceUntil`, `revokedAt`, all
+  nullable) that the server always returns; hand-built `ScheduleSummary` values
+  (test fakes, adapters) must add them. `ScheduleKind` widens to include `"event"`
+  and `"webhook"`, so an exhaustive `switch` over it needs the two new arms. No
+  runtime behaviour changes for existing cron / one-off callers.
+
+  The offline `AUTHORING_INSTRUCTIONS` fallback and the `sapiom-agent-authoring`
+  skill gain a triggers paragraph teaching the same thing; the served-text change
+  is version-gated on `@sapiom/mcp` >= 0.15 because older clients are never
+  offered the new kinds.
+
+### Patch Changes
+
+- 0710301: Say that an App Link is a redirector, not a reverse proxy. `sapiom_dev_app_publish`'s description and its publish summary now state that the link's root answers a 302 to whichever preview URL is currently serving the app, that sub-paths are not proxied, and that the app's own API therefore lives at the preview URL — which must be re-resolved per use rather than stored, because it changes when a wake recreates the sandbox and for an org-scoped app carries a short-lived token that expires. They also say who can take those routes: for an org-scoped app the redirect and `GET {link}/__status` both need a logged-in member's browser session rather than an API key, so its API is browser-only and a machine caller needs the app published `public` (whose link and `__status` need no session) or inbound traffic on `/hook/…`, which requires `webhooksEnabled`, off by default. The summary branches on visibility, so a public app is not warned about a gate it does not have.
+- 6b0b11f: Name the two Sapiom MCP servers by role in both offline fallbacks — "the local
+  authoring server" and "the hosted capability server" — instead of by registration
+  alias (SAP-3179).
+
+  The two texts disagreed: the Studio prompt called the servers `sapiom` (hosted) and
+  `sapiom-dev` (local), which is what Studio registers; the authoring primer called them
+  `sapiom` (local) and `sapiom-direct` (hosted), which is what a plain Claude Code user is
+  told to register. A Studio session reads both, so "use the `sapiom` alias to author
+  agents" pointed it at the remote server the prompt had just said not to call while
+  authoring. Aliases now appear only inside the two `claude mcp add` commands, which are
+  unchanged. The Studio prompt also disambiguates the two same-named `sapiom_authenticate`
+  / `sapiom_status` pairs, so a session signs in against the local server.
+
+  Both digest pins move with the bodies. The paired backend content release
+  (sapiom/Sapiom#4884) must adopt the same two bodies for the cross-repo pins to agree.
+
+- Updated dependencies [4c9bafb]
+- Updated dependencies [5d18ba3]
+  - @sapiom/agent-core@0.14.0
+
 ## 0.15.0
 
 ### Minor Changes

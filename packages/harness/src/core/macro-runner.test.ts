@@ -13,7 +13,6 @@ const workflow: WorkflowInfo = {
 const baseCtx: MacroContext = {
   workflow,
   sessionCwd: "/Users/demo/acme-app",
-  canvasPath: "/Users/demo/acme-app/.sapiom/canvas/index.html",
   subject: "the leasing funnel",
 };
 
@@ -25,7 +24,7 @@ describe("resolveMacro", () => {
       icon: "Sparkles",
       action: {
         kind: "inject",
-        text: "{{workflow.path}} {{workflow.name}} {{workflow.definitionId}} {{session.cwd}} {{canvas.path}} {{subject}}",
+        text: "{{workflow.path}} {{workflow.name}} {{workflow.definitionId}} {{session.cwd}} {{subject}}",
       },
     };
 
@@ -33,8 +32,8 @@ describe("resolveMacro", () => {
     expect(resolved).toEqual({
       kind: "inject",
       // {{workflow.path}} is POSIX single-quoted by shellQuote() at resolution time.
-      // Other placeholders (name, id, cwd, canvas.path, subject) are plain strings.
-      text: "'/Users/demo/acme-app/leasing' leasing 4821 /Users/demo/acme-app /Users/demo/acme-app/.sapiom/canvas/index.html the leasing funnel",
+      // Other placeholders (name, id, cwd, subject) are plain strings.
+      text: "'/Users/demo/acme-app/leasing' leasing 4821 /Users/demo/acme-app the leasing funnel",
       submit: true,
     });
   });

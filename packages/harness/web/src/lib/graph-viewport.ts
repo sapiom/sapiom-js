@@ -32,6 +32,7 @@ export interface GraphFit extends GraphView {
 export interface GraphViewportStore {
   get(workspaceKey: string): GraphView | undefined;
   set(workspaceKey: string, view: GraphView): void;
+  delete(workspaceKey: string): void;
 }
 
 export function clampGraphZoom(
@@ -237,6 +238,9 @@ export function createGraphViewportStore(): GraphViewportStore {
     },
     set(workspaceKey, value) {
       saved.set(workspaceKey, { ...value });
+    },
+    delete(workspaceKey) {
+      saved.delete(workspaceKey);
     },
   };
 }

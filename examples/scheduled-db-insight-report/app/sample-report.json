@@ -1,0 +1,58 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "158211",
+    "definitionId": "523",
+    "startedAt": "2026-08-05T00:17:03.480Z",
+    "finishedAt": "2026-08-05T00:17:45.099Z",
+    "status": "completed",
+    "input": {},
+    "note": "Verbatim terminal output of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 158211 on 2026-09-10. The chart link was a 15-minute presigned URL that had expired by capture, so chartUrl is null and the Chart section is dropped from the report."
+  },
+  "output": {
+    "to": null,
+    "note": "Nothing was emailed: no `deliverTo` address is set, so the report is returned inline below. Reported on the managed demo database `db-insight-demo`, not your data. Set `REPORT_DATABASE_URL` or point `dbHandle` at your own database to report on real data. Recommends watching `demo_orders` — its activity since the last snapshot: inserts 240, updates 0, deletes 0, sequential scans 5, index scans 0.",
+    "unmet": ["deliverTo"],
+    "dryRun": false,
+    "reason": "no-recipient",
+    "report": "## Insight Report — demo_* tables\n\n**Executive summary:** The flagged anomaly is confirmed: `demo_orders` holds 240 rows against only 130 in `demo_signups`, a 1.85:1 ratio that implies roughly 110 orders cannot be tied back to a signup under a strict FK relationship. The dataset is small (7.35 MB across 2 user tables), so the gap is not noise from scale — it is structural, pointing either to a guest-checkout path, a missing FK enforcement, or backfilled rows.\n\n- **Order-to-signup imbalance:** 240 orders vs. 130 signups = **+110 excess orders** (~85% surplus, ratio 1.85:1). At minimum, 45.8% of order rows have no matching signup if a 1:1 relationship is assumed.\n- **Coverage by table:** Orders represent **64.0%** of the 375 total rows across both tables; signups account for the remaining **34.7%** — orders are nearly 2× the signup volume.\n- **Storage footprint:** Just **7.35 MB** across only **2 user tables**, so this is an early-stage / seed dataset. Light volume means even a small referential-integrity gap is cheap to audit wholesale (full scans are trivial).\n- **Signal vs. noise:** With ~130 signups as the expected ceiling, the extra 110 orders are large enough to dominate the dataset — this is unlikely to be explained by data-entry timing alone.\n- **Decision point:** If `demo_orders.signup_id` exists, a `LEFT JOIN` against `demo_signups` should immediately quantify the exact orphan count, distinguishing guest-checkout (a feature) from a broken FK (a bug).\n\n**What to watch:** Run the orphan-count query on the next refresh — if the 110-row gap persists or grows, audit the orders → signups FK and the guest-checkout pathway before signups scale further.\n\n_Snapshot taken 2026-08-05T00:17:06.642Z._\n\n## Anomaly flagged\n\ndemo_orders has 240 rows while demo_signups has only 130 rows — ~85% more orders than signups (ratio 1.85:1). If orders are expected to originate from signups, this points to ~110 potentially orphan/uncategorized orders and warrants a check on the orders→signups foreign key or guest-checkout pathway. (**medium**)\n\n## Follow-up: Activity on `demo_orders`\n\n- inserts: 240\n- updates: 0\n- deletes: 0\n- sequential scans: 5\n- index scans: 0\n\n\n## Metrics\n- **Rows per table (top 10):**\n  - demo_orders: 240\n  - demo_signups: 130\n- **User tables:** 2\n- **Database size (MB):** 7.35",
+    "anomaly": {
+      "table": "demo_orders",
+      "metric": "Rows per table (top 10)",
+      "severity": "medium",
+      "description": "demo_orders has 240 rows while demo_signups has only 130 rows — ~85% more orders than signups (ratio 1.85:1). If orders are expected to originate from signups, this points to ~110 potentially orphan/uncategorized orders and warrants a check on the orders→signups foreign key or guest-checkout pathway."
+    },
+    "subject": "Database insight report",
+    "chartUrl": null,
+    "followUp": {
+      "kind": "series",
+      "name": "Activity on `demo_orders`",
+      "points": [
+        {
+          "label": "inserts",
+          "value": 240
+        },
+        {
+          "label": "updates",
+          "value": 0
+        },
+        {
+          "label": "deletes",
+          "value": 0
+        },
+        {
+          "label": "sequential scans",
+          "value": 5
+        },
+        {
+          "label": "index scans",
+          "value": 0
+        }
+      ]
+    },
+    "schedule": "0 8 * * *",
+    "delivered": false,
+    "generatedAt": "2026-08-05T00:17:06.642Z",
+    "metricCount": 3
+  }
+}

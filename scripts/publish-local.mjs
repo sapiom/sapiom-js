@@ -39,6 +39,7 @@ const PACKAGES = [
   "sandbox",
   "sandbox-preview",
   "cli",
+  "agent-map",
   "mcp",
 ];
 

@@ -30,8 +30,8 @@ class WorkerDouble {
 }
 const input = {
   id: "project/proposal",
+  groups: [],
   nodes: [{ id: "node", width: 184, height: 72 }],
-  edges: [],
 };
 const run = (client: ElkLayoutWorker, id = input.id) =>
   client.layout({ ...input, id }, new AbortController().signal);

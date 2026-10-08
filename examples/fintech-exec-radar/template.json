@@ -46,6 +46,13 @@
     ],
     "dryRun": false
   },
+  "app": {
+    "name": "Opportunity radar dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4185,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/fintech-exec-radar/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed_partial",
     "expect": [

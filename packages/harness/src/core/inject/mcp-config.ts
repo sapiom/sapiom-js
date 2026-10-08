@@ -1,3 +1,4 @@
+import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveEnvironment } from "@sapiom/mcp/auth";
@@ -25,8 +26,6 @@ export interface McpDevServerCommand {
 }
 
 export interface McpConfigOptions {
-  /** Session-scoped embedded Agent Map HTTP MCP authority. */
-  agentMap?: { url: string; bearerToken: string };
   /** Override for the local sapiom-dev server launch — see {@link McpDevServerCommand}. */
   devServer?: McpDevServerCommand;
   /** SAPIOM_ENVIRONMENT to pass through to the sapiom-dev child process. */
@@ -75,6 +74,9 @@ export async function generateMcpConfig(
 
   const sapiomEnvironment =
     options.environment ?? process.env.SAPIOM_ENVIRONMENT;
+  // Host authority comes only from this session, never from a command override.
+  const launcherEnv = { ...options.devServer?.env };
+  delete launcherEnv[STUDIO_HOST_CONTEXT_ENV];
   const devEnvEntries: Record<string, string> = {
     ...(sapiomEnvironment ? { SAPIOM_ENVIRONMENT: sapiomEnvironment } : {}),
     ...(options.harnessVersion
@@ -100,7 +102,7 @@ export async function generateMcpConfig(
             // The launcher's own env (e.g. ELECTRON_RUN_AS_NODE) must win over
             // the shared entries — it is what makes the command a node at all.
             ...(devEnv || options.devServer.env
-              ? { env: { ...devEnvEntries, ...options.devServer.env } }
+              ? { env: { ...devEnvEntries, ...launcherEnv } }
               : {}),
           }
         : {
@@ -116,17 +118,6 @@ export async function generateMcpConfig(
             args: ["-y", "@sapiom/mcp@latest"],
             ...(devEnv ? { env: devEnv } : {}),
           },
-      ...(options.agentMap
-        ? {
-            "agent-map": {
-              type: "http",
-              url: options.agentMap.url,
-              headers: {
-                Authorization: `Bearer ${options.agentMap.bearerToken}`,
-              },
-            },
-          }
-        : {}),
     },
   };
 

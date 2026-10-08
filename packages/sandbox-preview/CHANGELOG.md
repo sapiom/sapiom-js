@@ -1,5 +1,76 @@
 # @sapiom/sandbox-preview
 
+## 0.1.30
+
+### Patch Changes
+
+- Updated dependencies [a7731b9]
+- Updated dependencies [a893708]
+  - @sapiom/tools@0.44.0
+
+## 0.1.29
+
+### Patch Changes
+
+- Updated dependencies [7f8c99e]
+  - @sapiom/tools@0.43.0
+
+## 0.1.28
+
+### Patch Changes
+
+- Updated dependencies [687a69b]
+- Updated dependencies [173ddce]
+  - @sapiom/tools@0.42.0
+
+## 0.1.27
+
+### Patch Changes
+
+- Updated dependencies [772f154]
+  - @sapiom/tools@0.41.0
+
+## 0.1.26
+
+### Patch Changes
+
+- Updated dependencies [3a22965]
+- Updated dependencies [89d91d4]
+- Updated dependencies [21f060b]
+- Updated dependencies [0e4dce3]
+- Updated dependencies [97c2c61]
+- Updated dependencies [c4411a0]
+- Updated dependencies [92ab6df]
+- Updated dependencies [8a38f6d]
+- Updated dependencies [06adb78]
+  - @sapiom/tools@0.40.0
+
+## 0.1.25
+
+### Patch Changes
+
+- Updated dependencies [68c02c1]
+- Updated dependencies [ccf480a]
+- Updated dependencies [afa4569]
+- Updated dependencies [0c6e945]
+- Updated dependencies [85610db]
+  - @sapiom/tools@0.39.0
+
+## 0.1.24
+
+### Patch Changes
+
+- Updated dependencies [e32eb67]
+- Updated dependencies [ca1580c]
+  - @sapiom/tools@0.38.0
+
+## 0.1.23
+
+### Patch Changes
+
+- Updated dependencies [6e5e2e1]
+  - @sapiom/tools@0.37.0
+
 ## 0.1.22
 
 ### Patch Changes

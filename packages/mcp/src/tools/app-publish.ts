@@ -11,6 +11,36 @@
  * is provisioned here: no gateway call, no sandbox, no Blaxel. The wake happens
  * later, on demand.
  *
+ * What the durable address IS, and it is easy to read the copy the other way
+ * (SAP-3217): a redirector, not a reverse proxy. The host answers the root with a
+ * 302 to whichever preview URL is serving the app, answers `/__status` with the wake
+ * state that the "Starting …" page polls, forwards `/hook`/`/hook/*` when the link
+ * has `webhooksEnabled`, and 404s everything else. So the app's own API is only
+ * reachable at the preview URL the redirect lands on.
+ *
+ * Which is why the copy does not stop at "not the durable URL". Three further facts
+ * each turn one wrong inference into another, so all three are stated:
+ *   - RE-RESOLVE, do not store: the URL changes when a wake recreates the sandbox,
+ *     and for an org-scoped app it carries a token that expires inside one wake — so
+ *     a stored URL 401s minutes later, which "changes across wakes" does not predict.
+ *   - The redirect and `/__status` both run the link's access check, which verifies a
+ *     browser cookie and nothing else. An org-scoped app's API is therefore
+ *     browser-only; an API-key caller lands on the login page.
+ *   - `webhooksEnabled` is off by default and is not in this tool's schema, so
+ *     promising `/hook/` unconditionally would send an agent to register a URL that
+ *     404s indistinguishably from a typo'd slug.
+ *
+ * Both the tool description and the success summary say all of it, because the
+ * summary is what an agent reads back before it wires up a client, and the summary
+ * branches on visibility so a public app is not warned about a gate it does not have.
+ *
+ * The offline primer (instructions.ts) deliberately does NOT carry this paragraph yet:
+ * it and the backend's `DEFAULT_MCP_INSTRUCTIONS` are currently drifted by two unrelated
+ * release pairs (SAP-3180's vault/launch/receipts landed here, the backend's trigger-kinds
+ * release landed there), so neither body is a superset and syncing either way would delete
+ * the other's content. The redirector paragraph goes into the primer with that
+ * reconciliation, not ahead of it.
+ *
  * Three calls against the App Links REST API, in order:
  *   POST /v1/app-links            (upsert on slug)
  *   PUT  /v1/app-links/{id}/bundle
@@ -113,6 +143,15 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       '(only logged-in members of your organization can open it); visibility "public" needs ' +
       "confirmPublic: true and a dailySpendCapUsd because your org pays for every wake. Publishing the " +
       "same slug again replaces the app in place at the SAME URL — that is how you ship an update. " +
+      "The link is a wake-on-visit REDIRECTOR, not a reverse proxy: its root answers a 302 to whichever " +
+      "preview URL is currently serving the app and sub-paths are NOT proxied, so the app's own API lives " +
+      "at that preview URL, never under the link. Read it off the redirect (or from `url` in " +
+      "GET {link}/__status) and re-resolve it per use — it changes when a wake recreates the sandbox and, " +
+      "for an org-scoped app, carries a short-lived token that expires. Both routes run the link's OWN " +
+      "access check — for an org-scoped app that means a logged-in member's browser session, NOT an API " +
+      "key, so its API is browser-only. A public app's link and `/__status` need no session at all, so for " +
+      "machine callers publish the app as `public`, or receive traffic on `/hook/…`, which needs " +
+      "`webhooksEnabled` on the link (off by default, not settable here — REST only). " +
       `Bundles are TEXT-ONLY (UTF-8 files; no images, fonts, or archives) and capped at ${BUNDLE_CAP_MIB} MiB; ` +
       "node_modules, .git, dotfiles, symlinks and the project's own sapiom.json are never uploaded — " +
       "install dependencies at wake via `build`. Both limits are checked locally, so a bad bundle costs no upload. " +
@@ -303,7 +342,19 @@ function summarize(
   return (
     `Published "${link.name}" to ${link.url} (${audience}; ${files}). ` +
     `The link is durable — republish the "${link.slug}" slug to update it in place. ` +
-    "The first visit after a publish cold-starts the app."
+    "The first visit after a publish cold-starts the app. " +
+    "It is a REDIRECTOR, not a reverse proxy: the root 302s to the preview URL currently " +
+    "serving the app and sub-paths are not proxied, so the app's own API lives at that preview " +
+    `URL, not under this link — read it off the redirect (or from \`url\` in GET ${link.url}/__status) ` +
+    "and re-resolve it per use, because it changes when a wake recreates the sandbox and, for an " +
+    "org-scoped app, carries a short-lived token that expires. " +
+    (link.visibility === "public"
+      ? `This app is public, so ${link.url} and ${link.url}/__status need no login — that is the ` +
+        "route for a server-side caller too, and it is what wakes the app."
+      : "Both of those routes need a logged-in member's browser session, NOT an API key, so this " +
+        "org-scoped app's API is browser-only: a machine caller needs the app published as " +
+        `\`public\`, or inbound traffic on ${link.url}/hook/… — which requires webhooksEnabled on ` +
+        "the link, off by default and settable only over REST.")
   );
 }
 

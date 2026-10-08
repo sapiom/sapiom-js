@@ -3,7 +3,7 @@
  * stays hidden, the name is locked) and delete with the consequence stated.
  *
  * Delete is an alertdialog whose safe default is Cancel, the same contract
- * EndSessionConfirm keeps: a destructive verb is never one stray Enter away.
+ * RemoveProjectConfirm keeps: a destructive verb is never one stray Enter away.
  */
 import { useState, type JSX } from "react";
 

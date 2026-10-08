@@ -1,0 +1,167 @@
+/**
+ * emitEvent — announce that something happened in the tenant, and let whatever
+ * subscribes to it start.
+ *
+ * Networked operation: takes a GatewayClient. The route is `POST /events`
+ * relative to the `/v1/workflows` base the client already targets.
+ *
+ * This is the START verb, and it is the other half of `signal.ts`: an event
+ * fans out by `type` to every active `event` trigger the tenant armed and
+ * starts 0..N NEW runs, while a signal wakes runs that are already paused.
+ * Events start, signals resume — one namespace each, and neither reaches the
+ * other's.
+ *
+ * A thin passthrough, like `schedule.ts`. Two deliberate non-features:
+ *
+ * - **No client-side validation of `type`.** The grammar (lowercase
+ *   dot-separated segments, `sapiom.*` reserved) is the engine's, and its 400
+ *   relays verbatim through the tenant API. Restating it here would give the
+ *   same input two answers that can drift; the one that is always right is the
+ *   server's.
+ * - **The result is the server's DTO, verbatim.** `signal()` defaults its
+ *   `matched` because the body is not guaranteed to carry it; here every field
+ *   is, and a receipt id this function invented would be a lie a caller could
+ *   go on to read back (`GET /v1/workflows/receipts/:id`).
+ */
+import { GatewayClient } from "./client.js";
+import { AgentOperationError } from "./errors.js";
+
+export interface EmitEventOptions {
+  /**
+   * What happened, as the triggers are matched on it: lowercase `[a-z0-9_]`
+   * segments joined by dots (`lead.created`). The `sapiom.*` namespace is
+   * reserved and 400s. Enforced by the engine, not here.
+   */
+  type: string;
+  /**
+   * Event data. Must be a top-level JSON object: it becomes the top layer of
+   * the run-input fold, folded over each matched trigger's configured `input`
+   * (the payload wins on a key conflict). An array or a scalar is a 400 — the
+   * server gates the shape precisely because the fold would otherwise treat a
+   * non-object as absent and start a run with the data dropped. `emitEvent`
+   * checks the same rule locally so a JS caller gets the answer without the
+   * round-trip.
+   *
+   * **Extra keys reach the run; what happens to them is the entry schema's
+   * call.** The engine can drop payload keys an agent's entry step did not
+   * declare, but only when the STORED manifest literally closes the object
+   * (`additionalProperties: false`). Agents built with `@sapiom/agent` do not
+   * hit that path: `buildManifest` strips that marker at every depth, by
+   * design and even for `z.strictObject()`, so the stored schema stays
+   * forward-compatible with inputs that gain fields. So for an SDK-authored
+   * agent the extra key is NOT dropped — it arrives in the run input, and the
+   * author's own Zod parse at the step decides: `z.object()` ignores it,
+   * `z.strictObject()` REJECTS it and the step fails.
+   *
+   * Practical reading: sending keys the entry step does not declare is safe
+   * against a loose schema and fails the run against a strict one. Neither
+   * shows up here — the emit succeeds either way.
+   */
+  payload: Record<string, unknown>;
+  /**
+   * The sender's id for THIS delivery, 1..256 chars — the dedup identity.
+   * Reposting the same id returns the original receipt and starts nothing new,
+   * which is what makes a retry safe. Omit it and the server mints a UUID, so
+   * the call is accepted but a retry is a SECOND event. Same name as on the
+   * wire and in the REST docs.
+   */
+  id?: string;
+}
+
+/**
+ * `matched` — at least one active trigger subscribed to the type and was
+ * fired. `unmatched` — none did. The event is still recorded either way.
+ */
+export type EventOutcome = "matched" | "unmatched";
+
+export interface EmitEventResult {
+  /** The ledger row this delivery became. Read the chain back with `GET /v1/workflows/receipts/:id`. */
+  receiptId: string;
+  /**
+   * `unmatched` is NOT an error and never throws: it means no active `event`
+   * trigger subscribes to this type — a typo in `type`, or nothing armed yet.
+   */
+  outcome: EventOutcome;
+  /**
+   * True when this delivery collided with an earlier one carrying the same
+   * `id`. The receipt above is the ORIGINAL, nothing new was started, and
+   * `fireIds` is empty — a retry loop sees success rather than a conflict.
+   */
+  duplicate: boolean;
+  /**
+   * One id per trigger fire this event created — fire ids, not execution ids.
+   * Empty on `unmatched` and on a duplicate. To get from a fire to the run it
+   * started, read the receipt.
+   */
+  fireIds: string[];
+}
+
+/**
+ * Emit one custom event for this tenant. Returns as soon as the receipt is
+ * committed; the runs it started are enqueued, so an empty `fireIds` means
+ * "nothing was fired", never "nothing has finished yet".
+ *
+ * Throws `AgentOperationError` on gateway errors — including the engine's
+ * validation 400s (reserved or malformed `type`, an over-long `id`) and
+ * the per-IP throttle's 429.
+ */
+export async function emitEvent(
+  opts: EmitEventOptions,
+  client: GatewayClient,
+): Promise<EmitEventResult> {
+  // A JS caller reaches this with no type to stop them; the server 400s a
+  // non-object too, this only names it locally.
+  const payload = asEventPayload(opts.payload);
+  return client.post<EmitEventResult>("/events", {
+    type: opts.type,
+    payload,
+    // Omit rather than send `id: undefined`: absent is what lets the server
+    // mint the dedup id.
+    ...(opts.id !== undefined ? { id: opts.id } : {}),
+  });
+}
+
+/**
+ * Narrow an already-decoded value to an event payload. One rule in one place:
+ * `emitEvent`, `parseEventPayload` and the MCP tool all land here, so a JS
+ * caller, a `--payload` string and a tool argument get the same answer.
+ *
+ * The rule is not arbitrary. An array or a scalar is valid JSON, and the
+ * run-input fold treats a non-object as ABSENT — a run would start with its
+ * data dropped. The server gates the shape for exactly that reason and 400s;
+ * this check just moves the same verdict to the call site, before the wire.
+ *
+ * Separate from `parseEventPayload` because a caller may already hold a value
+ * rather than a string — an MCP tool argument, for instance — and re-encoding
+ * it just to re-parse it would only add a way to fail.
+ */
+export function asEventPayload(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new AgentOperationError({
+      code: "BAD_PAYLOAD",
+      message:
+        "Event payload must be a JSON object (it becomes the top layer of the run input).",
+    });
+  }
+  return value as Record<string, unknown>;
+}
+
+/**
+ * Parse a JSON payload string for an event. Exported so callers (CLI, MCP) can
+ * normalize errors consistently — the sibling of `parseSignalPayload`, but
+ * stricter: a signal's payload is opaque to the SDK, an event's has to survive
+ * the run-input fold, and a valid-JSON array would be accepted here only to be
+ * rejected a network round-trip later.
+ */
+export function parseEventPayload(raw: string): Record<string, unknown> {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new AgentOperationError({
+      code: "BAD_PAYLOAD",
+      message: "Event payload is not valid JSON.",
+    });
+  }
+  return asEventPayload(value);
+}

@@ -8,6 +8,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PULL_REQUEST_WORKFLOWS = [
   ".github/workflows/test.yml",
   ".github/workflows/harness.yml",
+  ".github/workflows/opencode-native.yml",
 ];
 
 function readWorkflow(relativePath) {

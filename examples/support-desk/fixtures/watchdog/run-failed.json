@@ -1,0 +1,15 @@
+{
+  "type": "sapiom.run.failed",
+  "description": "The copilot's draft step failed on its last attempt; the engine reports it to the watchdog.",
+  "payload": {
+    "definitionId": "a1b2c3d4-0000-4000-8000-0000000000d2",
+    "slug": "support-desk-copilot",
+    "definitionName": "support-desk-copilot",
+    "executionId": "a1b2c3d4-0000-4000-8000-0000000000e1",
+    "failedStep": "draft",
+    "attempt": 2,
+    "faultClass": "workload",
+    "startedAt": "2026-10-04T10:00:00.000Z",
+    "finishedAt": "2026-10-04T10:01:30.000Z"
+  }
+}

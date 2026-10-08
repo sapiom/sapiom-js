@@ -358,7 +358,11 @@ describe("portable continue — rehydrating a fresh session", () => {
       expect(submitInput).toHaveBeenCalledTimes(1);
     });
 
-    it("injects no rehydration brief for a session that was never rehydrated", async () => {
+    it("injects nothing into a session that was never rehydrated", async () => {
+      // An ordinary first session in a project used to receive the automatic
+      // "Agent Studio project bootstrap" turn on readiness. Under the agreed
+      // flow (flow-creation.md Q5) the user types first: no brief, no seeding
+      // turn, nothing typed into the pty on the user's behalf.
       server = await bootFlagless();
       const submitInput = vi.spyOn(server.sessionManager, "submitInput");
       const session = await server.sessionManager.create({
@@ -366,13 +370,8 @@ describe("portable continue — rehydrating a fresh session", () => {
         harness: "claude-code",
       });
       server.sessionManager.setReady(session.id);
-      await vi.waitFor(() => expect(submitInput).toHaveBeenCalledTimes(1));
-      expect(submitInput.mock.calls[0]?.[1]).toContain(
-        "Agent Studio project bootstrap",
-      );
-      expect(submitInput.mock.calls[0]?.[1]).not.toContain(
-        "reconstruction, not restored context",
-      );
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(submitInput).not.toHaveBeenCalled();
     });
   });
 

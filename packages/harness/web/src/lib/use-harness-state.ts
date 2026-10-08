@@ -1,4 +1,4 @@
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
@@ -25,7 +25,7 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
-import type { StudioProjectId } from "@shared/agent-map";
+import type { StudioProjectId } from "@sapiom/agent-map";
 
 import {
   ApiError,
@@ -39,6 +39,7 @@ import {
   type WorkflowScanOutcome,
 } from "./api";
 import { unavailableWorkflowDeployment } from "./workflow-deployment";
+import { macroNeedsReadySession } from "./macro-actions";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
 import { projectToOpen } from "./project-tree";
@@ -54,15 +55,7 @@ import { loadUiPrefs, saveUiPrefs } from "./ui-prefs";
 import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
-import { agentMapLoader } from "./agent-map-loader";
-import { systemGraphLoader } from "./system-graph-loader";
 import { WorkflowProjectionOrder } from "./workflow-projection-order";
-import {
-  retainSystemGraphAnnouncements,
-  systemGraphAnnouncementsAfterMessage,
-  type SystemGraphAnnouncement,
-} from "./system-graph-announcements";
-import type { WorkspaceKey } from "@shared/system-graph";
 import { track as trackProduct } from "./analytics/events";
 import {
   agentProvenance,
@@ -75,6 +68,15 @@ import {
   type RunFunnelEvent,
 } from "./analytics/lifecycle";
 import { renderLocalRun } from "@shared/render-local-run";
+import {
+  emptyAgentRunIndex,
+  moveAgentRuns,
+  moveRunAttribution,
+  pickAgentRun,
+  recordAgentRun,
+  shownRunIdByAgent,
+  type AgentRunIndex,
+} from "./agent-run-store";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 const api = createApi();
@@ -108,9 +110,10 @@ export type { RunTarget };
 export interface ObservedRun {
   run: RunView;
   target: RunTarget;
-  /** The workflow bound to the run's session at announcement time, or null
-   *  when nothing was bound. Captured ONCE: re-binding the session later
-   *  must never re-attribute a past run's cost to the new workflow. */
+  /** The agent the run belongs to: the one Run / Run locally was pressed on,
+   *  or, for a run a session's terminal announced, the agent bound to that
+   *  session then (null when none was). Captured ONCE: a later move or
+   *  re-bind must never re-attribute a past run's cost. */
   workflowPath: string | null;
   /** Client wall-clock (Date.now()) when execution.started was observed.
    *  RunView carries no server timestamps, so observation time is the only
@@ -141,6 +144,7 @@ export interface PendingWorkspace {
 }
 
 export interface HarnessStateHook {
+  assistant: AssistantProjection;
   authRevision: number;
   state: AppState | null;
   loading: boolean;
@@ -155,6 +159,8 @@ export interface HarnessStateHook {
    *  refreshed the held key, this re-hydrates the shell in place — no reload,
    *  no lockout. Safe to call repeatedly; a success clears the error. */
   reload: () => void;
+  /** Refresh project identities without hydrating or selecting a session. */
+  refreshWorkspaceScopes: () => Promise<void>;
   settings: HarnessSettings | null;
   bootToken: string;
   selectedWorkflowPath: string | null;
@@ -172,6 +178,9 @@ export interface HarnessStateHook {
      * it or refreshing the project catalog. This lets an explicit create own
      * its pending UI intent without guessing from same-cwd status events. */
     onCreated?: (session: HarnessSession) => void,
+    /** `select: false` leaves the selection alone; the caller selects the
+     *  session itself once it is ready to be seen. */
+    options?: { select?: boolean },
   ) => Promise<HarnessSession>;
   attachFile: (
     sessionId: string,
@@ -190,6 +199,8 @@ export interface HarnessStateHook {
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
+  /** Explicitly replace one live coding-agent runtime with stale MCP auth. */
+  restartMcpSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
    * reconstruction of the session `from` identifies (either id form). For a
@@ -202,8 +213,20 @@ export interface HarnessStateHook {
     from: string;
   }) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
-  /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
-  closeSession: (id: string) => Promise<void>;
+  /**
+   * Ends a live session (DELETE kills its process; the server keeps the record
+   * as exited). The session stays in the list, wearing the exited mark, and
+   * stays SELECTED if it was: ending never jumps the centre to another
+   * session (flow-navigation.md Q4, D43).
+   */
+  endSession: (id: string) => Promise<void>;
+  /**
+   * Moves an agent's directory (`POST /api/agents/move`), then re-reads the
+   * sessions: the server remaps every session's cwd and binding in memory but
+   * announces only the workflow rescan, so without the re-read the map panel
+   * would list stale paths (design.md I7).
+   */
+  moveAgent: (from: string, to: string) => Promise<void>;
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
   /** Bulk discovery: POST /api/workflows/scan under a root, then
    *  refreshes the registry list so found agents join the rail at once. */
@@ -323,7 +346,7 @@ export interface HarnessStateHook {
    * does. Errors go to the toast slot.
    */
   startProdRun: (
-    sessionId: string,
+    agentPath: string,
     definitionId: string,
     input?: unknown,
   ) => Promise<void>;
@@ -337,17 +360,21 @@ export interface HarnessStateHook {
    * key, creates no Sapiom capability spend, and works signed-out; author
    * code's own side effects remain real.
    */
-  runLocal: (
-    sessionId: string,
-    sourceDir: string,
-    input?: unknown,
-  ) => Promise<void>;
+  runLocal: (agentPath: string, input?: unknown) => Promise<void>;
+  /**
+   * Re-reads the agent's board from `GET /api/workflows/:path/graph` (Visualize
+   * and the render-error Retry). The extraction is deterministic and a failure
+   * is never cached, so the refetch IS the re-render: no session, no LLM.
+   */
+  reloadAgentGraph: (agentPath: string) => void;
   /**
    * Submits text to a session's pty via POST /api/sessions/:id/input.
    * Throws `ApiError` on HTTP errors — callers handle 409 (session not ready)
    * by showing the reason inline rather than as a toast.
    */
   injectInput: (sessionId: string, text: string) => Promise<void>;
+  /** Reveal app-driven foreground PTY work in the matching conversation pane. */
+  terminalRevealBySession: Map<string, number>;
   /** Expose the toast setter so panels can push their own toasts. Defaults
    *  to the "error" tone; callers announcing a result opt into "info". */
   showToast: (message: string, tone?: ToastTone) => void;
@@ -359,30 +386,25 @@ export interface HarnessStateHook {
   subscribeSessionRecordChanges: (
     listener: (sessionId: string) => void,
   ) => () => void;
-  /** Targeted Agent Map deltas over the existing event-bus connection. */
-  subscribeAgentMapInitializationChanges: (listener: (status: AgentMapInitializationStatus) => void) => () => void;
-  subscribeAgentMapProposalChanges: (
-    listener: (
-      delta: import("@shared/agent-map").AcceptedProposalDelta,
-    ) => void,
+  /** A project's source changed on disk: its map should be read again. */
+  subscribeProjectMapChanges: (
+    listener: (projectId: string) => void,
   ) => () => void;
   /** Signals that the shared event socket reconnected after an interruption. */
   subscribeEventReconnects: (listener: () => void) => () => void;
-  /** Latest monotonic graph invalidation per retained Project scope. */
-  systemGraphAnnouncements: ReadonlyMap<WorkspaceKey, SystemGraphAnnouncement>;
-  /** The run each session's Steps tab is showing (the latest observed by
+  /** The run each agent shows, keyed by agent path (the latest observed by
    *  default, or a past run picked via selectRun), with its target. */
-  runsBySession: Map<string, ObservedRun>;
+  runsByAgent: Map<string, ObservedRun>;
   /** EVERY run observed this Studio session, keyed by executionId. Entries
    *  are updated while a run polls but never dropped, so past runs stay
    *  inspectable. */
   runsByExecution: Map<string, ObservedRun>;
-  /** Ordered executionIds observed per session (oldest first) — the run
+  /** Ordered executionIds observed per agent path (oldest first) — the run
    *  picker's source of truth. */
-  runIdsBySession: Map<string, string[]>;
-  /** Shows a past run in a session's Steps tab and refetches its state so
-   *  the data is current even though its poller stopped long ago. */
-  selectRun: (sessionId: string, executionId: string) => void;
+  runIdsByAgent: Map<string, string[]>;
+  /** Shows a past run of an agent and refetches its state so the data is
+   *  current even though its poller stopped long ago. */
+  selectRun: (agentPath: string, executionId: string) => void;
   /** Detected dev-server preview per session (port.detected). */
   previewBySession: Map<string, { port: number; url: string }>;
   /** A user-facing message from the most recent failed action (e.g. a macro
@@ -419,24 +441,8 @@ export interface HarnessStateHook {
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
-  const [systemGraphAnnouncements, setSystemGraphAnnouncements] = useState<
-    Map<WorkspaceKey, SystemGraphAnnouncement>
-  >(new Map());
-
-  useEffect(() => {
-    if (!state) return;
-    const workspaceKeys = new Set(
-      (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey),
-    );
-    const projectIds = new Set(
-      (state.studioProjects ?? []).map((project) => project.projectId),
-    );
-    systemGraphLoader.retain(workspaceKeys);
-    agentMapLoader.retain(projectIds);
-    setSystemGraphAnnouncements((current) =>
-      retainSystemGraphAnnouncements(current, workspaceKeys),
-    );
-  }, [state?.studioProjects, state?.workspaceScopes]);
+  const assistantOrder = useRef(new AssistantStateOrder()).current;
+  const [assistant, setAssistant] = useState(() => assistantOrder.current());
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   /**
    * Mirror of `settings` for the one reader that cannot wait for a re-render:
@@ -490,6 +496,14 @@ export function useHarnessState(): HarnessStateHook {
     new WorkflowProjectionOrder<WorkflowInfo>(),
   ).current;
   const [authRevision, setAuthRevision] = useState(0);
+  const [terminalRevealBySession, setTerminalRevealBySession] = useState(
+    () => new Map<string, number>(),
+  );
+  const revealTerminal = useCallback((sessionId: string) => {
+    setTerminalRevealBySession((previous) =>
+      new Map(previous).set(sessionId, (previous.get(sessionId) ?? 0) + 1),
+    );
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -530,24 +544,13 @@ export function useHarnessState(): HarnessStateHook {
     },
     [],
   );
-  const initializationListeners = useRef(new Set<(status: AgentMapInitializationStatus) => void>());
-  const subscribeAgentMapInitializationChanges = useCallback((listener: (status: AgentMapInitializationStatus) => void) => {
-    initializationListeners.current.add(listener);
-    return () => { initializationListeners.current.delete(listener); };
-  }, []);
-  const agentMapProposalChangeListeners = useRef(
-    new Set<
-      (delta: import("@shared/agent-map").AcceptedProposalDelta) => void
-    >(),
+  const projectMapChangeListeners = useRef(
+    new Set<(projectId: string) => void>(),
   );
-  const subscribeAgentMapProposalChanges = useCallback(
-    (
-      listener: (
-        delta: import("@shared/agent-map").AcceptedProposalDelta,
-      ) => void,
-    ): (() => void) => {
-      agentMapProposalChangeListeners.current.add(listener);
-      return () => agentMapProposalChangeListeners.current.delete(listener);
+  const subscribeProjectMapChanges = useCallback(
+    (listener: (projectId: string) => void): (() => void) => {
+      projectMapChangeListeners.current.add(listener);
+      return () => projectMapChangeListeners.current.delete(listener);
     },
     [],
   );
@@ -575,14 +578,10 @@ export function useHarnessState(): HarnessStateHook {
   const [runsByExecution, setRunsByExecution] = useState<
     Map<string, ObservedRun>
   >(new Map());
-  // Ordered executionIds observed per session, oldest first.
-  const [runIdsBySession, setRunIdsBySession] = useState<Map<string, string[]>>(
-    new Map(),
-  );
-  // Explicit run picks per session; absent = follow the latest run.
-  const [pickedRunBySession, setPickedRunBySession] = useState<
-    Map<string, string>
-  >(new Map());
+  // Which runs belong to which agent, by agent path (agent-run-store.ts).
+  const [runIndex, setRunIndex] = useState<AgentRunIndex>(emptyAgentRunIndex);
+  // One poller per run, keyed by executionId: two runs of one agent each
+  // poll to their own end.
   const runPollers = useRef<Map<string, ReturnType<typeof setInterval>>>(
     new Map(),
   );
@@ -746,39 +745,29 @@ export function useHarnessState(): HarnessStateHook {
       .catch(() => {});
   }, []);
 
-  // Poll one run until terminal. A new run for the same session replaces the
-  // old POLLER only — the previous run's snapshot stays in runsByExecution.
+  // Poll one run until terminal. Every run keeps its own snapshot in
+  // runsByExecution, so a newer run never erases the one being read.
   const startRunPolling = useCallback(
-    (sessionId: string, executionId: string, target: RunTarget) => {
-      const existing = runPollers.current.get(sessionId);
-      // Superseding a live poller abandons the run it was watching, and that
-      // run gets NO terminal analytics event — deliberately. It is still
-      // executing server-side; we simply stopped looking. Calling it failed
-      // would be a lie, and calling it succeeded worse. This is the one place
-      // `run_started` legitimately outnumbers its terminal events.
+    (
+      owner: { agentPath: string | null; sessionId?: string },
+      executionId: string,
+      target: RunTarget,
+    ) => {
+      // A repeat announcement of the same run restarts its poller; it never
+      // runs two.
+      const existing = runPollers.current.get(executionId);
       if (existing) clearInterval(existing);
-      // Attribution facts are captured NOW, not at read time: the workflow the
-      // session is bound to when the run is announced owns the run's cost.
-      // Attributing later through the current binding would lie whenever a
-      // session re-binds mid-session.
-      const workflowPath = boundWorkflowPathOf(
-        sessionsRef.current.find((s) => s.id === sessionId),
-      );
+      // Attribution facts are captured NOW, not at read time: the agent the
+      // run was started on owns the run's cost. Attributing later through a
+      // path or a binding would lie whenever the agent moves.
+      const workflowPath = owner.agentPath;
       const observedAt = Date.now();
-      setRunIdsBySession((prev) => {
-        const ids = prev.get(sessionId) ?? [];
-        if (ids.includes(executionId)) return prev;
-        return new Map(prev).set(sessionId, [...ids, executionId]);
-      });
-      // A freshly started run takes the Steps tab over: drop any explicit pick
-      // so the session follows its latest run again (the picker gets back to
-      // any past run — nothing is lost, unlike the old overwrite model).
-      setPickedRunBySession((prev) => {
-        if (!prev.has(sessionId)) return prev;
-        const next = new Map(prev);
-        next.delete(sessionId);
-        return next;
-      });
+      // A freshly started run takes the agent's run view over; the picker gets
+      // back to any past run. A run no agent can be named for (a terminal
+      // run in an unbound session) is still polled, for the funnel below, but
+      // is filed under no agent.
+      if (workflowPath)
+        setRunIndex((prev) => recordAgentRun(prev, workflowPath, executionId));
 
       // ---- run funnel -----------------------------------------------------
       // This is the single door every prod run comes through — the Prod Run
@@ -791,7 +780,11 @@ export function useHarnessState(): HarnessStateHook {
       // out of a closure over React refs and timers is what makes them testable
       // at all (both bugs found in review round 1 were invisible to the suite).
       const runSlug = workflowPath ? slugFromPath(workflowPath) : undefined;
-      const runBase = { workflow_slug: runSlug, session_id: sessionId, target };
+      const runBase = {
+        workflow_slug: runSlug,
+        ...(owner.sessionId ? { session_id: owner.sessionId } : {}),
+        target,
+      };
       let funnel = initialRunFunnelState();
 
       const advanceFunnel = (event: RunFunnelEvent): void => {
@@ -826,10 +819,13 @@ export function useHarnessState(): HarnessStateHook {
       // re-count the start. The terminal event is deliberately NOT suppressed.
       advanceFunnel({ kind: "announced", duplicate: alreadyAnnounced });
 
+      // Stops THIS poller only: a late answer from a poller a repeat
+      // announcement replaced must not clear its replacement.
+      let ownTimer: ReturnType<typeof setInterval> | undefined;
       const stopPolling = (): void => {
-        const timer = runPollers.current.get(sessionId);
-        if (timer) clearInterval(timer);
-        runPollers.current.delete(sessionId);
+        if (ownTimer) clearInterval(ownTimer);
+        if (runPollers.current.get(executionId) === ownTimer)
+          runPollers.current.delete(executionId);
       };
 
       const poll = async (): Promise<void> => {
@@ -839,7 +835,8 @@ export function useHarnessState(): HarnessStateHook {
             new Map(prev).set(executionId, {
               run,
               target,
-              workflowPath,
+              // A Change location mid-run re-attributed the stored snapshot.
+              workflowPath: prev.get(executionId)?.workflowPath ?? workflowPath,
               observedAt,
             }),
           );
@@ -855,10 +852,8 @@ export function useHarnessState(): HarnessStateHook {
         }
       };
       void poll();
-      runPollers.current.set(
-        sessionId,
-        setInterval(() => void poll(), 2000),
-      );
+      ownTimer = setInterval(() => void poll(), 2000);
+      runPollers.current.set(executionId, ownTimer);
     },
     [],
   );
@@ -879,18 +874,12 @@ export function useHarnessState(): HarnessStateHook {
    * failed step so the failure is still visible rather than silent.
    */
   const runLocal = useCallback(
-    async (
-      sessionId: string,
-      sourceDir: string,
-      input?: unknown,
-    ): Promise<void> => {
+    async (agentPath: string, input?: unknown): Promise<void> => {
       localRunSeq.current += 1;
       const executionId = `local-${Date.now()}-${localRunSeq.current}`;
       // Attribution + observation facts captured now, exactly like a prod run
-      // (see startRunPolling) — a later re-bind must not re-attribute this run.
-      const workflowPath = boundWorkflowPathOf(
-        sessionsRef.current.find((s) => s.id === sessionId),
-      );
+      // (see startRunPolling): the agent run is the agent the run belongs to.
+      const workflowPath = agentPath;
       const observedAt = Date.now();
       const startedAt = new Date(observedAt).toISOString();
       const traces: LocalStepTrace[] = [];
@@ -904,19 +893,10 @@ export function useHarnessState(): HarnessStateHook {
       let unusedStubs: Array<{ step: string; key: string }> | undefined;
       let stubWarnings: string[] | undefined;
 
-      // Register the run so runsBySession surfaces it, and drop any explicit run
-      // pick so the session follows this fresh run (mirrors startRunPolling).
-      setRunIdsBySession((prev) => {
-        const ids = prev.get(sessionId) ?? [];
-        if (ids.includes(executionId)) return prev;
-        return new Map(prev).set(sessionId, [...ids, executionId]);
-      });
-      setPickedRunBySession((prev) => {
-        if (!prev.has(sessionId)) return prev;
-        const next = new Map(prev);
-        next.delete(sessionId);
-        return next;
-      });
+      // File the run under its agent so runsByAgent surfaces it, and drop
+      // any explicit pick so the agent follows this fresh run (mirrors
+      // startRunPolling).
+      setRunIndex((prev) => recordAgentRun(prev, agentPath, executionId));
 
       const publish = (): void => {
         const run = renderLocalRun(traces, {
@@ -934,7 +914,7 @@ export function useHarnessState(): HarnessStateHook {
           new Map(prev).set(executionId, {
             run,
             target: "local",
-            workflowPath,
+            workflowPath: prev.get(executionId)?.workflowPath ?? workflowPath,
             observedAt,
           }),
         );
@@ -945,8 +925,7 @@ export function useHarnessState(): HarnessStateHook {
 
       // ---- run funnel (local half; the prod half is in startRunPolling) ----
       const runBase = {
-        workflow_slug: workflowPath ? slugFromPath(workflowPath) : undefined,
-        session_id: sessionId,
+        workflow_slug: slugFromPath(workflowPath),
         target: "local" as const,
       };
       // True when the stream itself broke, as opposed to the run reporting a
@@ -1011,7 +990,7 @@ export function useHarnessState(): HarnessStateHook {
       };
 
       try {
-        await api.runLocal({ sourceDir, input }, onLine);
+        await api.runLocal({ sourceDir: agentPath, input }, onLine);
       } catch (err) {
         // Transport failure (the stream itself broke) — mark the run failed so
         // it doesn't spin as "running" forever. Give the workspace a concrete
@@ -1073,10 +1052,8 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   const selectRun = useCallback(
-    (sessionId: string, executionId: string) => {
-      setPickedRunBySession((prev) =>
-        new Map(prev).set(sessionId, executionId),
-      );
+    (agentPath: string, executionId: string) => {
+      setRunIndex((prev) => pickAgentRun(prev, agentPath, executionId));
       // Refetch so a past run shows current server truth, not a stale
       // mid-poll snapshot (refreshRun keeps the captured start facts).
       refreshRun(executionId);
@@ -1084,18 +1061,16 @@ export function useHarnessState(): HarnessStateHook {
     [refreshRun],
   );
 
-  // The run each session's Steps tab shows: the picked run when one is
-  // chosen (and still known), else the latest observed.
-  const runsBySession = useMemo(() => {
+  // The run each agent shows: the picked run when one is chosen (and still
+  // filed under it), else the latest observed.
+  const runsByAgent = useMemo(() => {
     const map = new Map<string, ObservedRun>();
-    runIdsBySession.forEach((ids, sessionId) => {
-      const picked = pickedRunBySession.get(sessionId);
-      const id = picked && ids.includes(picked) ? picked : ids[ids.length - 1];
-      const observed = id ? runsByExecution.get(id) : undefined;
-      if (observed) map.set(sessionId, observed);
+    shownRunIdByAgent(runIndex).forEach((id, agentPath) => {
+      const observed = runsByExecution.get(id);
+      if (observed) map.set(agentPath, observed);
     });
     return map;
-  }, [runIdsBySession, pickedRunBySession, runsByExecution]);
+  }, [runIndex, runsByExecution]);
 
   // Keep the sessions mirror current for the next execution.started arrival.
   // An effect (not a render-phase write) so it never runs on a discarded
@@ -1133,6 +1108,7 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     let cancelled = false;
     const workflowRequest = workflowProjectionOrder.begin();
+    const assistantRequest = assistantOrder.beginHttp();
     // A retry re-enters the loading state and clears the prior failure so the
     // shell shows "reconnecting", not a stale error, while the refetch runs.
     if (reloadSeq > 0) {
@@ -1154,7 +1130,9 @@ export function useHarnessState(): HarnessStateHook {
         const workflows = bootWorkflowsAccepted
           ? appState.workflows
           : [...(workflowProjectionOrder.current() ?? [])];
-        setState({ ...appState, workflows });
+        const { assistant: assistantSeed, ...shell } = appState;
+        setAssistant(assistantOrder.http(assistantRequest, assistantSeed));
+        setState({ ...shell, workflows });
         // Baseline the built-agents metric: everything present at load already
         // existed, so seed it into the seen-set and never count it as built.
         const seenAtLoad = (seenAgentPathsRef.current ??= new Set<string>());
@@ -1232,14 +1210,15 @@ export function useHarnessState(): HarnessStateHook {
 
   useEffect(() => {
     return subscribeEvents(
-      (message) => {
+      (message, generation) => {
+        if (message.type === "assistant.state") {
+          setAssistant(assistantOrder.socket(generation, message.snapshot));
+          return;
+        }
         // SessionRecord invalidations have a targeted listener below. Keeping
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.
         if (message.type !== "session.record.changed") setLastMessage(message);
-        setSystemGraphAnnouncements((current) =>
-          systemGraphAnnouncementsAfterMessage(current, message),
-        );
         if (message.type === "session.status") {
           sessionStatusRevisions.current.set(
             message.session.id,
@@ -1308,22 +1287,23 @@ export function useHarnessState(): HarnessStateHook {
             // and let the next event/auth/manual refresh retry; never create an
             // unhandled rejection from the event callback.
             .catch(() => undefined);
-        } else if (message.type === "system-graph.changed") {
-          // Invalidate even while its workspace destination is closed. The next
-          // open must never resurrect a pre-edit process-lifetime promise.
-          systemGraphLoader.invalidate(message.workspaceKey, message.revision);
-        } else if (message.type === "agent-map.initialization.changed") {
-          try {
-            const status = parseAgentMapInitializationStatus(message.status);
-            for (const listener of initializationListeners.current) listener(status);
-          } catch { /* malformed announcements cannot alter map state */ }
-        } else if (message.type === "agent-map.proposal.changed") {
-          agentMapProposalChangeListeners.current.forEach((listener) =>
-            listener(message.delta),
+        } else if (message.type === "project-map.changed") {
+          projectMapChangeListeners.current.forEach((listener) =>
+            listener(message.projectId),
           );
         } else if (message.type === "execution.started") {
+          // A run a session's terminal started. The announcement names only
+          // the session, so the agent is the one bound to it, if any.
           startRunPolling(
-            message.harnessSessionId,
+            {
+              agentPath:
+                boundWorkflowPathOf(
+                  sessionsRef.current.find(
+                    (s) => s.id === message.harnessSessionId,
+                  ),
+                ) ?? null,
+              sessionId: message.harnessSessionId,
+            },
             message.executionId,
             message.target,
           );
@@ -1364,6 +1344,7 @@ export function useHarnessState(): HarnessStateHook {
             }, BUSY_WINDOW_MS),
           );
         } else if (message.type === "auth.changed") {
+          setAssistant(assistantOrder.authChanged());
           // Accept a barrier synchronously: merely issuing the refresh cannot
           // stop an older in-flight success from restoring another account.
           const workflows = (workflowProjectionOrder.current() ?? workflowsRef.current)
@@ -1394,8 +1375,9 @@ export function useHarnessState(): HarnessStateHook {
         eventReconnectListeners.current.forEach((listener) => listener());
         void refreshWorkflows().catch(() => undefined);
       },
+      connection => setAssistant(assistantOrder.transport(connection)),
     );
-  }, [refreshWorkflows, startRunPolling]);
+  }, [refreshWorkflows, startRunPolling, assistantOrder]);
 
   /**
    * Loads history for `cwds` and folds it into the store via `mergeHistory`,
@@ -1454,8 +1436,11 @@ export function useHarnessState(): HarnessStateHook {
    * Replacing the full AppState here could overwrite newer session/workflow bus
    * updates with a slower HTTP snapshot; the scope catalog is the only field
    * the mutation made stale. */
+  const workspaceScopesRefreshOrder = useRef(0);
   const refreshWorkspaceScopes = useCallback(async (): Promise<void> => {
+    const request = ++workspaceScopesRefreshOrder.current;
     const refreshed = await api.getState();
+    if (request !== workspaceScopesRefreshOrder.current) return;
     setState((prev) =>
       prev
         ? {
@@ -1523,6 +1508,7 @@ export function useHarnessState(): HarnessStateHook {
     async (
       req: CreateSessionRequest,
       onCreated?: (session: HarnessSession) => void,
+      options: { select?: boolean } = {},
     ): Promise<HarnessSession> => {
       const session = await api.createSession(req);
       // The response is the first unambiguous client-side correlation between
@@ -1540,7 +1526,9 @@ export function useHarnessState(): HarnessStateHook {
           ? { ...prev, sessions: [...prev.sessions, session] }
           : prev,
       );
-      selectSession(session.id);
+      // A caller that binds the session before showing it (Start chat on the
+      // map, design.md I6) selects it itself once the binding lands.
+      if (options.select !== false) selectSession(session.id);
 
       // Starting a session in a folder is opening it: the folder joins the
       // project list, and a project the user had removed comes back rather
@@ -1607,6 +1595,35 @@ export function useHarnessState(): HarnessStateHook {
       }
     },
     [selectSession],
+  );
+
+  const restartMcpSession = useCallback(
+    async (harnessSessionId: string): Promise<HarnessSession> => {
+      try {
+        const session = await api.restartMcpSession(harnessSessionId);
+        setState((prev) =>
+          prev
+            ? {
+                ...prev,
+                sessions: prev.sessions.map((candidate) =>
+                  candidate.id === session.id ? session : candidate,
+                ),
+              }
+            : prev,
+        );
+        return session;
+      } catch (err) {
+        setToast(
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
+        );
+        throw err;
+      }
+    },
+    [],
   );
 
   /**
@@ -1721,41 +1738,61 @@ export function useHarnessState(): HarnessStateHook {
     [state, resumeSession, rehydrateSession, selectSession],
   );
 
-  const closeSession = useCallback(
-    async (id: string): Promise<void> => {
-      try {
-        await api.killSession(id);
-      } catch (err) {
-        // Surface the failure as a toast and keep the user on the dead-session
-        // overlay: the re-throw below skips the local removal, so a failed kill
-        // never makes the session vanish from the UI as if it had succeeded.
-        setToast(
-          createToastMessage(
-            err instanceof ApiError && err.reason
-              ? err.reason
-              : (err as Error).message,
-          ),
-        );
-        throw err;
-      }
-      const remaining = (state?.sessions ?? []).filter(
-        (session) => session.id !== id,
+  const endSession = useCallback(async (id: string): Promise<void> => {
+    try {
+      await api.killSession(id);
+    } catch (err) {
+      // Surface the failure and leave the row as it was: a failed kill never
+      // makes a session read as ended.
+      setToast(
+        createToastMessage(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        ),
       );
-      setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
-      if (activeSessionId === id) {
-        const closed = state?.sessions.find((session) => session.id === id);
-        const projectId = closed?.agentMapIdentity?.projectId;
-        const nextRunning =
-          remaining.find(
-            (session) =>
-              session.status !== "exited" &&
-              projectId != null &&
-              session.agentMapIdentity?.projectId === projectId,
-          ) ?? remaining.find((session) => session.status !== "exited");
-        selectSession(nextRunning ? nextRunning.id : null);
-      }
+      throw err;
+    }
+    setState((prev) =>
+      prev
+        ? {
+            ...prev,
+            sessions: prev.sessions.map((session) =>
+              session.id === id
+                ? { ...session, status: "exited" as const }
+                : session,
+            ),
+          }
+        : prev,
+    );
+  }, []);
+
+  const moveAgent = useCallback(
+    async (from: string, to: string): Promise<void> => {
+      await api.moveAgent(from, to);
+      setRunIndex((prev) => moveAgentRuns(prev, from, to));
+      setRunsByExecution((prev) => moveRunAttribution(prev, from, to));
+      void refreshWorkflows().catch(() => undefined);
+      // Best-effort, and only the two fields a move changes: the move already
+      // happened, and a status frame newer than this snapshot must survive it.
+      const moved = new Map(
+        (await api.listSessions().catch(() => [])).map((s) => [s.id, s]),
+      );
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              sessions: prev.sessions.map((session) => {
+                const fresh = moved.get(session.id);
+                return fresh
+                  ? { ...session, cwd: fresh.cwd, boundWorkflowPath: fresh.boundWorkflowPath }
+                  : session;
+              }),
+            }
+          : prev,
+      );
     },
-    [state, activeSessionId, selectSession],
+    [refreshWorkflows],
   );
 
   const connectWorkflow = useCallback(
@@ -2098,10 +2135,24 @@ export function useHarnessState(): HarnessStateHook {
     [],
   );
 
+  // The canvas re-reads an agent's graph route on `canvas.reload` (any
+  // session), and is the route's only reader, so a local announcement is the
+  // refetch. The empty session id matches no session's own canvas.
+  const reloadAgentGraph = useCallback((_agentPath: string): void => {
+    setLastMessage({ type: "canvas.reload", harnessSessionId: "" });
+  }, []);
+
   const runMacro = useCallback(
     async (id: string, req: RunMacroRequest): Promise<void> => {
+      const macro = state?.macros.find((candidate) => candidate.id === id);
       try {
         await api.runMacro(id, req);
+        if (
+          macro &&
+          macroNeedsReadySession(macro) &&
+          macro.execution !== "background"
+        )
+          revealTerminal(req.harnessSessionId);
       } catch (err) {
         // App.tsx fires this without awaiting — surface failures as a toast
         // instead of an invisible unhandled rejection (which is exactly how
@@ -2116,7 +2167,7 @@ export function useHarnessState(): HarnessStateHook {
         );
       }
     },
-    [],
+    [revealTerminal, state?.macros],
   );
 
   // Deploy via the direct route: stream build status to the toast, then refresh
@@ -2291,13 +2342,13 @@ export function useHarnessState(): HarnessStateHook {
   // (startRunPolling) so it lands in the Steps tab / run picker identically.
   const startProdRun = useCallback(
     async (
-      sessionId: string,
+      agentPath: string,
       definitionId: string,
       input?: unknown,
     ): Promise<void> => {
       try {
         const { executionId } = await api.run({ definitionId, input });
-        startRunPolling(sessionId, executionId, "prod");
+        startRunPolling({ agentPath }, executionId, "prod");
       } catch (err) {
         setToast(
           createToastMessage(
@@ -2342,8 +2393,9 @@ export function useHarnessState(): HarnessStateHook {
   const injectInput = useCallback(
     async (sessionId: string, text: string): Promise<void> => {
       await api.injectInput(sessionId, { text, submit: true });
+      revealTerminal(sessionId);
     },
-    [],
+    [revealTerminal],
   );
 
   const showToast = useCallback(
@@ -2371,6 +2423,7 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   return {
+    assistant,
     state,
     authRevision,
     loading,
@@ -2395,9 +2448,11 @@ export function useHarnessState(): HarnessStateHook {
     getWorkflowInputContract,
     sessionRecord,
     resumeSession,
+    restartMcpSession,
     rehydrateSession,
     resumeFromHistory,
-    closeSession,
+    endSession,
+    moveAgent,
     connectWorkflow,
     scanWorkflows,
     refreshWorkflows,
@@ -2413,7 +2468,9 @@ export function useHarnessState(): HarnessStateHook {
     deploy,
     startProdRun,
     runLocal,
+    reloadAgentGraph,
     injectInput,
+    terminalRevealBySession,
     showToast,
     lastDeployErrorFor,
     deployStateByPath,
@@ -2426,13 +2483,12 @@ export function useHarnessState(): HarnessStateHook {
     listDir,
     lastMessage,
     subscribeSessionRecordChanges,
-    subscribeAgentMapProposalChanges,
-    subscribeAgentMapInitializationChanges,
+    subscribeProjectMapChanges,
     subscribeEventReconnects,
-    systemGraphAnnouncements,
-    runsBySession,
+    refreshWorkspaceScopes,
+    runsByAgent,
     runsByExecution,
-    runIdsBySession,
+    runIdsByAgent: runIndex.idsByAgent,
     selectRun,
     previewBySession,
     toast,

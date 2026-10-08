@@ -1,0 +1,90 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Film one scene as a short multi-shot video with the same character in every shot. It plans the shots, draws the character once, edits that drawing into each keyframe, checks each keyframe for drift, and animates every shot at once with spoken lines as native audio.",
+  "longDescription": "Give it one scene, with any dialogue quoted, and it returns a stitched video with the same person in every shot. A model (`llm.run`) writes the character, a style bible and a shot list. One image of the character is the reference for every keyframe, and a vision check redoes a keyframe that drifts. Every shot renders at the same time as its own run, and `seedance-i2v` speaks each line as native audio. Set `dryRun` to see the plan without generating.",
+  "useCases": [
+    "Character-consistent short film",
+    "Dialogue scene with native audio",
+    "Storyboard dry run"
+  ],
+  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nRun it with no input and it films the built-in sample scene as one 5-second silent shot. Pass your own `scene` for a full video (`numShots`, default 4, max 6); quote any dialogue in the scene and it is spoken verbatim. Set `dryRun: true` to stop after planning and see the character, the style bible and the shot list without generating anything.\n\nEach shot renders as its own run of this same agent, so all shots render at once. Image-to-video takes 3 to 9 minutes per clip, which sets the run time. You don't send any signal.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the graph, or edit and deploy it with the Sapiom MCP.",
+  "defaultInput": {
+    "numShots": 1,
+    "aspectRatio": "16:9"
+  },
+  "examples": [
+    {
+      "title": "Plan only (dryRun, no billed generation)",
+      "input": {
+        "scene": "An old lighthouse keeper lights the lamp and faces the storm. He says \"Not tonight. Not on my watch.\"",
+        "numShots": 3,
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "character": "Weathered 70-year-old lighthouse keeper, thick grey beard, dark charcoal oilskin coat with brass buttons, faded black peaked cap.",
+        "bible": "Cinematic 16:9, 35mm film grain. Palette: slate-blue dusk, deep sea grey, amber lamp glow.",
+        "shots": [
+          {
+            "edit_instruction": "Place the person at the iron gallery railing of the lit lighthouse, face turned toward a storm over the sea.",
+            "motion_prompt": "The keeper grips the wet railing and turns his face to the storm. Slow orbit at chest level. Amber rim light, cold blue sea.",
+            "speaker": "the keeper",
+            "line": "Not tonight. Not on my watch.",
+            "duration": 7,
+            "clipPrompt": "The keeper grips the wet railing and turns his face to the storm. Slow orbit at chest level. Amber rim light, cold blue sea. The keeper says, clearly and at a natural pace: \"Not tonight. Not on my watch.\""
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "title": "Full run",
+      "input": {
+        "scene": "An old lighthouse keeper lights the lamp and faces the storm. He says \"Not tonight. Not on my watch.\"",
+        "numShots": 4
+      },
+      "output": {
+        "downloadUrl": "https://file-storage.services.sapiom.ai/public/file_abc123",
+        "videoFileId": "file_abc123",
+        "plateFileId": "file_plate",
+        "shots": [
+          {
+            "line": "Not tonight. Not on my watch.",
+            "duration": 7,
+            "result": {
+              "clipFileId": "file_clip3",
+              "keyframeAttempts": 1,
+              "check": {
+                "same_person": true,
+                "clothing_matches": true,
+                "score": 9
+              }
+            }
+          }
+        ],
+        "warnings": [],
+        "costUsd": 7.1,
+        "wallClockSeconds": 540
+      }
+    }
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      {
+        "path": "shots",
+        "assert": "nonEmptyArray"
+      },
+      {
+        "path": "downloadUrl",
+        "assert": "nonEmptyString"
+      }
+    ],
+    "narrative": "Films the built-in sample scene as one short silent shot, with the keyframe checked against the character, and returns the video's download link."
+  }
+}

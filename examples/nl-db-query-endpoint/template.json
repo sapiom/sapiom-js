@@ -17,7 +17,6 @@
     {
       "kind": "postgres",
       "handle": "nl-db-query-demo",
-      "duration": "7d",
       "seed": "seed.sql",
       "ephemeral": false,
       "reuse": {

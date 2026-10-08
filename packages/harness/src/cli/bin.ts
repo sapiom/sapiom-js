@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { prepareBundledMcpCommand } from "../core/mcp-compatibility.js";
 /**
  * sapiom-harness CLI entry (workstream W4).
  *
@@ -96,6 +97,7 @@ const main = async (): Promise<void> => {
   try {
     server = await startServer({
       port: options.port,
+      prepareSapiomDevMcp: prepareBundledMcpCommand,
       bootToken,
       telemetryOptIn,
       authMode: resolveCliAuthMode(options),

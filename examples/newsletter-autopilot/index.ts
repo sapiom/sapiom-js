@@ -938,6 +938,9 @@ const deliver = defineStep({
       subject,
       headerImageUrl,
       messageIds,
+      // The issue itself, as the demo and dry-run branches already return it:
+      // the dashboard reads the run's output, not the recipients' inboxes.
+      body,
       sources,
       selfEdit: input.selfEdit,
       ...(note || selfEditNote

@@ -266,9 +266,6 @@ describe("POST /api/track", () => {
       "plan.upgrade_clicked",
       "agent_map.entered",
       "agent_map.workspace_load_failed",
-      "agent_map.proposal_created",
-      "agent_map.proposal_visible",
-      "agent_map.validation_failed",
     ] as const;
 
     for (const event of events) {

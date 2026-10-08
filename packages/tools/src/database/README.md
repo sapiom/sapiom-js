@@ -1,16 +1,19 @@
 # database
 
-On-demand Postgres databases. The same database capability your agents call over
+Postgres databases you own. The same database capability your agents call over
 MCP, callable directly from your code. You get back direct connection credentials,
 so you can connect with any standard Postgres client or driver.
+
+A Sapiom Postgres is **permanent**: it lives until you delete it. There is no
+lifetime to pick and no `duration` to pass. What it costs is a slot of your plan's
+database limit (`database.count`), held from `create` until `delete`.
 
 ```typescript
 import { createClient } from "@sapiom/tools";
 const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 
-// 1. Provision a database. `duration` is required.
+// 1. Provision a database. Every field is optional; `create({})` works.
 const db = await sapiom.database.create({
-  duration: "1h", // "15m" | "1h" | "4h" | "24h" | "7d"
   handle: "analytics", // optional, stable key to look it up later
 });
 
@@ -26,7 +29,7 @@ db.connection?.databaseName;
 const again = await sapiom.database.get(db.id); // or get("analytics")
 const all = await sapiom.database.list(); // read-only; every database you own
 
-// 4. Delete it by id or handle.
+// 4. Delete it by id or handle. This is what frees the slot.
 await sapiom.database.delete(db.id); // or delete("analytics")
 ```
 
@@ -44,12 +47,16 @@ connect with the Postgres client of your choice (`pg`, `postgres`, an ORM, `psql
 
 ## Lifecycle
 
-- A database is created with a `duration` and is **automatically removed** when it
-  expires — there is no long-lived state to clean up by hand. `expiresAt` tells you
-  when that happens.
+- A database is **permanent**. Nothing removes it but your own `delete`; there is
+  no lifetime, no renewal, and nothing to export ahead of a deadline.
+- It is **count-metered**: each database you hold takes one slot of your plan's
+  database limit from `create` until `delete`. Reuse a handle you already own
+  (`get(handle)` first, or `list()`) instead of creating a fresh database per run,
+  and `delete` what you no longer need.
 - Right after `create`, `status` is `"active"` and `connection` carries credentials.
 - `get` on a database that is still provisioning may return `connection: null` until
   it is ready.
+- `get(handle)` failing means the handle was never created or has been deleted.
 
 ## Looking up a database
 
@@ -60,7 +67,12 @@ passing a database between steps or agents without carrying the id around.
 
 ## Gotchas
 
-- **`duration` is required.** Omitting it is rejected before any request is made.
+- **`duration` is ignored.** It is still accepted on `create` so older code
+  compiles (`@deprecated`), but it is not sent to the platform and has no effect.
+  Omit it.
+- **`expiresAt` and `duration` are absent** on a database created after
+  SAP-3100. Only databases created before then may still carry the values they were
+  created with; nothing enforces them. Do not build logic on either field.
 - **`connection` can be `null`** while a database is still provisioning — guard it
   (`db.connection?.connectionString`) before connecting.
 - **`connectionString` is always present** on a non-null `connection`, even if the

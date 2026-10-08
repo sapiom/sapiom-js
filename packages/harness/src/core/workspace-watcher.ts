@@ -5,9 +5,8 @@
  * scan found. Users scaffold new workflows (and delete old ones) mid-session and
  * expect the rail to keep up.
  *
- * Modeled on core/canvas-watcher.ts (same recursive-fs.watch-with-polling-
- * fallback shape, same per-session lifecycle), but tuned to STRUCTURAL change
- * rather than content change. It fires only when the workflow-marker state
+ * A recursive-fs.watch-with-polling-fallback watcher with a per-session
+ * lifecycle, tuned to STRUCTURAL change rather than content change. It fires only when the workflow-marker state
  * under the workspace actually changes (a workflow appearing, disappearing,
  * being renamed, or crossing a temporary unreadable boundary) — never for
  * ordinary file edits:
@@ -20,8 +19,7 @@
  *     The fingerprint diff is the reliable, cross-platform signal.
  *   - High-churn / irrelevant subtrees (`node_modules`, `.git`, `.sapiom`,
  *     build output) are skipped when arming AND when fingerprinting: a
- *     workflow marker never lives there, and `.sapiom/canvas/renders` in
- *     particular is rewritten on every render.
+ *     workflow marker never lives there.
  *
  * The polling fallback (Linux, or a watcher runtime error) diffs the same
  * fingerprint on an interval, so both paths share one notion of "changed".

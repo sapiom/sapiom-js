@@ -33,11 +33,10 @@ describe("DEFAULT_MACROS", () => {
     });
   });
 
-  it("visualize is the ONE canvas macro — a server-side force refresh, unbound-friendly, no pty involved", () => {
+  it("visualize is the ONE canvas macro — a board re-read the SPA performs, unbound-friendly, no pty involved", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
-    // Works whether or not a workflow is bound — the refresh pipeline reads
-    // the session's actual binding server-side, so there's no prompt text
-    // (and therefore no {{workflow.path}} to throw on when unbound).
+    // Works whether or not a workflow is bound — there's no prompt text (and
+    // therefore no {{workflow.path}} to throw on when unbound).
     expect(macro.requiresWorkflow).toBeFalsy();
     expect(macro.action).toEqual({ kind: "render-canvas" });
   });

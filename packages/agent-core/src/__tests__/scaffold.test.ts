@@ -18,6 +18,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import {
+  AUTHORING_RULES_RELEASE,
+  AUTHORING_RULES_RELEASE_PLACEHOLDER,
+  AUTHORING_RULES_STAMP_PLACEHOLDER,
+  parseAuthoringRulesStamp,
+  renderAuthoringRulesStamp,
+} from "../authoring-rules";
 import { AgentOperationError } from "../errors";
 import { registryFor, resolveVersions, scaffold } from "../scaffold";
 
@@ -120,6 +127,47 @@ describe("scaffold", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  it.each(["default", "coding-pause"])(
+    "stamps the %s template's AGENTS.md with the release this package was built against",
+    async (template) => {
+      const base = makeTmp();
+      const targetDir = path.join(base, "stamped");
+      try {
+        await scaffold({
+          targetDir,
+          template,
+          versions: { agent: "1.0.0", tools: "1.0.0", zod: "3.0.0" },
+        });
+        const agentsMd = readFileSync(
+          path.join(targetDir, "AGENTS.md"),
+          "utf8",
+        );
+        expect(agentsMd).toContain(renderAuthoringRulesStamp());
+        expect(agentsMd).toContain(
+          `written against release\n${AUTHORING_RULES_RELEASE}`,
+        );
+        expect(agentsMd).not.toContain(AUTHORING_RULES_STAMP_PLACEHOLDER);
+        expect(agentsMd).not.toContain(AUTHORING_RULES_RELEASE_PLACEHOLDER);
+        // The skill copy keeps its own concrete stamp, untouched.
+        const skill = readFileSync(
+          path.join(
+            targetDir,
+            ".claude",
+            "skills",
+            "sapiom-agent-authoring",
+            "SKILL.md",
+          ),
+          "utf8",
+        );
+        expect(parseAuthoringRulesStamp(skill)).toEqual(
+          parseAuthoringRulesStamp(renderAuthoringRulesStamp()),
+        );
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("defaults projectName to path.basename(targetDir)", async () => {
     const base = makeTmp();

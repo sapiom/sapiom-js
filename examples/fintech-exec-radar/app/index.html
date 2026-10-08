@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opportunity radar dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --series-1: #2a78d6;
+        --track: #eef1f5;
+        --good: #0ca30c;
+        --warning: #fab219;
+        --serious: #ec835a;
+        --critical: #d03b3b;
+        --chip: #f3f2ef;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --series-1: #3987e5;
+          --track: #2c2c2a;
+          --chip: #2a2a28;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 28px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 22px;
+        font-weight: 650;
+        line-height: 1.1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-wrap: anywhere;
+        font-variant-numeric: tabular-nums;
+      }
+      .kpi .value small {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-3);
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: none;
+        display: inline-block;
+        background: var(--text-3);
+      }
+      .o-complete .dot {
+        background: var(--good);
+      }
+      .o-partial .dot {
+        background: var(--warning);
+      }
+      .o-no_evidence .dot {
+        background: var(--line);
+        border: 1px solid var(--text-3);
+      }
+      .o-no_coverage .dot {
+        background: var(--critical);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+        gap: 12px;
+        align-items: start;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      h2 .aside {
+        font-weight: 400;
+        color: var(--text-3);
+        font-size: 12px;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+      .feed {
+        max-height: 560px;
+        overflow: auto;
+      }
+      .feed h3 {
+        font-size: 14px;
+        margin: 14px 0 4px;
+        font-weight: 650;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .feed h3:first-of-type {
+        margin-top: 0;
+      }
+      .feed h3 .count {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+      .item {
+        display: grid;
+        grid-template-columns: 112px minmax(0, 1fr);
+        gap: 10px;
+        padding: 6px 0;
+        border-top: 1px solid var(--line);
+      }
+      .item .who {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding-top: 1px;
+      }
+      .item a {
+        color: var(--text);
+        text-decoration: none;
+      }
+      .item a:hover {
+        color: var(--series-1);
+        text-decoration: underline;
+      }
+      .item .meta {
+        font-size: 12px;
+        color: var(--text-3);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 1px;
+      }
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 5px;
+        font-size: 11px;
+        color: var(--text-2);
+        background: var(--chip);
+      }
+      table.cov {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      table.cov th {
+        text-align: left;
+        font-weight: 500;
+        color: var(--text-3);
+        padding: 0 6px 4px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      table.cov td {
+        padding: 3px 6px 3px 0;
+        white-space: nowrap;
+      }
+      table.cov td.name {
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 120px;
+      }
+      table.cov td.num,
+      table.cov th.num {
+        text-align: right;
+      }
+      table.cov td.state {
+        color: var(--text-2);
+      }
+      table.cov td.state .dot {
+        margin-right: 6px;
+        vertical-align: -1px;
+      }
+      table.cov td.bar {
+        width: 34%;
+      }
+      .fill {
+        display: block;
+        height: 10px;
+        background: var(--series-1);
+        border-radius: 0 3px 3px 0;
+      }
+      ul.gaps {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+      }
+      ul.gaps li {
+        color: var(--text-2);
+        overflow-wrap: anywhere;
+      }
+      ul.gaps b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .source {
+        margin: 14px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source b {
+        color: var(--text-2);
+        font-weight: 600;
+      }
+      .empty {
+        color: var(--text-3);
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Fintech Executive Opportunity Radar</p>
+          <h1>Opportunity radar dashboard</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+
+      <section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+      <div class="grid">
+        <section class="card feed" aria-labelledby="feed-h">
+          <h2 id="feed-h">
+            <span>New sourced items</span><span class="aside" id="order"></span>
+          </h2>
+          <div id="feed"></div>
+        </section>
+        <div class="stack">
+          <section class="card" aria-labelledby="cov-h">
+            <h2 id="cov-h">Coverage by company</h2>
+            <div id="coverage"></div>
+          </section>
+          <section class="card" aria-labelledby="gaps-h">
+            <h2 id="gaps-h">What degraded</h2>
+            <div id="gaps"></div>
+          </section>
+        </div>
+      </div>
+
+      <p class="source" id="source"></p>
+    </div>
+
+    <script>
+      // Everything below renders `/api/run` — the agent's own terminal output —
+      // into the page. The dashboard computes nothing but per-signal counts of
+      // the items the run returned and bar widths proportional to its numbers.
+
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      // The digest's own section names for each signal (`index.ts`, buildDigest).
+      const SIGNAL_LABEL = {
+        exec_moves: "Executive moves",
+        funding: "Investment events",
+        hiring: "Hiring signals",
+      };
+      const OUTCOME_LABEL = {
+        complete: "Complete",
+        partial: "Partial",
+        no_evidence: "No evidence",
+        no_coverage: "No coverage",
+      };
+      const STAGE_LABEL = {
+        dispatch: "Research run",
+        dedupe: "Dedupe read",
+        search: "Search",
+        scrape: "Article read",
+        persistence: "Observation write",
+        ranking: "Ranking",
+        delivery: "Delivery",
+      };
+      const FALLBACK_LABEL = {
+        search_snippet: "kept the search snippet",
+        deterministic_order: "kept source order",
+        inline_digest: "returned the digest inline",
+      };
+
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+      const fmtNum = (n) =>
+        typeof n === "number" ? n.toLocaleString("en-US") : esc(n ?? "—");
+      const ratio = (part, whole) =>
+        `${fmtNum(part)}<small>/ ${fmtNum(whole)}</small>`;
+      const plural = (n, one, many) => `${fmtNum(n)} ${n === 1 ? one : many}`;
+      const safeUrl = (u) =>
+        /^https?:\/\//i.test(String(u)) ? String(u) : null;
+      const host = (u) => {
+        try {
+          return new URL(u).hostname.replace(/^www\./, "");
+        } catch {
+          return "";
+        }
+      };
+
+      function kpi(label, value, sub, cls = "") {
+        return `<article class="card kpi ${cls}"><p class="label">${label}</p><div class="value">${value}</div>${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      function renderItem(item) {
+        const url = safeUrl(item.url);
+        const title = esc(item.headline || item.url || "Untitled source");
+        const link = url
+          ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${title}</a>`
+          : title;
+        const meta = [
+          url ? `<span>${esc(host(url))}</span>` : "",
+          item.date ? `<span>${esc(item.date)}</span>` : "",
+          item.direction === "arrival" || item.direction === "departure"
+            ? `<span class="tag">${esc(item.direction)}</span>`
+            : "",
+        ].join("");
+        return `<div class="item"><span class="who" title="${esc(item.company)}">${esc(item.company)}</span><div>${link}<div class="meta">${meta}</div></div></div>`;
+      }
+
+      function renderFeed(items) {
+        if (items.length === 0) {
+          return `<p class="empty">This run found no new sourced items.</p>`;
+        }
+        const groups = new Map();
+        for (const item of items) {
+          const key = item.signal in SIGNAL_LABEL ? item.signal : "other";
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(item);
+        }
+        return [...Object.keys(SIGNAL_LABEL), "other"]
+          .filter((key) => groups.has(key))
+          .map((key) => {
+            const list = groups.get(key);
+            return `<h3>${esc(SIGNAL_LABEL[key] ?? "Other")}<span class="count">${fmtNum(list.length)}</span></h3>${list.map(renderItem).join("")}`;
+          })
+          .join("");
+      }
+
+      function renderCoverage(children) {
+        if (children.length === 0) {
+          return `<p class="empty">No company research runs in this output.</p>`;
+        }
+        const max = Math.max(
+          1,
+          ...children.map((c) => Number(c.newItems) || 0),
+        );
+        const rows = children
+          .map((c) => {
+            const n = Number(c.newItems) || 0;
+            const outcome = String(c.outcome ?? "");
+            return `<tr class="o-${esc(outcome)}"><td class="name" title="${esc(c.company)}">${esc(c.company)}</td><td class="state"><span class="dot" aria-hidden="true"></span>${esc(OUTCOME_LABEL[outcome] ?? outcome ?? "—")}</td><td class="num">${fmtNum(n)}</td><td class="num">${fmtNum(c.observedItems)}</td><td class="bar"><span class="fill" style="width:${((n / max) * 100).toFixed(2)}%"></span></td></tr>`;
+          })
+          .join("");
+        return `<table class="cov"><thead><tr><th>Company</th><th>Result</th><th class="num">New</th><th class="num" title="Relevant sources found this run, new ones included">Found</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+      }
+
+      function renderGaps(unmet, failed) {
+        const lines = [
+          ...failed.map(
+            (f) =>
+              `<li><b>${esc(f.company)}:</b> not covered — ${esc(f.reason)}</li>`,
+          ),
+          ...unmet.map((u) => {
+            const who = u.company ? `${esc(u.company)} · ` : "";
+            const stage = STAGE_LABEL[u.stage] ?? u.stage;
+            const where = safeUrl(u.url) ? ` on ${esc(host(u.url))}` : "";
+            const fallback = FALLBACK_LABEL[u.fallback]
+              ? `; ${FALLBACK_LABEL[u.fallback]}`
+              : "";
+            return `<li><b>${who}${esc(stage)}</b>${where}: ${esc(u.reason)}${fallback}</li>`;
+          }),
+        ];
+        return lines.length
+          ? `<ul class="gaps">${lines.join("")}</ul>`
+          : `<p class="empty">Nothing degraded in this run.</p>`;
+      }
+
+      function render({ source, output }) {
+        const o = output ?? {};
+        const items = Array.isArray(o.items) ? o.items : [];
+        const children = Array.isArray(o.children) ? o.children : [];
+        const unmet = Array.isArray(o.unmet) ? o.unmet : [];
+        const failed = Array.isArray(o.coverage?.failed)
+          ? o.coverage.failed
+          : [];
+        const h = o.health ?? {};
+        const outcome = String(o.outcome ?? "");
+
+        document.getElementById("facts").innerHTML = [
+          o.runDate
+            ? `<span class="chip">Run date <b>${esc(o.runDate)}</b></span>`
+            : "",
+          `<span class="chip o-${esc(outcome)}">Outcome <b>${esc(OUTCOME_LABEL[outcome] ?? (outcome || "—"))}</b></span>`,
+        ].join("");
+
+        const bySignal = Object.keys(SIGNAL_LABEL)
+          .map((key) => {
+            const n = items.filter((i) => i.signal === key).length;
+            return n ? `${fmtNum(n)} ${SIGNAL_LABEL[key].toLowerCase()}` : "";
+          })
+          .filter(Boolean)
+          .join(" · ");
+        const withItems = children.filter((c) => Number(c.newItems) > 0).length;
+        const noEvidence = children.filter(
+          (c) => c.outcome === "no_evidence",
+        ).length;
+        const companies = h.companies ?? {
+          covered: o.coverage?.covered,
+          requested: o.coverage?.requested,
+        };
+        const scrapes = h.scrapes ?? {};
+        const searches = h.searches ?? {};
+        const delivery = o.delivered
+          ? ["Emailed", "the digest went to the configured recipient"]
+          : o.reason === "no-recipient"
+            ? ["Returned inline", "no recipient set — nothing sent"]
+            : ["Not delivered", o.deliveryError ? esc(o.deliveryError) : ""];
+
+        document.getElementById("kpis").innerHTML = [
+          kpi(
+            "New sourced items",
+            fmtNum(typeof o.newItems === "number" ? o.newItems : items.length),
+            bySignal || "none this run",
+          ),
+          kpi(
+            "Companies covered",
+            ratio(companies.covered, companies.requested),
+            [
+              `${fmtNum(withItems)} with new items`,
+              noEvidence ? `${fmtNum(noEvidence)} with no evidence` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          ),
+          kpi(
+            "Article reads",
+            ratio(scrapes.succeeded, scrapes.attempted),
+            [
+              `${fmtNum(searches.succeeded)}/${fmtNum(searches.attempted)} searches`,
+              scrapes.snippetFallbacks
+                ? plural(
+                    scrapes.snippetFallbacks,
+                    "snippet kept",
+                    "snippets kept",
+                  )
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          ),
+          kpi("Delivery", delivery[0], delivery[1]),
+        ].join("");
+
+        const rankingFellBack = unmet.some((u) => u.stage === "ranking");
+        document.getElementById("order").textContent = rankingFellBack
+          ? "source order (ranking fell back)"
+          : items.length
+            ? "ranked by the model"
+            : "";
+
+        document.getElementById("feed").innerHTML = renderFeed(items);
+        document.getElementById("coverage").innerHTML =
+          renderCoverage(children);
+        document.getElementById("gaps").innerHTML = renderGaps(unmet, failed);
+
+        const src = source ?? {};
+        const where =
+          src.kind === "live" ? `Live — latest completed run` : `Captured run`;
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}` +
+          (src.liveError
+            ? ` · <span class="empty">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+      }
+
+      fetch("/api/run", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("feed").innerHTML =
+            `<p class="empty">Could not load the run: ${esc(err?.message ?? err)}</p>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>

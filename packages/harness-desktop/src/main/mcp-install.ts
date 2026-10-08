@@ -15,9 +15,8 @@
  * per session (npx re-resolves `@latest` on each launch), and sessions work
  * offline once installed.
  *
- * Freshness: an existing install is used immediately and refreshed in the
- * background (fire-and-forget npm install), so sessions never wait on the
- * network but track the published package within one launch.
+ * Freshness: cached installs are refreshed at most weekly, awaited at boot
+ * before sessions exist. Per-session capability preflight never installs.
  *
  * No `electron` import (the caller passes the prefix + installer) — the
  * vitest tier covers the resolution and decision logic from POSIX.

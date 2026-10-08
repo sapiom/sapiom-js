@@ -115,8 +115,9 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
   // Local URLs get a window we build ourselves rather than `{ action: "allow" }`.
   // A window opened by `allow` INHERITS the parent's webPreferences — including
   // this window's preload — and "local" is not the same as "ours": the harness
-  // serves agent-authored files at `/canvas/:sessionId/*` from
-  // `<cwd>/.sapiom/canvas/`, on this very origin. xterm linkifies whatever the
+  // origin can serve content an agent wrote (the harness once served
+  // `<cwd>/.sapiom/canvas/` at `/canvas/:sessionId/*`; the guard stays for any
+  // local page an agent controls). xterm linkifies whatever the
   // agent prints, so a URL in the terminal is one click from a window holding
   // `window.sapiomDesktop` — i.e. an agent could call `restartToUpdate()` and kill
   // every live session. Denying and opening explicitly is deterministic; it

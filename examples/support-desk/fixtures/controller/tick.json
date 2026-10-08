@@ -1,0 +1,5 @@
+{
+  "type": "schedule_once",
+  "description": "A ticket's timer firing: the one-shot schedule's stored input, set by _shared/timers.ts. Without issueId the run resets every open ticket's timer.",
+  "payload": { "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1" }
+}

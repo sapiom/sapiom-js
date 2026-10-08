@@ -15,7 +15,7 @@ import {
   scanWorkflowSources,
   type DetectedLaunch,
   type DetectedCapability,
-} from "./canvas-interconnections.js";
+} from "@sapiom/mcp/map";
 
 export type CanvasNodeKind = "entry" | "step" | "pause" | "terminal-success" | "terminal-warn" | "launched-workflow";
 export type CanvasEdgeKind = "sequential" | "branching" | "cross" | "launch";

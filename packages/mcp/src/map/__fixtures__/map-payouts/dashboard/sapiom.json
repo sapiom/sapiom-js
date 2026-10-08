@@ -1,0 +1,1 @@
+{ "name": "dashboard", "resources": { "web": { "type": "sandbox", "env": { "PORT": "3000" } } } }

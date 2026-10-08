@@ -87,5 +87,9 @@ answers never gets the next follow-up.
 
 - `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
+- `app/` — the dashboard this template ships (`node server.mjs`): every
+  prospect with the opener the model wrote and the email it went out in, the
+  drip sequence, and the run's step timings. See `app/README.md`. `preview.png`
+  is its screenshot, referenced from `template.json` → `app.preview`.
 
 Run `npm run typecheck` to confirm it compiles.

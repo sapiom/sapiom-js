@@ -88,6 +88,13 @@
       }
     }
   ],
+  "app": {
+    "name": "Report site dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4179,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/research-to-microsite/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [

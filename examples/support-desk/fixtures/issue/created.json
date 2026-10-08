@@ -1,0 +1,17 @@
+{
+  "type": "issue.created",
+  "description": "Intake opened issue #1 from the channel message.",
+  "payload": {
+    "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
+    "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "source": "slack",
+    "causationId": "Ev0EXAMPLE01",
+    "slack": {
+      "channel": "C0CUSTOMER1",
+      "ts": "1790889355.981329"
+    },
+    "category": "question",
+    "priority": "normal",
+    "title": "Webhook deliveries failing"
+  }
+}

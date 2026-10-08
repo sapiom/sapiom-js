@@ -32,7 +32,11 @@ describe("local agent tool contracts", () => {
     register(server, env);
 
     const check = descriptions.get("sapiom_dev_agents_check") ?? "";
-    expect(check).toContain("no Sapiom account or service call");
+    expect(check).toContain("no Sapiom account or service call to validate");
+    // The one request it does make is named honestly — what it reads, that it is
+    // anonymous and best-effort, and that it never fails the check (SAP-3181).
+    expect(check).toContain("platform-rules stamp differs");
+    expect(check).toContain("best-effort anonymous read");
     expect(check).not.toMatch(/offline|instant/i);
 
     const runLocal = descriptions.get("sapiom_dev_agents_run_local") ?? "";

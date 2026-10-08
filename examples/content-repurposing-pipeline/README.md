@@ -89,5 +89,9 @@ provider ids get no neutral-param normalization, and allowlist enforcement
 - `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
 - `AGENTS.md` — the authoring loop and why the async steps pause.
+- `app/` — the dashboard this template ships (`node server.mjs`): the quote
+  graphics, the tweet thread, the LinkedIn post and the newsletter the run
+  wrote, and what it delivered. See `app/README.md`. `preview.png` is its
+  screenshot, referenced from `template.json` → `app.preview`.
 
 Run `npm run typecheck` to confirm it compiles.

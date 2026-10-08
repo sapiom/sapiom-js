@@ -5,14 +5,13 @@
  * carry the boot token through `window.open` anyway — so in practice this
  * only ever executes "inject" macros (routed to the session's pty, or to a
  * headless background task when the macro says `execution: "background"`)
- * and "render-canvas", but it handles every kind per the documented
- * contract. The integrator mounts this (with express.json()) alongside the
+ * but it handles every kind per the documented contract ("render-canvas"
+ * is answered with a 400: the SPA re-reads the board itself). The integrator mounts this (with express.json()) alongside the
  * SessionManager, TaskManager, and WorkflowRegistry.
  */
-import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
-import { CANVAS_INDEX, type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
-import { ExternalHarnessError } from "../core/errors.js";
+import { type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
+import { ExternalHarnessError, McpCredentialGenerationChangedError } from "../core/errors.js";
 import { MacroValidationError, resolveMacro } from "../core/macro-runner.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
 import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
@@ -36,15 +35,11 @@ export interface MacrosRouterDeps {
    *  against the same workflow dedupe per-workflow rather than per-session.
    *  May throw TaskNotSupportedError (session's harness has no headless
    *  mode → 400) or TaskAlreadyRunningError (same macro already in flight
-   *  for this target → 409). */
+   *  for this target → 409), or McpCredentialGenerationChangedError
+   *  (credentials changed while the task was preparing → 409). */
   runBackgroundTask(harnessSessionId: string, macro: MacroDef, prompt: string, workflowPath: string | null): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
   openUrl(url: string): Promise<void>;
-  /** The "visualize" macro's `render-canvas` action: a fully deterministic
-   *  re-render of the session's bound canvas (structure + derived annotations,
-   *  no LLM, no user token, nothing to already-be-running). A cheap no-op when
-   *  the session is unbound. */
-  renderCanvas(harnessSessionId: string): Promise<void>;
 }
 
 export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
@@ -81,14 +76,18 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
       const resolved = resolveMacro(macro, {
         workflow,
         sessionCwd: cwd,
-        canvasPath: path.join(cwd, CANVAS_INDEX),
         subject: body.subject,
       });
 
       if (resolved.kind === "open-url") {
         await deps.openUrl(resolved.url);
       } else if (resolved.kind === "render-canvas") {
-        await deps.renderCanvas(body.harnessSessionId);
+        // Visualize re-reads the board in the SPA (GET /api/workflows/:path/graph);
+        // there is no server-side render to run, and answering ok would be a no-op.
+        res.status(400).json({
+          error: `Macro '${macro.id}' re-reads the board in the app; it has no server action.`,
+        });
+        return;
       } else if (macro.execution === "background") {
         await deps.runBackgroundTask(body.harnessSessionId, macro, resolved.text, workflowPath ?? null);
       } else {
@@ -104,9 +103,13 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
       if (
         err instanceof SessionNotReadyError ||
         err instanceof TaskAlreadyRunningError ||
+        err instanceof McpCredentialGenerationChangedError ||
         err instanceof ExternalHarnessError
       ) {
-        res.status(409).json({ error: err.message });
+        res.status(409).json({
+          error: err.message,
+          ...(err instanceof McpCredentialGenerationChangedError ? { code: err.code } : {}),
+        });
         return;
       }
       res.status(500).json({ error: (err as Error).message });

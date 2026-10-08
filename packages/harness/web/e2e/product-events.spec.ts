@@ -17,6 +17,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { openAgentModal, openNewAgentScreen } from "./mock-navigation";
 
 interface ProductEvent {
   event: string;
@@ -38,9 +39,9 @@ test.describe("agent-lifecycle product events → PostHog", () => {
     page,
   }) => {
     await page.goto("/?seed=0");
-    await expect(page.getByTestId("session-steps")).toBeVisible();
+    await openAgentModal(page, "acme-app", "leasing");
 
-    await page.getByTestId("session-step-deploy").click();
+    await page.getByTestId("agent-modal-deploy").click();
     await expect(page.getByTestId("toast")).toContainText("Deployed to Sapiom.", {
       timeout: 5_000,
     });
@@ -54,7 +55,7 @@ test.describe("agent-lifecycle product events → PostHog", () => {
     const events = await productEvents(page);
     const started = events.find((e) => e.event === "agent.deploy_started");
     const succeeded = events.find((e) => e.event === "agent.deploy_succeeded");
-    // The bound leasing agent's folder basename — never the absolute path.
+    // The leasing agent's folder basename — never the absolute path.
     expect(started?.properties?.workflow_slug).toBe("leasing");
     expect(succeeded?.properties?.workflow_slug).toBe("leasing");
     expect(typeof succeeded?.properties?.duration_ms).toBe("number");
@@ -76,18 +77,18 @@ test.describe("agent-lifecycle product events → PostHog", () => {
     page,
   }) => {
     await page.goto("/?mockState=fresh");
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await openNewAgentScreen(page);
     await page.getByTestId("composer-browse-templates").click();
     await expect(page.getByTestId("templates-grid").first()).toBeVisible();
 
     await page.getByTestId("template-card-open-web-research-digest").click();
     await expect(page.getByTestId("template-detail")).toBeVisible();
+    // Use routes through the new-agent screen: the template is the idea, and
+    // the metric fires when the agent is created from it.
     await page.getByTestId("template-use-btn").click();
-    await page.getByTestId("template-use-confirm").click();
-
-    await expect(page.getByTestId("session-context-title")).toContainText(
-      "web-research-digest",
-    );
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("agent-view")).toBeVisible();
 
     await expect
       .poll(async () => names(await productEvents(page)))

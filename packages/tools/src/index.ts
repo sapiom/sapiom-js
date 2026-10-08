@@ -14,6 +14,9 @@
 export { createClient, createClientFromEnv } from "./client.js";
 export type { Sapiom } from "./client.js";
 export type { TransportConfig, Attribution } from "./_client/index.js";
+export * as executions from "./executions/index.js";
+export * from "./executions/types.js";
+export * from "./executions/errors.js";
 
 // The generic dispatch contract: any capability handle that carries a `dispatch`
 // member is pausable via `pauseUntilSignal` in @sapiom/agent.
@@ -69,11 +72,36 @@ export { AGENTS_RESULT_SIGNAL } from "./agents/index.js";
 
 // schedules — create/manage cron + one-off triggers for a deployed agent.
 export * as schedules from "./schedules/index.js";
+
+export * as events from "./events/index.js";
+export type {
+  EmitEventSpec,
+  EmitEventResult,
+  EventOutcome,
+} from "./events/index.js";
 // The shape a step resumed from `pauseUntilSignal(agentHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { AgentRunResultPayload } from "./agents/index.js";
+// The dispatch + result vocabulary, top-level like the `models` equivalents:
+// `AgentRunStatus` is what `status` can be, `AgentRunError` is the structured
+// `error` a non-completed result carries (`"rejected"`, `"unknown"`,
+// `"timed_out"`). `RunHandle` is spelled `AgentRunHandle` here — `models` has
+// its own `RunHandle`.
+export type {
+  AgentRunSpec,
+  AgentRunResult,
+  AgentRunStatus,
+  AgentRunError,
+  AgentRunErrorCode,
+  ExecutionStatus as AgentExecutionStatus,
+  RunHandle as AgentRunHandle,
+  WaitRetryOptions as AgentWaitRetryOptions,
+} from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
 export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
+// Thrown by `agents.launch` when the dispatch is refused (`agents.run` returns
+// the same rejection as data instead). Catch it to `fail()` a step cleanly.
+export { AgentDispatchError } from "./agents/index.js";
 
 // llm — routed LLM calls through the gateway's /v2 routing front-end: `run`
 // (synchronous direct), `submit` (deferred-start; pausable handle), `redeem`,
@@ -113,6 +141,12 @@ export {
 // raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
 export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
+// Thrown by `llm.run` when a forced structured-output tool call never arrived:
+// `Truncated` when the turn hit `max_tokens` first, `Missing` when it ended for
+// any other reason without calling the tool — top-level so a step can catch it by
+// name without reaching into the `llm` namespace.
+export { LlmStructuredOutputMissingError, LlmStructuredOutputTruncatedError } from "./llm/index.js";
+export type { LlmTruncationReason } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";
@@ -184,6 +218,18 @@ export { MemoryHttpError } from "./memory/index.js";
 export * as speech from "./speech/index.js";
 export { SpeechHttpError } from "./speech/index.js";
 
+// decisions — System One judgments via the Capability Router:
+// `evaluate` returns calibrated probabilities over a fixed answer set.
+export * as decisions from "./decisions/index.js";
+export { DecisionsHttpError } from "./decisions/index.js";
+export type {
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+  DecisionQuestion,
+  DecisionAnswer,
+  DecisionAnswerFor,
+} from "./decisions/index.js";
+
 export * as browserAutomation from "./browser-automation/index.js";
 export { BrowserAutomationHttpError } from "./browser-automation/index.js";
 
@@ -193,3 +239,42 @@ export { VaultHttpError } from "./vault/index.js";
 export * as keys from "./keys/index.js";
 export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
+
+// connectors — connection-backed third-party providers (Google, GitHub, Slack, MCP), grouped
+// under one namespace: `import { connectors } from "@sapiom/tools"; connectors.google.fetch(...)`.
+export * as connectors from "./connectors/index.js";
+export type {
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  GmailAttachment,
+  SendEmailArgs,
+  SendEmailResult,
+} from "./connectors/google/index.js";
+export type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
+export type {
+  SlackBlock,
+  SlackMessage,
+  SlackMessageContent,
+  SlackPostEphemeralArgs,
+  SlackPostEphemeralResult,
+  SlackPostMessageArgs,
+  SlackPostMessageResult,
+  SlackReactionArgs,
+  SlackReactionResult,
+  SlackRepliesArgs,
+  SlackRepliesResult,
+  SlackUpdateArgs,
+  SlackUpdateResult,
+  SlackUser,
+  SlackUserInfoArgs,
+  SlackUserInfoResult,
+} from "./connectors/slack/index.js";
+export { McpRelayError } from "./connectors/mcp/index.js";
+export type {
+  McpCallToolResult,
+  McpConnector,
+  McpContent,
+  McpTool,
+} from "./connectors/mcp/index.js";

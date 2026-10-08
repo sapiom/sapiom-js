@@ -1,0 +1,103 @@
+{
+  "id": "160003",
+  "name": "research-to-microsite",
+  "definitionId": "548",
+  "status": "completed",
+  "startedAt": "2026-08-05T06:10:31.546Z",
+  "finishedAt": "2026-08-05T06:14:47.215Z",
+  "input": {},
+  "output": {
+    "note": "Live on a 7-day host, but NO keeper was registered — if the sandbox process is recycled the URL 502s until redeployed. Pass `keeperDefinition` (a deployed keeper agent's slug), or register a keeper against `keeperTarget`, to keep it up 24/7. Researched the default topic (\"how durable agent runtimes handle retries\"). Pass a `topic` to build a site about yours.",
+    "title": "How Durable Agent Runtimes Handle Retries",
+    "topic": "how durable agent runtimes handle retries",
+    "liveUrl": "https://04dc1ac2dca6bee181c689810cd8ed7d.preview.bl.run",
+    "sources": [
+      {
+        "url": "https://inference.sh/blog/agent-runtime/durable-execution",
+        "title": "Durable Execution for AI Agents | blog | inference shell"
+      },
+      {
+        "url": "https://zylos.ai/research/2026-04-24-durable-execution-agent-runtimes/",
+        "title": "Durable Execution for AI Agent Runtimes: Checkpointing, Replay, and Recovery | Zylos Research"
+      },
+      {
+        "url": "https://learn.microsoft.com/en-us/azure/durable-task/sdks/durable-task-for-ai-agents",
+        "title": "Durable Task for AI Agents - Azure | Microsoft Learn"
+      },
+      {
+        "url": "https://www.langchain.com/blog/runtime-behind-production-deep-agents",
+        "title": "The Runtime Behind Production Deep Agents"
+      },
+      {
+        "url": "https://www.restate.dev/blog/durable-ai-loops-fault-tolerance-across-frameworks-and-without-handcuffs",
+        "title": "Durable AI Loops: Fault Tolerance across Frameworks and without Handcuffs | Restate"
+      },
+      {
+        "url": "https://quellixlabs.com/insights/durable-execution-long-running-ai-agent-workflows",
+        "title": "Durable Execution for AI Agents: State, Retries, Pauses | Quellix Labs"
+      }
+    ],
+    "tagline": "When an AI agent crashes, gets disconnected, or has to wait days for approval, durable runtimes keep every step of progress safe — and retry without repeating work.",
+    "repoSlug": "microsite-160003",
+    "customUrl": null,
+    "keptAlive": false,
+    "published": true,
+    "reviewScore": 0.78,
+    "sandboxName": "microsite-160003",
+    "keeperTarget": {
+      "url": "https://04dc1ac2dca6bee181c689810cd8ed7d.preview.bl.run",
+      "port": 3000,
+      "start": "node server.js",
+      "source": {
+        "ref": "main",
+        "kind": "git",
+        "repo": "microsite-160003"
+      },
+      "healthPath": "/health",
+      "sandboxName": "microsite-160003"
+    },
+    "reviewPassed": true,
+    "reviewIterations": 2,
+    "illustrationCount": 2
+  },
+  "sharedState": {
+    "topic": "how durable agent runtimes handle retries",
+    "audience": "a general audience",
+    "reviewThreshold": 0.7,
+    "maxDraftAttempts": 2,
+    "critique": "Citations are present and valid, but the summary promises an overview of checkpoints, replay, and idempotent retries while the only visible section pivots to advanced 'beyond the basics' requirements, making the preview inaccurate; the section is truncated mid-sentence, and the lone section cannot fully satisfy the structure implied by a multi-section report.",
+    "reviewNote": "All five sections are citation-supported, distinct in purpose, and pitched for a general audience with the summary accurately previewing them, but the final section is truncated mid-sentence ('LangChain's deep-agents team argues that durable execution is what separates a real production agent from '), leaving the report visibly incomplete and slightly under-delivering on the summary's promise about surviving mid-task failures.",
+    "report": {
+      "title": "How Durable Agent Runtimes Handle Retries",
+      "tagline": "When an AI agent crashes, gets disconnected, or has to wait days for approval, durable runtimes keep every step of progress safe — and retry without repeating work.",
+      "summary": "Without durable execution, AI agents lose all progress the moment something goes wrong — a dropped connection, a crashed process, or a slow human reviewer. Durable runtimes fix this by writing checkpoints after each meaningful step, then replaying from the last safe point whenever something fails. Crucially, they also make retries safe: completed work like sending an email or charging a card is never duplicated. The result is an agent that can pause for hours, recover from outages, and survive being killed mid-task without missing a beat.",
+      "sections": [
+        {
+          "heading": "The Problem with Ephemeral Agent Runs"
+        },
+        {
+          "heading": "Checkpoints: Saving Progress at Safe Points"
+        },
+        {
+          "heading": "Replay: Picking Up Where You Left Off"
+        },
+        {
+          "heading": "Idempotent Retries: Doing Work Without Repeating It"
+        },
+        {
+          "heading": "What Mature Durable Runtimes Add on Top"
+        }
+      ]
+    },
+    "illustrations": [
+      {
+        "fileId": "544dc34b-24d8-41d8-b23c-92980ce706ed",
+        "heading": "The Problem with Ephemeral Agent Runs"
+      },
+      {
+        "fileId": "8e636782-7bfc-4ccb-97b9-77e6e05a0823",
+        "heading": "Checkpoints: Saving Progress at Safe Points"
+      }
+    ]
+  }
+}

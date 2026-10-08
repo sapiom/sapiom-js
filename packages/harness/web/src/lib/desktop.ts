@@ -16,6 +16,7 @@
  * a mismatch from becoming a crash: an older desktop build simply reads as
  * "no bridge".
  */
+import { getBootToken, isMockMode } from "./api";
 
 /**
  * A `sapiom://` deep-link target. Mirrors the desktop app's `DeepLinkTarget`
@@ -92,6 +93,13 @@ export interface DesktopBridge {
    * degrade to doing nothing rather than assume it.
    */
   pathForFile?: (file: File) => string;
+  /**
+   * Show an absolute path in Finder / Explorer / the Linux file manager.
+   * Resolves true when the OS was asked, false when the desktop app refused.
+   * Optional for the usual reason; `revealAgentFolder` falls back to the
+   * server route when it is missing.
+   */
+  revealPath?: (path: string) => Promise<boolean>;
   // No restart method: applying an update is confirmed in the desktop app's own
   // main-process-owned update window, so page code — which shares an origin with
   // agent-authored files the harness serves — has no way to end a user's sessions.
@@ -142,7 +150,87 @@ export function getDesktopBridge(host: DesktopHost | undefined = defaultHost()):
     // Optional: a browser (or older desktop build) can't resolve a File's path,
     // so a drop on the terminal simply does nothing there.
     pathForFile: typeof bridge.pathForFile === "function" ? bridge.pathForFile : undefined,
+    // Optional: without it, revealAgentFolder uses POST /api/fs/reveal.
+    revealPath: typeof bridge.revealPath === "function" ? bridge.revealPath : undefined,
   };
+}
+
+/** The OS family whose file manager a reveal opens. */
+export type RevealPlatform = "mac" | "windows" | "linux";
+
+/** Where the platform is read from. Injectable for the Node unit runner. */
+export interface PlatformHost {
+  navigator?: { platform?: string; userAgentData?: { platform?: string } };
+}
+
+/**
+ * The OS the folder will open on. The harness server runs on the user's own
+ * machine (the desktop app, or `npx` in a local browser), so the browser's OS
+ * is the server's OS. Anything unrecognised reads as Linux, whose label
+ * ("Open folder") promises the least.
+ */
+export function revealPlatform(
+  host: PlatformHost | undefined = typeof navigator === "undefined" ? undefined : { navigator },
+): RevealPlatform {
+  const nav = host?.navigator;
+  const name = (nav?.userAgentData?.platform || nav?.platform || "").toLowerCase();
+  if (name.startsWith("mac")) return "mac";
+  if (name.startsWith("win")) return "windows";
+  return "linux";
+}
+
+/**
+ * The button label, in each OS's own words. Linux says "Open folder" because
+ * `xdg-open` opens the folder rather than selecting it in its parent.
+ */
+export function revealLabel(platform: RevealPlatform = revealPlatform()): string {
+  switch (platform) {
+    case "mac":
+      return "Open in Finder";
+    case "windows":
+      return "Show in Explorer";
+    case "linux":
+      return "Open folder";
+  }
+}
+
+export interface RevealDeps {
+  host?: DesktopHost;
+  fetch?: typeof fetch;
+  mock?: boolean;
+}
+
+/**
+ * Show an agent's folder in the OS file manager. Resolves true when the OS was
+ * asked to, false when the request was refused or failed; never rejects, so a
+ * click handler can await it without a catch.
+ *
+ * The desktop bridge when present; otherwise `POST /api/fs/reveal`, which the
+ * server answers only for folders in its workflow registry. Mock mode has no
+ * server and its paths are fixtures, so it resolves true without asking the
+ * bridge or the server.
+ */
+export async function revealAgentFolder(agentPath: string, deps: RevealDeps = {}): Promise<boolean> {
+  // Before the bridge: mock paths are fixtures, not folders on this machine.
+  if (deps.mock ?? isMockMode()) return true;
+  const bridge = getDesktopBridge(deps.host ?? defaultHost());
+  if (bridge?.revealPath) {
+    try {
+      return await bridge.revealPath(agentPath);
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const res = await (deps.fetch ?? fetch)("/api/fs/reveal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Harness-Token": getBootToken() },
+      body: JSON.stringify({ path: agentPath }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /** How the Settings popover should render a check result. */

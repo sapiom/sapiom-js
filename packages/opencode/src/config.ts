@@ -1,0 +1,131 @@
+export interface SapiomOpenCodeConfigOptions {
+  bridgeUrl: string;
+  runtimeToken: string;
+  model?: string;
+  /** Deny every rule OpenCode would otherwise ask the user about. */
+  neverAsk?: boolean;
+  /**
+   * Remove the shell and the file-editing tools (the map chat, design I4 and
+   * I10). OpenCode's external_directory rule covers file tools only, so a
+   * shell command could still write outside the project; an edit from a chat
+   * that shows no diff changes an agent silently, so a change request goes to
+   * the handoff tool instead.
+   */
+  noShell?: boolean;
+}
+
+/**
+ * OpenCode 1.18.29's default agent rules with action "ask", plus the
+ * `question` and `plan_*` tools the build agent re-enables, each set to deny.
+ * A caller whose transport cannot reply to a permission or question request
+ * would otherwise hang until the user leaves.
+ */
+export const deniedAskPermissions = {
+  doom_loop: "deny",
+  external_directory: { "*": "deny" },
+  question: "deny",
+  plan_enter: "deny",
+  plan_exit: "deny",
+  read: {
+    "*": "allow",
+    "*.env": "deny",
+    "*.env.*": "deny",
+    "*.env.example": "allow",
+  },
+} as const;
+
+/**
+ * OpenCode 1.18.29's only shell tool is `bash` (permission key `bash`); a fully
+ * denied tool is dropped from the model's tool list. `execute` (code mode) is
+ * kept: it runs the hosted Sapiom MCP tools in OpenCode's interpreter, which
+ * has no process or filesystem access.
+ */
+export const deniedShellPermissions = { bash: "deny" } as const;
+
+/**
+ * OpenCode 1.18.29 checks its three file-writing tools, `edit`, `write` and
+ * `apply_patch`, against the one permission key `edit`; a fully denied key
+ * drops all three from the model's tool list. `read`, `glob` and `grep` stay.
+ */
+export const deniedEditPermissions = { edit: "deny" } as const;
+
+/** Only a revocable runtime credential enters OpenCode; Studio holds the key. */
+export function createSapiomOpenCodeConfig(
+  options: SapiomOpenCodeConfigOptions,
+): Record<string, unknown> {
+  const bridge = new URL(options.bridgeUrl);
+  if (
+    bridge.protocol !== "http:" ||
+    !["127.0.0.1", "[::1]"].includes(bridge.hostname) ||
+    bridge.username ||
+    bridge.password ||
+    bridge.search ||
+    bridge.hash ||
+    !options.runtimeToken
+  ) {
+    throw new Error("OpenCode requires a private loopback credential bridge");
+  }
+  const base = bridge.href.replace(/\/+$/, "");
+  const model = options.model ?? "gpt-luna";
+  return {
+    $schema: "https://opencode.ai/config.json",
+    model: `sapiom/${model}`,
+    enabled_providers: ["sapiom"],
+    plugin: [],
+    ...(options.neverAsk || options.noShell
+      ? {
+          permission: {
+            ...(options.neverAsk ? deniedAskPermissions : {}),
+            ...(options.noShell
+              ? { ...deniedShellPermissions, ...deniedEditPermissions }
+              : {}),
+          },
+        }
+      : {}),
+    agent: {
+      "sapiom-final-response": {
+        mode: "primary",
+        hidden: true,
+        permission: { "*": "deny" },
+        prompt:
+          "Write the final answer using the existing conversation and completed tool results. Do not perform additional work. Explain any limitations plainly.",
+      },
+      // Inherits native coding instructions and default permissions. Unlike the
+      // old summary-only agent, this can finish the user's remaining work.
+      "sapiom-turn-recovery": { mode: "primary", hidden: true },
+    },
+    provider: {
+      sapiom: {
+        npm: "@ai-sdk/openai",
+        name: "Sapiom",
+        options: {
+          apiKey: options.runtimeToken,
+          baseURL: `${base}/llm/v1`,
+        },
+        models: {
+          [model]: {
+            name: `Sapiom · ${model}`,
+            limit: { context: 400_000, output: 128_000 },
+            options: {
+              reasoningEffort: "low",
+              reasoningSummary: "auto",
+              // Carry reasoning with the conversation through Studio's saved
+              // history; never depend on a vendor-side previous_response_id.
+              store: false,
+              include: ["reasoning.encrypted_content"],
+            },
+          },
+        },
+      },
+    },
+    mcp: {
+      sapiom: {
+        type: "remote",
+        url: `${base}/mcp`,
+        enabled: true,
+        oauth: false,
+        headers: { Authorization: `Bearer ${options.runtimeToken}` },
+      },
+    },
+  };
+}

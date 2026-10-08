@@ -144,25 +144,6 @@ describe("CodexAdapter", () => {
       ]);
     });
 
-    it("injects Agent Map MCP config per process while keeping the secret out of argv", () => {
-      const adapter = new CodexAdapter({ binary: "fake-codex" });
-      const agentMapMcp = {
-        url: "http://127.0.0.1:4312/mcp/agent-map",
-        bearerToken: "private-map-token",
-      };
-      for (const spec of [
-        adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj", agentMapMcp }),
-        adapter.resume("rollout", { harnessSessionId: "h1", cwd: "/tmp/proj", agentMapMcp }),
-      ]) {
-        expect(spec.args.find((arg) => arg.startsWith("mcp_servers.agent-map-"))).toContain(
-          `{ "url" = ${JSON.stringify(agentMapMcp.url)}, "bearer_token_env_var" = "SAPIOM_AGENT_MAP_CAPABILITY" }`,
-        );
-        expect(spec.args.join(" ")).not.toContain(agentMapMcp.bearerToken);
-        expect(spec.env).toEqual({
-          SAPIOM_AGENT_MAP_CAPABILITY: agentMapMcp.bearerToken,
-        });
-      }
-    });
   });
 
   describe("detectBlockingPrompt", () => {

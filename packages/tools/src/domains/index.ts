@@ -27,6 +27,7 @@
  * {@link DomainsHttpError} (carries `status` + parsed `body`).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { capabilityCall } from "../_client/capability-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, DomainsHttpError } from "./errors.js";
 
@@ -370,15 +371,28 @@ export async function register(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<Domain> {
   const domainName = assertString(input?.domainName, "domainName");
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/domains`, {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ domainName }),
-    }),
-    `Failed to register domain '${domainName}'`,
+  const raw = await capabilityCall<RawDomain>(
+    "domains.purchase",
+    { domainName },
+    {
+      transport,
+      makeError: (message, status, body) =>
+        new DomainsHttpError(message, status, body),
+      errorPrefix: "Failed to register domain",
+      legacyCall: async () => {
+        const res = await ensureOk(
+          await transport.fetch(`${baseUrl}/v1/domains`, {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ domainName }),
+          }),
+          `Failed to register domain '${domainName}'`,
+        );
+        return (await res.json()) as RawDomain;
+      },
+    },
   );
-  return mapDomain((await res.json()) as RawDomain);
+  return mapDomain(raw);
 }
 
 /**

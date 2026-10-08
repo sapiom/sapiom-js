@@ -12,6 +12,10 @@ describe("createApiKeyProvider", () => {
       readApiKeyForEnv: () => Promise.resolve("sk-boot"),
     });
     expect(provider.getKey()).toBe("sk-boot");
+    expect(provider.snapshot()).toEqual({
+      apiKey: "sk-boot",
+      generation: 0,
+    });
   });
 
   it("adopts a newer key from the store on refresh (the re-login recovery)", async () => {
@@ -134,6 +138,88 @@ describe("createApiKeyProvider", () => {
     expect(readApiKeyForEnv).toHaveBeenCalledTimes(2);
   });
 
+  it("advances generation only when the effective key changes", async () => {
+    const storedKeys = ["key-a", "key-b", "key-b", null];
+    const provider = createApiKeyProvider("key-a", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () => Promise.resolve(storedKeys.shift() ?? null),
+    });
+
+    await provider.refresh();
+    expect(provider.snapshot()).toEqual({ apiKey: "key-a", generation: 0 });
+
+    await provider.refresh();
+    expect(provider.snapshot()).toEqual({ apiKey: "key-b", generation: 1 });
+
+    await provider.refresh();
+    expect(provider.snapshot()).toEqual({ apiKey: "key-b", generation: 1 });
+
+    await provider.refresh();
+    expect(provider.snapshot()).toEqual({ apiKey: null, generation: 2 });
+
+    provider.clear();
+    expect(provider.snapshot()).toEqual({ apiKey: null, generation: 2 });
+  });
+
+  it("notifies subscribers only when the effective credential changes", async () => {
+    const storedKeys = ["key-a", "key-b", "key-c"];
+    const provider = createApiKeyProvider("key-a", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () => Promise.resolve(storedKeys.shift() ?? null),
+    });
+    const snapshots: ReturnType<typeof provider.snapshot>[] = [];
+    const unsubscribe = provider.subscribe((snapshot) => snapshots.push(snapshot));
+
+    await provider.refresh();
+    await provider.refresh();
+    provider.clear();
+    unsubscribe();
+    await provider.refresh();
+
+    expect(snapshots).toEqual([
+      { apiKey: "key-b", generation: 1 },
+      { apiKey: null, generation: 2 },
+    ]);
+  });
+
+  it("keeps refresh non-throwing when an observer fails", async () => {
+    const provider = createApiKeyProvider("key-a", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () => Promise.resolve("key-b"),
+    });
+    const observed = vi.fn();
+    provider.subscribe(() => {
+      throw new Error("observer failed");
+    });
+    provider.subscribe(observed);
+
+    await expect(provider.refresh()).resolves.toBe("key-b");
+    expect(observed).toHaveBeenCalledWith({
+      apiKey: "key-b",
+      generation: 1,
+    });
+  });
+
+  it("does not let an in-flight refresh restore a key after clear", async () => {
+    let resolveRead!: (key: string | null) => void;
+    const provider = createApiKeyProvider("key-a", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    });
+
+    const refresh = provider.refresh();
+    await vi.waitFor(() => expect(resolveRead).toBeDefined());
+
+    provider.clear();
+    resolveRead("key-b");
+
+    await expect(refresh).resolves.toBeNull();
+    expect(provider.snapshot()).toEqual({ apiKey: null, generation: 1 });
+  });
+
   it("clear() sets the in-memory key to null unconditionally", () => {
     const provider = createApiKeyProvider("sk-live", {
       resolveEnvironmentName: () => Promise.resolve("production"),
@@ -179,6 +265,10 @@ describe("staticApiKeyProvider", () => {
   it("returns the fixed key and never changes it on refresh", async () => {
     const provider = staticApiKeyProvider("sk-fixed");
     expect(provider.getKey()).toBe("sk-fixed");
+    expect(provider.snapshot()).toEqual({
+      apiKey: "sk-fixed",
+      generation: 0,
+    });
     expect(await provider.refresh()).toBe("sk-fixed");
     expect(provider.getKey()).toBe("sk-fixed");
   });

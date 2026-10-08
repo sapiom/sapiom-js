@@ -1,0 +1,1212 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "379307",
+    "definitionId": "716",
+    "startedAt": "2026-08-27T08:17:25.765Z",
+    "finishedAt": "2026-08-27T08:21:53.989Z",
+    "status": "completed",
+    "input": {
+      "deliverTo": "<redacted>"
+    },
+    "note": "Terminal output of a live run of this template on its built-in 18-company watchlist, read back over the Sapiom API from agent run 379307 on 2026-09-26. The run set deliverTo, so it emailed the digest; the recipient address is redacted in input and output.to, and nothing else is changed. A zero-setup run differs only in delivery: it returns the same digest inline with delivered false. Ranking fell back to source order in this run; the ranking call's token cap was raised afterwards (SAP-3280)."
+  },
+  "output": {
+    "to": "<redacted>",
+    "items": [
+      {
+        "url": "https://www.efinancialcareers.com/jobs-United_States-New_York-Private_Equity_Partnerships_Associate.id24694343",
+        "date": null,
+        "signal": "funding",
+        "company": "Robinhood",
+        "headline": "Private Equity Partnerships Associate | New York, NY, USA",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://startup.jobs/company/robinhoodapp",
+        "date": null,
+        "signal": "hiring",
+        "company": "Robinhood",
+        "headline": "Robinhood Jobs (August 2026)",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://cfotech.news/story/sofi-adds-private-market-funds-for-retail-investors",
+        "date": null,
+        "signal": "funding",
+        "company": "SoFi",
+        "headline": "SoFi adds private market funds for retail investors",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.facebook.com/ekjot.singh.3998263/posts/sofi-is-hiring-an-associate-ai-engineer-finance-transformation-build-agentic-ai-/1623678579367368",
+        "date": null,
+        "signal": "hiring",
+        "company": "SoFi",
+        "headline": "SoFi is hiring an Associate AI Engineer",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.builtincolorado.com/job/senior-data-engineer-people-analytics/10838961",
+        "date": null,
+        "signal": "hiring",
+        "company": "SoFi",
+        "headline": "Senior Data Engineer- People Analytics - SoFi",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://dailyremote.com/remote-job/software-engineer-credit-card-and-so-fi-money-5494498",
+        "date": null,
+        "signal": "hiring",
+        "company": "SoFi",
+        "headline": "Software Engineer, Credit Card and SoFi Money",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.financexmagazine.com/post/klarna-casca-lama-ai-credits-big-august-2026-reset",
+        "date": null,
+        "signal": "funding",
+        "company": "Klarna",
+        "headline": "Klarna, Casca, Lama AI: Credit's Big August 2026 Reset",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.rho.co/blog/vc-firms-in-los-angeles-ca",
+        "date": null,
+        "signal": "funding",
+        "company": "Block",
+        "headline": "Top 13 Venture Capital Firms in Los Angeles",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.lakeareatech.edu",
+        "date": null,
+        "signal": "hiring",
+        "company": "Block",
+        "headline": "Lake Area Technical College Homepage | Hands on. Career ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.barchart.com/story/news/3947118/granite-asia-ranked-no-1-top-private-equity-firm-in-asia-among-singapores-leading-financial-firms-independent-research-finds",
+        "date": null,
+        "signal": "funding",
+        "company": "Tether",
+        "headline": "Granite Asia Ranked No. 1 Top Private Equity Firm in ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.barchart.com/story/news/4157183/hirein-south-expands-nearshore-hiring-services-to-connect-businesses-with-latin-american-talent",
+        "date": null,
+        "signal": "hiring",
+        "company": "Tether",
+        "headline": "HireIn South Expands Nearshore Hiring Services to ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.tradingview.com/news/zacks:262865568094b:0-intuit-q4-earnings-call-centers-on-customer-growth-reset",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Intuit",
+        "headline": "Intuit Q4 Earnings Call Centers on Customer Growth Reset",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://fr.tradingview.com/news/marketbeat:7a775a40c094b:0-intuit-q4-earnings-call-highlights",
+        "date": null,
+        "signal": "funding",
+        "company": "Intuit",
+        "headline": "Intuit Q4 Earnings Call Highlights",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://hiringcafe.com/job/9-16-2026-intuit-product-support-wave-3-percepta-united-states-h21y3dpkj6rg0uql",
+        "date": null,
+        "signal": "hiring",
+        "company": "Intuit",
+        "headline": "9/16/2026 Intuit Product Support Wave 3 at Percepta",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://simplywall.st/community/narratives/us/software/nasdaq-intu/intuit/l8wy0rq2-intuits-big-bets-are-working-and-the-market-is-still-pricing-the-old-story",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Intuit",
+        "headline": "Intuit's Big Bets Are Working — and the Market Is Still ...",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://www.glassdoor.com/Interview/Intuit-Software-Engineer-Interview-Questions-EI_IE2293.0,6_KO7,24.htm",
+        "date": null,
+        "signal": "hiring",
+        "company": "Intuit",
+        "headline": "Intuit Software Engineer Interview Experience & Questions",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.facebook.com/dallasbizjournal/posts/see-how-a-dallas-private-equity-firm-fared-with-the-ipo-of-a-portfolio-company-s/1549173873889909",
+        "date": null,
+        "signal": "funding",
+        "company": "Affirm",
+        "headline": "See how a Dallas private equity firm fared with the IPO of ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://startup.jobs/company/affirm-2",
+        "date": null,
+        "signal": "hiring",
+        "company": "Affirm",
+        "headline": "Affirm Jobs (August 2026)",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.marketbeat.com/instant-alerts/filing-bank-of-new-york-mellon-corp-acquires-shares-of-921164-affirm-holdings-inc-afrm-2026-08-26",
+        "date": null,
+        "signal": "funding",
+        "company": "Affirm",
+        "headline": "Bank of New York Mellon Corp Acquires Shares ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.cio.com/article/230613/new-cio-appointments.html",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Cloudflare",
+        "headline": "New US CIO appointments, August 2026 | CIO",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://www.crunchbase.com/funding_round/cloudflare-series-a--7d625df0",
+        "date": null,
+        "signal": "funding",
+        "company": "Cloudflare",
+        "headline": "Series A - Cloudflare - Crunchbase Funding Round Profile",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://forgeglobal.com/cloudflare_ipo",
+        "date": null,
+        "signal": "funding",
+        "company": "Cloudflare",
+        "headline": "Cloudflare IPO: Investment Opportunities & Pre-IPO Valuations - Forge",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.tradingkey.com/news/market-movers/262128393-market-movers-net-20260824",
+        "date": null,
+        "signal": "funding",
+        "company": "Cloudflare",
+        "headline": "Cloudflare Inc Stock (NET) Moved Down by 3.18% on Aug 24: A Full ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.marketbeat.com/instant-alerts/filing-ranger-investment-management-lp-invests-2434-million-in-chime-financial-inc-chym-2026-08-24",
+        "date": null,
+        "signal": "funding",
+        "company": "Chime",
+        "headline": "Ranger Investment Management L.P. Invests $24.34 ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.theladders.com/job/program-manager-member-experience-vxiglobalsolutions-virtual-travel_88463406",
+        "date": null,
+        "signal": "hiring",
+        "company": "Chime",
+        "headline": "Program Manager, Member Experience - Chime Financial ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.facebook.com/AccountingToday/posts/top-50-firm-hbk-is-getting-an-investment-from-hig-capitalhig-is-an-alternative-i/1525853839581830",
+        "date": null,
+        "signal": "funding",
+        "company": "Chime",
+        "headline": "Top 50 Firm HBK is getting an investment from H.I.G. ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.businessinsider.com/nvidia-q2-2027-earnings-bets-big-ai-18-billion-investment-2026-8",
+        "date": null,
+        "signal": "funding",
+        "company": "Nvidia",
+        "headline": "CEO Jensen Huang went on an AI deal spree in August. Nvidia plans ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.talnexis.com/companies/nvidia",
+        "date": null,
+        "signal": "hiring",
+        "company": "Nvidia",
+        "headline": "Nvidia Hiring Trends & Signals | TalNexis",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.technology.org/2026/08/25/nvidia-buying-the-stack-2026",
+        "date": "2026-08-25",
+        "signal": "funding",
+        "company": "Nvidia",
+        "headline": "Nvidia Is Buying the Whole AI Stack, and Financing It - Technology Org",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.facebook.com/opportunitiesforyouth/posts/-launch-your-tech-career-with-nvidia-early-talent-programs-20262027ready-to-take/1513283404162341",
+        "date": null,
+        "signal": "hiring",
+        "company": "Nvidia",
+        "headline": "🚀 Launch Your Tech Career with NVIDIA Early Talent ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.axios.com/pro/enterprise-software-deals/2026/08/26/nvidia-agentrys-agentic-chip-design",
+        "date": "2026-08-26",
+        "signal": "funding",
+        "company": "Nvidia",
+        "headline": "Exclusive: Agentrys raises $24.5M for agentic chip design",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://alts.co/elon-built-a-bank-without-a-bank",
+        "date": null,
+        "signal": "funding",
+        "company": "Erebor",
+        "headline": "Elon Built A Bank Without A Bank",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://dealroom.co/cities/columbus",
+        "date": null,
+        "signal": "hiring",
+        "company": "Erebor",
+        "headline": "Columbus — city startup ecosystem profile",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.thestablecoinbanker.com/the-stablecoin-banker-august-25",
+        "date": null,
+        "signal": "funding",
+        "company": "Erebor",
+        "headline": "The Stablecoin Banker, August 25 - Omnia",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.coliseum-online.com/high-impact-leader-tom-garfinkel-steps-down-as-miami-dolphins-ceo",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Nubank (US)",
+        "headline": "High-impact leader Tom Garfinkel steps down as Miami ...",
+        "direction": "departure"
+      },
+      {
+        "url": "https://startup.jobs/company/nubank",
+        "date": null,
+        "signal": "hiring",
+        "company": "Nubank (US)",
+        "headline": "Nubank Jobs (June 2026)",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.facebook.com/nyposttrending/posts/coinbase-ceo-weighs-california-exit-over-deeply-un-american-wealth-tax/1515489967279527",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Coinbase",
+        "headline": "Coinbase CEO weighs California exit over 'deeply un",
+        "direction": "departure"
+      },
+      {
+        "url": "https://www.efinancialcareers.com/jobs-United_States-New_York-Private_Equity_Partnerships_Associate.id24694343",
+        "date": null,
+        "signal": "funding",
+        "company": "Coinbase",
+        "headline": "Private Equity Partnerships Associate | New York, NY, USA",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://cryptojobslist.com/companies/coinbase",
+        "date": null,
+        "signal": "hiring",
+        "company": "Coinbase",
+        "headline": "Coinbase Jobs (Aug 2026): 31 Open Roles, Reviews & Culture",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.globallegalpost.com/news/orrick-cleary-fenwick-west-guide-stripes-multibillion-dollar-openrouter-buy-90385611",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Stripe",
+        "headline": "Orrick, Cleary, Fenwick & West guide Stripe's multibillion- ...",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://www.trendingtopics.eu/stripe-openrouter-exits-of-the-week",
+        "date": null,
+        "signal": "funding",
+        "company": "Stripe",
+        "headline": "Stripe Buys OpenRouter, Plus Nine More Big M&A Deals of ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.remoterocketship.com/company/stripe/jobs/specialist-solutions-architect-data-united-states-remote",
+        "date": null,
+        "signal": "hiring",
+        "company": "Stripe",
+        "headline": "Specialist Solutions Architect, Data at Stripe",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://variety.com/2026/tv/news/roku-gianluca-pucacco-vp-revenue-operations-1236841290",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Stripe",
+        "headline": "Roku Names Gianluca Pucacco VP, Revenue Operations",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://www.mindstudio.ai/blog/stripe-openrouter-acquisition",
+        "date": null,
+        "signal": "funding",
+        "company": "Stripe",
+        "headline": "Why Did Stripe Pay $7.5 Billion for OpenRouter?",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.bankingdive.com/news/kraken-cuts-400-employees-appoints-co-ceo/731777",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Kraken",
+        "headline": "Kraken cuts staff, appoints co-CEO and CFO | Banking Dive",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://forgeglobal.com/kraken_ipo",
+        "date": null,
+        "signal": "funding",
+        "company": "Kraken",
+        "headline": "Kraken IPO Timeline and Financing Details - Forge",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://productjobsanywhere.com/companies/kraken",
+        "date": null,
+        "signal": "hiring",
+        "company": "Kraken",
+        "headline": "Kraken jobs for Product Managers, Designers, and Engineers",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://finance.yahoo.com/news/kraken-cuts-staff-appoints-co-121452536.html",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Kraken",
+        "headline": "Kraken cuts staff, appoints co-CEO and CFO",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://www.fintechfutures.com/venture-capital-funding/kraken-raises-800m-files-for-us-ipo",
+        "date": null,
+        "signal": "funding",
+        "company": "Kraken",
+        "headline": "Kraken raises $800m, files for US IPO",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.sec.gov/Archives/edgar/data/1720265/000119312526364568/zcsh__424b3_08.25.2026.htm",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Binance (US)",
+        "headline": "424B3",
+        "direction": "arrival"
+      },
+      {
+        "url": "https://equityzen.com/company/binance",
+        "date": null,
+        "signal": "funding",
+        "company": "Binance (US)",
+        "headline": "Invest In Binance Stock | Buy Pre-IPO Shares | EquityZen",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://ca.talent.com/view?id",
+        "date": null,
+        "signal": "hiring",
+        "company": "Binance (US)",
+        "headline": "Remote Senior Software Engineer, Backend (Merchant & ...",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.yahoo.com/news/politics/articles/us-iran-ceasefire-last-october-043344657.html",
+        "date": null,
+        "signal": "funding",
+        "company": "Binance (US)",
+        "headline": "US-Iran Ceasefire to Last Into October? Crypto Punters Raise Odds as Qatar PM Heads to Tehran",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.fool.com/investing/2026/08/25/exxonmobil-has-raised-its-dividend-43-years-in-a-row-but-the-raises-used-to-be-bigger",
+        "date": "2026-08-25",
+        "signal": "funding",
+        "company": "Binance (US)",
+        "headline": "ExxonMobil Has Raised Its Dividend 43 Years in a Row. But the Raises Used to Be Bigger. | The Motley Fool",
+        "direction": "unknown"
+      },
+      {
+        "url": "https://www.cnn.com/markets/stocks/MQ",
+        "date": null,
+        "signal": "exec_moves",
+        "company": "Marqeta",
+        "headline": "MQ Stock Quote Price and Forecast",
+        "direction": "arrival"
+      }
+    ],
+    "unmet": [
+      {
+        "url": "https://www.facebook.com/ekjot.singh.3998263/posts/sofi-is-hiring-an-associate-ai-engineer-finance-transformation-build-agentic-ai-/1623678579367368",
+        "stage": "scrape",
+        "reason": "search service returned HTTP 500",
+        "company": "SoFi",
+        "attempts": 2,
+        "fallback": "search_snippet",
+        "retryable": true
+      },
+      {
+        "url": "https://www.facebook.com/dallasbizjournal/posts/see-how-a-dallas-private-equity-firm-fared-with-the-ipo-of-a-portfolio-company-s/1549173873889909",
+        "stage": "scrape",
+        "reason": "search service returned HTTP 500",
+        "company": "Affirm",
+        "attempts": 2,
+        "fallback": "search_snippet",
+        "retryable": true
+      },
+      {
+        "url": "https://www.facebook.com/AccountingToday/posts/top-50-firm-hbk-is-getting-an-investment-from-hig-capitalhig-is-an-alternative-i/1525853839581830",
+        "stage": "scrape",
+        "reason": "search service returned HTTP 500",
+        "company": "Chime",
+        "attempts": 2,
+        "fallback": "search_snippet",
+        "retryable": true
+      },
+      {
+        "url": "https://www.facebook.com/nyposttrending/posts/coinbase-ceo-weighs-california-exit-over-deeply-un-american-wealth-tax/1515489967279527",
+        "stage": "scrape",
+        "reason": "search service returned HTTP 500",
+        "company": "Coinbase",
+        "attempts": 2,
+        "fallback": "search_snippet",
+        "retryable": true
+      },
+      {
+        "stage": "ranking",
+        "reason": "ranking returned no valid indexes",
+        "company": null,
+        "attempts": 1,
+        "fallback": "deterministic_order",
+        "retryable": false
+      }
+    ],
+    "digest": "# Fintech Executive Opportunity Radar — 2026-08-27\n\n> **Run health: partial** — 18/18 companies covered; 54/54 searches succeeded; 39/43 article reads succeeded; 4 snippet fallbacks; 18/18 observation writes succeeded; 6 retries.\n\n**New sourced items:** 55\n\n> No previously reported source keys were found for 4 companies; this run is their baseline candidate.\n\n## Partial coverage\n\n- **SoFi:** article read failed for https://www.facebook.com/ekjot.singh.3998263/posts/sofi-is-hiring-an-associate-ai-engineer-finance-transformation-build-agentic-ai-/1623678579367368; kept search snippet: search service returned HTTP 500\n- **Affirm:** article read failed for https://www.facebook.com/dallasbizjournal/posts/see-how-a-dallas-private-equity-firm-fared-with-the-ipo-of-a-portfolio-company-s/1549173873889909; kept search snippet: search service returned HTTP 500\n- **Chime:** article read failed for https://www.facebook.com/AccountingToday/posts/top-50-firm-hbk-is-getting-an-investment-from-hig-capitalhig-is-an-alternative-i/1525853839581830; kept search snippet: search service returned HTTP 500\n- **Coinbase:** article read failed for https://www.facebook.com/nyposttrending/posts/coinbase-ceo-weighs-california-exit-over-deeply-un-american-wealth-tax/1515489967279527; kept search snippet: search service returned HTTP 500\n\n## Executive moves\n\n- **Intuit:** [Intuit Q4 Earnings Call Centers on Customer Growth Reset](<https://www.tradingview.com/news/zacks:262865568094b:0-intuit-q4-earnings-call-centers-on-customer-growth-reset>)\n- **Intuit:** [Intuit's Big Bets Are Working — and the Market Is Still ...](<https://simplywall.st/community/narratives/us/software/nasdaq-intu/intuit/l8wy0rq2-intuits-big-bets-are-working-and-the-market-is-still-pricing-the-old-story>)\n- **Cloudflare:** [New US CIO appointments, August 2026 | CIO](<https://www.cio.com/article/230613/new-cio-appointments.html>)\n- **Nubank (US):** [High-impact leader Tom Garfinkel steps down as Miami ...](<https://www.coliseum-online.com/high-impact-leader-tom-garfinkel-steps-down-as-miami-dolphins-ceo>)\n- **Coinbase:** [Coinbase CEO weighs California exit over 'deeply un](<https://www.facebook.com/nyposttrending/posts/coinbase-ceo-weighs-california-exit-over-deeply-un-american-wealth-tax/1515489967279527>)\n- **Stripe:** [Orrick, Cleary, Fenwick & West guide Stripe's multibillion- ...](<https://www.globallegalpost.com/news/orrick-cleary-fenwick-west-guide-stripes-multibillion-dollar-openrouter-buy-90385611>)\n- **Stripe:** [Roku Names Gianluca Pucacco VP, Revenue Operations](<https://variety.com/2026/tv/news/roku-gianluca-pucacco-vp-revenue-operations-1236841290>)\n- **Kraken:** [Kraken cuts staff, appoints co-CEO and CFO | Banking Dive](<https://www.bankingdive.com/news/kraken-cuts-400-employees-appoints-co-ceo/731777>)\n- **Kraken:** [Kraken cuts staff, appoints co-CEO and CFO](<https://finance.yahoo.com/news/kraken-cuts-staff-appoints-co-121452536.html>)\n- **Binance (US):** [424B3](<https://www.sec.gov/Archives/edgar/data/1720265/000119312526364568/zcsh__424b3_08.25.2026.htm>)\n- **Marqeta:** [MQ Stock Quote Price and Forecast](<https://www.cnn.com/markets/stocks/MQ>)\n\n## Investment events\n\n- **Robinhood:** [Private Equity Partnerships Associate | New York, NY, USA](<https://www.efinancialcareers.com/jobs-United_States-New_York-Private_Equity_Partnerships_Associate.id24694343>)\n- **SoFi:** [SoFi adds private market funds for retail investors](<https://cfotech.news/story/sofi-adds-private-market-funds-for-retail-investors>)\n- **Klarna:** [Klarna, Casca, Lama AI: Credit's Big August 2026 Reset](<https://www.financexmagazine.com/post/klarna-casca-lama-ai-credits-big-august-2026-reset>)\n- **Block:** [Top 13 Venture Capital Firms in Los Angeles](<https://www.rho.co/blog/vc-firms-in-los-angeles-ca>)\n- **Tether:** [Granite Asia Ranked No. 1 Top Private Equity Firm in ...](<https://www.barchart.com/story/news/3947118/granite-asia-ranked-no-1-top-private-equity-firm-in-asia-among-singapores-leading-financial-firms-independent-research-finds>)\n- **Intuit:** [Intuit Q4 Earnings Call Highlights](<https://fr.tradingview.com/news/marketbeat:7a775a40c094b:0-intuit-q4-earnings-call-highlights>)\n- **Affirm:** [See how a Dallas private equity firm fared with the IPO of ...](<https://www.facebook.com/dallasbizjournal/posts/see-how-a-dallas-private-equity-firm-fared-with-the-ipo-of-a-portfolio-company-s/1549173873889909>)\n- **Affirm:** [Bank of New York Mellon Corp Acquires Shares ...](<https://www.marketbeat.com/instant-alerts/filing-bank-of-new-york-mellon-corp-acquires-shares-of-921164-affirm-holdings-inc-afrm-2026-08-26>)\n- **Cloudflare:** [Series A - Cloudflare - Crunchbase Funding Round Profile](<https://www.crunchbase.com/funding_round/cloudflare-series-a--7d625df0>)\n- **Cloudflare:** [Cloudflare IPO: Investment Opportunities & Pre-IPO Valuations - Forge](<https://forgeglobal.com/cloudflare_ipo>)\n- **Cloudflare:** [Cloudflare Inc Stock (NET) Moved Down by 3.18% on Aug 24: A Full ...](<https://www.tradingkey.com/news/market-movers/262128393-market-movers-net-20260824>)\n- **Chime:** [Ranger Investment Management L.P. Invests $24.34 ...](<https://www.marketbeat.com/instant-alerts/filing-ranger-investment-management-lp-invests-2434-million-in-chime-financial-inc-chym-2026-08-24>)\n- **Chime:** [Top 50 Firm HBK is getting an investment from H.I.G. ...](<https://www.facebook.com/AccountingToday/posts/top-50-firm-hbk-is-getting-an-investment-from-hig-capitalhig-is-an-alternative-i/1525853839581830>)\n- **Nvidia:** [CEO Jensen Huang went on an AI deal spree in August. Nvidia plans ...](<https://www.businessinsider.com/nvidia-q2-2027-earnings-bets-big-ai-18-billion-investment-2026-8>)\n- **Nvidia:** [Nvidia Is Buying the Whole AI Stack, and Financing It - Technology Org](<https://www.technology.org/2026/08/25/nvidia-buying-the-stack-2026>)\n- **Nvidia:** [Exclusive: Agentrys raises $24.5M for agentic chip design](<https://www.axios.com/pro/enterprise-software-deals/2026/08/26/nvidia-agentrys-agentic-chip-design>)\n- **Erebor:** [Elon Built A Bank Without A Bank](<https://alts.co/elon-built-a-bank-without-a-bank>)\n- **Erebor:** [The Stablecoin Banker, August 25 - Omnia](<https://www.thestablecoinbanker.com/the-stablecoin-banker-august-25>)\n- **Coinbase:** [Private Equity Partnerships Associate | New York, NY, USA](<https://www.efinancialcareers.com/jobs-United_States-New_York-Private_Equity_Partnerships_Associate.id24694343>)\n- **Stripe:** [Stripe Buys OpenRouter, Plus Nine More Big M&A Deals of ...](<https://www.trendingtopics.eu/stripe-openrouter-exits-of-the-week>)\n- **Stripe:** [Why Did Stripe Pay $7.5 Billion for OpenRouter?](<https://www.mindstudio.ai/blog/stripe-openrouter-acquisition>)\n- **Kraken:** [Kraken IPO Timeline and Financing Details - Forge](<https://forgeglobal.com/kraken_ipo>)\n- **Kraken:** [Kraken raises $800m, files for US IPO](<https://www.fintechfutures.com/venture-capital-funding/kraken-raises-800m-files-for-us-ipo>)\n- **Binance (US):** [Invest In Binance Stock | Buy Pre-IPO Shares | EquityZen](<https://equityzen.com/company/binance>)\n- **Binance (US):** [US-Iran Ceasefire to Last Into October? Crypto Punters Raise Odds as Qatar PM Heads to Tehran](<https://www.yahoo.com/news/politics/articles/us-iran-ceasefire-last-october-043344657.html>)\n- **Binance (US):** [ExxonMobil Has Raised Its Dividend 43 Years in a Row. But the Raises Used to Be Bigger. | The Motley Fool](<https://www.fool.com/investing/2026/08/25/exxonmobil-has-raised-its-dividend-43-years-in-a-row-but-the-raises-used-to-be-bigger>)\n\n## Hiring signals\n\n- **Robinhood:** [Robinhood Jobs (August 2026)](<https://startup.jobs/company/robinhoodapp>)\n- **SoFi:** [SoFi is hiring an Associate AI Engineer](<https://www.facebook.com/ekjot.singh.3998263/posts/sofi-is-hiring-an-associate-ai-engineer-finance-transformation-build-agentic-ai-/1623678579367368>)\n- **SoFi:** [Senior Data Engineer- People Analytics - SoFi](<https://www.builtincolorado.com/job/senior-data-engineer-people-analytics/10838961>)\n- **SoFi:** [Software Engineer, Credit Card and SoFi Money](<https://dailyremote.com/remote-job/software-engineer-credit-card-and-so-fi-money-5494498>)\n- **Block:** [Lake Area Technical College Homepage | Hands on. Career ...](<https://www.lakeareatech.edu>)\n- **Tether:** [HireIn South Expands Nearshore Hiring Services to ...](<https://www.barchart.com/story/news/4157183/hirein-south-expands-nearshore-hiring-services-to-connect-businesses-with-latin-american-talent>)\n- **Intuit:** [9/16/2026 Intuit Product Support Wave 3 at Percepta](<https://hiringcafe.com/job/9-16-2026-intuit-product-support-wave-3-percepta-united-states-h21y3dpkj6rg0uql>)\n- **Intuit:** [Intuit Software Engineer Interview Experience & Questions](<https://www.glassdoor.com/Interview/Intuit-Software-Engineer-Interview-Questions-EI_IE2293.0,6_KO7,24.htm>)\n- **Affirm:** [Affirm Jobs (August 2026)](<https://startup.jobs/company/affirm-2>)\n- **Chime:** [Program Manager, Member Experience - Chime Financial ...](<https://www.theladders.com/job/program-manager-member-experience-vxiglobalsolutions-virtual-travel_88463406>)\n- **Nvidia:** [Nvidia Hiring Trends & Signals | TalNexis](<https://www.talnexis.com/companies/nvidia>)\n- **Nvidia:** [🚀 Launch Your Tech Career with NVIDIA Early Talent ...](<https://www.facebook.com/opportunitiesforyouth/posts/-launch-your-tech-career-with-nvidia-early-talent-programs-20262027ready-to-take/1513283404162341>)\n- **Erebor:** [Columbus — city startup ecosystem profile](<https://dealroom.co/cities/columbus>)\n- **Nubank (US):** [Nubank Jobs (June 2026)](<https://startup.jobs/company/nubank>)\n- **Coinbase:** [Coinbase Jobs (Aug 2026): 31 Open Roles, Reviews & Culture](<https://cryptojobslist.com/companies/coinbase>)\n- **Stripe:** [Specialist Solutions Architect, Data at Stripe](<https://www.remoterocketship.com/company/stripe/jobs/specialist-solutions-architect-data-united-states-remote>)\n- **Kraken:** [Kraken jobs for Product Managers, Designers, and Engineers](<https://productjobsanywhere.com/companies/kraken>)\n- **Binance (US):** [Remote Senior Software Engineer, Backend (Merchant & ...](<https://ca.talent.com/view?id>)",
+    "health": {
+      "ranking": {
+        "failed": 1,
+        "attempted": 1,
+        "succeeded": 0
+      },
+      "scrapes": {
+        "failed": 4,
+        "retries": 6,
+        "attempted": 43,
+        "succeeded": 39,
+        "snippetFallbacks": 4
+      },
+      "delivery": {
+        "failed": false,
+        "requested": true,
+        "succeeded": true
+      },
+      "searches": {
+        "failed": 0,
+        "retries": 0,
+        "attempted": 54,
+        "succeeded": 54
+      },
+      "companies": {
+        "failed": 0,
+        "covered": 18,
+        "requested": 18
+      },
+      "persistence": {
+        "failed": 0,
+        "retries": 0,
+        "attempted": 18,
+        "succeeded": 18
+      }
+    },
+    "outcome": "partial",
+    "runDate": "2026-08-27",
+    "children": [
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 2,
+            "succeeded": 2,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Robinhood",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 2,
+        "persisted": true,
+        "executionId": "379309",
+        "observedItems": 2,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-robinhood-5815755fc6ef",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 1,
+            "retries": 1,
+            "attempted": 3,
+            "succeeded": 2,
+            "snippetFallbacks": 1
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "SoFi",
+        "outcome": "partial",
+        "failures": [
+          "article read failed for https://www.facebook.com/ekjot.singh.3998263/posts/sofi-is-hiring-an-associate-ai-engineer-finance-transformation-build-agentic-ai-/1623678579367368; kept search snippet: search service returned HTTP 500"
+        ],
+        "newItems": 4,
+        "persisted": true,
+        "executionId": "379310",
+        "observedItems": 5,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-sofi-bb3c82841b3b",
+        "coverageFailures": [
+          {
+            "url": "https://www.facebook.com/ekjot.singh.3998263/posts/sofi-is-hiring-an-associate-ai-engineer-finance-transformation-build-agentic-ai-/1623678579367368",
+            "stage": "scrape",
+            "reason": "search service returned HTTP 500",
+            "attempts": 2,
+            "fallback": "search_snippet",
+            "retryable": true
+          }
+        ]
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Klarna",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 1,
+        "persisted": true,
+        "executionId": "379308",
+        "observedItems": 3,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-klarna-e539cb6d872a",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 2,
+            "succeeded": 2,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Block",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 2,
+        "persisted": true,
+        "executionId": "379311",
+        "observedItems": 3,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-block-496aca80e4d8",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 1,
+            "attempted": 2,
+            "succeeded": 2,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Tether",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 2,
+        "persisted": true,
+        "executionId": "379314",
+        "observedItems": 3,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-tether-3dc7089d175e",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Intuit",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 5,
+        "persisted": true,
+        "executionId": "379315",
+        "observedItems": 5,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-intuit-80daf15e57af",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 1,
+            "retries": 1,
+            "attempted": 3,
+            "succeeded": 2,
+            "snippetFallbacks": 1
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Affirm",
+        "outcome": "partial",
+        "failures": [
+          "article read failed for https://www.facebook.com/dallasbizjournal/posts/see-how-a-dallas-private-equity-firm-fared-with-the-ipo-of-a-portfolio-company-s/1549173873889909; kept search snippet: search service returned HTTP 500"
+        ],
+        "newItems": 3,
+        "persisted": true,
+        "executionId": "379316",
+        "observedItems": 4,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-affirm-934a426989f7",
+        "coverageFailures": [
+          {
+            "url": "https://www.facebook.com/dallasbizjournal/posts/see-how-a-dallas-private-equity-firm-fared-with-the-ipo-of-a-portfolio-company-s/1549173873889909",
+            "stage": "scrape",
+            "reason": "search service returned HTTP 500",
+            "attempts": 2,
+            "fallback": "search_snippet",
+            "retryable": true
+          }
+        ]
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Cloudflare",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 4,
+        "persisted": true,
+        "executionId": "379318",
+        "observedItems": 5,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-cloudflare-738e22f0acab",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 1,
+            "retries": 1,
+            "attempted": 3,
+            "succeeded": 2,
+            "snippetFallbacks": 1
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Chime",
+        "outcome": "partial",
+        "failures": [
+          "article read failed for https://www.facebook.com/AccountingToday/posts/top-50-firm-hbk-is-getting-an-investment-from-hig-capitalhig-is-an-alternative-i/1525853839581830; kept search snippet: search service returned HTTP 500"
+        ],
+        "newItems": 3,
+        "persisted": true,
+        "executionId": "379324",
+        "observedItems": 4,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-chime-41a68bae2ca6",
+        "coverageFailures": [
+          {
+            "url": "https://www.facebook.com/AccountingToday/posts/top-50-firm-hbk-is-getting-an-investment-from-hig-capitalhig-is-an-alternative-i/1525853839581830",
+            "stage": "scrape",
+            "reason": "search service returned HTTP 500",
+            "attempts": 2,
+            "fallback": "search_snippet",
+            "retryable": true
+          }
+        ]
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Nvidia",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 6,
+        "persisted": true,
+        "executionId": "379325",
+        "observedItems": 6,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-nvidia-8d4321d93632",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Erebor",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 3,
+        "persisted": true,
+        "executionId": "379327",
+        "observedItems": 6,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-erebor-3690e264cd92",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 0,
+            "succeeded": 0,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Revolut (US)",
+        "outcome": "no_evidence",
+        "failures": [],
+        "newItems": 0,
+        "persisted": true,
+        "executionId": "379329",
+        "observedItems": 0,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-revolut-us-19477669f3b4",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 2,
+            "succeeded": 2,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Nubank (US)",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 2,
+        "persisted": true,
+        "executionId": "379332",
+        "observedItems": 2,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-nubank-us-ae66755d45c2",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 1,
+            "retries": 2,
+            "attempted": 3,
+            "succeeded": 2,
+            "snippetFallbacks": 1
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Coinbase",
+        "outcome": "partial",
+        "failures": [
+          "article read failed for https://www.facebook.com/nyposttrending/posts/coinbase-ceo-weighs-california-exit-over-deeply-un-american-wealth-tax/1515489967279527; kept search snippet: search service returned HTTP 500"
+        ],
+        "newItems": 3,
+        "persisted": true,
+        "executionId": "379333",
+        "observedItems": 4,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-coinbase-f80f21938e52",
+        "coverageFailures": [
+          {
+            "url": "https://www.facebook.com/nyposttrending/posts/coinbase-ceo-weighs-california-exit-over-deeply-un-american-wealth-tax/1515489967279527",
+            "stage": "scrape",
+            "reason": "search service returned HTTP 500",
+            "attempts": 2,
+            "fallback": "search_snippet",
+            "retryable": true
+          }
+        ]
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Stripe",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 8,
+        "persisted": true,
+        "executionId": "379334",
+        "observedItems": 9,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-stripe-2bed2032ed3d",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Kraken",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 10,
+        "persisted": true,
+        "executionId": "379336",
+        "observedItems": 10,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-kraken-686d22d695e2",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Binance (US)",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 5,
+        "persisted": true,
+        "executionId": "379341",
+        "observedItems": 7,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-binance-us-38bcfc8b9760",
+        "coverageFailures": []
+      },
+      {
+        "ok": true,
+        "health": {
+          "scrapes": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1,
+            "snippetFallbacks": 0
+          },
+          "searches": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 3,
+            "succeeded": 3
+          },
+          "persistence": {
+            "failed": 0,
+            "retries": 0,
+            "attempted": 1,
+            "succeeded": 1
+          }
+        },
+        "status": "completed",
+        "company": "Marqeta",
+        "outcome": "complete",
+        "failures": [],
+        "newItems": 1,
+        "persisted": true,
+        "executionId": "379342",
+        "observedItems": 5,
+        "dedupeNamespace": "fintech-exec-radar-fintech-exec-radar-marqeta-51b4183303a6",
+        "coverageFailures": []
+      }
+    ],
+    "coverage": {
+      "failed": [],
+      "covered": 18,
+      "requested": 18
+    },
+    "newItems": 55,
+    "delivered": true,
+    "messageId": "<010001a0424f9ff2-4ec8d125-cd21-4aca-b05a-328764ad465d-000000@email.amazonses.com>",
+    "dedupeCommitSkipped": false,
+    "dedupeCommitFailures": []
+  }
+}

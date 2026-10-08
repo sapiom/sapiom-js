@@ -4,8 +4,8 @@ import {
   createElkGraph,
   readElkGraph,
   type ElkLayoutInput,
+  type MapLayout,
 } from "./elk-graph-layout";
-import type { DirectedGraphLayout } from "./directed-graph-layout";
 
 export class ElkLayoutWorker {
   stage = "Module import";
@@ -31,7 +31,7 @@ export class ElkLayoutWorker {
   layout(
     input: ElkLayoutInput,
     signal: AbortSignal,
-  ): Promise<DirectedGraphLayout> {
+  ): Promise<MapLayout> {
     this.pending?.(new Error("Layout superseded"));
     const request = ++this.request;
     return new Promise((resolve, reject) => {
@@ -65,7 +65,7 @@ export class ElkLayoutWorker {
           if (settled || request !== this.request) return;
           this.stage = "Worker construction";
           this.engine ??= new ELK({
-            algorithms: ["layered"],
+            algorithms: ["layered", "rectpacking"],
             workerFactory: () => {
               const worker = this.createWorker();
               this.worker = worker;

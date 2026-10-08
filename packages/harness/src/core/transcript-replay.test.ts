@@ -298,6 +298,10 @@ describe.skipIf(!nodePty)("transcript-fixture replay via SessionManager (real pt
       adapters: { "claude-code": makeFakeAgentAdapter("basic-echo") },
       ingestUrl: "http://127.0.0.1:0",
       ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
+      resolveAgentMapIdentity: async (sessionId, _cwd, persisted) =>
+        persisted ?? { projectId: "project-test", userId: "user-test", sessionId },
+      migrateAgentMapIdentity: async (sessionId) =>
+        ({ projectId: "project-test", userId: "user-test", sessionId }),
       sessionsPath,
       // No spawnPty override — uses the real node-pty.
     });

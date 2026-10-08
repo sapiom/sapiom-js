@@ -94,5 +94,12 @@
         "quoteNumber": "Q-8B1D40"
       }
     }
-  ]
+  ],
+  "app": {
+    "name": "Quote review dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4182,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/proposal-generator/preview.png"
+  }
 }

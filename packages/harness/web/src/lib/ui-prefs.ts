@@ -1,4 +1,4 @@
-import type { RailAxis, RailSort } from "./project-tree";
+import type { RailSort } from "./project-tree";
 
 /**
  * Persisted information-architecture state ("the Studio holds context
@@ -22,34 +22,17 @@ export interface UiPrefs {
    */
   rightTab?: "canvas" | "steps" | "secrets" | "code";
   /**
-   * Rows the user collapsed in the rail tree, as NAMESPACED keys
-   * (`project:<abs path>`, `dir:<abs path>`) — see ProjectTreeRows' `dirKey` /
-   * `projectKey`.
+   * Projects the user folded in the rail, as NAMESPACED keys
+   * (`project:<abs path>`) — see RailProjectRows' `projectKey`.
    *
-   * The namespace is load-bearing, not decoration. A path is not unique across
-   * row kinds: `~/x/agents` opened as a project is the exact string the
-   * `agents` subdirectory inside `~/x` already uses, and the old bare-path key
-   * collapsed both rows at once. It replaces `collapsedCwds`, whose stored
-   * bare paths simply stop matching — a fold nobody can explain is worse than
-   * a fold that resets once.
+   * The namespace is load-bearing, not decoration: the old rail also folded
+   * directories (`dir:`), and a path is not unique across row kinds, so a
+   * bare-path key collapsed a nested project and the same-named folder of its
+   * parent at once. A stored `dir:` key from that rail simply never matches.
    */
   collapsedKeys?: string[];
-  /**
-   * How the rail files agents: `project` (where an agent lives) or `group`
-   * (what it is related to). `deployment` is retired — it bucketed a fact every
-   * agent row already prints as a glyph — and `workspace` is replaced by
-   * `project`. Persisted so the explorer resumes as the user left it; an unknown
-   * stored value falls back to the default rather than rendering an axis that no
-   * longer exists.
-   *
-   * The GROUP ARRANGEMENT itself is not here. It lives in each project's
-   * `.sapiom/studio-rail.json` (see `agent-groups.ts`), because it is the
-   * project's shape rather than this browser's preference — committable, and it
-   * travels with the repo.
-   */
-  railAxis?: RailAxis;
-  /** Row/project order in the rail tree: newest activity first (default) or
-   *  A–Z by name. */
+  /** Project order in the rail: newest activity first (default) or A–Z by
+   *  name. Sessions under a project are always newest activity first. */
   railSort?: RailSort;
   /** The agent NEW sessions default to — set from the composer's provider
    *  dropdown (a session's own agent is pinned at launch, so the switch is
@@ -60,6 +43,14 @@ export interface UiPrefs {
    *  rename endpoint yet, so the name lives with the UI
    *  arrangement it belongs to. */
   sessionNames?: Record<string, string>;
+  /**
+   * Exited sessions the user hid from the rail with the row's `×`
+   * (flow-navigation.md Q4). Client-side for the reason `sessionNames` is: a
+   * hidden row is an arrangement, not a fact about the session, which the
+   * server keeps exited and History still lists. Only an exited session can be
+   * hidden (`rail-sessions.ts` ignores the id while its process runs).
+   */
+  hiddenSessionIds?: string[];
   /**
    * Project roots the user REMOVED from the rail (SAP-2932).
    *

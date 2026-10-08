@@ -1,4 +1,3 @@
-import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,17 +11,18 @@ import type {
   SpawnSpec,
 } from "../shared/types.js";
 import { CodexAdapter } from "./adapters/codex.js";
-import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
+import {
+  ExternalHarnessError,
+  McpSessionRestartUnavailableError,
+  SessionNotResumeableError,
+} from "./errors.js";
 import {
   SessionInputGuardRejectedError,
   SessionBackgroundInputPreemptedError,
   SessionInputIsolationError,
   SessionManagerClosingError,
-  SubsessionBindingMismatchError,
-  SubsessionFreshRestartForbiddenError,
-  type TrustedSubsessionBindingMarker,
+  McpCredentialGenerationChangedError,
   ProjectSessionScopeUnavailableError,
-  ProjectBootstrapClaimUnavailableError,
   SessionManager,
   sanitizeExitTail,
   type PtySpawnFn,
@@ -122,26 +122,23 @@ describe("SessionManager", () => {
   function makeManager(
     opts: {
       adapter?: HarnessAdapter;
+      adapters?: Partial<Record<HarnessKind, HarnessAdapter>>;
       spawnPty?: PtySpawnFn;
       loadSpawnPty?: SessionManagerOptions["loadSpawnPty"];
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
+      currentCredentialGeneration?: SessionManagerOptions["currentCredentialGeneration"];
       resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
+      migrateAgentMapIdentity?: SessionManagerOptions["migrateAgentMapIdentity"];
       prepareProjectSession?: SessionManagerOptions["prepareProjectSession"];
-      onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
-      onTerminalInput?: SessionManagerOptions["onTerminalInput"];
       onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
-      onProjectBootstrapSession?: SessionManagerOptions["onProjectBootstrapSession"];
       onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
-      onSubsessionUserClosed?: SessionManagerOptions["onSubsessionUserClosed"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
-      ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
       platform?: SessionManagerOptions["platform"];
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
       writeAgentSessionOwnerRegistry?: SessionManagerOptions["writeAgentSessionOwnerRegistry"];
-      writeSubsessionBindingRegistry?: SessionManagerOptions["writeSubsessionBindingRegistry"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -159,7 +156,7 @@ describe("SessionManager", () => {
           return fake.pty as unknown as ReturnType<PtySpawnFn>;
         }));
     const manager = new SessionManager({
-      adapters: { "claude-code": adapter },
+      adapters: opts.adapters ?? { "claude-code": adapter },
       ingestUrl: "http://127.0.0.1:4100",
       ingestCredentials:
         opts.ingestCredentials ??
@@ -168,22 +165,23 @@ describe("SessionManager", () => {
       spawnPty,
       loadSpawnPty: opts.loadSpawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
-      resolveAgentMapIdentity: opts.resolveAgentMapIdentity,
+      currentCredentialGeneration: opts.currentCredentialGeneration,
+      resolveAgentMapIdentity:
+        opts.resolveAgentMapIdentity ??
+        (async (sessionId, _cwd, persisted) =>
+          persisted ?? { projectId: "project-test", userId: "user-test", sessionId }),
+      migrateAgentMapIdentity:
+        opts.migrateAgentMapIdentity ??
+        (async (sessionId) => ({ projectId: "project-test", userId: "user-test", sessionId })),
       prepareProjectSession: opts.prepareProjectSession,
-      onAgentMapSessionExit: opts.onAgentMapSessionExit,
-      onTerminalInput: opts.onTerminalInput,
       onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
-      onProjectBootstrapSession: opts.onProjectBootstrapSession,
       onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
-      onSubsessionUserClosed: opts.onSubsessionUserClosed,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
-      ensureCanvasTemplate: opts.ensureCanvasTemplate,
       isPidAlive: opts.isPidAlive,
       platform: opts.platform,
       writeSessionRegistry: opts.writeSessionRegistry,
       writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
-      writeSubsessionBindingRegistry: opts.writeSubsessionBindingRegistry,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -207,414 +205,6 @@ describe("SessionManager", () => {
     expect(session.title).toBe("proj");
     expect(manager.get(session.id)).toEqual(session);
     expect(manager.list()).toHaveLength(1);
-  });
-
-  const marker = (
-    sessionId: string,
-    incarnation = 1,
-    spawnEpoch = 1,
-  ): TrustedSubsessionBindingMarker => ({
-    projectId: "project_00000000-0000-4000-8000-000000000001",
-    parentSessionId: "parent-session-1",
-    bindingId: "binding-1",
-    sessionId,
-    incarnation,
-    spawnEpoch,
-  });
-
-  const delegatedCreate = (sessionId: string) => ({
-    cwd: "/tmp/proj",
-    harness: "claude-code" as const,
-    trusted: {
-      agentMapIdentity: () => ({
-        projectId: "project_00000000-0000-4000-8000-000000000001",
-        userId: "user-1",
-        sessionId,
-      }),
-      initialTitle: "Collect evidence",
-    },
-  });
-
-  it("creates a reserved writable session only with its exact private binding", async () => {
-    const { manager, adapter } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000111";
-    const input = delegatedCreate(sessionId);
-    const session = await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-
-    expect(session).toMatchObject({
-      id: sessionId,
-      status: "running",
-      title: "Collect evidence",
-      ready: false,
-      agentMapIdentity: {
-        projectId: marker(sessionId).projectId,
-        sessionId,
-      },
-    });
-    expect(adapter.launch).toHaveBeenCalledTimes(1);
-    expect(manager.matchesSubsessionBinding(marker(sessionId))).toBe(true);
-    expect(await readFile(sessionsPath, "utf8")).not.toContain("binding-1");
-    const sidecar = `${sessionsPath}.subsession-bindings.json`;
-    expect(JSON.parse(await readFile(sidecar, "utf8"))).toMatchObject({
-      version: 1,
-      markers: { [sessionId]: marker(sessionId) },
-      closedSessionIds: [],
-    });
-    expect((await stat(sidecar)).mode & 0o777).toBe(0o600);
-
-    const { manager: restartedManager } = makeManager();
-    await restartedManager.init();
-    expect(restartedManager.getSubsessionBinding(sessionId)).toEqual(
-      marker(sessionId),
-    );
-
-    await expect(
-      manager.createReserved(
-        sessionId,
-        { cwd: input.cwd, harness: input.harness },
-        { ...marker(sessionId), bindingId: "foreign-binding" },
-        input.trusted,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(adapter.launch).toHaveBeenCalledTimes(1);
-  });
-
-  it("never adopts a manual row merely because its reserved id matches", async () => {
-    const { manager } = makeManager();
-    const manual = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    const input = delegatedCreate(manual.id);
-    await expect(
-      manager.createReserved(
-        manual.id,
-        { cwd: input.cwd, harness: input.harness },
-        marker(manual.id),
-        input.trusted,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(manager.getSubsessionBinding(manual.id)).toBeNull();
-  });
-
-  it("fresh-restarts an exact zero-turn bound row under the same Harness id", async () => {
-    const { manager, adapter, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000112";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    spawns[0]!.emitExit(1);
-    await manager.flush();
-
-    const restarted = await manager.restartFreshBound(
-      sessionId,
-      marker(sessionId),
-      marker(sessionId, 2, 2),
-      input.trusted,
-      async () => false,
-    );
-    expect(restarted).toMatchObject({ id: sessionId, status: "running" });
-    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(
-      marker(sessionId, 2, 2),
-    );
-    expect(adapter.launch).toHaveBeenCalledTimes(2);
-  });
-
-  it("resumes an exact coordinator-owned conversation under an advanced marker", async () => {
-    const { manager, adapter, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000115";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    const firstRuntime = manager.getRuntimeEpoch(sessionId)!;
-    await manager.setAgentSessionId(
-      sessionId,
-      "agent-session-1",
-      "startup",
-      firstRuntime,
-    );
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-
-    const resumed = await manager.resumeBound(
-      sessionId,
-      marker(sessionId),
-      marker(sessionId, 2, 2),
-    );
-
-    expect(resumed).toMatchObject({ id: sessionId, status: "running" });
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(
-      marker(sessionId, 2, 2),
-    );
-    expect(adapter.resume).toHaveBeenCalledWith(
-      "agent-session-1",
-      expect.objectContaining({ harnessSessionId: sessionId }),
-    );
-    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
-  });
-
-  it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
-    const initial = createFakePty();
-    const resumedPty = createFakePty();
-    const spawnPty = vi.fn<PtySpawnFn>()
-      .mockReturnValueOnce(initial.pty as unknown as ReturnType<PtySpawnFn>)
-      .mockImplementationOnce(() => { throw new Error("resume spawn failed"); })
-      .mockReturnValue(resumedPty.pty as unknown as ReturnType<PtySpawnFn>);
-    const { manager, adapter } = makeManager({ spawnPty });
-    const sessionId = "00000000-0000-4000-8000-000000000116";
-    const input = delegatedCreate(sessionId);
-    const expected = marker(sessionId);
-    const next = marker(sessionId, 2, 2);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      expected,
-      input.trusted,
-    );
-    await manager.setAgentSessionId(
-      sessionId,
-      "agent-resume-retry",
-      "startup",
-      manager.getRuntimeEpoch(sessionId)!,
-    );
-    initial.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toThrow(
-      "resume spawn failed",
-    );
-    expect(manager.get(sessionId)?.status).toBe("exited");
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
-    expect(JSON.parse(await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8")))
-      .toMatchObject({ markers: { [sessionId]: next } });
-
-    // Already-next recovery still requires this exact project, parent, binding,
-    // and next incarnation; it cannot adopt a foreign coordinator's marker.
-    await expect(manager.resumeBound(
-      sessionId,
-      { ...expected, bindingId: "foreign-binding" },
-      next,
-    )).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    await expect(manager.resumeBound(sessionId, expected, marker(sessionId, 3, 3)))
-      .rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(spawnPty).toHaveBeenCalledTimes(2);
-
-    await expect(manager.resumeBound(sessionId, expected, next)).resolves.toMatchObject({
-      id: sessionId,
-      status: "running",
-      agentSessionId: "agent-resume-retry",
-    });
-    expect(adapter.resume).toHaveBeenCalledTimes(2);
-    expect(spawnPty).toHaveBeenCalledTimes(3);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
-    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
-    resumedPty.emitExit(0);
-    await manager.flush();
-  });
-
-  it("refuses a fresh bound restart when any recorded turn exists", async () => {
-    const { manager, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000113";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    spawns[0]!.emitExit(1);
-    await manager.flush();
-    await expect(
-      manager.restartFreshBound(
-        sessionId,
-        marker(sessionId),
-        marker(sessionId, 2, 2),
-        input.trusted,
-        async () => true,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
-  });
-
-  it("persists an explicit delegated-session close and forbids automatic resurrection", async () => {
-    const { manager, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000114";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    const closing = manager.close(sessionId);
-    spawns[0]!.emitExit(0);
-    await closing;
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
-    await manager.flush();
-    await expect(
-      manager.restartFreshBound(
-        sessionId,
-        marker(sessionId),
-        marker(sessionId, 2, 2),
-        input.trusted,
-        async () => false,
-      ),
-    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
-    expect(
-      JSON.parse(
-        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
-      ),
-    ).toMatchObject({ closedSessionIds: [sessionId] });
-  });
-
-  it("terminates a delegated PTY even when its user-close tombstone cannot persist", async () => {
-    let failCloseWrite = false;
-    const writeSubsessionBindingRegistry = vi.fn(async () => {
-      if (failCloseWrite) throw new Error("injected close persistence failure");
-    });
-    const onSubsessionUserClosed = vi.fn(async () => {});
-    const { manager, spawns } = makeManager({
-      writeSubsessionBindingRegistry,
-      onSubsessionUserClosed,
-    });
-    const sessionId = "00000000-0000-4000-8000-000000000115";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-    failCloseWrite = true;
-
-    const closing = manager.close(sessionId);
-    expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1);
-    spawns[0]!.emitExit(0);
-    await expect(closing).rejects.toThrow("injected close persistence failure");
-    expect(manager.get(sessionId)).toMatchObject({ status: "exited" });
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
-    expect(onSubsessionUserClosed).toHaveBeenCalledWith(marker(sessionId));
-
-    failCloseWrite = false;
-    await expect(manager.close(sessionId)).resolves.toBe(false);
-    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(4);
-    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
-  });
-
-  it("prunes durably closed binding proof across release churn and restart", async () => {
-    const onSubsessionUserClosed = vi.fn(async () => {});
-    const { manager, spawns } = makeManager({ onSubsessionUserClosed });
-
-    for (let index = 0; index < 70; index += 1) {
-      const sessionId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
-      const input = delegatedCreate(sessionId);
-      await manager.createReserved(
-        sessionId,
-        { cwd: input.cwd, harness: input.harness },
-        marker(sessionId),
-        input.trusted,
-      );
-      const closing = manager.closeBound(marker(sessionId));
-      spawns[index]!.emitExit(0);
-      await closing;
-      expect(manager.getSubsessionBinding(sessionId)).toBeNull();
-    }
-
-    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(70);
-    expect(
-      JSON.parse(
-        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
-      ),
-    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
-    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
-    await restarted.init();
-    expect(restarted.getSubsessionBinding(
-      "00000000-0000-4000-8000-000000000000",
-    )).toBeNull();
-  });
-
-  it("retains exact binding proof when final cleanup fails and prunes it after restart", async () => {
-    let writeCount = 0;
-    const writeSubsessionBindingRegistry = vi.fn(
-      async (file: string, serialized: string) => {
-        writeCount += 1;
-        if (writeCount === 3)
-          throw new Error("injected cleanup persistence failure");
-        await writeFile(file, serialized, "utf8");
-      },
-    );
-    const onSubsessionUserClosed = vi.fn(async () => {});
-    const { manager, spawns } = makeManager({
-      writeSubsessionBindingRegistry,
-      onSubsessionUserClosed,
-    });
-    const sessionId = "00000000-0000-4000-8000-000000000117";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-
-    const closing = manager.closeBound(marker(sessionId));
-    spawns[0]!.emitExit(0);
-    await expect(closing).rejects.toThrow("injected cleanup persistence failure");
-    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
-
-    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
-    await restarted.init();
-    expect(restarted.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
-    await expect(restarted.closeBound(marker(sessionId))).resolves.toBe(false);
-    expect(restarted.getSubsessionBinding(sessionId)).toBeNull();
-    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(3);
-    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
-    expect(
-      JSON.parse(
-        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
-      ),
-    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
-  });
-
-  it("closes only an exact coordinator-owned binding through the trusted path", async () => {
-    const { manager, spawns } = makeManager();
-    const sessionId = "00000000-0000-4000-8000-000000000116";
-    const input = delegatedCreate(sessionId);
-    await manager.createReserved(
-      sessionId,
-      { cwd: input.cwd, harness: input.harness },
-      marker(sessionId),
-      input.trusted,
-    );
-
-    await expect(
-      manager.closeBound({ ...marker(sessionId), bindingId: "binding_foreign" }),
-    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
-    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
-
-    const closing = manager.closeBound(marker(sessionId));
-    await vi.waitFor(() =>
-      expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1),
-    );
-    spawns[0]!.emitExit(0);
-    await expect(closing).resolves.toBe(true);
-    await expect(manager.closeBound(marker(sessionId))).resolves.toBe(false);
-    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
   });
 
   it("persists sessions to disk and reconciles non-exited sessions to exited on reload", async () => {
@@ -718,15 +308,9 @@ describe("SessionManager", () => {
         userId: "user-1",
         sessionId: planner.id,
       },
-      projectBootstrap: {
-        projectId: "project-1",
-        userId: "user-1",
-        targetSessionId: planner.id,
-        bootstrap: { status: "generating", attemptId: "attempt-7" },
-        queuedInputIds: ["input-1"],
-      },
     });
     expect(manager.get(planner.id)).not.toHaveProperty("planning");
+    expect(manager.get(planner.id)).not.toHaveProperty("projectBootstrap");
     expect(manager.get(manual.id)).toMatchObject({
       id: manual.id,
       agentSessionId: manual.agentSessionId,
@@ -768,15 +352,15 @@ describe("SessionManager", () => {
     expect(persisted[1]?.agentSessionId).toBe(manual.agentSessionId);
   });
 
-  it("restores a scope-unavailable bootstrap failure and resumes once authority is valid", async () => {
+  it("drops retired project-bootstrap metadata on load and resumes as an ordinary session", async () => {
     const identity = {
       projectId: "project-1",
       userId: "user-1",
-      sessionId: "bootstrap-scope-failure",
+      sessionId: "retired-bootstrap",
     };
-    const session: HarnessSession = {
+    const session = {
       id: identity.sessionId,
-      agentSessionId: "provider-scope-failure",
+      agentSessionId: "provider-retired-bootstrap",
       harness: "claude-code",
       cwd: "/tmp/project",
       title: "Keep my conversation",
@@ -808,21 +392,29 @@ describe("SessionManager", () => {
 
     await manager.init();
 
-    expect(manager.get(session.id)?.projectBootstrap).toEqual(session.projectBootstrap);
-    expect(migrations).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).not.toHaveProperty("projectBootstrap");
+    expect(migrations).toHaveBeenCalledWith({
+      sessionId: session.id,
+      outcome: "migrated",
+    });
     await expect(manager.resume(session.id)).resolves.toMatchObject({
       id: session.id,
       agentSessionId: session.agentSessionId,
       title: session.title,
       agentMapIdentity: identity,
-      projectBootstrap: session.projectBootstrap,
       status: "running",
     });
     expect(adapter.resume).toHaveBeenCalledTimes(1);
     expect(spawns).toHaveLength(1);
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(
+      persisted.find((candidate) => candidate.id === session.id),
+    ).not.toHaveProperty("projectBootstrap");
   });
 
-  it("preserves malformed or conflicting legacy identity records without deleting or duplicating them", async () => {
+  it("drops malformed or conflicting legacy identity records from the registry on load", async () => {
     const malformed = {
       id: "malformed-session",
       agentSessionId: "provider-malformed",
@@ -881,13 +473,15 @@ describe("SessionManager", () => {
 
     await manager.init();
 
-    expect(manager.list()).toHaveLength(2);
-    expect(manager.get(malformed.id)).toEqual(malformed);
-    expect(manager.get(conflicting.id)).toEqual(conflicting);
+    expect(manager.list()).toEqual([]);
     expect(migrations.mock.calls).toEqual([
-      [{ sessionId: malformed.id, outcome: "rejected" }],
-      [{ sessionId: conflicting.id, outcome: "rejected" }],
+      [{ sessionId: malformed.id, outcome: "dropped" }],
+      [{ sessionId: conflicting.id, outcome: "dropped" }],
     ]);
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as unknown[];
+    expect(persisted).toEqual([]);
     await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
@@ -896,13 +490,162 @@ describe("SessionManager", () => {
     );
     expect(adapter.canResume).not.toHaveBeenCalled();
     expect(spawns).toEqual([]);
-    const persisted = JSON.parse(
-      await readFile(sessionsPath, "utf8"),
-    ) as unknown[];
-    expect(persisted).toEqual([malformed, conflicting]);
   });
 
-  it("preserves present-but-malformed legacy planner and bootstrap records", async () => {
+  it("lists only sessions with a valid identity when the registry mixes valid and malformed records", async () => {
+    const record = (id: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code" as const,
+      cwd: `/tmp/project/${id}`,
+      title: id,
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    const valid = {
+      ...record("valid-session"),
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "valid-session",
+      },
+    };
+    const malformed = {
+      ...record("malformed-session"),
+      agentMapIdentity: { projectId: 42 },
+    };
+    await writeFile(sessionsPath, JSON.stringify([valid, malformed]), "utf8");
+    const migrateAgentMapIdentity = vi.fn(
+      async (sessionId: string): Promise<never> => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      },
+    );
+    const { manager } = makeManager({ migrateAgentMapIdentity });
+
+    await manager.init();
+
+    expect(manager.list().map(({ id }) => id)).toEqual([valid.id]);
+    expect(
+      manager.list().every((session) => session.agentMapIdentity !== undefined),
+    ).toBe(true);
+    expect(migrateAgentMapIdentity).not.toHaveBeenCalled();
+    await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+  });
+
+  it("migrates identity-less legacy sessions to the deepest open root, drops ones no project can own, and persists the result", async () => {
+    const legacy = (id: string, cwd: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code" as const,
+      cwd,
+      title: id,
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    const outer = legacy("outer-session", "/tmp/monorepo/docs");
+    const inner = legacy("inner-session", "/tmp/monorepo/packages/app/src");
+    const orphan = legacy("orphan-session", "/tmp/nowhere");
+    await writeFile(sessionsPath, JSON.stringify([outer, inner, orphan]), "utf8");
+
+    // Two open roots, one nested in the other. The deeper root owns every cwd
+    // beneath it, exactly as the server resolver does for a live cwd.
+    const roots: Array<[string, string]> = [
+      ["/tmp/monorepo/packages/app", "project-app"],
+      ["/tmp/monorepo", "project-monorepo"],
+    ];
+    const migrateAgentMapIdentity = vi.fn(async (sessionId: string, cwd: string) => {
+      const owner = roots.find(([root]) => cwd === root || cwd.startsWith(`${root}/`));
+      if (!owner) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: owner[1], userId: "user-1", sessionId };
+    });
+    const migrations = vi.fn();
+    const resolveAgentMapIdentity = vi.fn();
+    const { manager } = makeManager({
+      migrateAgentMapIdentity,
+      resolveAgentMapIdentity,
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.list().map(({ id }) => id).sort()).toEqual([inner.id, outer.id]);
+    expect(manager.get(outer.id)?.agentMapIdentity).toEqual({
+      projectId: "project-monorepo",
+      userId: "user-1",
+      sessionId: outer.id,
+    });
+    expect(manager.get(inner.id)?.agentMapIdentity).toEqual({
+      projectId: "project-app",
+      userId: "user-1",
+      sessionId: inner.id,
+    });
+    expect(migrations.mock.calls).toEqual([
+      [{ sessionId: outer.id, outcome: "migrated" }],
+      [{ sessionId: inner.id, outcome: "migrated" }],
+      [{ sessionId: orphan.id, outcome: "dropped" }],
+    ]);
+
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map(({ id }) => id)).toEqual([outer.id, inner.id]);
+    expect(persisted.every((session) => session.agentMapIdentity !== undefined)).toBe(true);
+
+    // Migration never goes through the create-time resolver, which may mint.
+    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
+
+    // A restart finds nothing left to migrate.
+    migrateAgentMapIdentity.mockClear();
+    const { manager: restarted } = makeManager({ migrateAgentMapIdentity });
+    await restarted.init();
+    expect(migrateAgentMapIdentity).not.toHaveBeenCalled();
+    expect(restarted.list()).toHaveLength(2);
+  });
+
+  it("assigns each session in a folder a default title once, and never renumbers it", async () => {
+    const { manager, spawns } = makeManager();
+    const first = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const second = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const elsewhere = await manager.create({ cwd: "/tmp/other", harness: "claude-code" });
+    expect([first.title, second.title, elsewhere.title]).toEqual([
+      "proj",
+      "proj 2",
+      "other",
+    ]);
+
+    await manager.setAgentSessionId(first.id, "provider-first");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(manager.get(second.id)?.title).toBe("proj 2");
+
+    const third = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    expect(third.title).toBe("proj 3");
+
+    await manager.resume(first.id);
+    expect(manager.get(first.id)?.title).toBe("proj");
+    expect(manager.get(second.id)?.title).toBe("proj 2");
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map(({ title }) => title)).toEqual([
+      "proj",
+      "proj 2",
+      "other",
+      "proj 3",
+    ]);
+  });
+
+  it("drops malformed planner metadata and rejects resume for a kept record with rejected metadata", async () => {
     const base = {
       agentSessionId: "provider-session",
       harness: "claude-code",
@@ -937,30 +680,42 @@ describe("SessionManager", () => {
       "utf8",
     );
     const migrations = vi.fn();
+    const resolveAgentMapIdentity = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
+      resolveAgentMapIdentity,
     });
 
     await manager.init();
 
-    expect(manager.list()).toHaveLength(2);
-    expect(manager.get(malformedPlanning.id)).toEqual(malformedPlanning);
-    expect(manager.get(malformedBootstrap.id)).toEqual(malformedBootstrap);
+    expect(manager.list()).toEqual([malformedBootstrap]);
     expect(migrations.mock.calls).toEqual([
-      [{ sessionId: malformedPlanning.id, outcome: "rejected" }],
+      [{ sessionId: malformedPlanning.id, outcome: "dropped" }],
       [{ sessionId: malformedBootstrap.id, outcome: "rejected" }],
     ]);
+    expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
+      [malformedBootstrap],
+    );
+
     await expect(manager.resume(malformedPlanning.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
     await expect(manager.resume(malformedBootstrap.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
+    expect(manager.get(malformedBootstrap.id)).toMatchObject({
+      agentMapIdentity: malformedBootstrap.agentMapIdentity,
+      projectBootstrap: "not-an-object",
+      status: "exited",
+    });
+    const persistedAfterResume = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as unknown[];
+    expect(persistedAfterResume).toEqual([malformedBootstrap]);
+    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
     expect(adapter.canResume).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
-    expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
-      [malformedPlanning, malformedBootstrap],
-    );
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(0);
   });
 
   it("routes write() and resize() to the underlying pty", async () => {
@@ -1344,8 +1099,7 @@ describe("SessionManager", () => {
     });
 
     it("write() (raw keystrokes) is never gated on readiness — a human must be able to answer a blocking prompt themselves", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
+      const { manager, spawns } = makeManager();
       const session = await manager.create({
         cwd: "/tmp/proj",
         harness: "claude-code",
@@ -1354,11 +1108,6 @@ describe("SessionManager", () => {
 
       expect(manager.write(session.id, "1\r")).toBe(true);
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("1\r");
-      expect(onTerminalInput).toHaveBeenCalledOnce();
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: false,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
     });
 
     it(
@@ -2112,6 +1861,120 @@ describe("SessionManager", () => {
     expect(received).toEqual(["hello world", "!"]);
   });
 
+  it("keeps terminal listeners across credential relaunch and ignores retired PTY output", async () => {
+    let generation = 1;
+    const resumePreparationStarted = deferred<void>();
+    const allowResumePreparation = deferred<void>();
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async () => true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: generation === 1,
+        },
+      }),
+      prepareWorkspaceContext: async () => {
+        resumePreparationStarted.resolve();
+        await allowResumePreparation.promise;
+      },
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-resumable");
+
+    const received: string[] = [];
+    const detach = manager.attach(session.id, (chunk) => received.push(chunk));
+    generation = 2;
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() =>
+      expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce(),
+    );
+    spawns[0]!.emitExit(0);
+    await removal;
+    await resumePreparationStarted.promise;
+
+    const startingReceived: string[] = [];
+    let startingDetach: (() => void) | undefined;
+    try {
+      startingDetach = manager.attach(session.id, (chunk) =>
+        startingReceived.push(chunk),
+      );
+    } finally {
+      allowResumePreparation.resolve();
+    }
+    expect(startingDetach).toBeTypeOf("function");
+    await manager.flush();
+
+    expect(spawns).toHaveLength(2);
+    spawns[0]!.emitData("retired output");
+    expect(received).toEqual([]);
+    spawns[1]!.emitData("replacement output");
+    expect(received).toEqual(["replacement output"]);
+    expect(startingReceived).toEqual(["replacement output"]);
+
+    detach?.();
+    startingDetach?.();
+    spawns[1]!.emitData("after detach");
+    expect(received).toEqual(["replacement output"]);
+  });
+
+  it("keeps duplicate callback registrations independent", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const received: string[] = [];
+    const listener = (chunk: string) => received.push(chunk);
+    const detachFirst = manager.attach(session.id, listener);
+    const detachSecond = manager.attach(session.id, listener);
+
+    detachFirst?.();
+    spawns[0]!.emitData("still attached");
+    expect(received).toEqual(["still attached"]);
+
+    detachSecond?.();
+    spawns[0]!.emitData("detached");
+    expect(received).toEqual(["still attached"]);
+  });
+
+  it("snapshots terminal listeners when a listener attaches another during dispatch", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const received: string[] = [];
+    let nestedDetach: (() => void) | undefined;
+    const detach = manager.attach(session.id, (chunk) => {
+      received.push(`first:${chunk}`);
+      if (!nestedDetach) {
+        nestedDetach = manager.attach(session.id, (nestedChunk) => {
+          received.push(`nested:${nestedChunk}`);
+        });
+      }
+    });
+
+    spawns[0]!.emitData("current");
+    expect(received).toEqual(["first:current", "nested:current"]);
+
+    spawns[0]!.emitData("next");
+    expect(received).toEqual([
+      "first:current",
+      "nested:current",
+      "first:next",
+      "nested:next",
+    ]);
+    detach?.();
+    nestedDetach?.();
+  });
+
   describe("onActivity", () => {
     it("broadcasts once immediately, then throttles further data within the window", async () => {
       vi.useFakeTimers();
@@ -2802,6 +2665,11 @@ describe("SessionManager", () => {
       harness: "claude-code" as const,
       cwd: "/tmp/first",
       title: "first",
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-test",
+        sessionId: "z-first-in-file",
+      },
       status: "exited" as const,
       createdAt: "2026-01-01T00:00:00.000Z",
       lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -2814,6 +2682,7 @@ describe("SessionManager", () => {
       id: "a-later-in-file",
       cwd: "/tmp/later",
       title: "later",
+      agentMapIdentity: { ...first.agentMapIdentity, sessionId: "a-later-in-file" },
     } satisfies HarnessSession;
     await writeFile(sessionsPath, JSON.stringify([first, later], null, 2));
 
@@ -2954,38 +2823,15 @@ describe("SessionManager", () => {
     expect(buildLaunchOpts).toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ cwd: "/tmp/proj", harness: "claude-code" }),
+      expect.objectContaining({
+        agentMapIdentity: expect.objectContaining({ sessionId: session.id }),
+      }),
     );
     expect(adapter.launch).toHaveBeenCalledWith(
       expect.objectContaining({
         settingsFile: `/generated/${session.id}/settings.json`,
       }),
     );
-  });
-
-  it("keeps a trusted planner FIFO predecessor distinct from its history brief source", async () => {
-    const buildLaunchOpts = vi.fn(
-      async (_harnessSessionId: string, request: CreateSessionRequest) => ({
-        rehydratedFrom: request.rehydrateFrom,
-      }),
-    );
-    const { manager } = makeManager({ buildLaunchOpts });
-
-    const session = await manager.create(
-      {
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-        rehydrateFrom: "recorded-history-ancestor",
-      },
-      { handoffFromSessionId: "queue-owning-predecessor" },
-    );
-
-    expect(buildLaunchOpts).toHaveBeenCalledWith(
-      session.id,
-      expect.objectContaining({
-        rehydrateFrom: "recorded-history-ancestor",
-      }),
-    );
-    expect(session.rehydratedFrom).toBe("queue-owning-predecessor");
   });
 
   it("also awaits an async buildLaunchOpts on resume()", async () => {
@@ -3018,11 +2864,11 @@ describe("SessionManager", () => {
         userId: "user-1",
         sessionId,
       }))
-      .mockResolvedValueOnce(undefined);
-    const onAgentMapSessionExit = vi.fn();
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
 
     await expect(
@@ -3039,7 +2885,6 @@ describe("SessionManager", () => {
         userId: "user-1",
       },
     });
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
   });
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {
@@ -3324,64 +3169,6 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("canvas template wiring", () => {
-    it("create() drops the canvas template for every session, regardless of caller", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {});
-      const { manager } = makeManager({ ensureCanvasTemplate });
-
-      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-
-      expect(ensureCanvasTemplate).toHaveBeenCalledTimes(1);
-      expect(ensureCanvasTemplate).toHaveBeenCalledWith("/tmp/proj");
-    });
-
-    it("create() ensures the canvas template before the pty is actually spawned", async () => {
-      const order: string[] = [];
-      const ensureCanvasTemplate = vi.fn(async () => {
-        order.push("canvas");
-      });
-      const spawnPty: PtySpawnFn = (file, args) => {
-        order.push("spawn");
-        void file;
-        void args;
-        return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
-      };
-      const { manager } = makeManager({ ensureCanvasTemplate, spawnPty });
-
-      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-
-      // Same reasoning as writeWorkspaceContext: the canvas pane can open the
-      // moment the session reports "running", so the template must already
-      // be on disk before the real process (the pty) ever starts.
-      expect(order).toEqual(["canvas", "spawn"]);
-    });
-
-    it("resume() also ensures the canvas template — the function itself is the backfill check", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {});
-      const { manager } = makeManager({ ensureCanvasTemplate });
-
-      const session = await manager.registerHistorical({
-        agentSessionId: "agent-uuid-9",
-        harness: "claude-code",
-        cwd: "/tmp/proj",
-        title: "past session",
-        lastActiveAt: "2026-01-01T00:00:00.000Z",
-      });
-      ensureCanvasTemplate.mockClear(); // registerHistorical() doesn't call it; isolate resume()'s call
-
-      await manager.resume(session.id);
-
-      expect(ensureCanvasTemplate).toHaveBeenCalledWith("/tmp/proj");
-    });
-
-    it("defaults to a no-op so tests with fake cwds never touch the real filesystem", async () => {
-      const { manager } = makeManager();
-      await expect(
-        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
-      ).resolves.toBeDefined();
-    });
-  });
-
   describe("ghost-session reconciliation (non-exited records with no live pty)", () => {
     it("create() preserves its original persist error when exited reconciliation also fails", async () => {
       const original = new Error("initial create persist failed");
@@ -3428,11 +3215,11 @@ describe("SessionManager", () => {
       });
     });
 
-    it("create() reconciles the record to exited when ensureCanvasTemplate rejects", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {
+    it("create() reconciles the record to exited when the workspace context write rejects", async () => {
+      const writeWorkspaceContext = vi.fn(async () => {
         throw new Error("read-only fs");
       });
-      const { manager } = makeManager({ ensureCanvasTemplate });
+      const { manager } = makeManager({ writeWorkspaceContext });
 
       await expect(
         manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
@@ -3464,10 +3251,10 @@ describe("SessionManager", () => {
     });
 
     it("resume() reconciles the record back to exited when a pre-spawn step rejects", async () => {
-      const ensureCanvasTemplate = vi.fn(async () => {
+      const prepareWorkspaceContext = vi.fn(async () => {
         throw new Error("read-only fs");
       });
-      const { manager } = makeManager({ ensureCanvasTemplate });
+      const { manager } = makeManager({ prepareWorkspaceContext });
       const session = await manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
         harness: "claude-code",
@@ -3780,22 +3567,27 @@ describe("SessionManager", () => {
    * `Cannot start service: Host version "0.25.12" does not match binary version
    * "0.28.1"` on a project that builds fine outside the app.
    */
-  it("never leaks the host's ESBUILD_BINARY_PATH pin into the agent's environment", async () => {
-    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
-    const capturedEnvs: Record<string, string | undefined>[] = [];
-    const spawnPty: PtySpawnFn = (_file, _args, options) => {
-      capturedEnvs.push(options.env ?? {});
-      const fake = createFakePty();
-      return fake.pty as unknown as ReturnType<PtySpawnFn>;
-    };
-    const { manager } = makeManager({ spawnPty });
-    await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+  it.each(["ESBUILD_BINARY_PATH", "SAPIOM_STUDIO_HOST_CONTEXT"])("never leaks ambient %s into the agent environment", async (key) => {
+    const previous = process.env[key];
+    process.env[key] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+    try {
+      const capturedEnvs: Record<string, string | undefined>[] = [];
+      const spawnPty: PtySpawnFn = (_file, _args, options) => {
+        capturedEnvs.push(options.env ?? {});
+        const fake = createFakePty();
+        return fake.pty as unknown as ReturnType<PtySpawnFn>;
+      };
+      const { manager } = makeManager({ spawnPty });
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
-    expect(capturedEnvs[0]?.["ESBUILD_BINARY_PATH"]).toBeUndefined();
-    // Everything else still comes through — this is a targeted strip, not a
-    // switch to a clean environment (the agent needs PATH, HOME, the lot).
-    expect(capturedEnvs[0]?.["PATH"]).toBe(process.env["PATH"]);
-    delete process.env["ESBUILD_BINARY_PATH"];
+      expect(capturedEnvs[0]?.[key]).toBeUndefined();
+      // Everything else still comes through — this is a targeted strip, not a
+      // switch to a clean environment (the agent needs PATH, HOME, the lot).
+      expect(capturedEnvs[0]?.["PATH"]).toBe(process.env["PATH"]);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
   });
 
   describe("awaitable kill — liveness-fallback resolution", () => {
@@ -4116,6 +3908,205 @@ describe("SessionManager", () => {
     });
   });
 
+  it("relaunches resumable removed-credential sessions after killing their old runtimes", async () => {
+    let generation = 1;
+    let launchCount = 0;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async (agentSessionId: string) =>
+        agentSessionId === "provider-resumable",
+      ),
+    });
+    const resumePreparationStarted = deferred<void>();
+    const allowResumePreparation = deferred<void>();
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      prepareWorkspaceContext: async () => {
+        resumePreparationStarted.resolve();
+        await allowResumePreparation.promise;
+      },
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: launchCount++ < 3,
+        },
+      }),
+    });
+    const resumable = await manager.create({
+      cwd: "/tmp/resumable-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(resumable.id, "provider-resumable");
+    const unavailable = await manager.create({
+      cwd: "/tmp/unavailable-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(unavailable.id, "provider-unavailable");
+    const noProviderSession = await manager.create({
+      cwd: "/tmp/no-provider-session-with-key",
+      harness: "claude-code",
+    });
+    const oldRuntime = manager.getRuntimeEpoch(resumable.id);
+    generation = 2;
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() =>
+      expect(spawns.slice(0, 3).every(({ pty }) => pty.kill.mock.calls.length > 0)).toBe(
+        true,
+      ),
+    );
+    spawns[0]!.emitExit(0);
+    spawns[1]!.emitExit(0);
+    spawns[2]!.emitExit(0);
+    try {
+      await removal;
+      await resumePreparationStarted.promise;
+      expect(manager.get(resumable.id)?.status).toBe("starting");
+      expect(spawns).toHaveLength(3);
+    } finally {
+      allowResumePreparation.resolve();
+    }
+    await manager.flush();
+
+    expect(manager.get(resumable.id)).toMatchObject({ status: "running" });
+    expect(manager.get(unavailable.id)?.status).toBe("exited");
+    expect(manager.get(noProviderSession.id)?.status).toBe("exited");
+    expect(manager.getRuntimeEpoch(resumable.id)).not.toBe(oldRuntime);
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(adapter.canResume).toHaveBeenCalledTimes(3);
+    expect(spawns).toHaveLength(4);
+  });
+
+  it("does not let a late credential check overwrite a replacement runtime", async () => {
+    const canResumeResult = deferred<boolean>();
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn()
+        .mockImplementationOnce(() => canResumeResult.promise)
+        .mockResolvedValue(true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/credential-race",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-credential-race");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    const emittedStates: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => {
+      if (updated.id === session.id) emittedStates.push(updated.mcpAuthState);
+    });
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() => expect(adapter.canResume).toHaveBeenCalledOnce());
+
+    const oldRuntimeExit = manager.kill(session.id);
+    expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce();
+    spawns[0]!.emitExit(0);
+    await oldRuntimeExit;
+
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      status: "running",
+      mcpAuthState: "current",
+    });
+    expect(spawns).toHaveLength(2);
+
+    canResumeResult.resolve(true);
+    await removal;
+
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(emittedStates).not.toContain("restarting");
+
+    manager.reconcileMcpCredentialGeneration(3);
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restart-required");
+  });
+
+  it("restores the prior auth state when the exact-runtime kill declines", async () => {
+    const { manager, adapter, spawns } = makeManager({
+      currentCredentialGeneration: () => 1,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 1, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/credential-kill-race",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-kill-race");
+    delete session.mcpAuthState;
+    const killIfRuntime = vi
+      .spyOn(manager, "killIfRuntime")
+      .mockResolvedValue(false);
+    const emittedStates: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => {
+      if (updated.id === session.id) emittedStates.push(updated.mcpAuthState);
+    });
+
+    await manager.relaunchCredentialBearingSessions(1);
+
+    expect(killIfRuntime).toHaveBeenCalledWith(
+      session.id,
+      manager.getRuntimeEpoch(session.id),
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).not.toHaveProperty("mcpAuthState");
+    expect(emittedStates).toEqual(["restarting", undefined]);
+  });
+
+  it("does not reject credential removal when the keyless resume fails", async () => {
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      resume: vi.fn(() => {
+        throw new Error("resume failed");
+      }),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: generation === 1,
+        },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/resume-failure-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-resume-failure");
+    generation = 2;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
+    spawns[0]!.emitExit(0);
+    await expect(removal).resolves.toBeUndefined();
+    await manager.flush();
+
+    expect(manager.get(session.id)).toMatchObject({
+      status: "exited",
+      mcpAuthState: "not-applicable",
+    });
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "[harness] credential-removal session relaunch failed",
+      { sessionId: session.id },
+    );
+    consoleError.mockRestore();
+  });
+
 
   it("closes PTY admission before shutdown and rejects creates and resumes", async () => {
     let releaseLaunchOptions!: () => void;
@@ -4142,39 +4133,15 @@ describe("SessionManager", () => {
 
     await expect(creating).rejects.toBeInstanceOf(SessionManagerClosingError);
     expect(spawnPty).not.toHaveBeenCalled();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited" }),
-    ]);
+    expect(manager.list()).toEqual([]);
     await expect(
       manager.create({ cwd: "/tmp/second", harness: "claude-code" }),
     ).rejects.toBeInstanceOf(SessionManagerClosingError);
-    await expect(manager.resume(manager.list()[0]!.id)).rejects.toBeInstanceOf(
+    await expect(manager.resume("never-created")).rejects.toBeInstanceOf(
       SessionManagerClosingError,
     );
   });
 
-
-    it("classifies raw input on a recognized trust screen without blocking the user's bytes", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({
-        onTerminalInput,
-        adapter: createFakeAdapter({
-          detectBlockingPrompt: (output) => output.includes("Do you trust"),
-        }),
-      });
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      spawns[0]?.emitData("Do you trust the files in this folder?\r\n");
-
-      expect(manager.write(session.id, "y\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: true,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
-      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("y\r");
-    });
 
 
   it("claims the starting lifecycle before asynchronous resume config is regenerated", async () => {
@@ -4201,22 +4168,18 @@ describe("SessionManager", () => {
     const resumed = manager.resume(session.id);
     await vi.waitFor(() => expect(buildCount).toBe(2));
     expect(manager.get(session.id)?.status).toBe("starting");
+    const received: string[] = [];
+    const detach = manager.attach(session.id, (chunk) => received.push(chunk));
 
-    // Bootstrap exit bookkeeping can finish after kill() resolves. Its metadata
-    // update must observe the claimed resume lifecycle, so server cleanup does
-    // not remove the config currently being regenerated.
-    await manager.setProjectBootstrapMetadata(session.id, {
-      projectId: "project-1",
-      userId: "user-1",
-      targetSessionId: session.id,
-      bootstrap: { status: "skipped", reason: "user-proceeded" },
-      queuedInputIds: [],
-    });
     expect(statuses.at(-1)).toBe("starting");
     expect(adapter.resume).not.toHaveBeenCalled();
 
     resumeConfig.resolve();
     await resumed;
+    expect(detach).toBeTypeOf("function");
+    spawns[1]!.emitData("resumed output");
+    expect(received).toEqual(["resumed output"]);
+    detach?.();
     unsubscribe();
     expect(manager.get(session.id)?.status).toBe("running");
   });
@@ -4229,16 +4192,13 @@ describe("SessionManager", () => {
       () => createFakePty().pty as unknown as ReturnType<PtySpawnFn>,
     );
     let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
-    const onAgentMapSessionExit = vi.fn();
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: "project-1", userId: "user-1", sessionId };
+    });
     const { manager, adapter } = makeManager({
       loadSpawnPty,
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
 
     const creating = manager.create({
@@ -4259,7 +4219,293 @@ describe("SessionManager", () => {
     expect(manager.list()).toEqual([
       expect.objectContaining({ status: "exited" }),
     ]);
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
+  });
+
+  it("rejects a create whose MCP credential changes after config generation but before PTY admission", async () => {
+    const loader = deferred<PtySpawnFn>();
+    const spawnPty = vi.fn<PtySpawnFn>(
+      () => createFakePty().pty as unknown as ReturnType<PtySpawnFn>,
+    );
+    let generation = 1;
+    const { manager } = makeManager({
+      loadSpawnPty: () => loader.promise,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 1, credentialBearing: true },
+      }),
+    });
+
+    const creating = manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await vi.waitFor(() => expect(manager.list()).toHaveLength(1));
+    generation = 2;
+    loader.resolve(spawnPty);
+
+    await expect(creating).rejects.toBeInstanceOf(
+      McpCredentialGenerationChangedError,
+    );
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(manager.list()[0]).toMatchObject({
+      status: "exited",
+      mcpAuthState: "not-applicable",
+    });
+  });
+
+  it("marks an older live Claude runtime restart-required without terminating it", async () => {
+    const { manager, spawns } = makeManager({
+      currentCredentialGeneration: () => 3,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 3, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(session.mcpAuthState).toBe("current");
+    manager.reconcileMcpCredentialGeneration(4);
+
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restart-required");
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    const persisted = await readFile(sessionsPath, "utf8");
+    expect(persisted).not.toContain("mcpAuthState");
+    expect(persisted).not.toContain("generation");
+  });
+
+  it("leaves an unstamped Codex runtime not-applicable without rebroadcasting it", async () => {
+    const { manager } = makeManager({
+      adapters: { codex: createFakeAdapter() },
+      currentCredentialGeneration: () => 3,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "codex",
+    });
+    const states: HarnessSession[] = [];
+    manager.onStatusChange((updated) => states.push(updated));
+
+    manager.reconcileMcpCredentialGeneration(4);
+
+    expect(manager.get(session.id)?.mcpAuthState).toBe("not-applicable");
+    expect(states).toHaveLength(0);
+  });
+
+  it("does not call a stamped runtime current without a generation provider", async () => {
+    const { manager } = makeManager({
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 3, credentialBearing: true },
+      }),
+    });
+
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(session.mcpAuthState).toBe("not-applicable");
+  });
+
+  it.each(["claude-code", "codex"] as const)(
+    "restarts the exact stale %s runtime through the existing resume path",
+    async (harness) => {
+      let generation = 1;
+      const adapter = createFakeAdapter({ id: harness });
+      const adapters: Partial<Record<HarnessKind, HarnessAdapter>> = {
+        [harness]: adapter,
+      };
+      const { manager, spawns } = makeManager({
+        adapter,
+        adapters,
+        currentCredentialGeneration: () => generation,
+        buildLaunchOpts: async () => ({
+          mcpCredentialLaunch: {
+            generation,
+            credentialBearing: true,
+          },
+        }),
+      });
+      const states: Array<HarnessSession["mcpAuthState"]> = [];
+      manager.onStatusChange((updated) => states.push(updated.mcpAuthState));
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness,
+      });
+      const received: string[] = [];
+      const detach = manager.attach(session.id, (chunk) => received.push(chunk));
+      await manager.setAgentSessionId(session.id, "agent-session-1");
+      generation = 2;
+      manager.reconcileMcpCredentialGeneration(generation);
+
+      const restarting = manager.restartForMcpCredentials(session.id);
+      await vi.waitFor(() =>
+        expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce(),
+      );
+      expect(manager.get(session.id)?.mcpAuthState).toBe("restarting");
+      spawns[0]!.emitExit(0);
+
+      await expect(restarting).resolves.toMatchObject({
+        id: session.id,
+        status: "running",
+        mcpAuthState: "current",
+      });
+      expect(spawns).toHaveLength(2);
+      spawns[0]!.emitData("retired runtime output");
+      spawns[1]!.emitData("replacement runtime output");
+      expect(received).toEqual(["replacement runtime output"]);
+      detach?.();
+      expect(adapter.resume).toHaveBeenCalledWith(
+        "agent-session-1",
+        expect.objectContaining({ harnessSessionId: session.id }),
+      );
+      expect(states).toContain("restarting");
+    },
+  );
+
+  it("keeps an unresumable stale runtime running and restores restart-required", async () => {
+    let generation = 1;
+    const { manager, spawns } = makeManager({
+      adapter: createFakeAdapter({ canResume: vi.fn(async () => false) }),
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "missing-conversation");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    await expect(
+      manager.restartForMcpCredentials(session.id),
+    ).rejects.toBeInstanceOf(SessionNotResumeableError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).toMatchObject({
+      status: "running",
+      mcpAuthState: "restart-required",
+    });
+  });
+
+  it("rejects current, unstamped, and already-stopping runtimes", async () => {
+    let generation = 1;
+    const claude = createFakeAdapter();
+    const { manager, spawns } = makeManager({
+      adapter: claude,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async (_id, request) =>
+        request.cwd.endsWith("unstamped")
+          ? {}
+          : {
+              mcpCredentialLaunch: {
+                generation,
+                credentialBearing: true,
+              },
+            },
+    });
+    const current = await manager.create({
+      cwd: "/tmp/current",
+      harness: "claude-code",
+    });
+    await expect(
+      manager.restartForMcpCredentials(current.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    const unstamped = await manager.create({
+      cwd: "/tmp/unstamped",
+      harness: "claude-code",
+    });
+    unstamped.mcpAuthState = "restart-required";
+    await expect(
+      manager.restartForMcpCredentials(unstamped.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+
+    const stopping = await manager.create({
+      cwd: "/tmp/stopping",
+      harness: "claude-code",
+    });
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+    const termination = manager.kill(stopping.id);
+    await expect(
+      manager.restartForMcpCredentials(stopping.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[2]!.pty.kill).toHaveBeenCalledOnce();
+    spawns[2]!.emitExit(0);
+    await termination;
+  });
+
+  it("never kills a session whose runtime changed during restart preparation", async () => {
+    const resumable = deferred<boolean>();
+    let generation = 1;
+    const { manager, spawns } = makeManager({
+      adapter: createFakeAdapter({ canResume: vi.fn(() => resumable.promise) }),
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "agent-session-1");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    const restarting = manager.restartForMcpCredentials(session.id);
+    await vi.waitFor(() =>
+      expect(manager.get(session.id)?.mcpAuthState).toBe("restarting"),
+    );
+    manager.reconcileMcpCredentialGeneration(3);
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restarting");
+    await expect(
+      manager.restartForMcpCredentials(session.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+
+    spawns[0]!.emitExit(0);
+    resumable.resolve(true);
+    await expect(restarting).rejects.toBeInstanceOf(
+      McpSessionRestartUnavailableError,
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("rechecks the MCP credential after resume runtime bookkeeping and before PTY admission", async () => {
+    let generation = 1;
+    let runtimeTransitions = 0;
+    const { manager, spawns } = makeManager({
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+      onRuntimeEpochTransition: async (_session, runtimeEpoch) => {
+        if (runtimeEpoch && ++runtimeTransitions === 2) generation = 2;
+      },
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "agent-uuid-1");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
+      McpCredentialGenerationChangedError,
+    );
+    expect(spawns).toHaveLength(1);
+    expect(manager.get(session.id)).toMatchObject({
+      status: "exited",
+      mcpAuthState: "not-applicable",
+    });
   });
 
 
@@ -4275,16 +4521,13 @@ describe("SessionManager", () => {
       return loadCount === 1 ? spawnPty : resumeLoader.promise;
     });
     let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
-    const onAgentMapSessionExit = vi.fn();
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: "project-1", userId: "user-1", sessionId };
+    });
     const { manager, adapter } = makeManager({
       loadSpawnPty,
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
@@ -4315,7 +4558,6 @@ describe("SessionManager", () => {
         sessionId: session.id,
       },
     });
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
   });
 
 
@@ -4443,8 +4685,7 @@ describe("SessionManager", () => {
 
 
     it("lets durable API input cancel only a staged background turn", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
+      const { manager, spawns } = makeManager();
       const session = await manager.create({
         cwd: "/tmp/proj",
         harness: "claude-code",
@@ -4465,7 +4706,6 @@ describe("SessionManager", () => {
       expect(manager.preemptBackgroundInput(session.id)).toBe(true);
       expect(manager.preemptBackgroundInput(session.id)).toBe(false);
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(onTerminalInput).not.toHaveBeenCalled();
 
       const assertion = expect(background).rejects.toMatchObject({
         code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
@@ -4877,8 +5117,7 @@ describe("SessionManager", () => {
 
 
     it("lets raw user input preempt a staged background turn without combining either prompt", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
+      const { manager, spawns } = makeManager();
       const session = await manager.create({
         cwd: "/tmp/proj",
         harness: "claude-code",
@@ -4898,10 +5137,6 @@ describe("SessionManager", () => {
       );
 
       expect(manager.write(session.id, "implement the API now\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: false,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
       expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
         3,
@@ -4933,27 +5168,14 @@ describe("SessionManager", () => {
     "releases project launch authority when create setup fails in $stage",
     async (stage) => {
       const setupError = new Error(`setup failed in ${stage}`);
-      const cleanupError = new Error("cleanup also failed");
-      let claimedSessionId = "";
-      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
-        claimedSessionId = sessionId;
-        return {
-          projectId: "project-1",
-          userId: "user-1",
-          sessionId,
-        };
-      });
+      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }));
       const prepareProjectSession = vi.fn(async () => {
         if (stage === "prepareProjectSession") throw setupError;
-        return {
-          projectBootstrap: {
-            projectId: "project-1",
-            userId: "user-1",
-            targetSessionId: claimedSessionId,
-            bootstrap: { status: "pending" as const },
-            queuedInputIds: [],
-          },
-        };
+        return {};
       });
       const buildLaunchOpts = vi.fn(async () => {
         if (stage === "buildLaunchOpts") throw setupError;
@@ -4970,15 +5192,11 @@ describe("SessionManager", () => {
           };
         }),
       });
-      const onAgentMapSessionExit = vi.fn(async () => {
-        throw cleanupError;
-      });
       const { manager, spawns } = makeManager({
         adapter,
         resolveAgentMapIdentity,
         prepareProjectSession,
         buildLaunchOpts,
-        onAgentMapSessionExit,
       });
 
       await expect(
@@ -4993,41 +5211,11 @@ describe("SessionManager", () => {
         ),
       ).rejects.toBe(setupError);
 
-      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-      expect(onAgentMapSessionExit).toHaveBeenCalledWith(claimedSessionId);
       expect(manager.list()).toEqual([]);
       expect(spawns).toEqual([]);
     },
   );
 
-
-  it("rejects a focused overlay when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-
-    await expect(manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
-    )).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.launch).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
-    expect(manager.list()).toEqual([]);
-  });
-
-  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-    await manager.setAgentSessionId(session.id, "provider-session");
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resume(session.id, {
-      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
-    })).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(manager.get(session.id)?.status).toBe("exited");
-  });
 
   it.each(["buildLaunchOpts", "adapter.resume"] as const)(
     "releases project launch authority when resume setup fails in $stage",
@@ -5053,9 +5241,6 @@ describe("SessionManager", () => {
         }
         return {};
       });
-      const onAgentMapSessionExit = vi.fn(async () => {
-        throw new Error("cleanup also failed");
-      });
       const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
         projectId: "project-1",
         userId: "user-1",
@@ -5064,7 +5249,6 @@ describe("SessionManager", () => {
       const { manager, spawns } = makeManager({
         adapter,
         buildLaunchOpts,
-        onAgentMapSessionExit,
         resolveAgentMapIdentity,
       });
       const session = await manager.create({
@@ -5074,24 +5258,26 @@ describe("SessionManager", () => {
       await manager.setAgentSessionId(session.id, "provider-session");
       spawns[0]!.emitExit(0);
       await vi.waitFor(() => {
-        expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+        expect(manager.get(session.id)?.status).toBe("exited");
       });
-      onAgentMapSessionExit.mockClear();
       const beforeResume = structuredClone(manager.get(session.id));
 
       await expect(manager.resume(session.id)).rejects.toBe(setupError);
 
-      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-      expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
-      expect(manager.get(session.id)).toEqual(beforeResume);
+      // Preparation now enters the starting lifetime, so its failure clears
+      // the old exit result while retaining identity and last real activity.
+      expect(manager.get(session.id)).toEqual({
+        ...beforeResume,
+        exitCode: null,
+        exitTail: null,
+      });
       expect(spawns).toHaveLength(1);
     },
   );
 
 
-  it("derives one neutral project identity for create/resume and revokes it on exit", async () => {
+  it("derives one neutral project identity for create/resume", async () => {
     const buildLaunchOpts = vi.fn(async () => ({}));
-    const onAgentMapSessionExit = vi.fn();
     const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
       projectId: "project-1",
       userId: "user-1",
@@ -5100,7 +5286,6 @@ describe("SessionManager", () => {
     const { manager, spawns } = makeManager({
       buildLaunchOpts,
       resolveAgentMapIdentity,
-      onAgentMapSessionExit,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
@@ -5119,7 +5304,6 @@ describe("SessionManager", () => {
     await manager.setAgentSessionId(session.id, "agent-uuid-map");
     spawns[0]?.emitExit(0);
     await manager.flush();
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
     await manager.resume(session.id);
     expect(buildLaunchOpts).toHaveBeenLastCalledWith(
       session.id,
@@ -5132,130 +5316,6 @@ describe("SessionManager", () => {
   });
 
 
-  it("publishes a claimed first project session before a concurrent ordinary session", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async (identity) =>
-      prepareProjectSession.mock.calls.length === 1
-        ? {
-            initialTitle: "Plan Agents",
-            projectBootstrap: {
-              projectId: identity.projectId,
-              userId: identity.userId,
-              targetSessionId: identity.sessionId,
-              bootstrap: { status: "pending" as const },
-              queuedInputIds: [],
-            },
-          }
-        : {},
-    );
-    const { manager, adapter } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const automatic = manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { requireProjectBootstrapClaim: true },
-    );
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const explicit = manager.create({
-      cwd: "/tmp/proj/packages/worker",
-      harness: "claude-code",
-      initialUserInputPending: true,
-    });
-    await Promise.resolve();
-    expect(prepareProjectSession).toHaveBeenCalledOnce();
-    expect(adapter.launch).not.toHaveBeenCalled();
-
-    firstLaunch.resolve();
-    const [first, second] = await Promise.all([automatic, explicit]);
-
-    expect(first.title).toBe("Plan Agents");
-    expect(first.projectBootstrap?.targetSessionId).toBe(first.id);
-    expect(second.title).toBe("worker");
-    expect(second.projectBootstrap).toBeUndefined();
-    expect(manager.list().map((session) => session.id)).toEqual([
-      first.id,
-      second.id,
-    ]);
-    expect(adapter.launch).toHaveBeenCalledTimes(2);
-  });
-
-
-  it("cancels only an automatic create that loses its bootstrap claim", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async (identity) =>
-      prepareProjectSession.mock.calls.length === 1
-        ? {
-            initialTitle: "Plan Agents",
-            projectBootstrap: {
-              projectId: identity.projectId,
-              userId: identity.userId,
-              targetSessionId: identity.sessionId,
-              bootstrap: {
-                status: "skipped" as const,
-                reason: "user-proceeded" as const,
-              },
-              queuedInputIds: [],
-            },
-          }
-        : {},
-    );
-    const onAgentMapSessionExit = vi.fn();
-    const { manager, adapter, spawns } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      onAgentMapSessionExit,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const explicit = manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-      initialUserInputPending: true,
-    });
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const automatic = manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { requireProjectBootstrapClaim: true },
-    );
-    firstLaunch.resolve();
-
-    const first = await explicit;
-    await expect(automatic).rejects.toBeInstanceOf(
-      ProjectBootstrapClaimUnavailableError,
-    );
-    expect(first).toMatchObject({
-      title: "Plan Agents",
-      projectBootstrap: {
-        targetSessionId: first.id,
-        bootstrap: { status: "skipped", reason: "user-proceeded" },
-      },
-    });
-    expect(manager.list()).toEqual([first]);
-    expect(adapter.launch).toHaveBeenCalledOnce();
-    expect(spawns).toHaveLength(1);
-    expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-  });
 
 
   it("drains project create queues without preparing a waiter after shutdown", async () => {
@@ -5320,7 +5380,9 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
     });
@@ -5347,18 +5409,25 @@ describe("SessionManager", () => {
   });
 
 
-  it("fails resume closed when neutral project scope cannot be revalidated and preserves the session identity", async () => {
+  it("rejects resume when persisted project scope is unavailable without changing session state", async () => {
     const identity = (sessionId: string) => ({
       projectId: "project-1",
       userId: "user-1",
       sessionId,
     });
-    const resolveAgentMapIdentity = vi
-      .fn()
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+    let projectRemoved = false;
+    const resolveAgentMapIdentity = vi.fn(
+      async (
+        sessionId: string,
+        _cwd?: string,
+        persisted?: { projectId: string; userId: string; sessionId: string },
+      ) => {
+        if (projectRemoved && persisted) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        return persisted ?? identity(sessionId);
+      },
+    );
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
     });
@@ -5369,23 +5438,31 @@ describe("SessionManager", () => {
     await manager.setAgentSessionId(session.id, "provider-project-session");
     spawns[0]?.emitExit(0);
     await manager.flush();
-    const beforeResume = structuredClone(manager.get(session.id));
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+    const callsBeforeResume = resolveAgentMapIdentity.mock.calls.length;
+    projectRemoved = true;
 
     await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
 
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(callsBeforeResume + 1);
     expect(resolveAgentMapIdentity).toHaveBeenLastCalledWith(
       session.id,
       session.cwd,
-      session.agentMapIdentity,
+      persistedIdentity,
     );
-    expect(manager.get(session.id)).toEqual(beforeResume);
-    expect(manager.get(session.id)?.agentMapIdentity).toEqual({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId: session.id,
+    expect(manager.get(session.id)).toMatchObject({
+      status: "exited",
+      agentMapIdentity: persistedIdentity,
     });
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.find((candidate) => candidate.id === session.id))
+      .toMatchObject({
+        agentMapIdentity: persistedIdentity,
+      });
     expect(adapter.resume).not.toHaveBeenCalled();
     expect(spawns).toHaveLength(1);
   });

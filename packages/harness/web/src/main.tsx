@@ -8,6 +8,7 @@ import "./styles.css";
 import "./styles/refine.css";
 // After refine.css, which owns the shared block/surface model this layers on.
 import "./styles/secrets.css";
+import "./styles/opencode-chat.css";
 
 // In mock mode, intercept /api/track calls so Playwright tests can assert
 // that track() events fire without a real server. No-op in real mode.

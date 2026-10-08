@@ -1,5 +1,290 @@
 # @sapiom/orchestration-core
 
+## 0.15.4
+
+### Patch Changes
+
+- Updated dependencies [a7731b9]
+- Updated dependencies [a893708]
+  - @sapiom/tools@0.44.0
+  - @sapiom/agent@0.14.8
+
+## 0.15.3
+
+### Patch Changes
+
+- Updated dependencies [7f8c99e]
+  - @sapiom/tools@0.43.0
+  - @sapiom/agent@0.14.7
+
+## 0.15.2
+
+### Patch Changes
+
+- Updated dependencies [687a69b]
+- Updated dependencies [173ddce]
+  - @sapiom/tools@0.42.0
+  - @sapiom/agent@0.14.6
+
+## 0.15.1
+
+### Patch Changes
+
+- 772f154: `@sapiom/tools`: new connectors. `connectors.slack` wraps the gateway's Slack methods
+  (`postMessage`, `update`, `postEphemeral`, `addReaction`, `removeReaction`, `replies`,
+  `userInfo`) on `POST /connectors/v1/slack/methods/<method>`. `connectors.mcp(slug)` is a
+  client for the MCP relay at `POST /connectors/v1/<slug>/mcp` (`listTools()`,
+  `callTool(name, args)`), with `connectors.linear` and `connectors.notion` for the default
+  slugs; a JSON-RPC error throws `McpRelayError`. All are bound on `ctx.sapiom.connectors` and stubbed for `run_local`, overridable
+  under `connectors.slack.<method>`, `connectors.<slug>.listTools|callTool`, or
+  `connectors.mcp.listTools|callTool`. Without a `callTool` override, an MCP `callTool` succeeds
+  only for a tool returned by the step's latest `listTools()` on that connector and otherwise
+  answers `isError: true`, as the relay does. A
+  malformed override adds a stub warning.
+
+  `@sapiom/agent-core`: the authoring skill gains "Calling Slack, Linear, and Notion from a step".
+
+- Updated dependencies [772f154]
+  - @sapiom/tools@0.41.0
+  - @sapiom/agent@0.14.5
+
+## 0.15.0
+
+### Minor Changes
+
+- 5bb66c6: Emit custom events from the SDK, the CLI and the MCP — the start verb next to
+  `signal`'s resume verb.
+
+  `emitEvent({ type, payload, id? })` posts to `POST /v1/workflows/events`
+  and returns the receipt verbatim: `{ receiptId, outcome, duplicate, fireIds }`.
+  It fans out by type to every active `event` trigger the tenant armed and starts
+  0..N new runs. `outcome: "unmatched"` is a success, not an error — nothing
+  subscribes to that type. `id` is the sender's dedup identity, so reposting
+  it returns the original receipt and starts nothing new; omit it and every call
+  is a distinct event. `sapiom agents emit <type> --payload <json> [--event-id
+<id>]` and `sapiom_dev_agents_emit_event` wrap it, and `parseEventPayload`
+  rejects a payload that is not a JSON object, which the run-input fold would
+  otherwise drop silently.
+
+  Events start runs, signals resume them, so `signal()` stays the resume verb and
+  now surfaces the server's `message` next to `matched` — `matched` counts the
+  runs that actually resumed, so it under-reports a partial fanout and a `0` does
+  not prove nothing was waiting.
+
+### Patch Changes
+
+- 89d91d4: The platform-rules stamp is now written into a project's `AGENTS.md` when it is scaffolded, from the release constants in `@sapiom/agent-core`, instead of being hard-coded in every template and gallery example. Scaffold output is unchanged: a new project still carries a concrete `<!-- sapiom-authoring-rules release=… digest=… -->` and `sapiom_dev_agents_check` still warns when it differs from the served copy. Gallery examples, `examples/AUTHORING.md` and the `@sapiom/tools` JSDoc keep the pointer to the served rules but no longer record a release, so a content release touches the two constants and the four skill copies only.
+- 06adb78: `@sapiom/tools`: new `events` capability. A step emits a tenant event with its own run
+  credential through `ctx.sapiom.events.emit({ type, payload, id? })` (also
+  `import { events } from "@sapiom/tools"`), which calls the gateway's
+  `POST /agents/v1/events` and resolves with the 202 receipt
+  `{ receiptId, outcome, duplicate, fireIds }`. Pass a stable `id` to make a retry safe.
+  The `run_local` stub answers `outcome: "unmatched"` unless overridden under `events.emit`.
+
+  `@sapiom/agent-core`: the authoring skill's trigger section names `ctx.sapiom.events.emit`.
+
+- Updated dependencies [3a22965]
+- Updated dependencies [89d91d4]
+- Updated dependencies [21f060b]
+- Updated dependencies [0e4dce3]
+- Updated dependencies [97c2c61]
+- Updated dependencies [c4411a0]
+- Updated dependencies [92ab6df]
+- Updated dependencies [8a38f6d]
+- Updated dependencies [06adb78]
+  - @sapiom/tools@0.40.0
+  - @sapiom/agent@0.14.4
+
+## 0.14.3
+
+### Patch Changes
+
+- 0c6e945: Fix `agents.run`/`agents.launch` reporting a REFUSED DISPATCH — an unknown slug (404),
+  input the engine's pre-gate rejects (400), a transport fault — by throwing an untyped
+  error out of the calling step. Because a step throw feeds the engine's retry machinery,
+  a coordinator dispatching several children by slug lost its whole run to one typo: the
+  step retried a deterministic failure to `maxAttemptsPerStep` and then failed.
+
+  The two entry points now report it according to what each returns:
+
+  - **`run` resolves it as data** — `status: "rejected"`, `executionId: null`, and a
+    structured `AgentRunError` (`{ code, message, status, details }`) whose `details`
+    keeps the platform's own response body. Its result is already discriminated on
+    `status`, and a coordinator treats "the child failed" and "the child never started"
+    as one fact, so `if (result.status !== "completed")` stays the single branch and no
+    try/catch is needed.
+
+    `"rejected"` is deliberately narrow: it promises nothing is running, so it is used
+    only when the platform's answer proves nothing was created (404, 400/422, 401/403).
+    A 5xx, or a response lost after the platform accepted the request, may have created
+    a child whose id never came back — those resolve `"unknown"` with a `null`
+    `executionId`, so re-dispatch guidance stays safe.
+
+  - **`launch` throws `AgentDispatchError`** (exported from the package root, with
+    `.code`, `.status`, `.details`, and `.toRunError()`). It owes the caller a pausable
+    handle, and a dispatch that created no child has none — a handle with a null
+    `executionId` that cannot be paused on would misrepresent itself. Catch it and
+    `fail()` the step. Uncaught it is an ordinary step throw, so it still retries to the
+    cap; making it terminal-without-retry needs the engine's non-retryable error set to
+    admit it, which is separate work. The error's `childMayExist` draws the same
+    proven-vs-ambiguous distinction as the `"rejected"`/`"unknown"` split, so a `launch`
+    caller can tell whether a retry is safe.
+
+  `wait()` no longer throws. Hitting `timeoutMs` resolves `status: "timed_out"`; a status
+  read the platform refuses, or one that keeps faulting, resolves `status: "unknown"`.
+  Both keep `executionId`, because the run exists and can be checked on later. A
+  transient 5xx, 408, 429 or transport fault is ridden out for a few consecutive polls
+  before `"unknown"`, rather than spending the whole `timeoutMs` on doomed requests — and
+  a single rate-limit answer no longer ends an hour-long wait.
+
+  Of the three new statuses only `"rejected"` means nothing is running, so it is the only
+  one on which re-dispatching is safe. `"unknown"` and `"timed_out"` name a child that may
+  still be working — retry those with an `idempotencyKey` or not at all.
+
+  **Breaking.** A refused dispatch used to throw out of `run`; it now resolves. If you
+  branch on `status === "failed"`, change it to `status !== "completed"` — otherwise a
+  rejected dispatch falls straight through that branch and feeds `output: null`
+  downstream instead of failing loudly. The old surface documented `status` as
+  `"completed" | "failed"`, so that spelling was the documented one. `launch` still
+  throws, now with a typed error instead of a bare `Error`.
+
+  Also breaking at the type level, and a no-op for code that already branches on
+  `status !== "completed"`: `AgentRunResult.executionId` and `RunHandle.executionId` widen
+  to `string | null` (a delayed `launch({ at })` handle now reports `null` rather than
+  `""`), and `AgentRunResult.status` widens from `ExecutionStatus` to `AgentRunStatus`,
+  adding `"rejected"`, `"unknown"` and `"timed_out"`. `RunHandle` still `extends
+DispatchHandle`, so every handle you receive is pausable.
+
+  `AgentRunSpec`, `AgentRunResult`, `AgentRunStatus`, `AgentRunError`, `AgentRunErrorCode`,
+  `AgentRunHandle`, `AgentExecutionStatus` and `AgentDispatchError` are now exported from
+  the package root, matching the `models` equivalents.
+
+  In `createStubClient` (and so `run_local`), `agents.launch` resolves through the
+  overrides — `agents.launch` then the shared `agents.run`, merged over the built-in
+  defaults, matching `models.coding.launch`. It previously built a completed run
+  unconditionally, so the try/catch the docs require was impossible to cover in a local
+  test. A stubbed `{ status: "rejected" }` throws from `launch` and resolves from `run`,
+  mirroring the real split; `{ status: "failed" }` covers a child that ran and failed, and
+  the resume payload a paused step receives follows the stubbed status. A partial
+  `{ status: "rejected" }` fills in a real `AgentRunError` (so `result.error.code` reads
+  the same under the stub as in production), a function override returning a promise is
+  awaited, and a delayed `launch({ at })` returns production's shape — `executionId: null`
+  with a trigger correlation id.
+
+- 85610db: Structured `llm.run` calls no longer fail silently when the token cap runs out before the answer (SAP-3280).
+
+  Thinking tokens are spent out of `request.max_tokens`. A routed label may emit a `thinking` block before the forced tool call, so a cap sized for the answer alone can be exhausted mid-deliberation: the turn ends before the tool call is ever emitted, `structuredOf` correctly returns `undefined`, and the step throws a `TypeError` from destructuring it. Deliberation is longest on the hardest, most ambiguous inputs, so an under-sized cap passes every test and every easy case and then drops exactly the item that was worth the most.
+
+  **`llm.run` now throws `LlmStructuredOutputTruncatedError`** when `output` was set and the turn stopped on `max_tokens` without a usable structured result — either no matching `tool_use` block came back (`reason: "no-tool-call"`) or the cap landed partway through the tool call, leaving an `input` missing a field the schema requires (`reason: "incomplete-input"`). The schema is walked to every depth — nested objects, array elements, `allOf` / `anyOf` / `oneOf` branches — so a cut inside `{ result: {} }` is caught, and `error.missingPath` names the first absent field as a path (`result.priority`, `items[1].score`); the message quotes it. An empty `input` is judged the same way: it throws when the schema requires anything and is returned when it requires nothing. The reason union is exported as `LlmTruncationReason`. The error names the tool, the cap the request carried, and the fix, and carries the verbatim `response`. It is exported from `@sapiom/tools`.
+
+  Everything gated on that `stop_reason`, so nothing else changes: a truncated plain-text reply is still returned (it is readable, and bounding a reply on purpose is legitimate), an empty or partial structured result from a turn that ended any other way still reads as before, and a field the schema does not require is still the model's to omit.
+
+  **Breaking:** if you already handled the empty structured result yourself, wrap the call and catch `LlmStructuredOutputTruncatedError` — `error.response` is the verbatim response you used to receive.
+
+  **The examples now size the cap for thinking plus output.** The authoring skill's structured-output example and the `llm` JSDoc examples said `256` and `512`; every one now uses `4096` and says, next to the example, that thinking counts against the cap, that billing settles on the tokens actually produced, and that the cap is still not free — the gateway's admission weight scales with it. The skill also shows catching the error and `fail()`-ing the step, because the engine will otherwise retry the identical under-capped request.
+
+- Updated dependencies [68c02c1]
+- Updated dependencies [ccf480a]
+- Updated dependencies [afa4569]
+- Updated dependencies [0c6e945]
+- Updated dependencies [85610db]
+  - @sapiom/tools@0.39.0
+  - @sapiom/agent@0.14.3
+
+## 0.14.2
+
+### Patch Changes
+
+- Updated dependencies [e32eb67]
+- Updated dependencies [ca1580c]
+  - @sapiom/tools@0.38.0
+  - @sapiom/agent@0.14.2
+
+## 0.14.1
+
+### Patch Changes
+
+- f1ec121: Local `check` and runs now bundle with a `createRequire` banner, so dependencies that call `require()` at runtime (for example `googleapis` / `google-auth-library`) resolve at runtime instead of failing with esbuild's "Dynamic require not supported".
+- Updated dependencies [6e5e2e1]
+  - @sapiom/tools@0.37.0
+  - @sapiom/agent@0.14.1
+
+## 0.14.0
+
+### Minor Changes
+
+- 4c9bafb: Stop restating the platform rules in npm-shipped files; point at the served copy
+  and stamp the pointer (SAP-3181).
+
+  The rules that are true of Sapiom regardless of the installed SDK — one-off call
+  vs agent, the capability catalog, database lifetime, trigger kinds, App Links,
+  which capability calls an LLM, composing deployed agents, platform vocabulary —
+  are served by the Sapiom API at `GET /v1/agents/authoring-rules`. Every copy
+  this repo used to ship of them was frozen at publish or scaffold time and could
+  never be corrected; that is how the 7-day database claim and the two-kind
+  trigger list reached customers.
+
+  - The `sapiom-agent-authoring` skill's platform chapters are now a short
+    summary plus a pointer to the served section, bracketed by
+    `<!-- section: … -->` markers so a Studio session can splice the served text
+    in. The authoring mechanics (step model, directives, `ctx.shared`,
+    pause/resume, stubs) are unchanged.
+  - Every scaffolded `AGENTS.md` (both `@sapiom/agent-core` templates, the
+    `@sapiom/cli` template and all gallery examples) and `examples/AUTHORING.md`
+    carry a one-paragraph pointer and a stamp:
+    `<!-- sapiom-authoring-rules release=… digest=… -->`.
+  - `@sapiom/tools`' JSDoc on the `model` field of `llm.run`, `llm.submit`,
+    `models.run` and `models.coding.run` points at the served rule instead of
+    restating it.
+  - `sapiom_dev_agents_check` reads the stamps in the project's `AGENTS.md` and
+    skill, makes one best-effort anonymous read of the served endpoint's
+    `X-Sapiom-Content-*` headers, and warns when a stamp differs from the served
+    copy. No stamp means no request; unreachable means no warning. The wording is
+    "differs from", never "older than" — digests do not order.
+  - `@sapiom/agent-core` exports the stamp vocabulary
+    (`AUTHORING_RULES_*`, `parseAuthoringRulesStamp`,
+    `renderAuthoringRulesStamp`, `authoringRulesDriftWarning`), and
+    `node scripts/authoring-rules-stamp.mjs --from-served` moves every stamp in
+    the repo to the current release at once.
+
+- 5d18ba3: Expose all four backend trigger kinds from the local authoring MCP (SAP-3174).
+  `sapiom_dev_agents_schedule` now accepts `kind: "event"` (+ `eventType`) and
+  `kind: "webhook"` alongside `schedule_cron` / `schedule_once`. A webhook create
+  returns the public hook URL, the shown-once signing secret, and the signing
+  scheme in the tool result (HMAC-SHA256 over `timestamp.eventId.rawBody`, sent as
+  `X-Sapiom-Timestamp` / `X-Sapiom-Event-Id` / `X-Sapiom-Signature`), and the
+  description says when a webhook trigger fits versus an App Link `/hook/*`
+  receiver (third-party senders cannot produce our HMAC). `_schedule_inspect` and
+  `_schedule_cancel` describe every kind; the new `sapiom_dev_agents_schedule_secret`
+  tool rotates, completes a rotation of, or revokes a webhook secret.
+
+  `@sapiom/agent-core` gains the matching `ScheduleKind` members, the webhook /
+  event fields on `ScheduleSummary`, `CreateScheduleResult`, and
+  `rotateScheduleSecret` / `completeScheduleSecretRotation` / `revokeScheduleSecret`.
+
+  **Breaking (types only, `@sapiom/agent-core`):** `ScheduleFireRecord.scheduledFor`
+  is now `string | null` — an event or webhook fire has no occurrence time, so code
+  that did `new Date(fire.scheduledFor)` must guard for `null` (or read
+  `fire.receiptId` for those kinds). `ScheduleSummary` gains five required fields
+  (`eventType`, `publicId`, `secretVersion`, `graceUntil`, `revokedAt`, all
+  nullable) that the server always returns; hand-built `ScheduleSummary` values
+  (test fakes, adapters) must add them. `ScheduleKind` widens to include `"event"`
+  and `"webhook"`, so an exhaustive `switch` over it needs the two new arms. No
+  runtime behaviour changes for existing cron / one-off callers.
+
+  The offline `AUTHORING_INSTRUCTIONS` fallback and the `sapiom-agent-authoring`
+  skill gain a triggers paragraph teaching the same thing; the served-text change
+  is version-gated on `@sapiom/mcp` >= 0.15 because older clients are never
+  offered the new kinds.
+
+### Patch Changes
+
+- Updated dependencies [421439b]
+- Updated dependencies [4c9bafb]
+  - @sapiom/agent@0.14.0
+  - @sapiom/agent-runtime@0.7.2
+  - @sapiom/tools@0.36.1
+
 ## 0.13.5
 
 ### Patch Changes

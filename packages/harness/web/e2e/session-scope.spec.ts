@@ -1,24 +1,29 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { activeSessionId, openAgentModal } from "./mock-navigation";
 
 /**
  * SAP-2927 / criterion 18 — a new session's cwd is the PROJECT ROOT.
  *
  * `session-scope.test.ts` pins the resolution rule, but a unit test on a pure
  * function cannot show that `App.tsx` calls it. These specs prove the wiring
- * through the browser: the tab a new session opens is named for the project,
- * not for the agent, which is only true if the session actually booted at the
- * project root and so can see its CLAUDE.md, .claude/ and skills.
+ * through the browser: a prompt asked from an agent's board in its modal
+ * (flow-map-chat-overlay.md 4.4b, "Ask ... a new project-root session") boots
+ * at the project that owns the agent, so the coding agent sees the project's
+ * CLAUDE.md, .claude/ and skills, and the new session is named for the
+ * project rather than the agent. It is never bound to the agent (I2).
  *
  * Mock fixtures this leans on (web/src/lib/mock-data.ts):
  *   - agent `leasing` lives at /Users/demo/acme-app/leasing
  *   - recentDirs holds /Users/demo/acme-app  → a root that STRICTLY contains it
- *   - `?mockFixtures=search` adds agents under no recorded root at all
+ *
+ * The old third case, an agent under no known root, has no UI path any more:
+ * an agent outside every open project is on no map (NAVIGATION.md "Removed"),
+ * so nothing can start a chat on it.
  */
 
 interface SessionTestState {
   lastCreateSession?: { req?: { cwd?: string; harness?: string } };
-  createSessionCalls?: Array<{ req?: { cwd?: string; harness?: string } }>;
 }
 
 const testState = (page: Page): Promise<SessionTestState> =>
@@ -28,39 +33,30 @@ const testState = (page: Page): Promise<SessionTestState> =>
         .__HARNESS_TEST__ ?? {},
   );
 
-/** End the active session through the tab menu's confirm dialog. Clicks
- *  straight through, the way smoke.spec.ts does: asserting the dialog visible
- *  first catches it mid pop-in and the confirm button is then unstable. */
-const endActiveSession = async (page: Page): Promise<void> => {
-  await page.getByTestId("session-menu").click();
-  await page.getByTestId("session-end-btn").click();
-  await page.getByTestId("end-session-confirm-btn").click();
-};
-
-/** Leave `leasing` focused with no live session of its own, so the workbench
- *  shows the "Start session" empty state. */
-const emptyLeasingWorkbench = async (page: Page): Promise<void> => {
+test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  const context = page.getByTestId("session-context");
-  await expect(context).toHaveAttribute("data-session-id", "sess-boot");
-  // Both live sessions in the fixtures are bound to `leasing`.
-  await endActiveSession(page);
-  await expect(context).toHaveAttribute("data-session-id", "sess-leasing-2");
-  await endActiveSession(page);
-  await expect(page.getByTestId("open-agent-empty")).toBeVisible();
-  // Nothing else is left claiming this agent, so the created session below is
-  // unambiguously the one under test.
-  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
-};
+});
 
-test("a session started on an agent boots at the owning PROJECT root", async ({
+/** Ask about the agent from its board's chat panel, in its modal: a new
+ *  project-root session with that first message. Resolves to its id. */
+async function askFromAgentBoard(page: Page): Promise<string> {
+  const before = await page.locator(".rail-session-row").count();
+  await openAgentModal(page, "acme-app", "leasing");
+  await page.getByTestId("canvas-chat-toggle").click();
+  await page.getByTestId("canvas-freeform-input").fill("Explain this agent");
+  await page.getByTestId("canvas-freeform-ask").click();
+  await expect(page.locator(".rail-session-row")).toHaveCount(before + 1);
+  await expect(page.getByTestId("agent-modal")).toHaveCount(0);
+  const id = await activeSessionId(page);
+  expect(id).toBeTruthy();
+  return id!;
+}
+
+test("a session started from an agent boots at the owning PROJECT root", async ({
   page,
 }) => {
-  await emptyLeasingWorkbench(page);
-
-  await page.getByTestId("open-agent-start-session").click();
-
+  await askFromAgentBoard(page);
   // The fix itself: the agent is /Users/demo/acme-app/leasing, the session is
   // not. Before SAP-2927 this POSTed the agent directory.
   await expect
@@ -68,60 +64,19 @@ test("a session started on an agent boots at the owning PROJECT root", async ({
     .toBe("/Users/demo/acme-app");
 });
 
-test("the new session's tab is named for the project, not the agent", async ({
+test("the new session is named for the project, not the agent, and is not bound to it", async ({
   page,
 }) => {
-  await emptyLeasingWorkbench(page);
-
-  await page.getByTestId("open-agent-start-session").click();
-
-  // The tab label is the cwd's basename (session-name.ts), so this reads the
-  // booted folder back out of the rendered UI rather than out of the request:
-  // "leasing" here would mean the session came up inside the agent's folder.
-  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
-  await expect(tabs).toHaveCount(1);
-  await expect(tabs.nth(0)).toHaveText("acme-app");
-  await expect(page.getByTestId("session-context-title")).toHaveText("acme-app");
-  // ...and it is genuinely THIS AGENT's tab strip, so the two names are being
-  // compared on the same row: the strip is about `leasing` while its only tab
-  // is named for the project that owns it.
-  await expect(page.getByTestId("session-tab-new")).toHaveAttribute(
-    "aria-label",
-    "New session on leasing",
+  const id = await askFromAgentBoard(page);
+  // The server's default title: the cwd's basename plus the next unused
+  // ordinal in that folder. "leasing" here would mean the session came up
+  // inside the agent's folder.
+  await expect(page.getByTestId(`rail-session-${id}`)).toContainText("acme-app 3");
+  await expect(page.getByTestId("session-context-title")).toHaveText("acme-app 3");
+  // I2: no code path binds a session to an agent.
+  await expect(page.getByTestId(`rail-session-${id}`)).not.toHaveAttribute(
+    "data-agent",
+    /.+/,
   );
-});
-
-test("an agent under no known root still starts a session, in its own folder", async ({
-  page,
-}) => {
-  // `daily-activity-analyst` sits at /Users/demo/social-marketing/analytics-stack/…,
-  // which no recentDirs entry and no launchDir contains. Honest degradation:
-  // the old behaviour, not a failure to start.
-  await page.goto("/?seed=0&mockFixtures=search");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-
-  /* RE-POINTED IN ROUND 2. This addressed the row as
-     `workflow-daily-activity-analyst` and found it already open.
-     "Outside your projects" now (a) collapses by default — on a real install it
-     held ~78 of 88 agents and dominated the rail — and (b) keys each row on its
-     PATH, because six rows named `ari-grade-repo` shared one testid and neither
-     a test nor a user could say which one they had. The BEHAVIOUR this test
-     exists for is unchanged and still asserted below: an agent under no known
-     root starts its session in its own folder. */
-  await page.getByTestId("unrooted-header").click();
-  const row = page.getByTestId(
-    "unrooted-agent-/Users/demo/social-marketing/analytics-stack/daily-activity-analyst",
-  );
-  await row.scrollIntoViewIfNeeded();
-  await row.locator(".workflow-item-trigger").click();
-  await expect(page.getByTestId("open-agent-empty")).toBeVisible();
-
-  await page.getByTestId("open-agent-start-session").click();
-
-  await expect
-    .poll(async () => (await testState(page)).lastCreateSession?.req?.cwd)
-    .toBe("/Users/demo/social-marketing/analytics-stack/daily-activity-analyst");
-  await expect(
-    page.getByRole("tablist", { name: "Sessions" }).getByRole("tab"),
-  ).toHaveCount(1);
+  expect(await activeSessionId(page)).toBe(id);
 });

@@ -57,11 +57,9 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
-    // One-click refresh of the bound workflow's canvas: drops the extraction
-    // cache and re-runs the fully deterministic render (core/canvas-render.ts
-    // — structure + derived annotations, no LLM, no user token), all
-    // server-side without touching the session's pty. A cheap no-op when the
-    // session is unbound.
+    // One-click re-read of the agent's board. The SPA runs it against
+    // GET /api/workflows/:path/graph (web/src/lib/agent-verb-route.ts); the
+    // server has no render step for it.
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
@@ -73,8 +71,8 @@ export const DEFAULT_MACROS: MacroDef[] = [
     // board takeover) to author the `description` fields in the workflow
     // source. execution:"background" routes it to the TaskManager instead of
     // the interactive terminal; the prompt is passed as {{subject}} (the SPA
-    // builds it, web/src/lib/describe-prompt.ts). The source watcher re-renders
-    // the canvas on save. Invoked programmatically (the canvas overview button),
+    // builds it, web/src/lib/describe-prompt.ts). The board re-reads when the map
+    // reports a source change. Invoked programmatically (the canvas overview button),
     // never rendered in the action rail.
     id: "describe",
     label: "Describe with AI",

@@ -10,8 +10,6 @@ import type { MacroDef, WorkflowInfo } from "../shared/types.js";
 export interface MacroContext {
   workflow: WorkflowInfo | null;
   sessionCwd: string;
-  /** Absolute path to the session's canvas index file ({{canvas.path}}). */
-  canvasPath: string;
   /** Free-text subject for the Visualize macro ({{subject}}). */
   subject?: string;
 }
@@ -67,7 +65,6 @@ function placeholderTable(ctx: MacroContext): Record<string, PlaceholderEntry> {
       value: ctx.workflow?.definitionId != null ? String(ctx.workflow.definitionId) : "",
     },
     "{{session.cwd}}": { available: true, value: ctx.sessionCwd },
-    "{{canvas.path}}": { available: true, value: ctx.canvasPath },
     "{{subject}}": { available: Boolean(ctx.subject), value: ctx.subject ?? "" },
   };
 }
@@ -76,7 +73,7 @@ function placeholderTable(ctx: MacroContext): Record<string, PlaceholderEntry> {
  * Substitutes every known `{{...}}` placeholder found in `template`. Throws
  * `MacroValidationError` listing every placeholder that's present in the
  * template but has no value in `ctx` — instead of silently injecting text
- * with a hole in it (e.g. "visualize  to .sapiom/canvas/index.html" with no
+ * with a hole in it (e.g. "visualize  to the board" with no
  * subject). An unrecognized `{{...}}`-shaped token is left verbatim; it's not
  * a placeholder this engine knows about.
  */

@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/mcp",
-  "version": "0.15.0",
+  "version": "0.19.2",
   "description": "Local Sapiom developer MCP server (sapiom-dev) — the unmetered surface for building and operating on Sapiom; today it scaffolds, tests, deploys, and inspects orchestrations. Not the remote Sapiom capability MCP.",
   "mcpName": "io.github.sapiom/mcp",
   "keywords": [
@@ -31,6 +31,10 @@
     "./auth": {
       "types": "./dist/auth-api.d.ts",
       "default": "./dist/auth-api.js"
+    },
+    "./map": {
+      "types": "./dist/map/index.d.ts",
+      "default": "./dist/map/index.js"
     }
   },
   "bin": {
@@ -44,20 +48,24 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.perf.config.ts && node --test scripts/capabilities.test.mjs",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "test:capabilities": "pnpm build && node --test scripts/capabilities.test.mjs",
+    "test:package": "pnpm --filter \"@sapiom/mcp...\" build && node scripts/check-package.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/sandbox-preview": "workspace:^",
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "@sapiom/agent-map": "workspace:^",
+    "typescript": "^5.4.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
@@ -65,7 +73,6 @@
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
-    "typescript": "^5.4.2",
     "vitest": "^3.0.0"
   },
   "engines": {
@@ -73,5 +80,6 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "sapiomCapabilities": 1
 }

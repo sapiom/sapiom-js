@@ -160,6 +160,24 @@ export function checkResourceSeeds(templateId, manifest, fileExists) {
 }
 
 /**
+ * A declared `app.entry` that isn't on disk publishes an empty bundle and the
+ * clone reports a dashboard that never starts — the exact failure the block
+ * exists to prevent. Only the directory's existence is checked here: the
+ * trailing-slash shape is the schema's, and what `start` does inside it is the
+ * author's (the screenshot proves it runs).
+ *
+ * @param dirExists  (relativePath) => boolean, resolved against the example dir
+ */
+export function checkAppEntry(templateId, manifest, dirExists) {
+  const entry = manifest?.app?.entry;
+  if (typeof entry !== "string" || entry.length === 0) return [];
+  if (dirExists(entry)) return [];
+  return [
+    `manifest-app-entry: "${templateId}" /app/entry points at "${entry}", which is not a directory in the example directory — the dashboard source must ship under it.`,
+  ];
+}
+
+/**
  * The set of injected-input keys the step code reads via `resolveResourceHandle`.
  * A call's `key: "…"` option is the key it reads; a call that names no key reads
  * the default `dbHandle`.
@@ -326,6 +344,27 @@ export function createManifestChecker(ajv, schema) {
       seenHandles.set(handle, i);
     });
 
+    // The backend parses `app.preview` with zod's `.url()` AND a separate https
+    // check (`new URL("javascript:alert(1)")` is well-formed, so `.url()` alone
+    // is not a scheme guard). The schema pattern mirrors the scheme; this mirrors
+    // the parse, so a value that passes here cannot cost a template its dashboard
+    // there — that is the whole contract between the two hand-maintained copies.
+    const preview = manifest?.app?.preview;
+    if (typeof preview === "string" && !isHttpsUrl(preview)) {
+      errors.push(
+        `manifest-app-preview: ${where} /app/preview "${preview}" is not an absolute https URL — the backend rejects anything else and the template would ship with no dashboard card.`,
+      );
+    }
+
     return errors;
   };
+}
+
+/** True when `value` parses as a URL whose scheme is https — the backend's rule. */
+export function isHttpsUrl(value) {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }

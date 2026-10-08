@@ -46,7 +46,7 @@ const review = (agentSessionId: string): NavigationVisit => ({
   // fixture focused on the identity that matters.
   summary: { agentSessionId } as unknown as SessionSummary,
 });
-const composer: NavigationVisit = { kind: "composer" };
+const composer: NavigationVisit = { kind: "composer", project: null };
 const templates: NavigationVisit = { kind: "templates" };
 
 /** Build a state from a list of visits, index defaulting to the tip. */

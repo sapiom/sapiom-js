@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Outreach campaign dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --accent: #2a78d6;
+        --accent-soft: #eaf2fc;
+        --good: #1f7a4d;
+        --chip: #f3f2ef;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --accent: #3987e5;
+          --accent-soft: #1f2a38;
+          --good: #4cc38a;
+          --chip: #2a2a28;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 24px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 64%;
+      }
+      .chip {
+        display: inline-block;
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .chip.good {
+        color: var(--good);
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 20px;
+        font-weight: 650;
+        line-height: 1.1;
+        font-variant-numeric: tabular-nums;
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .facts {
+          max-width: 100%;
+          justify-content: flex-start;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+      .prospects {
+        max-height: 540px;
+        overflow: auto;
+      }
+      .prospect {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 10px;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+      .prospect:first-child {
+        padding-top: 0;
+        border-top: 0;
+      }
+      .prospect:last-child {
+        padding-bottom: 0;
+      }
+      .avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 650;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .who {
+        display: flex;
+        align-items: baseline;
+        gap: 6px 10px;
+        flex-wrap: wrap;
+      }
+      .who b {
+        font-size: 14px;
+        font-weight: 650;
+      }
+      .who .role {
+        color: var(--text-2);
+        font-size: 13px;
+      }
+      .who .chips {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+      }
+      .who .chip {
+        padding: 1px 8px;
+        font-size: 11px;
+      }
+      .addr {
+        color: var(--text-3);
+        font-size: 12px;
+        margin: 0 0 6px;
+      }
+      .mail {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: var(--surface);
+      }
+      .mail .subject {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 4px;
+      }
+      .mail .subject b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .mail .opener {
+        margin: 0;
+        padding-left: 10px;
+        border-left: 3px solid var(--accent);
+        font-size: 13.5px;
+      }
+      .mail .rest {
+        margin: 6px 0 0;
+        color: var(--text-3);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .touches {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+      }
+      .touches li {
+        display: grid;
+        grid-template-columns: 20px minmax(0, 1fr);
+        gap: 10px;
+      }
+      .dot {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 2px solid var(--line);
+        color: var(--text-3);
+        font-size: 11px;
+        font-weight: 650;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-top: 1px;
+      }
+      .dot.on {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+      .touches .t-head {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .touches .t-head span {
+        color: var(--text-3);
+        font-weight: 400;
+      }
+      .touches .t-sub {
+        font-size: 12px;
+        color: var(--text-2);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .touches .t-state {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .touches .t-state.sent {
+        color: var(--good);
+      }
+      .trail {
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr) 46px;
+        gap: 3px 8px;
+        align-items: center;
+        font-size: 12px;
+      }
+      .trail .name {
+        color: var(--text-2);
+      }
+      .trail .bar {
+        height: 8px;
+        border-radius: 4px;
+        background: var(--chip);
+        overflow: hidden;
+      }
+      .trail .bar i {
+        display: block;
+        height: 100%;
+        min-width: 3px;
+        background: var(--accent);
+        border-radius: 4px;
+      }
+      .trail .secs {
+        text-align: right;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+      .note {
+        margin: 10px 0 0;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source {
+        margin: 12px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source b {
+        color: var(--text-2);
+        font-weight: 600;
+      }
+      .muted {
+        color: var(--text-3);
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Cold Outreach Engine</p>
+          <h1>Outreach campaign dashboard</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+      <section class="kpis" id="kpis" aria-label="Key figures"></section>
+      <div class="grid">
+        <section class="card prospects" aria-labelledby="prospects-h">
+          <h2 id="prospects-h">Prospects, and the first touch each one got</h2>
+          <div id="prospects"></div>
+        </section>
+        <div class="stack">
+          <section class="card" aria-labelledby="drip-h">
+            <h2 id="drip-h">Drip sequence</h2>
+            <ol class="touches" id="touches"></ol>
+          </section>
+          <section class="card" aria-labelledby="trail-h">
+            <h2 id="trail-h">Run trail</h2>
+            <div class="trail" id="trail"></div>
+            <div id="note"></div>
+          </section>
+        </div>
+      </div>
+      <p class="source" id="source"></p>
+    </div>
+    <script>
+      // Everything below renders `/api/run`, a run of the agent, into the page.
+      // The one thing assembled here is the first-touch email, and it is put
+      // together from the run's own pieces exactly as the agent's `send` step
+      // does: the model's opener, then the sequence's first body with its
+      // {firstName} / {company} / {sender} tokens filled.
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      /** Inline markdown on an already-escaped line: code and bold. */
+      const inline = (text) =>
+        text
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+      const count = (v) => (Number.isFinite(v) ? String(v) : "—");
+      const DAY_MS = 86_400_000;
+
+      /** The agent's own token fill (`render` in index.ts), same fallbacks. */
+      function fill(template, c, sender) {
+        return String(template)
+          .replaceAll("{firstName}", c.firstName?.trim() || "there")
+          .replaceAll("{lastName}", c.lastName?.trim() || "")
+          .replaceAll(
+            "{fullName}",
+            c.fullName?.trim() || c.firstName?.trim() || "there",
+          )
+          .replaceAll("{company}", c.company?.trim() || "your team")
+          .replaceAll("{sender}", sender);
+      }
+
+      function initials(c) {
+        const name = c.fullName || c.company || c.email || "?";
+        return name
+          .split(/[\s@.]+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((w) => w[0].toUpperCase())
+          .join("");
+      }
+
+      /** Why a contact is in or out, in words; the raw verdict is the title. */
+      function verdict(c, demo) {
+        if (!c.deliverable) {
+          return c.verifyStatus === "no-personalized-opener"
+            ? "No opener written"
+            : "Would bounce";
+        }
+        if (c.verifyStatus === "demo-stand-in") return "Demo lead";
+        // `verify` keeps a contact sendable when the check itself errors, and
+        // says so here; that is not a verified address.
+        if (c.verifyStatus === "unverified") return "Unverified";
+        return demo ? "Demo lead" : "Verified";
+      }
+
+      /**
+       * Where a contact ended up. The page only ever shows a completed run, so
+       * a contact still `active` is one whose drip ended with the run: the
+       * agent leaves the status alone when the sequence runs out or a demo
+       * stops after its first touch.
+       */
+      function dripState(c, run) {
+        if (!c.deliverable) return "Not contacted";
+        if (run.dryRun) return "Planned, not contacted";
+        if (c.status === "replied") return "Replied, drip ended";
+        return run.demo ? "Demo ended after touch 1" : "Sequence finished";
+      }
+
+      function renderProspects(campaign, sender, run) {
+        const contacts = campaign.contacts ?? [];
+        if (contacts.length === 0) {
+          return `<p class="muted">This run's shared state carries no contacts.</p>`;
+        }
+        const first = campaign.sequence?.[0];
+        return contacts
+          .map((c) => {
+            const title = c.verifyStatus
+              ? ` title="${esc(c.verifyStatus)}"`
+              : "";
+            const mail =
+              c.deliverable && c.firstLine && first
+                ? `<div class="mail">
+                    <p class="subject">${run.dryRun ? "Draft, not sent · " : ""}Subject <b>${esc(fill(first.subject, c, sender))}</b></p>
+                    <p class="opener">${esc(c.firstLine)}</p>
+                    <p class="rest" title="${esc(fill(first.body, c, sender))}">${esc(fill(first.body, c, sender).replace(/\s*\n+\s*/g, " "))}</p>
+                  </div>`
+                : c.firstLine
+                  ? `<div class="mail"><p class="opener">${esc(c.firstLine)}</p></div>`
+                  : `<p class="muted">Nothing was sent to this contact.</p>`;
+            return `<article class="prospect">
+              <div class="avatar" aria-hidden="true">${esc(initials(c))}</div>
+              <div>
+                <div class="who">
+                  <b>${esc(c.fullName || c.email || "Unnamed contact")}</b>
+                  <span class="role">${esc([c.position, c.company].filter(Boolean).join(" · "))}</span>
+                  <span class="chips">
+                    <span class="chip${c.deliverable && c.verifyStatus !== "unverified" ? " good" : ""}"${title}>${esc(verdict(c, campaign.demo))}</span>
+                    <span class="chip">${esc(dripState(c, run))}</span>
+                  </span>
+                </div>
+                <p class="addr mono">${esc(c.email ?? "")}</p>
+                ${mail}
+              </div>
+            </article>`;
+          })
+          .join("");
+      }
+
+      /**
+       * One row per touch in the sequence the run sent from. A touch counts as
+       * sent when the run's trail has a succeeded `send` step for it: `send`
+       * runs once per touch, and the terminal `touchesSent` counter is a
+       * position in the sequence, not a count, so it reads 0 after a first
+       * touch went out. A `send` step also succeeds when every recipient's
+       * send failed, so nothing is marked sent unless the run sent something.
+       * `sent` is the run-wide total, so it is printed as touch 1's count only
+       * when touch 1 was the only one.
+       */
+      function renderTouches(campaign, output, steps) {
+        const seq = campaign.sequence ?? [];
+        if (seq.length === 0) {
+          return `<li class="muted">This run's shared state carries no sequence.</li>`;
+        }
+        const sendSteps = steps.filter(
+          (s) => s.stepName === "send" && s.status === "succeeded",
+        ).length;
+        const touchesSent =
+          output.dryRun || !(output.sent > 0)
+            ? 0
+            : steps.length
+              ? sendSteps
+              : 1;
+        const days = Number.isFinite(campaign.dripMs)
+          ? campaign.dripMs / DAY_MS
+          : null;
+        const sample =
+          (campaign.contacts ?? []).find((c) => c.deliverable) ?? {};
+        const sender = campaign.senderName || "The team";
+        return seq
+          .map((t, i) => {
+            const on = i < touchesSent;
+            const when =
+              i === 0
+                ? "right away"
+                : days != null
+                  ? `day ${+(i * days).toFixed(1)}`
+                  : "later";
+            const state = on
+              ? i === 0 && touchesSent === 1
+                ? `Sent to ${output.sent} ${output.sent === 1 ? "prospect" : "prospects"}${
+                    campaign.demo
+                      ? ", delivered to this agent's demo inbox"
+                      : ""
+                  }`
+                : "Sent"
+              : output.dryRun
+                ? "Not sent: a dry run stops before sending"
+                : campaign.demo
+                  ? "Not sent: a demo run stops after the first touch"
+                  : "Not sent";
+            return `<li>
+              <span class="dot${on ? " on" : ""}">${i + 1}</span>
+              <div>
+                <div class="t-head">Touch ${i + 1} <span>· ${esc(when)}</span></div>
+                <div class="t-sub" title="${esc(fill(t.subject, sample, sender))}">${esc(fill(t.subject, sample, sender))}</div>
+                <div class="t-state${on ? " sent" : ""}" title="${esc(state)}">${esc(state)}</div>
+              </div>
+            </li>`;
+          })
+          .join("");
+      }
+
+      function renderTrail(steps) {
+        const timed = steps.map((s) => {
+          const ms = Date.parse(s.finishedAt) - Date.parse(s.startedAt);
+          return { ...s, ms: Number.isFinite(ms) && ms >= 0 ? ms : null };
+        });
+        if (timed.length === 0) {
+          return `<p class="muted" style="grid-column:1/-1">This run has no step trail.</p>`;
+        }
+        const longest = Math.max(1, ...timed.map((s) => s.ms ?? 0));
+        return timed
+          .map(
+            (
+              s,
+            ) => `<span class="name">${esc(s.stepName)}${s.attempt ? ` <span class="muted">#${s.attempt + 1}</span>` : ""}</span>
+              <span class="bar" title="${esc(s.status ?? "")}"><i style="width:${s.ms == null ? 0 : ((s.ms / longest) * 100).toFixed(1)}%"></i></span>
+              <span class="secs">${s.ms == null ? "—" : `${(s.ms / 1000).toFixed(1)} s`}</span>`,
+          )
+          .join("");
+      }
+
+      function kpi(label, value, sub) {
+        return `<article class="card kpi"><p class="label">${label}</p><div class="value">${value}</div>${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      function render({ source, output, campaign, steps }) {
+        const o = output ?? {};
+        const src = source ?? {};
+        const camp = campaign ?? {};
+        const trail = Array.isArray(steps) ? steps : [];
+        const demo = camp.demo === true || o.demo === true;
+        const sender = camp.senderName || "The team";
+
+        const took = Date.parse(src.finishedAt) - Date.parse(src.startedAt);
+        document.getElementById("facts").innerHTML = [
+          `<span class="chip">Campaign <b>${esc(o.campaign ?? "—")}</b></span>`,
+          `<span class="chip">Leads <b>${demo ? "built-in demo batch" : "your list"}</b></span>`,
+          `<span class="chip">Finished <b>${fmtWhen(src.finishedAt)}</b>${
+            Number.isFinite(took) ? ` in ${Math.round(took / 1000)} s` : ""
+          }</span>`,
+        ].join("");
+
+        document.getElementById("kpis").innerHTML = [
+          kpi(
+            "Contacts found",
+            count(o.enriched),
+            demo ? "one per demo company" : "enriched from your leads",
+          ),
+          kpi(
+            "Deliverable",
+            count(o.deliverable),
+            demo
+              ? "verification simulated for demo leads"
+              : "sendable after verification",
+          ),
+          // A dry run ends at `launch`, before `sent` and `replied` exist; it
+          // sent nothing and so heard nothing back, which is 0, not unknown.
+          kpi(
+            "Emails sent",
+            count(o.dryRun ? 0 : o.sent),
+            o.dryRun
+              ? "a dry run sends nothing"
+              : demo
+                ? "to this agent's own demo inbox"
+                : "across every touch",
+          ),
+          kpi(
+            "Replies",
+            count(o.dryRun ? 0 : o.replied),
+            "a reply ends that prospect's drip",
+          ),
+        ].join("");
+
+        const run = { demo, dryRun: o.dryRun === true };
+        if (run.dryRun) {
+          document.getElementById("prospects-h").textContent =
+            "Prospects, and the first touch drafted for each";
+        }
+        document.getElementById("prospects").innerHTML = renderProspects(
+          camp,
+          sender,
+          run,
+        );
+        document.getElementById("touches").innerHTML = renderTouches(
+          camp,
+          o,
+          trail,
+        );
+        document.getElementById("trail").innerHTML = renderTrail(trail);
+
+        // The run's own account of what it did (simulated which calls, sent
+        // where) belongs beside the trail it qualifies, not in the page chrome.
+        document.getElementById("note").innerHTML = o.note
+          ? `<p class="note">${inline(esc(o.note))}</p>`
+          : "";
+
+        const where =
+          src.kind === "live"
+            ? `Live — latest completed run`
+            : `Captured zero-setup run`;
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}` +
+          (src.liveError
+            ? ` · <span class="muted">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+      }
+
+      fetch("/api/run", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("prospects").innerHTML =
+            `<p class="muted">Could not load the run: ${esc(err?.message ?? err)}</p>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>

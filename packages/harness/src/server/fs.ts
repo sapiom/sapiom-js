@@ -1,14 +1,21 @@
 /**
- * Filesystem browsing for the SPA's path-picker autocomplete: `GET
- * /api/fs/list?path=<abs-or-~>` → directories only, one level deep. This is
- * a self-contained express Router with no dependency on the rest of the
- * server — the integrator mounts it (behind the boot token, like the rest
- * of /api) alongside everything else.
+ * Filesystem routes for the SPA:
+ *  - `GET /api/fs/list?path=<abs-or-~>` → directories only, one level deep,
+ *    for the path-picker autocomplete;
+ *  - `POST /api/fs/reveal {path}` → show a registered agent's folder in the
+ *    OS file manager. The browser fallback for the desktop app's `revealPath`
+ *    bridge (`harness-desktop/src/main/dialogs.ts`).
+ *
+ * A self-contained express Router — the integrator mounts it (behind the boot
+ * token, like the rest of /api) and hands in the registry lookup the reveal
+ * route needs.
  */
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Router, type Router as ExpressRouter } from "express";
+import { json, Router, type Router as ExpressRouter } from "express";
+import rateLimit from "express-rate-limit";
 import { type FsDirEntry, type FsListResponse } from "../shared/types.js";
 import {
   isAgentProjectScanIgnoredDir,
@@ -26,8 +33,72 @@ function expandHome(input: string): string {
   return input;
 }
 
-export function createFsRouter(): ExpressRouter {
+/** The OS command that shows `target` in the file manager, as argv (no shell). */
+export interface RevealCommand {
+  command: string;
+  args: string[];
+  /** Windows only: pass `args` through unquoted (see `revealCommand`). */
+  windowsVerbatimArguments?: boolean;
+}
+
+/**
+ * macOS and Windows select the folder inside its parent; Linux has no portable
+ * "select" verb, so `xdg-open` opens the folder itself (the card labels it
+ * "Open folder" there).
+ */
+export function revealCommand(target: string, platform: NodeJS.Platform): RevealCommand {
+  if (platform === "darwin") return { command: "open", args: ["-R", target] };
+  if (platform === "win32") {
+    // Explorer parses `/select,` itself and does not accept Node's default
+    // quoting of the whole argument ("/select,C:\a b"); it needs the path quoted
+    // after the comma, so the argument is passed verbatim.
+    return {
+      command: "explorer.exe",
+      args: [`/select,"${target}"`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command: "xdg-open", args: [target] };
+}
+
+/**
+ * Settles once the OS has started the command (`spawn`) or failed to
+ * (`error`, e.g. no `xdg-open` on a headless box), so the route can report a
+ * file manager that never opened instead of answering 204.
+ */
+function spawnReveal(cmd: RevealCommand): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd.command, cmd.args, {
+      detached: true,
+      stdio: "ignore",
+      windowsVerbatimArguments: cmd.windowsVerbatimArguments,
+    });
+    child.once("spawn", () => resolve());
+    // Kept after settling: an unhandled 'error' event would crash the server.
+    child.on("error", reject);
+    child.unref();
+  });
+}
+
+export interface FsRouterDeps {
+  /**
+   * The workflow registry's own path for the agent folder at `resolvedPath`,
+   * or null when no registered agent lives there. The reveal route acts only
+   * on these: it runs an OS command, so it must not take arbitrary paths, and
+   * it uses the registry's string rather than the request's from here on.
+   * Absent, every reveal is refused (403).
+   */
+  findAgentPath?: (resolvedPath: string) => string | null | Promise<string | null>;
+  /** Injectable for tests; defaults to spawning the platform command detached. */
+  reveal?: (cmd: RevealCommand) => void | Promise<void>;
+  /** Injectable for tests; defaults to `process.platform`. */
+  platform?: NodeJS.Platform;
+}
+
+export function createFsRouter(deps: FsRouterDeps = {}): ExpressRouter {
   const router = Router();
+  const reveal = deps.reveal ?? spawnReveal;
+  const platform = deps.platform ?? process.platform;
 
   router.get("/api/fs/list", async (req, res) => {
     const rawPath = req.query.path;
@@ -113,6 +184,53 @@ export function createFsRouter(): ExpressRouter {
     };
     res.json(response);
   });
+
+  // Each reveal opens a file-manager window; a burst is never a user clicking.
+  const revealRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  router.post("/api/fs/reveal", revealRateLimiter, json(), async (req, res, next) => {
+    try {
+      await handleReveal(req.body, res);
+    } catch (err) {
+      // Express 4 does not forward a rejected handler promise; an async
+      // registry lookup that throws would otherwise go unhandled.
+      next(err);
+    }
+  });
+
+  async function handleReveal(body: unknown, res: import("express").Response): Promise<void> {
+    const rawPath: unknown = (body as { path?: unknown } | undefined)?.path;
+    if (typeof rawPath !== "string" || !path.isAbsolute(rawPath)) {
+      res.status(400).json({ error: "path must be an absolute path" });
+      return;
+    }
+    const resolved = path.resolve(rawPath);
+    // Registry before existence: answering 404 for unregistered paths would
+    // tell any caller which arbitrary paths exist on this machine.
+    const agentPath = deps.findAgentPath ? await deps.findAgentPath(resolved) : null;
+    if (!agentPath) {
+      res.status(403).json({ error: `not a registered agent folder: ${resolved}` });
+      return;
+    }
+    // A registered agent whose folder was deleted, or replaced by a file,
+    // since the last scan.
+    const isFolder = await fs.stat(agentPath).then((st) => st.isDirectory(), () => false);
+    if (!isFolder) {
+      res.status(404).json({ error: `no such folder: ${agentPath}` });
+      return;
+    }
+    try {
+      await reveal(revealCommand(agentPath, platform));
+    } catch (err) {
+      res.status(500).json({ error: `could not open the file manager: ${(err as Error).message}` });
+      return;
+    }
+    res.status(204).end();
+  }
 
   return router;
 }

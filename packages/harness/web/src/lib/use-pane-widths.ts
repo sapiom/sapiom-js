@@ -36,9 +36,10 @@ export const RAIL_MIN = 180;
 export const RAIL_MAX = 480;
 /** 20rem — the workspace rail's default width. */
 export const RAIL_DEFAULT = 320;
-/** 20rem — the canvas pane can never be squeezed below this. */
+/** 20rem — the canvas pane can never be squeezed below this. There is no
+ *  fixed upper bound: the grid's `minmax(CANVAS_MIN, 1fr)` terminal track is
+ *  what stops the canvas, so it can grow to whatever the viewport allows. */
 export const CANVAS_MIN = 320;
-export const CANVAS_MAX = 720;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -55,7 +56,7 @@ function loadStoredWidths(): PaneWidths {
       rail: clamp(typeof parsed.rail === "number" ? parsed.rail : RAIL_DEFAULT, RAIL_MIN, RAIL_MAX),
       // Absent/null canvas = equal split (the default); a stored number is a
       // deliberate user drag and wins until the next double-click reset.
-      canvas: typeof parsed.canvas === "number" ? clamp(parsed.canvas, CANVAS_MIN, CANVAS_MAX) : null,
+      canvas: typeof parsed.canvas === "number" ? Math.max(parsed.canvas, CANVAS_MIN) : null,
     };
   } catch {
     return fallback;
@@ -101,7 +102,7 @@ export function usePaneWidths(): {
       key: keyof PaneWidths,
       sign: 1 | -1,
       min: number,
-      max: number,
+      max: number | (() => number),
       resolveStart: () => number,
       onResizing?: (v: boolean) => void,
     ) =>
@@ -113,7 +114,8 @@ export function usePaneWidths(): {
       const startValue = resolveStart();
 
       const handleMove = (moveEvent: PointerEvent): void => {
-        const next = clamp(startValue + (moveEvent.clientX - startX) * sign, min, max);
+        const limit = typeof max === "function" ? max() : max;
+        const next = clamp(startValue + (moveEvent.clientX - startX) * sign, min, limit);
         setWidths((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
       };
       const handleUp = (): void => {
@@ -144,15 +146,26 @@ export function usePaneWidths(): {
     startRailDrag: startDrag("rail", 1, RAIL_MIN, RAIL_MAX, () => widths.rail, setRailResizing),
     // Dragging away from the equal split needs a concrete starting px —
     // measure the live pane, since "equal" has no stored number.
+    // The upper bound is the live layout limit (the shell minus the terminal's
+    // floor) rather than a constant, so the stored width never runs ahead of
+    // the pane the user can actually see — a drag past the boundary would
+    // otherwise bank invisible excess that a later drag must first unwind.
     startCanvasDrag: startDrag(
       "canvas",
       -1,
       CANVAS_MIN,
-      CANVAS_MAX,
       () => {
-        if (widths.canvas != null) return widths.canvas;
-        const pane = document.querySelector(".canvas-pane");
-        return pane ? pane.getBoundingClientRect().width : CANVAS_MIN;
+        const app = document.querySelector(".app");
+        return app ? Math.max(app.getBoundingClientRect().width - CANVAS_MIN, CANVAS_MIN) : Infinity;
+      },
+      () => {
+        // Start from the RENDERED width of the grid column (`.right-pane`, which
+        // stays laid out whichever tab is shown): a stored width wider than the
+        // shell can hold is clamped by the grid, and the drag must track the
+        // edge the user grabbed, not the number in storage.
+        const pane = document.querySelector(".right-pane");
+        if (pane) return pane.getBoundingClientRect().width;
+        return widths.canvas ?? CANVAS_MIN;
       },
       setCanvasResizing,
     ),

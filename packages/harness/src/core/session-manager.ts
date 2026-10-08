@@ -1,3 +1,4 @@
+import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
 /**
  * SessionManager — node-pty registry implementing the session lifecycle from
  * the shared contract: create, resume, kill, list. Persists HarnessSession[]
@@ -5,16 +6,13 @@
  * server restarts, even though the ptys themselves do not.
  */
 
-import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   chmod,
   mkdir,
-  open,
   readFile,
   rename,
-  rm,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -30,10 +28,8 @@ import {
   type LaunchOpts,
   type SpawnSpec,
 } from "../shared/types.js";
-import type {
-  ProjectAgentSession,
-  ProjectBootstrapMetadata,
-} from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
+import { samePath } from "@sapiom/agent-map/paths";
 import {
   migratePersistedProjectIdentity,
   removeLegacyProjectSessionMetadata,
@@ -52,11 +48,11 @@ import {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpSessionRestartUnavailableError,
+  McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
-  SubsessionBindingMismatchError,
-  SubsessionFreshRestartForbiddenError,
   UnknownSessionError,
 } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
@@ -69,11 +65,11 @@ export {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpSessionRestartUnavailableError,
+  McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
-  SubsessionBindingMismatchError,
-  SubsessionFreshRestartForbiddenError,
   UnknownSessionError,
 } from "./errors.js";
 
@@ -101,51 +97,7 @@ function sameProjectAgent(
 ): boolean {
   return (
     left.projectId === right.projectId &&
-    left.userId === right.userId &&
     left.sessionId === right.sessionId
-  );
-}
-
-function parseTrustedSubsessionBindingMarker(
-  value: unknown,
-  expectedSessionId?: string,
-): TrustedSubsessionBindingMarker | null {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).sort().join(",") !==
-      "bindingId,incarnation,parentSessionId,projectId,sessionId,spawnEpoch" ||
-    ![value.projectId, value.parentSessionId, value.bindingId, value.sessionId].every(
-      (entry) =>
-        typeof entry === "string" &&
-        entry.length > 0 &&
-        entry.length <= 256 &&
-        ![...entry].some((character) => {
-          const point = character.codePointAt(0) ?? 0;
-          return point <= 0x1f || point === 0x7f;
-        }),
-    ) ||
-    (expectedSessionId !== undefined && value.sessionId !== expectedSessionId) ||
-    !Number.isSafeInteger(value.incarnation) ||
-    (value.incarnation as number) < 1 ||
-    !Number.isSafeInteger(value.spawnEpoch) ||
-    (value.spawnEpoch as number) < 1
-  ) {
-    return null;
-  }
-  return structuredClone(value) as TrustedSubsessionBindingMarker;
-}
-
-function sameSubsessionBinding(
-  left: TrustedSubsessionBindingMarker,
-  right: TrustedSubsessionBindingMarker,
-): boolean {
-  return (
-    left.projectId === right.projectId &&
-    left.parentSessionId === right.parentSessionId &&
-    left.bindingId === right.bindingId &&
-    left.sessionId === right.sessionId &&
-    left.incarnation === right.incarnation &&
-    left.spawnEpoch === right.spawnEpoch
   );
 }
 
@@ -315,9 +267,6 @@ const BRACKETED_PASTE_END = "\x1b[201~";
 const AGENT_SESSION_OWNER_FILE_VERSION = 1;
 const AGENT_SESSION_OWNER_MAX_ENTRIES = 50_000;
 const AGENT_SESSION_OWNER_MAX_BYTES = 4 * 1024 * 1024;
-const SUBSESSION_BINDING_FILE_VERSION = 1;
-const SUBSESSION_BINDING_MAX_ENTRIES = 8_192;
-const SUBSESSION_BINDING_MAX_BYTES = 2 * 1024 * 1024;
 /** See `recordActivity()`: minimum gap between two `onActivity` broadcasts
  *  for the same session — pty.onData fires per chunk (often many times a
  *  second for a busy TUI), but the SPA's busy indicator only needs "this
@@ -387,6 +336,20 @@ export type SessionDataListener = (chunk: string) => void;
 /** See `onActivity()`. */
 export type SessionActivityListener = (harnessSessionId: string) => void;
 
+/** Server-private identity of the credential used to generate one MCP config. */
+export interface McpCredentialLaunch {
+  generation: number;
+  credentialBearing: boolean;
+}
+
+export type LaunchOptsBuildResult = Omit<
+  LaunchOpts,
+  "harnessSessionId" | "cwd"
+> & {
+  /** Removed before LaunchOpts reaches an adapter; never leaves the server. */
+  mcpCredentialLaunch?: McpCredentialLaunch;
+};
+
 /**
  * Builds the harness-specific part of LaunchOpts (generated system-prompt /
  * mcp-config / settings file paths). SessionManager owns cwd + harnessSessionId;
@@ -405,19 +368,24 @@ export type LaunchOptsBuilder = (
   >,
   context?: {
     promptAppendix?: string;
-    focusedContext?: FocusedSessionContextProjection;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: ProjectAgentSession;
-    /** Server-composed secret launch metadata, never accepted from REST. */
-    agentMapMcp?: { url: string; bearerToken: string };
     resume?: boolean;
   },
-) =>
-  | Omit<LaunchOpts, "harnessSessionId" | "cwd">
-  | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
+) => LaunchOptsBuildResult | Promise<LaunchOptsBuildResult>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
+
+/** Runtime MCP state is derived from private PTY handles, never durable data. */
+function serializeSessionRegistry(sessions: HarnessSession[]): string {
+  const persisted = sessions.map((session) => {
+    const copy = { ...session };
+    delete copy.mcpAuthState;
+    return copy;
+  });
+  return JSON.stringify(persisted, null, 2) + "\n";
+}
 
 export interface SessionManagerOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
@@ -436,33 +404,41 @@ export interface SessionManagerOptions {
    * after that final await and before PTY admission. */
   loadSpawnPty?: () => Promise<PtySpawnFn>;
   buildLaunchOpts?: LaunchOptsBuilder;
-  /** Revalidates cwd containment and current principal before every spawn. */
-  resolveAgentMapIdentity?: (
+  /** Live credential generation checked synchronously immediately before spawn. */
+  currentCredentialGeneration?: () => number;
+  /**
+   * Issues the one project identity a session belongs to. Called before every
+   * spawn to revalidate cwd containment and the current principal. Throws
+   * `ProjectSessionScopeUnavailableError` when no project can own `cwd`.
+   */
+  resolveAgentMapIdentity: (
     sessionId: string,
     cwd: string,
     persisted?: ProjectAgentSession,
-  ) => Promise<ProjectAgentSession | undefined>;
+  ) => Promise<ProjectAgentSession>;
+  /**
+   * Called once on load for a persisted session that predates project
+   * identity. Joins the deepest already-open root containing `cwd` and never
+   * mints a project for the cwd itself, so a session left behind by a removed
+   * project cannot bring it back. Throws `ProjectSessionScopeUnavailableError`
+   * when no open root owns `cwd`.
+   */
+  migrateAgentMapIdentity: (
+    sessionId: string,
+    cwd: string,
+  ) => Promise<ProjectAgentSession>;
   /** Claims new-project lifecycle metadata after trusted scope resolution. */
   prepareProjectSession?: (
     identity: ProjectAgentSession,
     request: CreateSessionRequest,
   ) => Promise<{
     initialTitle?: string;
-    projectBootstrap?: ProjectBootstrapMetadata;
   }>;
-  /** Synchronous notification before a real terminal write crosses the PTY. */
-  onTerminalInput?: (sessionId: string, context: TerminalInputContext) => void;
   /** Content-free observability for persisted identity normalization. */
   onProjectAgentIdentityMigration?: (event: {
     sessionId: string;
-    outcome: "migrated" | "rejected";
+    outcome: "migrated" | "rejected" | "dropped";
   }) => void;
-  /** Registers only sessions that carry a durable bootstrap lifecycle. */
-  onProjectBootstrapSession?: (
-    session: HarnessSession,
-    mode: "created" | "resumed",
-    runtimeEpoch: string,
-  ) => Promise<void> | void;
   /**
    * Serializes coordinator ownership before a PTY generation is published.
    * `null` retracts a prepared epoch when pre-publication setup fails.
@@ -471,12 +447,6 @@ export interface SessionManagerOptions {
     session: HarnessSession,
     runtimeEpoch: string | null,
   ) => Promise<void> | void;
-  /** Mirrors an explicit user close into the coordinator-owned aggregate. */
-  onSubsessionUserClosed?: (
-    marker: TrustedSubsessionBindingMarker,
-  ) => Promise<void> | void;
-  /** Revokes launch capabilities/transports after every exit path. */
-  onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
   now?: () => string;
   generateId?: () => string;
   /** Test seam for deterministic registry persistence failures. Production
@@ -484,11 +454,6 @@ export interface SessionManagerOptions {
   writeSessionRegistry?: (file: string, serialized: string) => Promise<void>;
   /** Test seam for faults after the private identity ledger becomes durable. */
   writeAgentSessionOwnerRegistry?: (
-    file: string,
-    serialized: string,
-  ) => Promise<void>;
-  /** Fault-injection seam for the private coordinator ownership sidecar. */
-  writeSubsessionBindingRegistry?: (
     file: string,
     serialized: string,
   ) => Promise<void>;
@@ -513,17 +478,6 @@ export interface SessionManagerOptions {
    */
   prepareWorkspaceContext?: (session: HarnessSession) => Promise<void>;
   /**
-   * Drops the canvas kit template into `<cwd>/.sapiom/canvas/index.html`
-   * when nothing is there yet (backfill-only — the real implementation,
-   * `ensureCanvasTemplate` from core/canvas-template.ts, does its own
-   * existence check internally, so unlike `writeWorkspaceContext` this
-   * needs no separate `*Exists` companion). Called from both `create()` and
-   * `resume()` so the canvas pane is never a blank iframe, regardless of
-   * entry point. Defaults to a no-op so tests that pass a fake `cwd` never
-   * touch the real filesystem unless they opt in.
-   */
-  ensureCanvasTemplate?: (cwd: string) => Promise<void>;
-  /**
    * Injectable for tests (fake ptys carry fake pids that must never be
    * probed against real OS processes). Defaults to `defaultIsPidAlive`.
    */
@@ -542,35 +496,21 @@ export interface TrustedSessionCreateOptions {
   initialTitle?: string;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
-  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
-  focusedContext?: (sessionId: string) => FocusedSessionContextProjection;
   /** Server-authored native CLI orientation for a newly created session. */
   sessionStartSystemMessage?: (sessionId: string) => string;
-  /** Server-owned coordinator predecessor. This may differ from the older
-   * history record used to build the rehydration brief. */
-  handoffFromSessionId?: string;
-  /** Internal auto-create guard. Ordinary/user-requested creates omit this and
-   * remain valid even when the project's first-session lifecycle already has
-   * an owner. */
-  requireProjectBootstrapClaim?: boolean;
 }
 
 export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
-  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
-  focusedContext?: FocusedSessionContextProjection;
-  /** Private two-sided coordinator transition, never accepted by REST. */
-  subsessionBindingTransition?: Readonly<{
-    expected: TrustedSubsessionBindingMarker;
-    next: TrustedSubsessionBindingMarker;
-  }>;
 }
 
 interface PtyHandle {
   pty: IPty;
   /** Server-owned identity for this exact live PTY generation. */
   runtimeEpoch: string;
+  /** MCP credential identity captured with this exact live PTY generation. */
+  mcpCredentialLaunch?: McpCredentialLaunch;
   buffer: string;
   /** Latest content-bearing terminal repaint used for current-screen checks.
    * Unlike `buffer`, animation-only ANSI churn cannot evict the visible text. */
@@ -588,7 +528,6 @@ interface PtyHandle {
   pendingReadinessFrame: string | null;
   /** Whether the pending synchronized repaint has produced visible text. */
   pendingReadinessFrameHasContent: boolean;
-  emitter: EventEmitter;
   /** Epoch ms this pty was spawned — anchors the Claude hook-timeout fallback. */
   spawnedAt: number;
   /** Epoch ms the current non-blocking readiness candidate began. A recognized
@@ -661,30 +600,11 @@ export interface SessionStatusContext {
 }
 
 
-export interface TerminalInputContext {
-  /** Server-owned identity of the exact PTY receiving these bytes. */
-  runtimeEpoch: string;
-  /** The current adapter screen is a recognized trust/login/setup blocker. */
-  blockingPrompt: boolean;
-}
-
-
 export type TrackedSessionInputResult = Readonly<{
   accepted: boolean;
   phase: SessionInputWritePhase;
   error?: unknown;
 }>;
-
-/** Server-private half of a coordinator/session ownership proof. */
-export type TrustedSubsessionBindingMarker = Readonly<{
-  projectId: string;
-  parentSessionId: string;
-  bindingId: string;
-  sessionId: string;
-  incarnation: number;
-  spawnEpoch: number;
-}>;
-
 
 export type SessionInputWritePhase =
   | "not-written"
@@ -870,6 +790,88 @@ export class SessionManager {
     return this.kill(id);
   }
 
+  /** Retire credential-bearing PTYs before scheduling keyless resumes. */
+  async relaunchCredentialBearingSessions(
+    throughGeneration: number,
+  ): Promise<void> {
+    const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
+      handle.mcpCredentialLaunch?.credentialBearing &&
+      handle.mcpCredentialLaunch.generation <= throughGeneration
+        ? [{ id, runtimeEpoch: handle.runtimeEpoch }]
+        : [],
+    );
+    await Promise.all(
+      targets.map(async ({ id, runtimeEpoch }) => {
+        const session = this.sessions.get(id);
+        let resumable = false;
+        if (session?.agentSessionId) {
+          try {
+            resumable = await this.getAdapter(session.harness).canResume(
+              session.agentSessionId,
+              session.cwd,
+            );
+          } catch {
+            resumable = false;
+          }
+        }
+        if (this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch) return;
+
+        const previousMcpAuthState = session?.mcpAuthState;
+        if (resumable && session) {
+          session.mcpAuthState = "restarting";
+          this.emitStatus(session, runtimeEpoch);
+        }
+
+        const killed = await this.killIfRuntime(id, runtimeEpoch);
+        if (!killed) {
+          if (
+            resumable &&
+            session &&
+            this.sessions.get(id) === session &&
+            session.mcpAuthState === "restarting"
+          ) {
+            if (previousMcpAuthState === undefined) {
+              delete session.mcpAuthState;
+            } else {
+              session.mcpAuthState = previousMcpAuthState;
+            }
+            this.emitStatus(session);
+          }
+          return;
+        }
+        if (!resumable || !session) return;
+
+        session.mcpAuthState = "restarting";
+        this.emitStatus(session);
+        this.trackCredentialRemovalResume(id);
+      }),
+    );
+  }
+
+  private trackCredentialRemovalResume(id: string): void {
+    const session = this.sessions.get(id);
+    const relaunch = this.resume(id)
+      .then(() => {})
+      .catch(() => {
+        if (
+          session &&
+          this.sessions.get(id) === session &&
+          !this.ptys.has(id) &&
+          session.mcpAuthState === "restarting"
+        ) {
+          session.mcpAuthState = "not-applicable";
+          this.emitStatus(session);
+        }
+        console.error("[harness] credential-removal session relaunch failed", {
+          sessionId: id,
+        });
+      });
+    const tracked = relaunch.finally(() => {
+      this.credentialRemovalRelaunches.delete(tracked);
+    });
+    this.credentialRemovalRelaunches.add(tracked);
+  }
+
 
   /**
    * Fail-closed admission for already-authenticated ingest work. A terminal
@@ -958,12 +960,6 @@ export class SessionManager {
   private readonly retiredRuntimeEpochs = new Map<string, string>();
 
   private readonly onRuntimeEpochTransition: SessionManagerOptions["onRuntimeEpochTransition"];
-  private readonly onSubsessionUserClosed: SessionManagerOptions["onSubsessionUserClosed"];
-
-  private readonly onTerminalInput: (
-    sessionId: string,
-    context: TerminalInputContext,
-  ) => void;
 
   private readonly loadSpawnPty: () => Promise<PtySpawnFn>;
 
@@ -980,14 +976,15 @@ export class SessionManager {
    * accepted by a HarnessSession. Keeping this outside sessions.json avoids
    * leaking historical aliases through the browser DTO. */
   private readonly agentSessionOwnersPath: string;
-  /** Never projected through REST; public session fields are not ownership. */
-  private readonly subsessionBindingsPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
+  private readonly currentCredentialGeneration:
+    | (() => number)
+    | undefined;
   private readonly resolveAgentMapIdentity: SessionManagerOptions["resolveAgentMapIdentity"];
+  private readonly migrateAgentMapIdentity: SessionManagerOptions["migrateAgentMapIdentity"];
   private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
   private readonly rejectedProjectSessionMetadata = new Set<string>();
-  private readonly onAgentMapSessionExit: SessionManagerOptions["onAgentMapSessionExit"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -996,21 +993,22 @@ export class SessionManager {
   private readonly writeAgentSessionOwnerRegistry:
     | ((file: string, serialized: string) => Promise<void>)
     | undefined;
-  private readonly writeSubsessionBindingRegistry:
-    | ((file: string, serialized: string) => Promise<void>)
-    | undefined;
   private readonly writeWorkspaceContext: (
     session: HarnessSession,
   ) => Promise<void>;
   private readonly prepareWorkspaceContext: (
     session: HarnessSession,
   ) => Promise<void>;
-  private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly platform: NodeJS.Platform;
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
+  private readonly outputListeners = new Map<
+    string,
+    Set<{ listener: SessionDataListener }>
+  >();
+  private readonly credentialRemovalRelaunches = new Set<Promise<void>>();
   private readonly statusEmitter = new EventEmitter();
   private readonly activityEmitter = new EventEmitter();
   /** Epoch ms of the last `onActivity` broadcast per session — see `recordActivity()`. */
@@ -1022,18 +1020,11 @@ export class SessionManager {
    * state only after the candidate was published or rejected. */
   private sessionRegistryIdentityFence: Promise<void> | null = null;
   private readonly agentSessionOwners = new Map<string, string>();
-  private readonly subsessionBindings = new Map<
-    string,
-    TrustedSubsessionBindingMarker
-  >();
-  private readonly userClosedSubsessions = new Set<string>();
   /** Serializes the full authorize -> reserve -> pointer commit transition.
    * A file-level atomic rename alone is insufficient when two starts race the
    * in-memory ownership check before either write begins. */
   private agentSessionIdentityQueue: Promise<void> = Promise.resolve();
   private agentSessionOwnerWriteSeq = 0;
-  private subsessionBindingWriteSeq = 0;
-  private subsessionBindingQueue: Promise<void> = Promise.resolve();
   private initialized = false;
 
   constructor(options: SessionManagerOptions) {
@@ -1048,32 +1039,25 @@ export class SessionManager {
       options.sessionsPath ?? HARNESS_PATHS.sessions,
     );
     this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
-    this.subsessionBindingsPath = `${this.sessionsPath}.subsession-bindings.json`;
     this.spawnPty = options.spawnPty;
     this.loadSpawnPty = options.loadSpawnPty ?? loadDefaultSpawn;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
+    this.currentCredentialGeneration = options.currentCredentialGeneration;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
+    this.migrateAgentMapIdentity = options.migrateAgentMapIdentity;
     this.prepareProjectSession = options.prepareProjectSession;
-    this.onAgentMapSessionExit = options.onAgentMapSessionExit;
-    this.onTerminalInput = options.onTerminalInput ?? (() => {});
     this.onProjectAgentIdentityMigration =
       options.onProjectAgentIdentityMigration;
-    this.onProjectBootstrapSession = options.onProjectBootstrapSession;
     this.onRuntimeEpochTransition = options.onRuntimeEpochTransition;
-    this.onSubsessionUserClosed = options.onSubsessionUserClosed;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
     this.writeAgentSessionOwnerRegistry =
       options.writeAgentSessionOwnerRegistry;
-    this.writeSubsessionBindingRegistry =
-      options.writeSubsessionBindingRegistry;
     this.writeWorkspaceContext =
       options.writeWorkspaceContext ?? (async () => {});
     this.prepareWorkspaceContext =
       options.prepareWorkspaceContext ?? (async () => {});
-    this.ensureCanvasTemplate =
-      options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     this.platform = options.platform ?? process.platform;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
@@ -1097,6 +1081,12 @@ export class SessionManager {
     }
     let dirty = false;
     for (const session of persisted) {
+      // This state is derived from a process-local PTY stamp. Never trust a
+      // value written by another build or carry it across a server restart.
+      if (session.mcpAuthState !== undefined) {
+        delete session.mcpAuthState;
+        dirty = true;
+      }
       const migration = migratePersistedProjectIdentity(session);
       if (migration.outcome === "rejected") {
         this.rejectedProjectSessionMetadata.add(session.id);
@@ -1104,29 +1094,51 @@ export class SessionManager {
       if (migration.outcome === "migrated") {
         if (migration.identity) {
           session.agentMapIdentity = structuredClone(migration.identity);
-        } else {
-          delete session.agentMapIdentity;
         }
-        if (migration.bootstrap) {
-          session.projectBootstrap = structuredClone(migration.bootstrap);
-        } else {
-          delete session.projectBootstrap;
-        }
-        // Planner-era metadata is never live authority after normalization.
-        // Its on-disk input queue is migrated by ProjectBootstrapCoordinator.
+        // Planner-era and bootstrap metadata is never live authority after
+        // normalization.
         removeLegacyProjectSessionMetadata(session);
         dirty = true;
       }
-      if (migration.outcome !== "unchanged") {
+      let outcome: "unchanged" | "migrated" | "rejected" | "dropped" =
+        migration.outcome;
+      if (
+        outcome === "rejected" &&
+        (migration.identity === undefined ||
+          session.agentMapIdentity === undefined)
+      ) {
+        // Rejected metadata never becomes authority, and a session with no
+        // valid identity cannot be listed: every published session carries
+        // one. The id stays in `rejectedProjectSessionMetadata` so a resume
+        // still reports the scope error rather than an unknown session.
+        outcome = "dropped";
+        dirty = true;
+      } else if (migration.identity === undefined && outcome !== "rejected") {
+        // A session written before project identity existed joins the deepest
+        // open root containing its cwd. A cwd no open root owns is not a
+        // session this build can represent.
+        try {
+          session.agentMapIdentity = structuredClone(
+            await this.migrateAgentMapIdentity(session.id, session.cwd),
+          );
+          outcome = "migrated";
+        } catch (error) {
+          if (!(error instanceof ProjectSessionScopeUnavailableError)) throw error;
+          outcome = "dropped";
+        }
+        dirty = true;
+      }
+      if (outcome !== "unchanged") {
         try {
           this.onProjectAgentIdentityMigration?.({
             sessionId: session.id,
-            outcome: migration.outcome,
+            outcome,
           });
         } catch {
           // Observability is best effort and cannot affect session recovery.
         }
       }
+      if (outcome === "dropped") continue;
       if (session.status !== "exited") {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;
@@ -1149,7 +1161,6 @@ export class SessionManager {
       this.sessions.set(session.id, session);
     }
     dirty = (await this.loadAgentSessionOwners(persisted)) || dirty;
-    await this.loadSubsessionBindings();
     if (dirty) await this.persist();
   }
 
@@ -1164,6 +1175,112 @@ export class SessionManager {
   /** True only when this process owns the live PTY behind the record. */
   isLive(id: string): boolean {
     return this.ptys.has(id);
+  }
+
+  /** Recompute browser-safe state from private live-runtime stamps. */
+  reconcileMcpCredentialGeneration(currentGeneration: number): void {
+    for (const [id, handle] of this.ptys) {
+      const session = this.sessions.get(id);
+      if (!session) continue;
+      // The restart action owns this exact runtime until it either restores
+      // restart-required or replaces it. A concurrent credential change is
+      // still enforced by resume's launch-generation fence.
+      if (session.mcpAuthState === "restarting") continue;
+      const next = handle.mcpCredentialLaunch
+        ? handle.mcpCredentialLaunch.generation === currentGeneration
+          ? "current"
+          : "restart-required"
+        : "not-applicable";
+      if (session.mcpAuthState === next) continue;
+      session.mcpAuthState = next;
+      this.emitStatus(session, handle.runtimeEpoch);
+    }
+  }
+
+  /** Replace one stale coding-agent runtime when its conversation is resumable. */
+  async restartForMcpCredentials(id: string): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    const handle = this.ptys.get(id);
+    if (
+      session.mcpAuthState !== "restart-required" ||
+      !handle?.mcpCredentialLaunch ||
+      handle.killed
+    ) {
+      throw new McpSessionRestartUnavailableError();
+    }
+    const harnessLabel =
+      listHarnessAdapters().find((adapter) => adapter.id === session.harness)
+        ?.label ?? session.harness;
+
+    const runtimeEpoch = handle.runtimeEpoch;
+    const restoreRestartRequired = (): void => {
+      if (this.ptys.get(id) !== handle || this.sessions.get(id) !== session)
+        return;
+      session.mcpAuthState = "restart-required";
+      this.emitStatus(session, runtimeEpoch);
+    };
+    session.mcpAuthState = "restarting";
+    this.emitStatus(session, runtimeEpoch);
+
+    if (!session.agentSessionId) {
+      restoreRestartRequired();
+      throw new SessionNotResumeableError(
+        id,
+        `${harnessLabel} has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.`,
+      );
+    }
+    let resumable: boolean;
+    try {
+      resumable = await this.getAdapter(session.harness).canResume(
+        session.agentSessionId,
+        session.cwd,
+      );
+    } catch (error) {
+      restoreRestartRequired();
+      throw error;
+    }
+    if (!resumable) {
+      restoreRestartRequired();
+      throw new SessionNotResumeableError(
+        id,
+        `${harnessLabel} no longer has this conversation, so it cannot be restarted safely. Start a new session instead.`,
+      );
+    }
+    if (this.ptys.get(id) !== handle || handle.killed) {
+      restoreRestartRequired();
+      throw new McpSessionRestartUnavailableError(
+        "The session changed while its restart was being prepared. Try again from its current state.",
+      );
+    }
+
+    let killed: boolean;
+    try {
+      killed = await this.killIfRuntime(id, runtimeEpoch);
+    } catch (error) {
+      restoreRestartRequired();
+      throw error;
+    }
+    if (!killed) {
+      throw new McpSessionRestartUnavailableError(
+        "The session changed before it could be restarted. Try again from its current state.",
+      );
+    }
+
+    // markExited() clears runtime-only MCP state. Keep the action observable
+    // while the ordinary resume path performs its own final checks and spawn.
+    session.mcpAuthState = "restarting";
+    this.emitStatus(session);
+    try {
+      return await this.resume(id);
+    } catch (error) {
+      if (!this.ptys.has(id) && session.mcpAuthState === "restarting") {
+        session.mcpAuthState = "not-applicable";
+        this.emitStatus(session);
+      }
+      throw error;
+    }
   }
 
   private getAdapter(harness: HarnessKind): HarnessAdapter {
@@ -1182,19 +1299,18 @@ export class SessionManager {
     return adapter;
   }
 
-  /** Recheck the immutable project principal immediately before spawning. */
+  /** Recheck that the resolved project scope is still current before spawning. */
   private async revalidateAgentMapIdentity(
     sessionId: string,
     cwd: string,
-    expected: ProjectAgentSession | undefined,
+    expected: ProjectAgentSession,
   ): Promise<void> {
-    if (!expected || !this.resolveAgentMapIdentity) return;
     const current = await this.resolveAgentMapIdentity(
       sessionId,
       cwd,
       expected,
     );
-    if (!current || !sameProjectAgent(current, expected)) {
+    if (!sameProjectAgent(current, expected)) {
       throw new ProjectSessionScopeUnavailableError(sessionId);
     }
   }
@@ -1235,13 +1351,18 @@ export class SessionManager {
         if (existing?.agentSessionId === input.agentSessionId) return existing;
         throw new AgentSessionIdentityReservedError();
       }
+      const agentMapIdentity = structuredClone(
+        await this.resolveAgentMapIdentity(id, input.cwd),
+      );
       const session: HarnessSession = {
         id,
         agentSessionId: input.agentSessionId,
         harness: input.harness,
         cwd: input.cwd,
         title: input.title,
+        agentMapIdentity,
         status: "exited",
+        mcpAuthState: "not-applicable",
         createdAt: input.lastActiveAt,
         lastActiveAt: input.lastActiveAt,
         exitCode: null,
@@ -1265,11 +1386,19 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Resumes a stored conversation after the adapter confirms it can reopen it.
+   * Claims the starting state before preparation. Setup failures run normal
+   * exit cleanup and preserve the previous last-activity timestamp.
+   */
   async resume(
     id: string,
     trusted: TrustedSessionResumeOptions = {},
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
+    if (this.rejectedProjectSessionMetadata.has(id)) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
@@ -1277,37 +1406,6 @@ export class SessionManager {
     }
     if (this.ptys.has(id)) {
       throw new SessionAlreadyLiveError(id);
-    }
-    if (this.rejectedProjectSessionMetadata.has(id)) {
-      throw new ProjectSessionScopeUnavailableError(id);
-    }
-    const bindingTransition = trusted.subsessionBindingTransition;
-    if (bindingTransition) {
-      const expected = parseTrustedSubsessionBindingMarker(
-        bindingTransition.expected,
-        id,
-      );
-      const next = parseTrustedSubsessionBindingMarker(
-        bindingTransition.next,
-        id,
-      );
-      const current = this.subsessionBindings.get(id);
-      if (
-        !expected ||
-        !next ||
-        !current ||
-        (!sameSubsessionBinding(current, expected) &&
-          !sameSubsessionBinding(current, next)) ||
-        next.projectId !== expected.projectId ||
-        next.parentSessionId !== expected.parentSessionId ||
-        next.bindingId !== expected.bindingId ||
-        next.sessionId !== expected.sessionId ||
-        next.incarnation !== expected.incarnation + 1 ||
-        next.spawnEpoch <= expected.spawnEpoch ||
-        this.userClosedSubsessions.has(id)
-      ) {
-        throw new SubsessionBindingMismatchError();
-      }
     }
     const adapter = this.getAdapter(session.harness);
     // Pre-flight against the agent's OWN store before touching the record.
@@ -1327,109 +1425,56 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
-    if (bindingTransition) {
-      const current = this.subsessionBindings.get(id)!;
-      // A failed spawn may leave the exact next marker durably committed.
-      // Retrying that same transition must not require the old marker again.
-      if (!sameSubsessionBinding(current, bindingTransition.next)) {
-        this.subsessionBindings.set(id, bindingTransition.next);
-        try {
-          await this.persistSubsessionBindings();
-        } catch (error) {
-          this.subsessionBindings.set(id, current);
-          throw error;
-        }
-      }
-    }
-    const trustedIdentity = session.agentMapIdentity;
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
-      : trustedIdentity;
-    if (agentMapIdentity)
-      session.agentMapIdentity = structuredClone(agentMapIdentity);
-    else if (trustedIdentity) throw new ProjectSessionScopeUnavailableError(id);
-    if (trusted.focusedContext && !agentMapIdentity)
-      throw new TypeError("Focused project context requires a project-agent identity");
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      session.cwd,
+      session.agentMapIdentity,
+    );
+    session.agentMapIdentity = structuredClone(agentMapIdentity);
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against
     // files that the resumed process is currently regenerating.
     const lastActiveBeforeResume = session.lastActiveAt;
-    const statusBeforeResume = session.status;
-    const exitCodeBeforeResume = session.exitCode;
     session.status = "starting";
     session.exitCode = null;
     session.lastActiveAt = this.now();
-    let opts: LaunchOpts;
-    let spec: SpawnSpec;
-    try {
-      const launchContext =
-        trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
-          ? {
-              ...(trusted.promptAppendix
-                ? { promptAppendix: trusted.promptAppendix }
-                : {}),
-              ...(trusted.focusedContext
-                ? { focusedContext: trusted.focusedContext }
-                : {}),
-              ...(agentMapIdentity ? { agentMapIdentity } : {}),
-              resume: true as const,
-            }
-          : undefined;
-      opts = {
-        harnessSessionId: id,
-        cwd: session.cwd,
-        ...(await (launchContext
-          ? this.buildLaunchOpts(id, session, launchContext)
-          : this.buildLaunchOpts(id, session))),
-      };
-      spec = adapter.resume(session.agentSessionId, opts);
-    } catch (error) {
-      // Resume preparation may rotate project capabilities or write generated
-      // launch state before the process exists. No starting state was exposed
-      // or persisted yet, so restore the exact prior record while releasing
-      // any prepared authority.
-      session.status = statusBeforeResume;
-      session.exitCode = exitCodeBeforeResume;
-      session.lastActiveAt = lastActiveBeforeResume;
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
-    // The prior value is kept so the failure path below can put it back:
-    // `lastActiveAt` is stamped only to keep sweepDeadSessions() from reaping
-    // this record
-    // during the pre-pty window (it reaps non-exited records with no pty once
-    // they're older than the grace period). If the resume never produces a
-    // pty, that stamp is not activity and must not survive — otherwise a
-    // session idle since last night reports "Ran for 6h 25m" purely because
-    // someone clicked Resume.
+    // A failed pre-PTY attempt is not activity; the failure path restores this
+    // timestamp so the dead pane's elapsed time still reflects real work.
     try {
       await this.persist();
       this.emitStatus(session);
+      // Preparation belongs to this lifetime so failure runs normal exit cleanup.
+      const built = await this.buildLaunchOpts(id, session, {
+        ...(trusted.promptAppendix
+          ? { promptAppendix: trusted.promptAppendix }
+          : {}),
+        agentMapIdentity,
+        resume: true,
+      });
+      const { mcpCredentialLaunch, ...opts } = {
+        harnessSessionId: id,
+        cwd: session.cwd,
+        ...built,
+      };
+      const spec = adapter.resume(session.agentSessionId, opts);
       // Schema-aware and strict: the caller leaves a valid current file
       // untouched, translates a valid legacy file, and reconstructs anything
       // missing/invalid from this session plus the live registry. Await it in
       // the prompt-regeneration window so no resumed process can observe the
       // new prompt with an old context contract.
       await this.prepareWorkspaceContext(session);
-      // Also backfill-only (ensureCanvasTemplate does its own existence check)
-      // — a session from before the canvas kit existed, or one whose canvas
-      // file was somehow deleted, still gets a live pane on resume.
-      await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(session, spec, () =>
-        this.revalidateAgentMapIdentity(
-          session.id,
-          session.cwd,
-          agentMapIdentity,
-        ),
+      await this.spawn(
+        session,
+        spec,
+        mcpCredentialLaunch,
+        () =>
+          this.revalidateAgentMapIdentity(
+            session.id,
+            session.cwd,
+            agentMapIdentity,
+          ),
       );
-      if (session.projectBootstrap) {
-        const runtimeEpoch = this.getRuntimeEpoch(session.id);
-        if (runtimeEpoch === null) throw new Error("session runtime unavailable");
-        await Promise.resolve(
-          this.onProjectBootstrapSession?.(session, "resumed", runtimeEpoch),
-        ).catch(() => {});
-      }
     } catch (err) {
       // Same best-effort reconciliation as create(): the first persist can be
       // the failure, and a failed repair must not replace that original error.
@@ -1445,94 +1490,12 @@ export class SessionManager {
     return session;
   }
 
-  /** Server-only same-ID resume fenced by the coordinator's private marker. */
-  resumeBound(
-    id: string,
-    expected: TrustedSubsessionBindingMarker,
-    next: TrustedSubsessionBindingMarker,
-    trusted: Omit<TrustedSessionResumeOptions, "subsessionBindingTransition"> = {},
-  ): Promise<HarnessSession> {
-    return this.resume(id, {
-      ...trusted,
-      subsessionBindingTransition: { expected, next },
-    });
-  }
-
   /**
-   * Close the session and durably record a user-closed delegated binding.
-   * Termination starts before storage writes, so a persistence failure cannot
-   * leave its PTY running. Failed closure bookkeeping retains a tombstone that
-   * prevents automatic recovery and can be retried by a later close.
-   *
-   * Await this operation and handle rejection: binding persistence and the
-   * coordinator callback can fail, and their completion has no time bound.
-   * On success, returns kill()'s result: whether a live or stale session was
-   * transitioned to exited.
+   * Close the session at the user's request. Returns kill()'s result: whether
+   * a live or stale session was transitioned to exited.
    */
   async close(id: string): Promise<boolean> {
-    const binding = this.subsessionBindings.get(id);
-    if (binding) {
-      this.userClosedSubsessions.add(id);
-    }
-    // Start termination before persistence so a sidecar fsync failure cannot
-    // leave a delegated PTY running after the user closes its tab. Keep the
-    // in-memory tombstone on failure and let a later close retry persistence.
-    const termination = this.kill(id);
-    let persistenceError: unknown;
-    let coordinatorCloseRecorded = false;
-    if (binding) {
-      try {
-        await this.persistSubsessionBindings();
-      } catch (error) {
-        persistenceError = error;
-      }
-      try {
-        if (this.onSubsessionUserClosed) {
-          await this.onSubsessionUserClosed(binding);
-          coordinatorCloseRecorded = true;
-        }
-      } catch (error) {
-        persistenceError ??= error;
-      }
-    }
-    const killed = await termination;
-    if (binding && persistenceError === undefined && coordinatorCloseRecorded) {
-      const current = this.subsessionBindings.get(id);
-      if (current && sameSubsessionBinding(current, binding)) {
-        this.subsessionBindings.delete(id);
-        this.userClosedSubsessions.delete(id);
-        try {
-          await this.persistSubsessionBindings();
-        } catch (error) {
-          this.subsessionBindings.set(id, binding);
-          this.userClosedSubsessions.add(id);
-          persistenceError = error;
-        }
-      }
-    }
-    if (persistenceError !== undefined) throw persistenceError;
-    return killed;
-  }
-
-  /** Close only when the caller proves the exact coordinator-owned binding. */
-  async closeBound(expected: TrustedSubsessionBindingMarker): Promise<boolean> {
-    const parsed = parseTrustedSubsessionBindingMarker(
-      expected,
-      expected.sessionId,
-    );
-    if (!parsed) throw new SubsessionBindingMismatchError();
-    const operation = async (): Promise<boolean> => {
-      const current = this.subsessionBindings.get(parsed.sessionId);
-      if (!current || !sameSubsessionBinding(current, parsed))
-        throw new SubsessionBindingMismatchError();
-      return this.close(parsed.sessionId);
-    };
-    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
-    this.subsessionBindingQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return this.kill(id);
   }
 
   /**
@@ -1668,23 +1631,6 @@ export class SessionManager {
       throw new SessionInputIsolationError();
     }
     const session = this.sessions.get(id);
-    if (session && session.status !== "exited") {
-      try {
-        const adapter = this.adapters[session.harness];
-        const blockingPrompt = Boolean(
-          adapter?.detectBlockingPrompt &&
-          (this.hasCurrentBlockingPrompt(adapter, handle) ||
-            this.hasRetainedBlockingPrompt(adapter, handle)),
-        );
-        this.onTerminalInput(id, {
-          runtimeEpoch: handle.runtimeEpoch,
-          blockingPrompt,
-        });
-      } catch {
-        // Input priority is local correctness; lifecycle telemetry/persistence
-        // callbacks are best effort and cannot block a person's terminal.
-      }
-    }
     this.terminalInputEpochs.set(
       id,
       (this.terminalInputEpochs.get(id) ?? 0) + 1,
@@ -1971,14 +1917,29 @@ export class SessionManager {
   /**
    * Subscribe to a session's output. Replays the retained scrollback buffer
    * synchronously before returning so a reconnecting WS client sees recent
-   * output immediately. Returns undefined if the session has no live pty.
+   * output immediately. A session that is `starting` without a pty yet is
+   * also attachable; its listener receives the new pty's output once it
+   * spawns. Returns undefined otherwise when the session has no live pty.
    */
   attach(id: string, listener: SessionDataListener): (() => void) | undefined {
     const handle = this.ptys.get(id);
-    if (!handle) return undefined;
-    if (handle.buffer) listener(handle.buffer);
-    handle.emitter.on("data", listener);
-    return () => handle.emitter.off("data", listener);
+    if (!handle && this.sessions.get(id)?.status !== "starting") {
+      return undefined;
+    }
+    if (handle?.buffer) listener(handle.buffer);
+    const registration = { listener };
+    let listeners = this.outputListeners.get(id);
+    if (!listeners) {
+      listeners = new Set();
+      this.outputListeners.set(id, listeners);
+    }
+    listeners.add(registration);
+    return () => {
+      listeners.delete(registration);
+      if (listeners.size === 0 && this.outputListeners.get(id) === listeners) {
+        this.outputListeners.delete(id);
+      }
+    };
   }
 
   onStatusChange(listener: SessionStatusListener): () => void {
@@ -2406,21 +2367,6 @@ export class SessionManager {
     this.emitStatus(session);
   }
 
-  /** Persist a coordinator-owned metadata projection before exposing it. */
-
-
-  /** Persist the neutral project-bootstrap projection before exposing it. */
-  async setProjectBootstrapMetadata(
-    id: string,
-    metadata: ProjectBootstrapMetadata,
-  ): Promise<void> {
-    const session = this.sessions.get(id);
-    if (!session) throw new UnknownSessionError(id);
-    session.projectBootstrap = structuredClone(metadata);
-    await this.persist();
-    this.emitStatus(session);
-  }
-
   /**
    * Whether `id` should be treated as ready to receive programmatic input
    * right now. A real/fallback `session.ready` signal normally suffices; an
@@ -2614,9 +2560,31 @@ export class SessionManager {
     while (this.projectCreateQueues.size > 0) {
       await Promise.all([...this.projectCreateQueues.values()]);
     }
+    while (this.credentialRemovalRelaunches.size > 0) {
+      await Promise.all([...this.credentialRemovalRelaunches]);
+    }
     await this.agentSessionIdentityQueue;
-    await this.subsessionBindingQueue;
     await this.writeQueue;
+  }
+
+  /**
+   * A session's default name is owned by the record, assigned once at
+   * creation: the folder basename, counting up past every sibling ever
+   * created in that folder so an exit or resume never relabels a neighbour.
+   */
+  private defaultTitle(cwd: string): string {
+    const base = basename(cwd) || cwd;
+    let highest = 0;
+    for (const session of this.sessions.values()) {
+      if (!samePath(session.cwd, cwd)) continue;
+      if (session.title === base) highest = Math.max(highest, 1);
+      else if (session.title.startsWith(`${base} `)) {
+        const ordinal = Number(session.title.slice(base.length + 1));
+        if (Number.isInteger(ordinal) && ordinal > 0)
+          highest = Math.max(highest, ordinal);
+      }
+    }
+    return highest === 0 ? base : `${base} ${highest + 1}`;
   }
 
   setTitle(id: string, title: string): void {
@@ -2643,6 +2611,7 @@ export class SessionManager {
   private async spawn(
     session: HarnessSession,
     spec: SpawnSpec,
+    mcpCredentialLaunch?: McpCredentialLaunch,
     revalidateAdmission?: () => Promise<void>,
   ): Promise<void> {
     if (this.closing) throw new SessionManagerClosingError();
@@ -2660,6 +2629,7 @@ export class SessionManager {
       if (value !== undefined) env[key] = value;
     }
     delete env[HOST_ESBUILD_PIN];
+    delete env[STUDIO_HOST_CONTEXT_ENV];
     for (const [key, value] of Object.entries(spec.env)) {
       if (value === null) delete env[key];
       else env[key] = value;
@@ -2705,9 +2675,18 @@ export class SessionManager {
       );
       epochTransitioned = true;
       // Epoch transition is fallible and may wait on durable state. Revalidate
-      // project/user scope and shutdown admission once more after that await.
+      // project/user scope, credential generation, and shutdown admission once
+      // more after that await.
       await revalidateAdmission?.();
       if (this.closing) throw new SessionManagerClosingError();
+      if (
+        mcpCredentialLaunch &&
+        this.currentCredentialGeneration &&
+        mcpCredentialLaunch.generation !==
+          this.currentCredentialGeneration()
+      ) {
+        throw new McpCredentialGenerationChangedError();
+      }
       // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
       // node-pty prebuild surfaces there, not at import time) — propagates to
       // create()/resume(), which own reconciling the session record to
@@ -2732,8 +2711,6 @@ export class SessionManager {
       throw error;
     }
 
-    const emitter = new EventEmitter();
-    emitter.setMaxListeners(0);
     let resolveExited!: () => void;
     const exited = new Promise<void>((resolve) => {
       resolveExited = resolve;
@@ -2741,6 +2718,7 @@ export class SessionManager {
     const handle: PtyHandle = {
       pty,
       runtimeEpoch: ingestCredential.runtimeEpoch,
+      ...(mcpCredentialLaunch ? { mcpCredentialLaunch } : {}),
       buffer: "",
       readinessBuffer: "",
       readinessHistory: "",
@@ -2748,7 +2726,6 @@ export class SessionManager {
       pendingReadinessPrefix: "",
       pendingReadinessFrame: null,
       pendingReadinessFrameHasContent: false,
-      emitter,
       spawnedAt: Date.now(),
       readinessCandidateAt: null,
       lastOutputAt: null,
@@ -2766,6 +2743,10 @@ export class SessionManager {
     this.ptys.set(session.id, handle);
 
     session.status = "running";
+    session.mcpAuthState =
+      mcpCredentialLaunch && this.currentCredentialGeneration
+        ? "current"
+        : "not-applicable";
     // A resumed session may carry `ready: true` from its previous life —
     // this is a fresh pty that hasn't proven itself interactive yet either
     // way (trust dialogs can reappear, e.g. under different sandbox flags).
@@ -2778,7 +2759,13 @@ export class SessionManager {
       handle.bracketedPaste = trackBracketedPaste(handle.bracketedPaste, chunk);
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       this.recordReadinessOutput(handle, chunk, adapter);
-      handle.emitter.emit("data", chunk);
+      if (this.ptys.get(session.id) === handle) {
+        for (const registration of [
+          ...(this.outputListeners.get(session.id) ?? []),
+        ]) {
+          registration.listener(chunk);
+        }
+      }
       this.recordActivity(session.id);
     });
 
@@ -2940,14 +2927,8 @@ export class SessionManager {
     } = {},
   ): Promise<void> {
     this.revokeIngestToken(session.id);
-    try {
-      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(
-        () => {},
-      );
-    } catch {
-      // Capability cleanup never delays durable session reconciliation.
-    }
     session.status = "exited";
+    session.mcpAuthState = "not-applicable";
     session.exitCode = exitCode;
     // Only markExited (a live-pty death) has output to preserve; every other
     // caller (pre-pty create/resume failure, kill()'s ghost path, the sweep)
@@ -3115,99 +3096,6 @@ export class SessionManager {
     await rename(tmpPath, this.agentSessionOwnersPath);
   }
 
-  private async loadSubsessionBindings(): Promise<void> {
-    let decoded: unknown;
-    try {
-      const raw = await readFile(this.subsessionBindingsPath, "utf8");
-      if (Buffer.byteLength(raw, "utf8") > SUBSESSION_BINDING_MAX_BYTES)
-        throw new Error("subsession binding registry exceeds its size limit");
-      decoded = JSON.parse(raw) as unknown;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    if (
-      !isRecord(decoded) ||
-      Object.keys(decoded).sort().join(",") !==
-        "closedSessionIds,markers,version" ||
-      decoded.version !== SUBSESSION_BINDING_FILE_VERSION ||
-      !isRecord(decoded.markers) ||
-      !Array.isArray(decoded.closedSessionIds) ||
-      decoded.closedSessionIds.length > SUBSESSION_BINDING_MAX_ENTRIES ||
-      !decoded.closedSessionIds.every(
-        (sessionId) => typeof sessionId === "string",
-      )
-    ) {
-      throw new Error("subsession binding registry is malformed");
-    }
-    const entries = Object.entries(decoded.markers);
-    if (entries.length > SUBSESSION_BINDING_MAX_ENTRIES)
-      throw new Error("subsession binding registry exceeds its entry limit");
-    const bindingIds = new Set<string>();
-    for (const [sessionId, value] of entries) {
-      const marker = parseTrustedSubsessionBindingMarker(value, sessionId);
-      if (!marker || bindingIds.has(marker.bindingId))
-        throw new Error("subsession binding registry is malformed");
-      bindingIds.add(marker.bindingId);
-      this.subsessionBindings.set(sessionId, marker);
-    }
-    for (const sessionId of decoded.closedSessionIds) {
-      if (!this.subsessionBindings.has(sessionId))
-        throw new Error("subsession binding registry is malformed");
-      this.userClosedSubsessions.add(sessionId);
-    }
-  }
-
-  private async persistSubsessionBindings(): Promise<void> {
-    const markers = Object.fromEntries(
-      [...this.subsessionBindings.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([sessionId, marker]) => [sessionId, marker]),
-    );
-    const serialized = `${JSON.stringify(
-      {
-        version: SUBSESSION_BINDING_FILE_VERSION,
-        markers,
-        closedSessionIds: [...this.userClosedSubsessions].sort(),
-      },
-      null,
-      2,
-    )}\n`;
-    if (Buffer.byteLength(serialized, "utf8") > SUBSESSION_BINDING_MAX_BYTES)
-      throw new Error("subsession binding registry exceeds its size limit");
-    if (this.writeSubsessionBindingRegistry) {
-      await this.writeSubsessionBindingRegistry(
-        this.subsessionBindingsPath,
-        serialized,
-      );
-      return;
-    }
-    const directory = dirname(this.subsessionBindingsPath);
-    await mkdir(directory, { recursive: true });
-    const temporary = `${this.subsessionBindingsPath}.tmp-${process.pid}-${
-      this.subsessionBindingWriteSeq++
-    }`;
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(temporary, "wx", 0o600);
-      await handle.writeFile(serialized, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await rename(temporary, this.subsessionBindingsPath);
-      await chmod(this.subsessionBindingsPath, 0o600);
-      const directoryHandle = await open(directory, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
-    } finally {
-      await handle?.close().catch(() => {});
-      await rm(temporary, { force: true }).catch(() => {});
-    }
-  }
-
   private persistIdentityCandidate(candidate: HarnessSession): Promise<void> {
     const current = this.list();
     const index = current.findIndex((session) => session.id === candidate.id);
@@ -3217,7 +3105,7 @@ export class SessionManager {
         : current.map((session) =>
             session.id === candidate.id ? candidate : session,
           );
-    return this.enqueueRegistryWrite(JSON.stringify(proposed, null, 2) + "\n");
+    return this.enqueueRegistryWrite(serializeSessionRegistry(proposed));
   }
 
   private enqueueRegistryWrite(
@@ -3252,40 +3140,26 @@ export class SessionManager {
       // mutated) or overwrite a successful commit with its old value. Wait,
       // then snapshot the authoritative published map at execution time.
       return this.enqueueRegistryWrite(
-        () => JSON.stringify(this.list(), null, 2) + "\n",
+        () => serializeSessionRegistry(this.list()),
         fence,
       );
     }
     // Outside an identity transaction, capture at call time: queued writes
     // represent the mutation that requested them, not an unrelated later one.
     return this.enqueueRegistryWrite(
-      JSON.stringify(this.list(), null, 2) + "\n",
+      serializeSessionRegistry(this.list()),
     );
   }
 
   private readonly prepareProjectSession: SessionManagerOptions["prepareProjectSession"];
 
-  private readonly onProjectBootstrapSession: SessionManagerOptions["onProjectBootstrapSession"];
-
-  /** Publish project sessions in claim order so the first durable/visible row
-   * is also the one that owns the first-session lifecycle. */
+  /** Publish a project's sessions in creation order. */
   private readonly projectCreateQueues = new Map<string, Promise<void>>();
 
   private readonly pendingCreates = new Map<
     string,
     Pick<HarnessSession, "cwd" | "agentMapIdentity">
   >();
-
-
-  /** Read-only vendor-history probe used before a coordinator claims recovery. */
-  async canResumeSession(id: string): Promise<boolean> {
-    const session = this.sessions.get(id);
-    if (!session?.agentSessionId) return false;
-    return this.getAdapter(session.harness).canResume(
-      session.agentSessionId,
-      session.cwd,
-    );
-  }
 
 
   private serializeProjectCreate<T>(
@@ -3314,166 +3188,44 @@ export class SessionManager {
     return [...this.pendingCreates.values()];
   }
 
-  /**
-   * Server-only reserved-ID create. The private marker is committed before a
-   * session row or process can exist, closing the row-before-binding crash
-   * window while preserving the ordinary writable create path.
-   */
-  async createReserved(
-    reservedSessionId: string,
-    req: CreateSessionRequest,
-    markerInput: TrustedSubsessionBindingMarker,
-    trusted: TrustedSessionCreateOptions,
-  ): Promise<HarnessSession> {
-    const marker = parseTrustedSubsessionBindingMarker(
-      markerInput,
-      reservedSessionId,
-    );
-    if (!marker) throw new SubsessionBindingMismatchError();
-    const operation = async (): Promise<HarnessSession> => {
-      const existingMarker = this.subsessionBindings.get(reservedSessionId);
-      const existingSession = this.sessions.get(reservedSessionId);
-      if (existingMarker) {
-        if (!sameSubsessionBinding(existingMarker, marker))
-          throw new SubsessionBindingMismatchError();
-        if (this.userClosedSubsessions.has(reservedSessionId))
-          throw new SubsessionFreshRestartForbiddenError();
-        if (existingSession) return existingSession;
-      } else {
-        if (existingSession) throw new SubsessionBindingMismatchError();
-        this.subsessionBindings.set(reservedSessionId, marker);
-        try {
-          await this.persistSubsessionBindings();
-        } catch (error) {
-          if (this.subsessionBindings.get(reservedSessionId) === marker)
-            this.subsessionBindings.delete(reservedSessionId);
-          throw error;
-        }
-      }
-      return this.createWithId(reservedSessionId, req, trusted, marker);
-    };
-    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
-    this.subsessionBindingQueue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
-
-  getSubsessionBinding(
-    sessionId: string,
-  ): TrustedSubsessionBindingMarker | null {
-    const marker = this.subsessionBindings.get(sessionId);
-    return marker ? structuredClone(marker) : null;
-  }
-
-  matchesSubsessionBinding(
-    expected: TrustedSubsessionBindingMarker,
-  ): boolean {
-    const parsed = parseTrustedSubsessionBindingMarker(
-      expected,
-      expected.sessionId,
-    );
-    const current = parsed
-      ? this.subsessionBindings.get(parsed.sessionId)
-      : undefined;
-    return Boolean(parsed && current && sameSubsessionBinding(current, parsed));
-  }
-
-  wasSubsessionClosedByUser(
-    expected: TrustedSubsessionBindingMarker,
-  ): boolean {
-    return (
-      this.matchesSubsessionBinding(expected) &&
-      this.userClosedSubsessions.has(expected.sessionId)
-    );
-  }
-
   private async createWithId(
     id: string,
     req: CreateSessionRequest,
     trusted: TrustedSessionCreateOptions,
-    expectedSubsessionBinding?: TrustedSubsessionBindingMarker,
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
-    const marker = this.subsessionBindings.get(id);
-    if (
-      (marker !== undefined || expectedSubsessionBinding !== undefined) &&
-      (!marker ||
-        !expectedSubsessionBinding ||
-        !sameSubsessionBinding(marker, expectedSubsessionBinding))
-    ) {
-      throw new SubsessionBindingMismatchError();
-    }
-    if (this.sessions.has(id)) throw new SubsessionBindingMismatchError();
     const adapter = this.getAdapter(req.harness);
-    const trustedIdentity = trusted.agentMapIdentity?.(id);
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
-      : trustedIdentity;
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      req.cwd,
+      trusted.agentMapIdentity?.(id),
+    );
     const createResolved = async (): Promise<HarnessSession> => {
       // A project create may have been waiting behind another publication
-      // when shutdown closed admission. Refuse it before claiming bootstrap,
-      // issuing capabilities, or writing generated session state.
+      // when shutdown closed admission. Refuse it before issuing
+      // capabilities or writing generated session state.
       if (this.closing) throw new SessionManagerClosingError();
-      let preparedProjectSession:
-        | Awaited<
-            ReturnType<
-              NonNullable<SessionManagerOptions["prepareProjectSession"]>
-            >
-          >
-        | undefined;
-      let opts: LaunchOpts;
-      let spec: SpawnSpec;
-      try {
-        preparedProjectSession =
-          agentMapIdentity && this.prepareProjectSession
-            ? await this.prepareProjectSession(agentMapIdentity, req)
-            : undefined;
-        if (
-          trusted.requireProjectBootstrapClaim &&
-          !preparedProjectSession?.projectBootstrap
-        ) {
-          throw new ProjectBootstrapClaimUnavailableError();
-        }
-        // Retain only AFTER claiming first-session ownership. Advertising the
-        // root earlier could start an automatic session ahead of this request.
-        this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
-        const promptAppendix = trusted.promptAppendix?.(id);
-        const focusedContext = trusted.focusedContext?.(id);
-        if (focusedContext && !agentMapIdentity)
-          throw new TypeError("Focused project context requires a project-agent identity");
-        const sessionStartSystemMessage =
-          trusted.sessionStartSystemMessage?.(id);
-        const launchContext =
-          promptAppendix || focusedContext || sessionStartSystemMessage || agentMapIdentity
-            ? {
-                ...(promptAppendix ? { promptAppendix } : {}),
-                ...(focusedContext ? { focusedContext } : {}),
-                ...(sessionStartSystemMessage
-                  ? { sessionStartSystemMessage }
-                  : {}),
-                ...(agentMapIdentity ? { agentMapIdentity } : {}),
-              }
-            : undefined;
-        opts = {
-          harnessSessionId: id,
-          cwd: req.cwd,
-          ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
-          ...(await (launchContext
-            ? this.buildLaunchOpts(id, req, launchContext)
-            : this.buildLaunchOpts(id, req))),
-        };
-        spec = adapter.launch(opts);
-      } catch (error) {
-        // Scope resolution may already have claimed bootstrap ownership, and
-        // launch preparation may already have issued a capability. Revoke both
-        // for every setup failure, including prompt composition/config writes,
-        // while preserving the original actionable error.
-        await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-        throw error;
-      }
-      const projectBootstrap = preparedProjectSession?.projectBootstrap;
+      const preparedProjectSession = this.prepareProjectSession
+        ? await this.prepareProjectSession(agentMapIdentity, req)
+        : undefined;
+      this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
+      const promptAppendix = trusted.promptAppendix?.(id);
+      const sessionStartSystemMessage =
+        trusted.sessionStartSystemMessage?.(id);
+      const built = await this.buildLaunchOpts(id, req, {
+        ...(promptAppendix ? { promptAppendix } : {}),
+        ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
+        agentMapIdentity,
+      });
+      const { mcpCredentialLaunch, ...opts }: LaunchOpts & {
+        mcpCredentialLaunch?: McpCredentialLaunch;
+      } = {
+        harnessSessionId: id,
+        cwd: req.cwd,
+        ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
+        ...built,
+      };
+      const spec = adapter.launch(opts);
       const session: HarnessSession = {
         id,
         agentSessionId: null,
@@ -3482,28 +3234,21 @@ export class SessionManager {
         title:
           trusted.initialTitle ??
           preparedProjectSession?.initialTitle ??
-          (basename(req.cwd) || req.cwd),
+          this.defaultTitle(req.cwd),
         status: "starting",
+        mcpAuthState: "not-applicable",
         createdAt: this.now(),
         lastActiveAt: this.now(),
         exitCode: null,
         boundWorkflowPath: null,
-        // Ordinary callers record only what the builder actually rehydrated.
-        // A trusted planner replacement records its exact FIFO predecessor even
-        // when the brief came from an older recorded ancestor in that chain.
-        rehydratedFrom:
-          trusted.handoffFromSessionId ?? opts.rehydratedFrom ?? null,
+        // Record only what the builder actually rehydrated.
+        rehydratedFrom: opts.rehydratedFrom ?? null,
         // Persisted so resume() regenerates the same ANSI base — otherwise a
         // resumed session would fall back to the server default and its dim text
         // could lose contrast against a differently-themed terminal.
         ...(req.theme ? { theme: req.theme } : {}),
         ready: false,
-        ...(projectBootstrap
-          ? { projectBootstrap: structuredClone(projectBootstrap) }
-          : {}),
-        ...(agentMapIdentity
-          ? { agentMapIdentity: structuredClone(agentMapIdentity) }
-          : {}),
+        agentMapIdentity: structuredClone(agentMapIdentity),
       };
       this.sessions.set(id, session);
       try {
@@ -3512,24 +3257,17 @@ export class SessionManager {
         // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
         // regardless of which entry point called create() (REST, autoCreateSession).
         await this.writeWorkspaceContext(session);
-        // Same reasoning: the canvas pane opens immediately once the session is
-        // "running" — it must never show a bare empty iframe because nothing's
-        // been written to .sapiom/canvas/index.html yet.
-        await this.ensureCanvasTemplate(session.cwd);
-        await this.spawn(session, spec, () =>
-          this.revalidateAgentMapIdentity(
-            session.id,
-            session.cwd,
-            agentMapIdentity,
-          ),
+        await this.spawn(
+          session,
+          spec,
+          mcpCredentialLaunch,
+          () =>
+            this.revalidateAgentMapIdentity(
+              session.id,
+              session.cwd,
+              agentMapIdentity,
+            ),
         );
-        if (session.projectBootstrap) {
-          const runtimeEpoch = this.getRuntimeEpoch(session.id);
-          if (runtimeEpoch === null) throw new Error("session runtime unavailable");
-          await Promise.resolve(
-            this.onProjectBootstrapSession?.(session, "created", runtimeEpoch),
-          ).catch(() => {});
-        }
       } catch (err) {
         // The first persist may itself be the failure, so reconciliation is
         // best-effort: always repair the in-memory record to "exited", attempt
@@ -3541,156 +3279,12 @@ export class SessionManager {
       return session;
     };
     try {
-      return await (agentMapIdentity
-        ? this.serializeProjectCreate(agentMapIdentity.projectId, createResolved)
-        : createResolved());
+      return await this.serializeProjectCreate(
+        agentMapIdentity.projectId,
+        createResolved,
+      );
     } finally {
       this.pendingCreates.delete(id);
     }
   }
-
-  /**
-   * Narrow recovery for an exact coordinator-owned row that exited before its
-   * first turn and has no resumable vendor conversation. The Harness ID stays
-   * fixed; the private marker advances before a fresh PTY can be admitted.
-   */
-  async restartFreshBound(
-    id: string,
-    expected: TrustedSubsessionBindingMarker,
-    nextInput: TrustedSubsessionBindingMarker,
-    trusted: TrustedSessionCreateOptions,
-    hasRecordedTurns: (sessionId: string) => Promise<boolean>,
-  ): Promise<HarnessSession> {
-    if (this.closing) throw new SessionManagerClosingError();
-    const currentExpected = parseTrustedSubsessionBindingMarker(expected, id);
-    const next = parseTrustedSubsessionBindingMarker(nextInput, id);
-    const current = this.subsessionBindings.get(id);
-    const session = this.sessions.get(id);
-    if (
-      !currentExpected ||
-      !next ||
-      !current ||
-      !session ||
-      (current.projectId !== currentExpected.projectId ||
-        current.parentSessionId !== currentExpected.parentSessionId ||
-        current.bindingId !== currentExpected.bindingId ||
-        current.sessionId !== currentExpected.sessionId) ||
-      next.projectId !== currentExpected.projectId ||
-      next.parentSessionId !== currentExpected.parentSessionId ||
-      next.bindingId !== currentExpected.bindingId ||
-      next.sessionId !== currentExpected.sessionId ||
-      next.incarnation !== currentExpected.incarnation + 1 ||
-      next.spawnEpoch <= currentExpected.spawnEpoch ||
-      this.ptys.has(id) ||
-      session.status !== "exited"
-    ) {
-      throw new SubsessionBindingMismatchError();
-    }
-    if (this.userClosedSubsessions.has(id))
-      throw new SubsessionFreshRestartForbiddenError();
-    // A retry may observe the already-advanced marker after the sidecar write
-    // committed but before the fresh process existed.
-    if (
-      !sameSubsessionBinding(current, currentExpected) &&
-      !sameSubsessionBinding(current, next)
-    ) {
-      throw new SubsessionBindingMismatchError();
-    }
-    const adapter = this.getAdapter(session.harness);
-    if (
-      (session.agentSessionId !== null &&
-        (await adapter.canResume(session.agentSessionId, session.cwd))) ||
-      (await hasRecordedTurns(id))
-    ) {
-      throw new SubsessionFreshRestartForbiddenError();
-    }
-
-    if (!sameSubsessionBinding(current, next)) {
-      this.subsessionBindings.set(id, next);
-      try {
-        await this.persistSubsessionBindings();
-      } catch (error) {
-        this.subsessionBindings.set(id, current);
-        throw error;
-      }
-    }
-
-    const trustedIdentity = trusted.agentMapIdentity?.(id);
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
-      : trustedIdentity;
-    if (
-      !agentMapIdentity ||
-      agentMapIdentity.projectId !== next.projectId ||
-      agentMapIdentity.sessionId !== id
-    ) {
-      throw new ProjectSessionScopeUnavailableError(id);
-    }
-
-    const lastActiveBeforeRestart = session.lastActiveAt;
-    session.status = "starting";
-    session.exitCode = null;
-    session.exitTail = null;
-    session.agentSessionId = null;
-    session.agentMapIdentity = structuredClone(agentMapIdentity);
-    session.lastActiveAt = this.now();
-    let spec: SpawnSpec;
-    try {
-      const promptAppendix = trusted.promptAppendix?.(id);
-      const focusedContext = trusted.focusedContext?.(id);
-      const sessionStartSystemMessage =
-        trusted.sessionStartSystemMessage?.(id);
-      const context = {
-        ...(promptAppendix ? { promptAppendix } : {}),
-        ...(focusedContext ? { focusedContext } : {}),
-        ...(sessionStartSystemMessage
-          ? { sessionStartSystemMessage }
-          : {}),
-        agentMapIdentity,
-      };
-      const opts: LaunchOpts = {
-        harnessSessionId: id,
-        cwd: session.cwd,
-        ...(await this.buildLaunchOpts(id, session, context)),
-      };
-      spec = adapter.launch(opts);
-    } catch (error) {
-      session.status = "exited";
-      session.lastActiveAt = lastActiveBeforeRestart;
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
-    try {
-      await this.persist();
-      this.emitStatus(session);
-      await this.writeWorkspaceContext(session);
-      await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(session, spec, () =>
-        this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
-      );
-      return session;
-    } catch (error) {
-      session.lastActiveAt = lastActiveBeforeRestart;
-      await this.transitionExited(session, null, {
-        stampLastActive: false,
-      }).catch(() => {});
-      throw error;
-    }
-  }
-}
-
-
-
-/** An automatic first-session create lost the project bootstrap claim. */
-export class ProjectBootstrapClaimUnavailableError extends Error {
-  readonly code = "PROJECT_BOOTSTRAP_CLAIM_UNAVAILABLE";
-
-  constructor() {
-    super("the project bootstrap claim is already owned by another session");
-    this.name = "ProjectBootstrapClaimUnavailableError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

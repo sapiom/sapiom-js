@@ -161,8 +161,12 @@ export function useDialogBehavior({
     }
 
     return () => {
-      const restoreTo = triggerRef?.current ?? openedFromRef.current;
-      if (!restoreTo?.isConnected) return;
+      // The trigger may have unmounted since (a dialog that closed itself to
+      // hand off to this one); fall back to whatever held focus at open.
+      const restoreTo = [triggerRef?.current, openedFromRef.current].find(
+        (candidate) => candidate?.isConnected,
+      );
+      if (!restoreTo) return;
       // Don't yank focus from wherever it has legitimately gone: restore only
       // when the closing dialog is what still holds it.
       const active = document.activeElement;

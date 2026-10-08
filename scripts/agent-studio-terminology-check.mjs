@@ -76,6 +76,7 @@ const TERMINOLOGY_RULES = [
 ];
 
 const STATIC_TARGETS = [
+  "packages/agent-map/src",
   ".github/workflows/desktop-release.yml",
   ".changeset",
   "docs",

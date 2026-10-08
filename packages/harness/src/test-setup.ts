@@ -14,6 +14,10 @@ process.env.SAPIOM_TELEMETRY_DISABLED = "1";
 // profiles/system-prompt-fetch.test.ts, which calls it directly.
 process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED = "1";
 
+// Same for the served platform rules the skills plugin inlines into a session's
+// authoring skill (SAP-3225); core/inject/skills-plugin.test.ts covers the fetch.
+process.env.SAPIOM_AUTHORING_RULES_FETCH_DISABLED = "1";
+
 // Launch-time MCP generation reads ~/.sapiom/credentials.json by design. Give
 // every test file an isolated home so a developer's real credential and
 // current environment can never enter a generated config or affect assertions.

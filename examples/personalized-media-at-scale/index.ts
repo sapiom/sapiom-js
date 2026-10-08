@@ -191,11 +191,11 @@ function buildPrompt(row: Recipient, medium: Medium, style: string): string {
  * `run_local`. Reading rows is free, so this runs on a dry run too; only
  * generation + email are gated.
  *
- * `provisioned` is load-bearing, not decoration. A managed Postgres caps at 7
- * days with no renew verb, so `get` failing means either "never existed" or
- * "expired" and the API cannot tell you which. Without reporting it, a scheduled
- * run silently reverts to the demo rows after the caller's own data expires —
- * a confident, successful-looking run over data that vanished.
+ * `provisioned` is load-bearing, not decoration. A Sapiom Postgres is permanent,
+ * so `get` failing means the handle was never created or someone deleted it, and
+ * the API cannot tell you which. Without reporting it, a scheduled run would
+ * silently revert to the demo rows after the caller's own table was deleted —
+ * a confident, successful-looking run over data that is no longer there.
  */
 async function openSql(
   ctx: Ctx,
@@ -209,7 +209,6 @@ async function openSql(
     provisioned = true;
     db = await ctx.sapiom.database.create({
       handle,
-      duration: "7d",
       name: "Personalized Media",
       description: "Recipient rows for the personalized-media-at-scale agent",
     });
@@ -415,7 +414,7 @@ const fetch = defineStep({
       "note",
       [
         opened?.provisioned
-          ? `Provisioned the \`${dbHandle}\` database on this run. A Sapiom Postgres caps at 7 days with no renew verb, so on a schedule an earlier run's rows may have expired.`
+          ? `Provisioned the \`${dbHandle}\` database on this run: no database with that handle existed. A Sapiom Postgres is permanent, so on a schedule this means an earlier run's database was deleted, not that it lapsed.`
           : null,
         seeded
           ? `Seeded ${TABLE} with 3 demo recipients, so the media below is rendered for them, not for your list. Insert your own rows (or point \`dbHandle\` at your database) to render yours.`

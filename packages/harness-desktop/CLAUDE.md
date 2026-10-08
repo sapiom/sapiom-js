@@ -115,6 +115,12 @@ import order and the `deploy-bundle` smoke check catches it packaged. node-pty i
 problem solved a different way (its spawn-helper path comes from the module itself, already unpacked).
 Any new dependency of this shape needs its own path hook or a child process.
 
+**OpenCode names its native binary `opencode.exe` on every platform.** electron-builder drops
+`.exe` dependencies from Mac/Linux packages by default. Keep the explicit `files` directory
+pattern and `onNodeModuleFile` hook together: the extension exception needs both. Removing either
+breaks Assistant startup while the rest of Studio still boots. The `opencode-runtime` packaged
+smoke check starts two real runtimes, creates independent sessions, and requires confirmed cleanup.
+
 ### macOS
 
 - Canonicalize the tmpdir or electron-builder fails with `ENOENT .pnpm/node_modules/@sapiom/…`: it

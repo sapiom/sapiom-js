@@ -40,7 +40,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { focusRfqAgent } from "./mock-navigation";
+import { openProjectMap } from "./mock-navigation";
 
 // ---------------------------------------------------------------------------
 // Suite 1: 401 boot → ConnectivityScreen(auth) → Retry → no lockout
@@ -216,7 +216,7 @@ test.describe("offline mid-session → graceful degrade", () => {
     await expect(page.getByTestId("connectivity-screen")).toHaveCount(0);
   });
 
-  test("the shell remains interactive while offline: focus agent, read session info", async ({
+  test("the shell remains interactive while offline: focus agent, read session info and open a map", async ({
     page,
   }) => {
     // Go offline.
@@ -227,13 +227,17 @@ test.describe("offline mid-session → graceful degrade", () => {
 
     await expect(page.getByTestId("connectivity-banner")).toBeVisible({ timeout: 3_000 });
 
-    // Shell interactions still work against last-known state — focus rfq agent.
-    await focusRfqAgent(page);
-    await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
-
-    // Session context shows the honest "no session" state — offline doesn't
-    // corrupt the UI or hide session information.
-    await expect(page.getByTestId("session-context-title")).toHaveText("rfq");
-    await expect(page.getByTestId("session-status-tag")).toContainText("no session");
+    // Shell interactions still work against last-known state: one click to
+    // another project's session, and a project's map, both from the rail.
+    await page.getByTestId("rail-session-select-sess-rfq").click();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-rfq",
+    );
+    // Session context shows the honest exited state — offline doesn't corrupt
+    // the UI or hide session information.
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+    await openProjectMap(page, "rfq-agent");
+    await expect(page.getByTestId("session-context-title")).toHaveText("rfq-agent");
   });
 });

@@ -1,22 +1,17 @@
 # `GET /api/workflows/:path/graph` — the agent-keyed canvas route
 
 **Status:** shipped (IA-01, epic SAP-2926 § Server gaps).
-**Implementation:** `src/server/workflow-graph.ts`, derivation in `src/core/canvas-render.ts`.
+**Implementation:** `src/server/workflow-graph.ts`, derivation in `src/core/canvas-document.ts`.
 **Consumer:** SAP-2931 (selection-driven canvas) — this note is the contract to wire against.
 
 ## Why it exists
 
-The canvas has only ever been reachable through a session. Boards live at
-`/canvas/:harnessSessionId/` and resolve by the session's *current binding*
-(`src/server/canvas.ts`), so an agent that has never hosted a session has no board at all,
-and you cannot read agent F's board while working in agent B's session.
-
-This route is a second, **session-free** entry point onto the *same* derivation. It is not a
-new renderer: it calls `deriveWorkflowCanvas` (`src/core/canvas-render.ts`) — the exact
-pipeline the render-file write path uses — so the document it returns is **byte-identical** to
-the render a bound session's canvas serves for the same workflow. A test locks that parity
-(`src/core/canvas-render.test.ts`, "produces the byte-identical document the session-bound
-render writes to disk"). Nothing is written to disk.
+The agent modal's Canvas reads an agent's board by the agent's path, so an agent that has
+never hosted a session still has a board, and you can read agent F's board while working in
+agent B's session. The route calls `deriveWorkflowCanvas` (`src/core/canvas-document.ts`) and
+returns the document and graph in the response. Nothing is written to disk. (The per-agent
+render files under `.sapiom/canvas/renders/` and the session board at `/canvas/:sessionId/`
+this route used to mirror no longer exist.)
 
 ## Request
 
@@ -38,8 +33,7 @@ X-Harness-Token: <boot token>
 
 - Mounted under the same `/api` boot-token middleware as the rest of the REST surface, so it
   needs the `X-Harness-Token` header. **It is therefore a `fetch` target, not an `<iframe src>`**
-  — an iframe cannot carry the header, which is exactly why `/canvas/:sessionId/` is mounted
-  unauthenticated. Render `document` via `srcdoc` (or draw `graph` yourself); do not point an
+  — an iframe cannot carry the header. Render `document` via `srcdoc` (or draw `graph` yourself); do not point an
   iframe `src` at this URL.
 
 ## Response
@@ -62,8 +56,7 @@ interface WorkflowGraphResponse {
 `document` is present for **every** status, including `empty`: an empty board is still a
 renderable page, never a hole. For `ok` it is the workflow panel; for `preparing` the calm
 "Preparing your agent" placeholder; for `error` the honest error panel; for `empty` the same
-"Nothing rendered yet" message document `src/server/canvas.ts` serves, with `reason` as its
-subtitle.
+"Nothing rendered yet" message document, with `reason` as its subtitle.
 
 ## Status codes
 

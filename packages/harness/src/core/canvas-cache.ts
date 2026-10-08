@@ -3,7 +3,7 @@
  * for a child `check()` process twice. Keyed by workflow directory, guarded
  * by a cheap source fingerprint (file count + newest mtime over the
  * project's own `.ts`/`.tsx` sources — the same file walk the launch grep
- * uses, see core/canvas-interconnections.ts's `listSourceFiles`). Any source
+ * uses, see `@sapiom/mcp/map`'s `listSourceFiles`). Any source
  * edit bumps an mtime, any add/remove changes the count; either invalidates.
  *
  * Only SUCCESSFUL extractions are cached: a failure like "run npm install
@@ -22,7 +22,7 @@ import {
 import {
   listSourceFilesWithObservations,
   workflowSourceFileMetadata,
-} from "./canvas-interconnections.js";
+} from "@sapiom/mcp/map";
 
 /** Stable no-follow metadata over the workflow's bounded admitted sources. */
 export async function fingerprintWorkflowSources(

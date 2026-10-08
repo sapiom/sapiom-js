@@ -1,0 +1,142 @@
+/**
+ * Which runs belong to which agent, and which one each agent shows (pure).
+ *
+ * Runs are keyed by the agent's PATH, never by a session (design-map-chat.md
+ * §1 "Run", I3; flow 4.4b). Run locally and Run are direct routes that take no
+ * session, so a run started from the agent modal with no session open must
+ * still land under the agent it ran. Keying by session dropped exactly that
+ * run: there was no session to file it under.
+ *
+ * The snapshots themselves live in `runsByExecution` (keyed by executionId,
+ * never dropped); this module only holds the per-agent order and the explicit
+ * pick, so a past run stays inspectable after a newer one starts.
+ */
+import { samePath } from "./paths";
+
+export interface AgentRunIndex {
+  /** Ordered executionIds per agent path, oldest first: the run picker's
+   *  source of truth. */
+  idsByAgent: Map<string, string[]>;
+  /** Explicit run picks per agent path; absent = follow the latest run. */
+  pickedByAgent: Map<string, string>;
+}
+
+export const emptyAgentRunIndex = (): AgentRunIndex => ({
+  idsByAgent: new Map(),
+  pickedByAgent: new Map(),
+});
+
+/**
+ * The map's own key for `agentPath`. Paths arrive from the registry, the run
+ * request and a session's binding; they can differ in a trailing separator or
+ * (on Windows) case, and two keys for one agent would split its runs in two.
+ */
+const keyFor = (map: Map<string, unknown>, agentPath: string): string => {
+  for (const key of map.keys()) if (samePath(key, agentPath)) return key;
+  return agentPath;
+};
+
+/**
+ * Files a newly observed run under its agent and drops the agent's explicit
+ * pick, so the agent follows its fresh run (the picker still reaches every
+ * past one). A repeat announcement of the same run changes nothing.
+ */
+export function recordAgentRun(
+  index: AgentRunIndex,
+  agentPath: string,
+  executionId: string,
+): AgentRunIndex {
+  const key = keyFor(index.idsByAgent, agentPath);
+  const ids = index.idsByAgent.get(key) ?? [];
+  if (ids.includes(executionId)) return index;
+  const idsByAgent = new Map(index.idsByAgent).set(key, [...ids, executionId]);
+  const pickKey = keyFor(index.pickedByAgent, agentPath);
+  if (!index.pickedByAgent.has(pickKey)) return { ...index, idsByAgent };
+  const pickedByAgent = new Map(index.pickedByAgent);
+  pickedByAgent.delete(pickKey);
+  return { idsByAgent, pickedByAgent };
+}
+
+/** Shows a past run of the agent instead of its latest. */
+export function pickAgentRun(
+  index: AgentRunIndex,
+  agentPath: string,
+  executionId: string,
+): AgentRunIndex {
+  const key = keyFor(index.pickedByAgent, agentPath);
+  if (index.pickedByAgent.get(key) === executionId) return index;
+  return {
+    ...index,
+    pickedByAgent: new Map(index.pickedByAgent).set(key, executionId),
+  };
+}
+
+/**
+ * Re-files an agent's runs after Change location moved it, so its history
+ * follows it to the new path instead of staying under a path nothing shows.
+ */
+export function moveAgentRuns(
+  index: AgentRunIndex,
+  from: string,
+  to: string,
+): AgentRunIndex {
+  const source = keyFor(index.idsByAgent, from);
+  const moved = index.idsByAgent.get(source);
+  if (!moved) return index;
+  const idsByAgent = new Map(index.idsByAgent);
+  idsByAgent.delete(source);
+  // Lands on the destination's existing key when one is already there (runs
+  // filed under a path an earlier agent held), merged, so one agent never has
+  // two keys and `runIdsForAgent` sees every run.
+  const dest = keyFor(idsByAgent, to);
+  const earlier = (idsByAgent.get(dest) ?? []).filter((id) => !moved.includes(id));
+  idsByAgent.set(dest, [...earlier, ...moved]);
+  // The moved agent's pick decides what it shows, under the same key as its
+  // runs: none means it follows its latest, never the earlier agent's pick.
+  const pick = index.pickedByAgent.get(keyFor(index.pickedByAgent, from));
+  const pickedByAgent = new Map(index.pickedByAgent);
+  pickedByAgent.delete(keyFor(pickedByAgent, from));
+  pickedByAgent.delete(keyFor(pickedByAgent, to));
+  if (pick !== undefined) pickedByAgent.set(dest, pick);
+  return { idsByAgent, pickedByAgent };
+}
+
+/**
+ * Re-attributes the stored run snapshots of a moved agent to its new path,
+ * the snapshot half of {@link moveAgentRuns}. A move keeps the agent, so its
+ * runs keep belonging to it; only a different agent may never inherit them.
+ */
+export function moveRunAttribution<T extends { workflowPath: string | null }>(
+  runs: Map<string, T>,
+  from: string,
+  to: string,
+): Map<string, T> {
+  let next: Map<string, T> | null = null;
+  runs.forEach((observed, id) => {
+    if (observed.workflowPath === null || !samePath(observed.workflowPath, from)) return;
+    (next ??= new Map(runs)).set(id, { ...observed, workflowPath: to });
+  });
+  return next ?? runs;
+}
+
+/**
+ * The executionId each agent shows: its pick while that run is still filed
+ * under it, else its latest run.
+ */
+export function shownRunIdByAgent(index: AgentRunIndex): Map<string, string> {
+  const shown = new Map<string, string>();
+  index.idsByAgent.forEach((ids, agentPath) => {
+    const picked = index.pickedByAgent.get(keyFor(index.pickedByAgent, agentPath));
+    const id = picked && ids.includes(picked) ? picked : ids[ids.length - 1];
+    if (id) shown.set(agentPath, id);
+  });
+  return shown;
+}
+
+/** The agent's run ids, oldest first, whatever spelling of its path is asked. */
+export function runIdsForAgent(
+  index: AgentRunIndex,
+  agentPath: string,
+): string[] {
+  return index.idsByAgent.get(keyFor(index.idsByAgent, agentPath)) ?? [];
+}

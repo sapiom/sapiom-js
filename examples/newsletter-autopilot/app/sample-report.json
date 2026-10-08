@@ -1,0 +1,56 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "384652",
+    "definitionId": "538",
+    "startedAt": "2026-08-27T16:06:07.388Z",
+    "finishedAt": "2026-08-27T16:07:28.117Z",
+    "status": "completed",
+    "input": {
+      "niche": "indie game development",
+      "newsletterName": "Pixel Weekly"
+    },
+    "note": "Verbatim terminal output of a run of this template with no subscribers set (input: the default niche plus a newsletterName), read back over the Sapiom API from agent run 384652 on 2026-09-25. The issue was really emailed to the agent's own demo inbox; the header image is the public file the illustrate step produced."
+  },
+  "output": {
+    "to": "difficultobject512@agentmail.to",
+    "body": "# Pixels & Paychecks: A Solo Dev's $20K Launch Week, Wishlist Math, and the Indie Stack\n\nThis week we crunch real revenue numbers from a one-person Steam debut, surface the wishlist-to-sales conversion every solo dev underestimates, and round up the communities and tutorial libraries quietly powering the next wave of hobby-to-shipping pipelines.\n\n## Core Defense: Anatomy of a $20,186 Launch Week\nSolo dev Mario Kaiser shipped Core Defense on Steam and banked $20,186 in week one — modest by triple-A standards, but a useful data point for anyone building small. Months later, with zero Steam sales run, the title is already sitting at roughly 2.5x that first-week revenue, and an Android + iOS port is queued to stretch it further. The takeaway: a clean launch is a starting line, not a finish. [1]\n\n## The Wishlist-to-Revenue Math Nobody Tells You\nKaiser leans on Simon Carless's research showing that first-week Steam revenue typically grows 2–5x over a game's first year as accumulated wishlists slowly convert to sales. Core Defense is out-performing that benchmark without a single discount — proof that the months-long wishlist build before launch is the real campaign. [1]\n\n## Finding Your Missing Co-Founder: Work With Indies\nWork With Indies is positioning itself as the indie-specific job board and Discord hub that mainstream gaming-recruitment sites don't serve. Listings start at $49, the Discord runs resume and portfolio reviews, and the team has flagged an active scam impersonating the brand — a useful reminder that indie hiring culture is still maturing alongside the tooling. [3]\n\n## From Hobby Project to Shipped Game: IndieGameDev's Tutorial Stack\nIndieGameDev.net quietly maintains one of the better learning libraries aimed at hobby developers crossing into shippable territory: hands-on deep dives into rendering and engine architecture, a full OpenAL + C++ audio series, simple game-music production tutorials, and even a random game-idea generator for the moments when the blank page wins. [5]\n\n## Sources\n- [1] How to Make a Somewhat Successful Indie Game — https://frgmnts.blog/f/how-make-successful-indie-game.html\n- [3] Work With Indies - Make Games, Together — https://www.workwithindies.com/\n- [5] IndieGameDev | Solo, Hobby, and Indie Developers — https://indiegamedev.net/",
+    "demo": true,
+    "note": "No `subscribers` were set, so this issue was emailed to the agent's own Sapiom-hosted demo inbox (difficultobject512@agentmail.to) — the message above is real and inspectable. Set `subscribers` to send it to your list instead. Wrote about the default niche (\"indie game development\"). Pass a `niche` to write about yours.",
+    "niche": "indie game development",
+    "dryRun": false,
+    "sources": [
+      {
+        "url": "https://frgmnts.blog/f/how-make-successful-indie-game.html",
+        "title": "How to Make a Somewhat Successful Indie Game | FRGMNTS"
+      },
+      {
+        "url": "https://www.indiegamesdeveloper.com/",
+        "title": "Indie Games, Development, Magazine, and Awards - Indie Games Developer"
+      },
+      {
+        "url": "https://www.workwithindies.com/",
+        "title": "Work With Indies - Make Games, Together"
+      },
+      {
+        "url": "https://gamemaker.io/en/blog/what-are-indie-games",
+        "title": "What Are Indie Games & Indie Game Development Guide | GameMaker"
+      },
+      {
+        "url": "https://indiegamedev.net/",
+        "title": "IndieGameDev | Solo, Hobby, and Indie Developers"
+      }
+    ],
+    "subject": "Pixels & Paychecks: A Solo Dev's $20K Launch Week",
+    "schedule": "0 8 * * 1",
+    "selfEdit": {
+      "score": 1,
+      "passed": true,
+      "iterations": 1
+    },
+    "delivered": true,
+    "messageId": "<010001a043f9ec93-6e793de6-b1dd-4d5a-8704-37641a6b95bb-000000@email.amazonses.com>",
+    "recipients": 1,
+    "headerImageUrl": "https://file-storage.services.sapiom.ai/public/57c3cdbf-af2e-46c8-8251-d129ccbb7284"
+  }
+}

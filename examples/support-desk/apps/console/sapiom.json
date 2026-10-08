@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "resources": {
+    "console": {
+      "type": "sandbox",
+      "source": { "kind": "upload", "path": "dist" },
+      "start": "node server.mjs",
+      "port": 3000,
+      "env": {}
+    }
+  }
+}

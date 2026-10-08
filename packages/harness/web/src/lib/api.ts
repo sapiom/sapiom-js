@@ -1,6 +1,3 @@
-import type { AgentMapImplementationsResponse } from "@shared/agent-map";
-import { parseAgentMapImplementations } from "./agent-map-deployment";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
  * section of ../../../src/shared/types.ts). Gated at this layer: with
@@ -8,11 +5,12 @@ import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } 
  * touches the network — this is what lets the SPA build ahead of a running
  * server.
  */
-import { buildIdeaWithAttachments } from "@shared/initial-prompt";
+import { buildFirstPrompt } from "@shared/initial-prompt";
 import type {
   AccountPlanView,
   AgentSecret,
   AgentSecretsView,
+  DefinitionAppLinkView,
   SecretWriteReport,
   AdoptSessionRequest,
   AgentScaffoldResponse,
@@ -31,9 +29,6 @@ import type {
   RunMacroRequest,
   SessionRecord,
   SessionSummary,
-  StudioRailFileResponse,
-  StudioRailLaunchEdge,
-  StudioRailLaunchEdgesResponse,
   TemplateDetailView,
   TemplateListResponse,
   RunView,
@@ -42,40 +37,24 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 import {
-  type SystemGraph,
-  type SystemGraphNavigationResponse,
-  type SystemGraphSnapshot,
   type WorkspaceKey,
   type WorkspaceScopeSummary,
-} from "@shared/system-graph";
+} from "@shared/workspace-scope";
 import type {
-  AcceptedProposalDelta,
-  AgentMapWorkspaceResponse,
-  MapOperation,
-  PlanNodeId,
   PutStudioCurrentWorkspaceRequest,
   StudioCurrentWorkspaceResponse,
   StudioProjectId,
   StudioProjectSummary,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
-import {
-  parseAgentMapNodeTarget,
-  type AgentMapNodeTarget,
-} from "./agent-map-navigation";
 import { refuseAgentName } from "@shared/agent-name";
-import {
-  parseSystemGraphNavigation,
-  parseSystemGraphSnapshot,
-} from "./system-graph";
-import {
-  parseAgentMapWorkspaceResponse,
-  parseStudioCurrentWorkspaceResponse,
-} from "./agent-map";
+import { parseStudioCurrentWorkspaceResponse } from "./agent-map";
+import { mockProjectMap } from "./mock-project-map";
+import type { CanvasMapRequest, MapRef, ProjectMapResponse } from "./project-map";
 import { refuseMove, remapUnder } from "./agent-move";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
@@ -308,8 +287,7 @@ export type WorkflowGraphStatus = "ok" | "empty" | "preparing" | "error";
  *
  * The route returns JSON and CANNOT be an `<iframe src>`: it sits behind the
  * `X-Harness-Token` middleware and a bare `src` carries no header. `document`
- * is byte-identical to what a bound session's `/canvas/:sessionId/` serves for
- * the same workflow, and is present for EVERY status — an empty board is still
+ * is present for EVERY status — an empty board is still
  * a renderable page, never a hole — so a consumer renders it via `srcdoc`.
  */
 export interface WorkflowGraphResponse {
@@ -375,17 +353,8 @@ export interface HarnessApi {
    */
   authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
-  /** Durable, path-free empty/proposal/revision pointers for one Studio project. */
-  getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
-  retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
-  getAgentMapWorkspace(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapWorkspaceResponse>;
-  getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse>;
-  getAgentMapNodeImplementation(
-    projectId: StudioProjectId,
-    nodeId: PlanNodeId,
-  ): Promise<AgentMapNodeTarget>;
+  /** The project's map, computed from its code by `sapiom_dev_map`; `ref` draws a git ref. */
+  getProjectMap(projectId: StudioProjectId, ref: MapRef): Promise<ProjectMapResponse>;
   getStudioCurrentWorkspace(
     projectId: StudioProjectId,
   ): Promise<StudioCurrentWorkspaceResponse>;
@@ -393,15 +362,6 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     selection: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse>;
-  /** Revisioned local dependency projection for one server-issued workspace key. */
-  getSystemGraph(
-    workspaceKey: WorkspaceKey,
-    options?: { refresh?: boolean },
-  ): Promise<SystemGraphSnapshot>;
-  /** Server-owned AgentKey resolver for one exact graph revision. */
-  getSystemGraphNavigation(
-    workspaceKey: WorkspaceKey,
-  ): Promise<SystemGraphNavigationResponse>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
   attachFile(id: string, req: AttachFileRequest): Promise<AttachFileResponse>;
   listSessions(): Promise<HarnessSession[]>;
@@ -416,6 +376,8 @@ export interface HarnessApi {
    */
   sessionRecord(id: string): Promise<SessionRecord | null>;
   resumeSession(id: string): Promise<HarnessSession>;
+  /** Restart one live coding-agent session whose launch-time MCP auth is stale. */
+  restartMcpSession(id: string): Promise<HarnessSession>;
   /** Take a transcript-only history row (`resumeMode: "agent-resume"`, no
    *  `harnessSessionId`) into the registry and resume it — the honest
    *  alternative to silently opening a fresh session in its directory.
@@ -440,7 +402,9 @@ export interface HarnessApi {
    * empty, never missing — so a consumer must tell a real board from an empty
    * one by `status`, never by the status code.
    */
-  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse>;
+  /** The agent's Canvas. With `map`, its steps and its edges to other agents
+   *  come from the project map (POST); without, from the working copy (GET). */
+  getWorkflowGraph(workflowPath: string, map?: CanvasMapRequest | null): Promise<WorkflowGraphResponse>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   /**
    * `POST /api/workflows/scan` — a requested deep scan of one root.
@@ -485,28 +449,6 @@ export interface HarnessApi {
    *  mode/installed/experimental flags plus per-agent Sapiom MCP install
    *  instructions — the new-session picker and MCP setup block feed on it. */
   listHarnesses(): Promise<HarnessEntry[]>;
-  /**
-   * The Group axis's stored arrangement for one project root — the exact text of
-   * `<root>/.sapiom/studio-rail.json`, or null when there is no file.
-   *
-   * TEXT, not a decoded object, and deliberately so: the file distinguishes
-   * `groups: null` ("nothing stored, detection owns this") from `groups: []`
-   * ("the user materialized groups and then deleted them all"), and a second
-   * decoder anywhere on this path is a second place for those to collapse into
-   * each other. `lib/agent-groups.ts` is the only decoder.
-   */
-  getRailState(projectRoot: string): Promise<string | null>;
-  /** Write a MATERIALIZED arrangement. An un-materialized one is
-   *  `clearRailState`, never `{ groups: [] }`. */
-  saveRailState(projectRoot: string, raw: string): Promise<void>;
-  /** Remove the file: how an un-materialized arrangement — including the one
-   *  `Reset to detected` produces — is persisted. Removing rather than skipping
-   *  the write is what stops the old arrangement outliving the reset. */
-  clearRailState(projectRoot: string): Promise<void>;
-  /** Every detected launch edge across the registered agents, from the existing
-   *  grep in `core/canvas-interconnections.ts`. The Group axis seeds its groups
-   *  from the connected components over these. */
-  listLaunchEdges(): Promise<StudioRailLaunchEdge[]>;
   listMacros(): Promise<MacroDef[]>;
   runMacro(id: string, req: RunMacroRequest): Promise<void>;
   getSettings(): Promise<HarnessSettings>;
@@ -524,6 +466,10 @@ export interface HarnessApi {
   /** The rail's plan card view, relayed by the server from core (key stays
    *  server-side). Never rejects on a degraded read — inspect `source`. */
   getAccountPlan(): Promise<AccountPlanView>;
+  /** The durable App Link bound to this agent's cloud definition, relayed by
+   *  the server from core. Answers `status: null` for every "nothing to show"
+   *  case (unlinked, no link, signed out, unreachable). */
+  getAppLink(workflowPath: string): Promise<DefinitionAppLinkView>;
   /**
    * This agent's credentials, by NAME and state. Never carries a value: the
    * platform's read is names-only by design and the local store's plaintext
@@ -657,36 +603,11 @@ class RealApi implements HarnessApi {
     return this.request<AppState>("/api/state");
   }
 
-  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization`), projectId);
-  }
-  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization/retry`, { method: "POST" }), projectId);
-  }
-
-  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
-    return parseAgentMapImplementations(await this.request<unknown>(
-      `/api/projects/${encodeURIComponent(projectId)}/agent-map/implementations`,
-    ), projectId);
-  }
-
-  async getAgentMapNodeImplementation(
-    projectId: StudioProjectId,
-    nodeId: PlanNodeId,
-  ): Promise<AgentMapNodeTarget> {
-    const value = await this.request<unknown>(
-      `/api/projects/${encodeURIComponent(projectId)}/agent-map/nodes/${encodeURIComponent(nodeId)}/implementation`,
+  getProjectMap(projectId: StudioProjectId, ref: MapRef): Promise<ProjectMapResponse> {
+    const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+    return this.request<ProjectMapResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/map${query}`,
     );
-    return parseAgentMapNodeTarget(value, projectId, nodeId);
-  }
-
-  async getAgentMapWorkspace(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapWorkspaceResponse> {
-    const value = await this.request<unknown>(
-      `/api/projects/${encodeURIComponent(projectId)}/agent-map/workspace`,
-    );
-    return parseAgentMapWorkspaceResponse(value, projectId);
   }
 
   async getStudioCurrentWorkspace(
@@ -712,33 +633,6 @@ class RealApi implements HarnessApi {
       },
     );
     return parseStudioCurrentWorkspaceResponse(value, projectId);
-  }
-
-  async getSystemGraph(
-    workspaceKey: WorkspaceKey,
-    options: { refresh?: boolean } = {},
-  ): Promise<SystemGraphSnapshot> {
-    const route = `/api/workspaces/${encodeURIComponent(workspaceKey)}/system-graph`;
-    const response = await this.response(
-      options.refresh ? `${route}/refresh` : route,
-      options.refresh ? { method: "POST" } : undefined,
-    );
-    const snapshot = parseSystemGraphSnapshot(
-      (await response.json()) as unknown,
-    );
-    if (snapshot.workspaceKey !== workspaceKey) {
-      throw new Error("Invalid system graph response");
-    }
-    return snapshot;
-  }
-
-  async getSystemGraphNavigation(
-    workspaceKey: WorkspaceKey,
-  ): Promise<SystemGraphNavigationResponse> {
-    const value = await this.request<unknown>(
-      `/api/workspaces/${encodeURIComponent(workspaceKey)}/system-graph/navigation`,
-    );
-    return parseSystemGraphNavigation(value, { workspaceKey });
   }
 
   createSession(req: CreateSessionRequest): Promise<HarnessSession> {
@@ -792,6 +686,13 @@ class RealApi implements HarnessApi {
     );
   }
 
+  restartMcpSession(id: string): Promise<HarnessSession> {
+    return this.request<HarnessSession>(
+      `/api/sessions/${encodeURIComponent(id)}/restart-mcp`,
+      { method: "POST" },
+    );
+  }
+
   adoptSession(req: AdoptSessionRequest): Promise<HarnessSession> {
     return this.request<HarnessSession>("/api/sessions/adopt", {
       method: "POST",
@@ -828,13 +729,21 @@ class RealApi implements HarnessApi {
     );
   }
 
-  getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+  getWorkflowGraph(
+    workflowPath: string,
+    map?: CanvasMapRequest | null,
+  ): Promise<WorkflowGraphResponse> {
     // Same encoding as `input-contract` and `deploy` beside it: the agent's
     // absolute path URI-encoded into ONE segment. Express matches on the raw
     // path and decodes the param, so an encoded `/` never splits the route.
-    return this.request<WorkflowGraphResponse>(
-      `/api/workflows/${encodeURIComponent(workflowPath)}/graph`,
-    );
+    const url = `/api/workflows/${encodeURIComponent(workflowPath)}/graph`;
+    return map
+      ? this.request<WorkflowGraphResponse>(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(map),
+        })
+      : this.request<WorkflowGraphResponse>(url);
   }
 
   connectWorkflow(path: string): Promise<WorkflowInfo> {
@@ -871,34 +780,6 @@ class RealApi implements HarnessApi {
 
   listHarnesses(): Promise<HarnessEntry[]> {
     return this.request<HarnessEntry[]>("/api/harnesses");
-  }
-
-  async getRailState(projectRoot: string): Promise<string | null> {
-    const res = await this.request<StudioRailFileResponse>(
-      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
-    );
-    return res.raw;
-  }
-
-  async saveRailState(projectRoot: string, raw: string): Promise<void> {
-    await this.request<{ ok: true }>(
-      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
-      { method: "PUT", body: JSON.stringify({ raw }) },
-    );
-  }
-
-  async clearRailState(projectRoot: string): Promise<void> {
-    await this.request<{ ok: true }>(
-      `/api/studio-rail?root=${encodeURIComponent(projectRoot)}`,
-      { method: "DELETE" },
-    );
-  }
-
-  async listLaunchEdges(): Promise<StudioRailLaunchEdge[]> {
-    const res = await this.request<StudioRailLaunchEdgesResponse>(
-      "/api/studio-rail/launch-edges",
-    );
-    return res.edges;
   }
 
   listMacros(): Promise<MacroDef[]> {
@@ -957,6 +838,12 @@ class RealApi implements HarnessApi {
 
   getAccountPlan(): Promise<AccountPlanView> {
     return this.request<AccountPlanView>("/api/account/plan");
+  }
+
+  getAppLink(workflowPath: string): Promise<DefinitionAppLinkView> {
+    return this.request<DefinitionAppLinkView>(
+      `/api/workflows/${encodeURIComponent(workflowPath)}/app-link`,
+    );
   }
 
   /** `/api/workflows/<path>/secrets` — the path is the agent id, encoded the
@@ -1282,34 +1169,6 @@ export function progressiveLeasingRun(
   return { executionId, status: done ? "completed" : "running", steps };
 }
 
-/**
- * Launch edges for mock mode — what `core/canvas-interconnections.ts`'s grep
- * would find across the fixture agents, without a filesystem to grep.
- *
- * Shaped to produce every case the Group axis has to render, against
- * `?mockFixtures=deep` (see MOCK_DEEP_WORKFLOWS):
- *
- *  - `gateway` reaches `queue` and `ads-worker` — a three-member component,
- *    named for the head nothing launches.
- *  - `mailer` reaches `sender` — a second, smaller component, so group ordering
- *    (biggest first) is observable.
- *  - `outreach` reaches `ghost-agent`, which this install does NOT have. An edge
- *    to a missing agent forms NO group, so `outreach` stays in `Ungrouped`.
- *  - `ads` and `rollup` are reached by nothing at all, which is the ordinary
- *    case in a real repo and why `Ungrouped` has to be named rather than hidden.
- *
- * Lives here rather than in `mock-data.ts` because it is a fixture for a route
- * this client owns, and `mock-data.ts` holds no route fixtures.
- */
-const MOCK_LAUNCH_EDGES: StudioRailLaunchEdge[] = [
-  { parent: "gateway", child: "queue" },
-  { parent: "gateway", child: "ads-worker" },
-  { parent: "mailer", child: "sender" },
-  { parent: "outreach", child: "ghost-agent" },
-];
-
-/** One key per project root, mirroring one file per project root. */
-const MOCK_RAIL_STATE_PREFIX = "sapiom-mock-studio-rail:";
 const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
 
 /**
@@ -1320,8 +1179,8 @@ const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
  * is right — a fixture that remembered `telemetryOptIn` or `recentDirs` across
  * page loads would leak one spec's state into the next. But the first-run card
  * is only interesting ACROSS a load, so its flag needs the same treatment
- * `getRailState` already gives the rail file: `localStorage`, because it is the
- * only store in the fixture that outlives the page.
+ * a cross-load fixture needs: `localStorage`, because it is the only store in
+ * the fixture that outlives the page.
  *
  * The irony is deliberate and harmless. In the mock, the browser origin is
  * stable (Playwright serves one port) and there is no settings file to write;
@@ -1368,41 +1227,13 @@ if (typeof window !== "undefined" && isFreshMockState())
   writeMockHelpSeen(false);
 
 /**
- * Every rail-state write the mock has served this page load, newest last, for
- * Playwright to read back.
- *
- * MockApi has no other observable effect (same reason `runMacro` records
- * `lastMacroRun`), and the assertion that matters most in this area is a
- * NEGATIVE one: loading the page twice must write nothing at all. A spec that
- * only counted rows would pass while a mount effect quietly stored
- * `groups: []` — which is exactly how the regression shipped.
- */
-function recordRailStateWrite(entry: {
-  root: string;
-  raw: string | null;
-}): void {
-  if (typeof window === "undefined") return;
-  const win = window as unknown as {
-    __HARNESS_TEST__?: Record<string, unknown>;
-  };
-  const previous =
-    (win.__HARNESS_TEST__?.railStateWrites as Array<{
-      root: string;
-      raw: string | null;
-    }>) ?? [];
-  win.__HARNESS_TEST__ = {
-    ...(win.__HARNESS_TEST__ ?? {}),
-    railStateWrites: [...previous, entry],
-  };
-}
-
-/**
  * Mock mode's stand-in for THE DISK, for the one mutation that is a filesystem
- * change: the Project-axis move (SAP-2930).
+ * change: an agent's Change location on the map (SAP-2930, flow-navigation.md
+ * 4.4.3).
  *
  * Module-level, not per-instance, and that is the whole reason it exists.
- * `createApi()` is called from several modules (`use-harness-state`,
- * `use-rail-groups`, `use-account-plan`), and each mock instance holds its OWN
+ * `createApi()` is called from several modules (`use-harness-state`, the
+ * shell, `use-account-plan`), and each mock instance holds its OWN
  * copy of the fixtures — so a move dispatched through one instance would be
  * invisible to the list the app renders from another. There is only one disk, so
  * there is one log, and every instance's reads fold it in (see the `workflows`
@@ -1419,10 +1250,9 @@ function replayMockMoves(p: string): string {
   return at;
 }
 
-/** Test-only escape hatch, mock mode only: what the rail actually dispatched.
- *  A count-only drag assertion passes when nothing happened at all, so the spec
- *  reads this to prove the drop reached the mover — and that a GROUP-axis drag
- *  never does. */
+/** Test-only escape hatch, mock mode only: what Change location actually
+ *  dispatched. A count-only assertion passes when nothing happened at all, so
+ *  the spec reads this to prove the confirm reached the mover. */
 function recordAgentMove(entry: { from: string; to: string }): void {
   if (typeof window === "undefined") return;
   const win = window as unknown as {
@@ -1507,6 +1337,57 @@ function mockWorkflowGraph(name: string): CanvasGraph {
   };
 }
 
+/** The mock board for a map request: the map's steps, and each agent this one
+ *  touches as a border card, its edge leaving `fromStep` or the entry
+ *  (core/canvas-map-steps.ts is the real version). */
+function mockGraphFromMap(name: string, request: CanvasMapRequest): CanvasGraph {
+  const steps = request.map.steps!;
+  const outgoing = new Set(steps.transitions.map((t) => t.from));
+  const node = (id: string, kind: CanvasGraphNode["kind"], role: string): CanvasGraphNode => ({
+    id,
+    kind,
+    label: id.startsWith("agent:") ? id.slice("agent:".length) : id,
+    role,
+    description: "",
+    timeoutMs: null,
+    inputSchema: null,
+    capabilities: [],
+  });
+  const ids = new Set(steps.steps.map((step) => step.id));
+  return {
+    name,
+    entry: steps.entry,
+    nodes: [
+      ...steps.steps.map((step) =>
+        step.id === steps.entry
+          ? node(step.id, "entry", "entry")
+          : outgoing.has(step.id)
+            ? node(step.id, "step", "step")
+            : node(step.id, "terminal-success", "terminal · success"),
+      ),
+      ...request.map.calls.map((call) => node(`agent:${call.to}`, "launched-workflow", "agent")),
+      ...request.map.calledBy.map((caller) => node(`agent:${caller.from}`, "launched-workflow", "calls this agent")),
+    ],
+    edges: [
+      ...steps.transitions.map((t) => ({ from: t.from, to: t.to, kind: "sequential" as const, label: "" })),
+      ...request.map.calls.map((call) => ({
+        from: call.fromStep && ids.has(call.fromStep) ? call.fromStep : steps.entry,
+        to: `agent:${call.to}`,
+        kind: "launch" as const,
+        label: call.label ?? "",
+      })),
+      ...request.map.calledBy.map((caller) => ({
+        from: `agent:${caller.from}`,
+        to: steps.entry,
+        kind: "launch" as const,
+        label: caller.label ?? "",
+      })),
+    ],
+    groups: [],
+    warnings: [],
+  };
+}
+
 /**
  * The fixture stand-in for the message documents the real route returns for
  * every status but `ok` — the calm "Preparing your agent" placeholder, the
@@ -1548,10 +1429,15 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
   const nodes = graph.nodes
     .map(
       (n) =>
-        `<div class="node" data-kind="${esc(n.kind)}" data-step-name="${esc(n.label)}">` +
+        `<div class="node" data-kind="${esc(n.kind)}" data-node-id="${esc(n.id)}" data-step-name="${esc(n.label)}">` +
         `<strong>${esc(n.label)}</strong><small>${esc(n.role)}</small></div>`,
     )
     .join('<div class="edge" aria-hidden="true"></div>');
+  // The real board's edge attributes, so a spec can assert which step an edge
+  // to another agent leaves from.
+  const edgeMarks = graph.edges
+    .map((e) => `<path class="edge" data-edge-from="${esc(e.from)}" data-edge-to="${esc(e.to)}"></path>`)
+    .join("");
   return [
     '<!doctype html><html lang="en"><head><meta charset="utf-8" />',
     `<title>${esc(name)} — mock agent board</title>`,
@@ -1566,7 +1452,7 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
     ".node small{color:var(--dim)}",
     ".edge{width:1px;height:24px;background:var(--line)}",
     "</style></head><body>",
-    `<main class="board" id="board" data-testid="mock-workflow-board">${nodes}</main>`,
+    `<main class="board" id="board" data-testid="mock-workflow-board">${nodes}<svg aria-hidden="true" style="display:none">${edgeMarks}</svg></main>`,
     '<script id="sapiom-graph" type="application/json">',
     JSON.stringify(graph),
     "</script><script>",
@@ -1581,394 +1467,6 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
   ].join("");
 }
 
-const MOCK_POLSIA_ROOT = "/Users/demo/polsia";
-
-/**
- * A compact Polsia-style direct-call topology for the deep Project fixture.
- * Two source records for Outreach -> Mailer deliberately collapse into one
- * combined connector in the renderer. Rollup stays disconnected so inventory
- * coverage is tested independently of direct invocation extraction.
- */
-const MOCK_POLSIA_GRAPH_EDGES: SystemGraph["edges"] = [
-  {
-    from: "agent:outreach",
-    to: "agent:mailer",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:outreach",
-    to: "agent:mailer",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-  {
-    from: "agent:ads",
-    to: "agent:gateway",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:gateway",
-    to: "agent:ads-worker",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-  {
-    from: "agent:gateway",
-    to: "agent:queue",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:ads-worker",
-    to: "agent:queue",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-  {
-    from: "agent:queue",
-    to: "agent:sender",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:sender",
-    to: "agent:gateway",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-];
-
-function codeUnitOrder(left: string, right: string): number {
-  return left === right ? 0 : left < right ? -1 : 1;
-}
-
-function hasGraphControl(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.codePointAt(0)!;
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-  });
-}
-
-function mockCanonicalIdentity(value: string | null): string | null {
-  const identity = value?.trim() ?? "";
-  return identity !== "" &&
-    identity !== "." &&
-    identity !== ".." &&
-    !identity.startsWith("local:") &&
-    !identity.includes("/") &&
-    !identity.includes("\\") &&
-    !hasGraphControl(identity)
-    ? identity
-    : null;
-}
-
-function mockInventoryPath(scopeRoot: string, workflowPath: string): string {
-  if (samePath(scopeRoot, workflowPath)) return ".";
-  const normalizedRoot = scopeRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedPath = workflowPath.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalizedPath.slice(normalizedRoot.length + 1);
-}
-
-export interface MockSystemGraphProjection {
-  nodes: SystemGraph["nodes"];
-  targets: SystemGraphNavigationResponse["targets"];
-  warnings: SystemGraph["warnings"];
-  degraded: boolean;
-}
-
-/** Process-local discovery proof used by the browser mock. The real REST
- * WorkflowInfo intentionally does not expose registry evidence, so mock graph
- * projection receives the same information as a separate sidecar. */
-export interface MockWorkflowIdentityEvidence {
-  kind: "marker" | "source" | "not-agent" | "unknown";
-  sourceDefinitionName?: string | null;
-}
-
-export type MockWorkflowIdentityEvidenceByPath = Readonly<
-  Record<string, MockWorkflowIdentityEvidence>
->;
-
-/** Deterministic identity/navigation projection for the browser mock. */
-export function projectMockSystemGraphInventory(
-  scopeRoot: string,
-  workflows: readonly WorkflowInfo[],
-  evidenceByPath: MockWorkflowIdentityEvidenceByPath = {},
-): MockSystemGraphProjection {
-  const rows = workflows
-    .filter((workflow) => isWithinDir(scopeRoot, workflow.path))
-    .map((workflow) => {
-      const inventoryPath = mockInventoryPath(scopeRoot, workflow.path);
-      const fallbackKey = `local:${inventoryPath === "." ? "root" : inventoryPath}`;
-      const marker = mockCanonicalIdentity(workflow.definitionSlug);
-      const evidence = evidenceByPath[workflow.path];
-      const hasPersistedSourceName =
-        evidence !== undefined &&
-        Object.prototype.hasOwnProperty.call(evidence, "sourceDefinitionName");
-      const sourceName = hasPersistedSourceName
-        ? mockCanonicalIdentity(evidence.sourceDefinitionName ?? null)
-        : null;
-      const sourceIsAuthoritative =
-        evidence?.kind === "source" ||
-        (evidence?.kind === "unknown" && hasPersistedSourceName);
-      // `unknown` may retain the last accepted syntax identity for continuity,
-      // but it can never make the graph ready until a fresh scan proves it.
-      const degraded =
-        evidence?.kind === "unknown" ||
-        (evidence?.kind === "source" && sourceName === null);
-      const canonical = sourceIsAuthoritative
-        ? sourceName !== null
-        : evidence?.kind === "not-agent"
-          ? false
-          : marker !== null;
-      return {
-        workflow,
-        inventoryPath,
-        fallbackKey,
-        candidateKey: sourceIsAuthoritative
-          ? (sourceName ?? fallbackKey)
-          : (marker ?? fallbackKey),
-        canonical,
-        degraded,
-      };
-    })
-    .sort(
-      (left, right) =>
-        codeUnitOrder(left.inventoryPath, right.inventoryPath) ||
-        codeUnitOrder(left.candidateKey, right.candidateKey) ||
-        codeUnitOrder(left.workflow.name, right.workflow.name) ||
-        codeUnitOrder(left.workflow.path, right.workflow.path),
-    )
-    .filter(
-      (row, index, all) =>
-        all.findIndex((candidate) =>
-          samePath(candidate.workflow.path, row.workflow.path),
-        ) === index,
-    );
-  const canonicalCounts = new Map<string, number>();
-  const provisionalCounts = new Map<string, number>();
-  for (const row of rows) {
-    const counts = row.canonical ? canonicalCounts : provisionalCounts;
-    counts.set(row.candidateKey, (counts.get(row.candidateKey) ?? 0) + 1);
-  }
-  const used = new Set<string>();
-  const projected = rows.map((row) => {
-    const canonicalCount = canonicalCounts.get(row.candidateKey) ?? 0;
-    const provisionalCount = provisionalCounts.get(row.candidateKey) ?? 0;
-    const ambiguous = row.canonical
-      ? canonicalCount > 1
-      : canonicalCount === 0 && provisionalCount > 1;
-    const shadowedByCanonical = !row.canonical && canonicalCount > 0;
-    const base =
-      ambiguous || shadowedByCanonical ? row.fallbackKey : row.candidateKey;
-    let agentKey = base;
-    let suffix = 2;
-    while (used.has(agentKey)) {
-      agentKey = `${base}~${suffix}`;
-      suffix += 1;
-    }
-    used.add(agentKey);
-    return {
-      agentKey,
-      label: row.workflow.name,
-      workflowPath: row.workflow.path,
-    };
-  });
-  projected.sort((left, right) => codeUnitOrder(left.agentKey, right.agentKey));
-  const duplicateCandidates = [
-    ...new Set([...canonicalCounts.keys(), ...provisionalCounts.keys()]),
-  ]
-    .filter((candidateKey) => {
-      const canonicalCount = canonicalCounts.get(candidateKey) ?? 0;
-      const provisionalCount = provisionalCounts.get(candidateKey) ?? 0;
-      return (
-        (canonicalCount > 1 ||
-          (canonicalCount === 0 && provisionalCount > 1)) &&
-        mockCanonicalIdentity(candidateKey) !== null
-      );
-    })
-    .sort(codeUnitOrder);
-  return {
-    nodes: projected.map(({ agentKey, label }) => ({
-      id: `agent:${agentKey}`,
-      agentKey,
-      label,
-    })),
-    targets: projected.map(({ agentKey, workflowPath }) => ({
-      agentKey,
-      workflowPath,
-    })),
-    warnings: duplicateCandidates.map((candidateKey) => ({
-      code: "duplicate-agent-key",
-      agentKey: candidateKey,
-      message: `Multiple agents use ${candidateKey}; kept each with a local identity.`,
-    })),
-    degraded:
-      duplicateCandidates.length > 0 || rows.some((row) => row.degraded),
-  };
-}
-
-function goldenAgentMapFixture(
-  project: StudioProjectSummary,
-  acceptedAt: string,
-  userId: string,
-  sessionId: string,
-): { snapshot: AgentMapWorkspaceResponse; delta: AcceptedProposalDelta } {
-  const proposalId = "proposal_00000000-0000-7000-8000-000000000101";
-  const ids = {
-    research: "node_00000000-0000-7000-8000-000000000101",
-    marketing: "node_00000000-0000-7000-8000-000000000102",
-    database: "node_00000000-0000-7000-8000-000000000103",
-    tiktok: "node_00000000-0000-7000-8000-000000000104",
-    report: "node_00000000-0000-7000-8000-000000000105",
-    editor: "node_00000000-0000-7000-8000-000000000106",
-  } as const;
-  const nodes = [
-    {
-      id: ids.research,
-      kind: "agent",
-      name: "Stock Research",
-      purpose: "Research public-market signals and produce sourced findings.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchRequest", "ResearchReport"],
-    },
-    {
-      id: ids.marketing,
-      kind: "agent",
-      name: "Marketing",
-      purpose: "Turn approved findings into audience-ready campaigns.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchReport", "CampaignBrief"],
-    },
-    {
-      id: ids.database,
-      kind: "resource",
-      name: "Research Database",
-      purpose: "Persist sources, observations, and approved reports.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchRecord"],
-    },
-    {
-      id: ids.tiktok,
-      kind: "connector",
-      name: "TikTok",
-      purpose: "Publish approved short-form campaign content.",
-      ownerAgentId: null,
-      contractRefs: ["TikTokPublishRequest"],
-    },
-    {
-      id: ids.report,
-      kind: "artifact",
-      name: "ResearchReport",
-      purpose:
-        "Carry sourced findings from research into review and marketing.",
-      ownerAgentId: null,
-      contractRefs: ["ResearchReport"],
-    },
-    {
-      id: ids.editor,
-      kind: "subagent",
-      name: "News Editor",
-      purpose: "Check source quality and tighten the report narrative.",
-      ownerAgentId: ids.research,
-      contractRefs: ["EditorialReview"],
-    },
-  ];
-  const relationships = [
-    ["invokes", ids.research, ids.editor, "synchronous", "EditorialReview"],
-    ["feeds", ids.report, ids.marketing, "asynchronous", "ResearchReport"],
-    ["reads", ids.marketing, ids.report, "synchronous", "ResearchReport"],
-    ["writes", ids.research, ids.report, "synchronous", "ResearchReport"],
-    ["uses", ids.research, ids.database, "synchronous", "ResearchRecord"],
-    [
-      "uses",
-      ids.marketing,
-      ids.tiktok,
-      "human-triggered",
-      "TikTokPublishRequest",
-    ],
-    ["triggers", ids.report, ids.marketing, "asynchronous", "CampaignBrief"],
-    ["writes", ids.editor, ids.report, "synchronous", "EditorialReview"],
-  ].map(([kind, fromNodeId, toNodeId, executionMode, contractRef], index) => ({
-    id: `rel_00000000-0000-7000-8000-${String(index + 201).padStart(12, "0")}`,
-    fromNodeId,
-    toNodeId,
-    kind,
-    executionMode,
-    contractRef,
-    description: `${kind} through the declared contract.`,
-  }));
-  const operations = [
-    ...nodes.map((node) => ({ kind: "add-node", node })),
-    ...relationships.map((relationship) => ({
-      kind: "add-relationship",
-      relationship,
-    })),
-  ] as unknown as MapOperation[];
-  const operationIds = operations.map(
-    (_, index) =>
-      `operation_00000000-0000-7000-8000-${String(index + 301).padStart(12, "0")}`,
-  ) as AcceptedProposalDelta["operationIds"];
-  const actor = {
-    userId,
-    sessionId,
-  };
-  const delta: AcceptedProposalDelta = {
-    schemaVersion: 1,
-    projectId: project.projectId,
-    proposalId: proposalId as AcceptedProposalDelta["proposalId"],
-    fromVersion: 0,
-    version: 1,
-    operationIds,
-    operations,
-    actor,
-    acceptedAt,
-  };
-  const snapshot = {
-    schemaVersion: 1,
-    project,
-    workspace: {
-      projectId: project.projectId,
-      schemaVersion: 1,
-      recordVersion: 2,
-      confirmedRevisionId: null,
-      activeProposalId: proposalId,
-      projectBuildPlanId: null,
-      createdAt: project.createdAt,
-      updatedAt: acceptedAt,
-    },
-    proposal: {
-      schemaVersion: 1,
-      id: proposalId,
-      projectId: project.projectId,
-      baseRevisionId: null,
-      version: 1,
-      nodes,
-      relationships,
-      history: operations.map((operation, index) => ({
-        id: operationIds[index],
-        requestId: "golden-stock-research",
-        acceptedVersion: 1,
-        operation,
-        actor,
-        acceptedAt,
-      })),
-      createdAt: acceptedAt,
-      updatedAt: acceptedAt,
-    },
-  } as unknown as AgentMapWorkspaceResponse;
-  return { snapshot, delta };
-}
-
 export class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
@@ -1978,26 +1476,13 @@ export class MockApi implements HarnessApi {
   // from when the run was first observed (not module load) — see getRunState.
   private progressiveRunStart = new Map<string, number>();
   /** Stable for the lifetime of the mock process, mirroring server-issued
-   * opaque keys without putting filesystem paths into graph payloads. */
+   * opaque keys without deriving durable project IDs from filesystem paths. */
   private workspaceKeys = new Map<string, WorkspaceKey>();
   private studioProjectIds = new Map<string, StudioProjectId>();
   private studioPreferences = new Map<
     StudioProjectId,
     StudioWorkspaceSelection
   >();
-  private agentMapTargets = new Map<string, AgentMapNodeTarget>();
-  private agentMapSnapshots = new Map<
-    StudioProjectId,
-    AgentMapWorkspaceResponse
-  >();
-  private systemGraphSnapshots = new Map<WorkspaceKey, SystemGraphSnapshot>();
-  private systemGraphNavigation = new Map<
-    WorkspaceKey,
-    SystemGraphNavigationResponse
-  >();
-  private systemGraphRevision = new Map<WorkspaceKey, number>();
-  private pendingSystemGraphRevision = new Map<WorkspaceKey, number>();
-
   async startAuth(): Promise<AuthStartResponse> {
     // Record the call for Playwright assertions (same pattern as runMacro/deploy).
     if (typeof window !== "undefined") {
@@ -2088,22 +1573,6 @@ export class MockApi implements HarnessApi {
         ...MOCK_WORKFLOWS,
         ...(isSearchFixturesEnabled() ? MOCK_SEARCH_WORKFLOWS : []),
       ].map((workflow) => ({ ...workflow }));
-  /** Mock-only equivalent of the server's private accepted identity sidecar. */
-  private workflowIdentityEvidenceStore: Record<
-    string,
-    MockWorkflowIdentityEvidence
-  > = Object.fromEntries(
-    this.workflowsStore
-      .filter(
-        (workflow) =>
-          workflow.path === `${MOCK_POLSIA_ROOT}/backend/src/agents/outreach`,
-      )
-      .map((workflow) => [
-        workflow.path,
-        { kind: "source", sourceDefinitionName: "outreach" } as const,
-      ]),
-  );
-
   /*
    * Every read of the fixtures goes through the move log (`mockMoves`), so a
    * moved agent reads at its NEW path from every instance and every call site —
@@ -2121,70 +1590,26 @@ export class MockApi implements HarnessApi {
 
   private set workflows(next: WorkflowInfo[]) {
     this.workflowsStore = next;
-    this.invalidateSystemGraphProjections();
-  }
-
-  private get workflowIdentityEvidence(): MockWorkflowIdentityEvidenceByPath {
-    if (mockMoves.length === 0) return this.workflowIdentityEvidenceStore;
-    return Object.fromEntries(
-      Object.entries(this.workflowIdentityEvidenceStore).map(
-        ([workflowPath, evidence]) => [replayMockMoves(workflowPath), evidence],
-      ),
-    );
-  }
-
-  /**
-   * Mock/test mutation seam for the syntax-discovery lifecycle. It keeps the
-   * private proof sidecar out of WorkflowInfo while exercising the same rail
-   * event plus revisioned graph invalidation as production add/edit/delete.
-   */
-  replaceSourceDiscoveredWorkflows(
-    workflows: readonly WorkflowInfo[],
-    evidenceByPath: MockWorkflowIdentityEvidenceByPath,
-  ): void {
-    this.workflowIdentityEvidenceStore = { ...evidenceByPath };
-    this.workflows = workflows.map((workflow) => ({ ...workflow }));
-    void import("./events").then(({ publishMockBusMessage }) => {
-      publishMockBusMessage({ type: "workflows.changed" });
-    });
-  }
-
-  private allocateSystemGraphRevision(workspaceKey: WorkspaceKey): number {
-    const revision = (this.systemGraphRevision.get(workspaceKey) ?? 0) + 1;
-    this.systemGraphRevision.set(workspaceKey, revision);
-    return revision;
-  }
-
-  private invalidateSystemGraphProjections(): void {
-    for (const [workspaceKey, snapshot] of this.systemGraphSnapshots) {
-      const revision = this.allocateSystemGraphRevision(workspaceKey);
-      this.pendingSystemGraphRevision.set(workspaceKey, revision);
-      this.systemGraphSnapshots.delete(workspaceKey);
-      this.systemGraphNavigation.delete(workspaceKey);
-      void import("./events").then(({ publishMockBusMessage }) => {
-        publishMockBusMessage({
-          type: "system-graph.changed",
-          workspaceKey,
-          revision,
-          state: snapshot.graph ? "stale" : "building",
-        });
-      });
-    }
   }
 
   /** A session whose cwd sat inside a moved directory follows it — on disk it
    *  has no choice, and a session pointing at a directory that no longer exists
    *  is the bug this remap prevents. Its binding travels the same way. */
   private get sessions(): HarnessSession[] {
-    if (mockMoves.length === 0) return this.sessionsStore;
-    return this.sessionsStore.map((session) => ({
-      ...session,
-      cwd: replayMockMoves(session.cwd),
-      boundWorkflowPath:
-        session.boundWorkflowPath == null
-          ? session.boundWorkflowPath
-          : replayMockMoves(session.boundWorkflowPath),
-    }));
+    return this.sessionsStore.map((session) => {
+      const moved: HarnessSession =
+        mockMoves.length === 0
+          ? session
+          : {
+              ...session,
+              cwd: replayMockMoves(session.cwd),
+              boundWorkflowPath:
+                session.boundWorkflowPath == null
+                  ? session.boundWorkflowPath
+                  : replayMockMoves(session.boundWorkflowPath),
+            };
+      return { ...moved, agentMapIdentity: this.ownedIdentity(moved) };
+    });
   }
 
   private set sessions(next: HarnessSession[]) {
@@ -2222,27 +1647,61 @@ export class MockApi implements HarnessApi {
     return projectId;
   }
 
-  private workspaceScopes(): WorkspaceScopeSummary[] {
+  /** Mirrors `SessionManager.defaultTitle`: the folder name, counting up past
+   *  every sibling ever created there, assigned once and never recomputed. */
+  private defaultSessionTitle(cwd: string): string {
+    const base = basenameOf(cwd) || cwd;
+    let highest = 0;
+    for (const session of this.sessions) {
+      if (session.cwd !== cwd) continue;
+      if (session.title === base) highest = Math.max(highest, 1);
+      else if (session.title.startsWith(`${base} `)) {
+        const ordinal = Number(session.title.slice(base.length + 1));
+        if (Number.isInteger(ordinal) && ordinal > 0)
+          highest = Math.max(highest, ordinal);
+      }
+    }
+    return highest === 0 ? base : `${base} ${highest + 1}`;
+  }
+
+  private scopeRoots(): string[] {
     const roots = new Set([
       ...this.settings.recentDirs,
-      ...this.sessions.map((session) => session.cwd),
+      ...this.sessionsStore.map((session) => replayMockMoves(session.cwd)),
     ]);
-    return [...roots]
-      .sort((left, right) => left.localeCompare(right))
-      .map((cwd) => ({
-        cwd,
-        workspaceKey: this.workspaceKey(cwd),
-        projectId: this.studioProjectId(cwd),
-      }));
+    return [...roots].sort((left, right) => left.localeCompare(right));
+  }
+
+  private workspaceScopes(): WorkspaceScopeSummary[] {
+    return this.scopeRoots().map((cwd) => ({
+      cwd,
+      workspaceKey: this.workspaceKey(cwd),
+      projectId: this.studioProjectId(cwd),
+    }));
+  }
+
+  /** Mirrors the server's project principal: the deepest published root
+   *  containing the session's cwd owns it. */
+  private ownedIdentity(
+    session: HarnessSession,
+  ): HarnessSession["agentMapIdentity"] {
+    const owner = this.scopeRoots()
+      .filter((root) => isWithinDir(root, session.cwd))
+      .sort(
+        (left, right) =>
+          right.length - left.length || left.localeCompare(right),
+      )[0];
+    return {
+      projectId: this.studioProjectId(owner ?? session.cwd),
+      userId: "user_mock",
+      sessionId: session.id,
+    };
   }
 
   private studioProjects(): StudioProjectSummary[] | undefined {
-    // Production authority is determined by the server response and always
-    // uses durable Studio project summaries. Mock mode keeps the historical
-    // fixtures stable unless a plan-first scenario opts in explicitly; the
-    // dedicated agent-map fixture is also an opt-in. `absent` names the
-    // legacy-server compatibility contract exercised by the remaining direct
-    // creation specs. This is test data selection, not a product feature flag.
+    // Durable-map fixtures opt into the current project catalog. Standalone
+    // session fixtures also cover servers without identities: their project
+    // clicks offer recovery, while ordinary sessions remain usable.
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get("mockStudioProjects");
@@ -2252,7 +1711,7 @@ export class MockApi implements HarnessApi {
     }
     const timestamp = "2026-01-01T00:00:00.000Z";
     return this.workspaceScopes().map((scope, index) => ({
-      projectId: scope.projectId!,
+      projectId: scope.projectId,
       identityVersion: 1,
       displayName: basenameOf(scope.cwd) || "Project",
       bindings: [
@@ -2266,34 +1725,8 @@ export class MockApi implements HarnessApi {
     }));
   }
 
-  /** Mirror the server's neutral project principal in opt-in Studio fixtures. */
-  private studioSession(
-    session: HarnessSession,
-    projects: readonly StudioProjectSummary[] | undefined,
-  ): HarnessSession {
-    if (!projects) return session;
-    const projectIds = new Set(projects.map((project) => project.projectId));
-    const matches = this.workspaceScopes()
-      .filter(
-        (scope) =>
-          scope.projectId &&
-          projectIds.has(scope.projectId) &&
-          isWithinDir(scope.cwd, session.cwd),
-      )
-      .sort(
-        (left, right) =>
-          right.cwd.length - left.cwd.length ||
-          left.cwd.localeCompare(right.cwd),
-      );
-    const nearestDepth = matches[0]?.cwd.length;
-    const nearestProjectIds = new Set(
-      matches
-        .filter((scope) => scope.cwd.length === nearestDepth)
-        .map((scope) => scope.projectId),
-    );
-    const projectId =
-      nearestProjectIds.size === 1 ? matches[0]?.projectId : undefined;
-    if (!projectId || !projectIds.has(projectId)) return session;
+  /** Applies the opt-in Studio fixture tweaks to a session in `/api/state`. */
+  private studioSession(session: HarnessSession): HarnessSession {
     const usePlanAgentsFixture =
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get(
@@ -2312,11 +1745,6 @@ export class MockApi implements HarnessApi {
       ...(useRestoreBindingConflictFixture
         ? { boundWorkflowPath: "/Users/demo/polsia/services/workers" }
         : {}),
-      agentMapIdentity: {
-        projectId,
-        userId: "user_mock",
-        sessionId: session.id,
-      },
     };
   }
 
@@ -2326,11 +1754,10 @@ export class MockApi implements HarnessApi {
       if (workflow.studioBindings?.length) return workflow;
       const bindings = scopes
         .filter(
-          (candidate) =>
-            candidate.projectId && isWithinDir(candidate.cwd, workflow.path),
+          (candidate) => isWithinDir(candidate.cwd, workflow.path),
         )
         .map((scope, bindingIndex) => ({
-          projectId: scope.projectId!,
+          projectId: scope.projectId,
           agentId: `agent_00000000-0000-4000-${(0x8000 + bindingIndex).toString(16)}-${String(index + 1).padStart(12, "0")}`,
         }));
       return bindings.length > 0
@@ -2418,7 +1845,23 @@ export class MockApi implements HarnessApi {
     const telemetryOptIn =
       mockConsentSource === "prompted" ? true : this.settings.telemetryOptIn;
     const studioProjects = this.studioProjects();
+    // The Assistant is on for every account, so the mock boots with it on.
+    // e2e can set `__MOCK_ASSISTANT__` before load, and push later changes as
+    // `assistant.state` through `__HARNESS_TEST__.publish`.
+    const mockAssistant =
+      typeof window !== "undefined"
+        ? (window as unknown as {
+            __MOCK_ASSISTANT__?: { enabled: boolean; authorityRevision?: string };
+          }).__MOCK_ASSISTANT__
+        : undefined;
     return {
+      assistant: {
+        hostInstanceId: "mock-host",
+        authorityRevision: mockAssistant?.authorityRevision ?? "mock-authority",
+        revision: 0,
+        enabled: mockAssistant?.enabled ?? true,
+        sessions: [],
+      },
       version: "0.0.1-mock",
       authenticated: true,
       userId: "user_mock",
@@ -2434,9 +1877,7 @@ export class MockApi implements HarnessApi {
         ) === "off"
           ? false
           : true,
-      sessions: this.sessions.map((session) =>
-        this.studioSession(session, studioProjects),
-      ),
+      sessions: this.sessions.map((session) => this.studioSession(session)),
       workflows: this.studioWorkflows(),
       workspaceScopes: this.workspaceScopes(),
       ...(studioProjects ? { studioProjects } : {}),
@@ -2452,148 +1893,43 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    const mode = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("mockMapInitialization");
-    if (mode === "error") throw new ApiError(503, "Agent Map storage is unavailable", "Agent Map storage is unavailable");
-    return { projectId, status: mode === "running" || mode === "queued" || mode === "failed" || mode === "completed" ? mode : "idle",
-      errorCode: mode === "failed" ? "provider_failed" : null, retryable: mode === "failed" };
-  }
-  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
-    return { projectId, status: "queued", errorCode: null, retryable: false };
-  }
-
-  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
-    const snapshot = this.agentMapSnapshots.get(projectId);
-    return { projectId, mapVersionId: null, bindings: (snapshot?.proposal?.nodes ?? [])
-      .filter((node) => node.kind === "agent" || node.kind === "subagent")
-      .map((node) => {
-        const target = this.agentMapTargets.get(`${projectId}:${node.id}`);
-        return { nodeId: node.id, agentId: target?.agentId ?? null, revision: 0,
-          resolution: target ? "bound" : "unbound" };
-      }),
-    };
-  }
-
-  async getAgentMapNodeImplementation(
-    projectId: StudioProjectId,
-    nodeId: PlanNodeId,
-  ): Promise<AgentMapNodeTarget> {
-    await delay();
-    const target = this.agentMapTargets.get(`${projectId}:${nodeId}`);
-    if (!target)
-      throw new ApiError(
-        404,
-        "No implementation is linked yet.",
-        undefined,
-        "unbound",
-      );
-    return parseAgentMapNodeTarget(target, projectId, nodeId);
-  }
-
-  async getAgentMapWorkspace(
-    projectId: StudioProjectId,
-  ): Promise<AgentMapWorkspaceResponse> {
-    const query =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search);
-    const failure = query?.get("mockAgentMapWorkspace") ?? null;
+  async getProjectMap(projectId: StudioProjectId, ref: MapRef): Promise<ProjectMapResponse> {
+    const params =
+      typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
+    const failure = params?.get("mockProjectMap") ?? null;
     const project = this.studioProjects()?.find(
       (candidate) => candidate.projectId === projectId,
     );
-    const goldenFixtureEnabled = query?.get("mockAgentMapGolden") === "1";
-    let seededGoldenFixture = false;
-    if (
-      failure === null &&
-      project &&
-      goldenFixtureEnabled &&
-      !this.agentMapSnapshots.has(projectId)
-    ) {
-      const fixture = goldenAgentMapFixture(
-        project,
-        new Date().toISOString(),
-        "user_mock",
-        "planner_mock",
-      );
-      this.agentMapSnapshots.set(projectId, fixture.snapshot);
-      this.studioWorkflows()
-        .filter((workflow) =>
-          workflow.studioBindings?.some(
-            (binding) => binding.projectId === projectId,
-          ),
-        )
-        .slice(0, 2)
-        .forEach((workflow, index) => {
-          const nodeId = fixture.snapshot.proposal!.nodes.filter(
-            (node) => node.kind === "agent",
-          )[index].id;
-          const agentId = workflow.studioBindings!.find(
-            (binding) => binding.projectId === projectId,
-          )!.agentId;
-          this.agentMapTargets.set(`${projectId}:${nodeId}`, {
-            projectId,
-            nodeId,
-            agentId,
-            workflowPath: workflow.path,
-          });
-        });
-      seededGoldenFixture = true;
-      // Publish before the delayed GET settles so the golden journey covers the
-      // cold-open queue/replay path. Durable recovery already has the same
-      // fixture staged if delivery fails or the client reconnects.
-      setTimeout(() => {
-        void import("./events").then(({ publishMockBusMessage }) => {
-          publishMockBusMessage({
-            type: "agent-map.proposal.changed",
-            delta: fixture.delta,
-          });
-        });
-      }, 0);
-    }
+    const scope = this.workspaceScopes().find((candidate) => candidate.projectId === projectId);
     await delay();
-    if (failure === "error") {
-      throw new ApiError(
-        503,
-        "Agent Map storage is unavailable",
-        "Agent Map storage is unavailable",
-      );
+    if (failure === "error")
+      throw new ApiError(500, "The map could not be computed", "The map could not be computed", "map_failed");
+    if (failure === "gone")
+      throw new ApiError(409, "The project folder no longer exists", "The project folder no longer exists", "project_unavailable");
+    if (failure === "missing" || !project || !scope)
+      throw new ApiError(404, "Studio project not found", "Studio project not found", "project_not_found");
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = win.__HARNESS_TEST__ ?? {};
+      const calls = (win.__HARNESS_TEST__.projectMapCalls as unknown[] | undefined) ?? [];
+      win.__HARNESS_TEST__.projectMapCalls = [...calls, { projectId, ref }];
     }
-    if (failure === "unauthorized") {
-      throw new ApiError(
-        403,
-        "Studio project is not available",
-        "Studio project is not available",
-      );
-    }
-    if (failure === "missing" || !project) {
-      throw new ApiError(
-        404,
-        "Studio project not found",
-        "Studio project not found",
-      );
-    }
-    const stored = this.agentMapSnapshots.get(projectId);
-    if (stored && !seededGoldenFixture) {
-      return parseAgentMapWorkspaceResponse(stored, projectId);
-    }
-    return parseAgentMapWorkspaceResponse(
-      {
-        schemaVersion: 1,
-        project,
-        workspace: {
-          projectId,
-          schemaVersion: 1,
-          recordVersion: 1,
-          confirmedRevisionId: null,
-          activeProposalId: null,
-          projectBuildPlanId: null,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt,
-        },
-        proposal: null,
-      },
+    const value = mockProjectMap({
       projectId,
-    );
+      displayName: project.displayName,
+      root: scope.cwd,
+      workflows: this.studioWorkflows(),
+      ref,
+      params,
+    });
+    if (value === "empty")
+      return {
+        projectId,
+        displayName: project.displayName,
+        map: { root: scope.cwd, systems: [], agents: [], edges: [], unresolved: [], platform: "skipped", labels: "unavailable" },
+        git: null,
+      };
+    return value;
   }
 
   async getStudioCurrentWorkspace(
@@ -2689,207 +2025,10 @@ export class MockApi implements HarnessApi {
       ? requested
       : { kind: "agent-map" as const, projectId };
     // Match the persisted server preference across reloads. Commit before
-    // artificial response latency, as saveRailState does for ordered writes.
+    // artificial response latency, so ordered writes land in order.
     this.saveStudioPreference(projectId, selection);
     await delay();
     return { ...current, selection, repaired: !valid };
-  }
-
-  async getSystemGraph(
-    workspaceKey: WorkspaceKey,
-    options: { refresh?: boolean } = {},
-  ): Promise<SystemGraphSnapshot> {
-    const graphControl =
-      typeof window === "undefined"
-        ? null
-        : (window as unknown as {
-            __HARNESS_TEST__?: Record<string, unknown>;
-            __MOCK_SYSTEM_GRAPH_FAIL_ONCE__?: boolean;
-            __MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__?: number;
-            __MOCK_SYSTEM_GRAPH_STATE__?: SystemGraphSnapshot["state"];
-            __MOCK_SYSTEM_GRAPH_REVISION__?: number;
-          });
-    const cached = this.systemGraphSnapshots.get(workspaceKey);
-    const fixtureRequestsProjection =
-      cached !== undefined &&
-      graphControl !== null &&
-      (graphControl.__MOCK_SYSTEM_GRAPH_FAIL_ONCE__ === true ||
-        (graphControl.__MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__ ?? 0) > 0 ||
-        (graphControl.__MOCK_SYSTEM_GRAPH_STATE__ !== undefined &&
-          graphControl.__MOCK_SYSTEM_GRAPH_STATE__ !== cached.state) ||
-        (graphControl.__MOCK_SYSTEM_GRAPH_REVISION__ !== undefined &&
-          graphControl.__MOCK_SYSTEM_GRAPH_REVISION__ !== cached.revision));
-    if (
-      !options.refresh &&
-      cached &&
-      !this.pendingSystemGraphRevision.has(workspaceKey) &&
-      !fixtureRequestsProjection
-    ) {
-      return cached;
-    }
-    const graphDelay =
-      typeof window === "undefined"
-        ? 180
-        : ((window as unknown as { __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number })
-            .__MOCK_SYSTEM_GRAPH_DELAY_MS__ ?? 180);
-    await delay(graphDelay);
-    const selectedScope = this.workspaceScopes().find(
-      (scope) => scope.workspaceKey === workspaceKey,
-    );
-    if (!selectedScope) {
-      throw new ApiError(404, "Workspace not found", "Workspace not found");
-    }
-    let state: SystemGraphSnapshot["state"] = "ready";
-    let revision =
-      this.pendingSystemGraphRevision.get(workspaceKey) ??
-      this.allocateSystemGraphRevision(workspaceKey);
-    this.pendingSystemGraphRevision.delete(workspaceKey);
-    if (graphControl) {
-      const win = graphControl;
-      const previous =
-        (win.__HARNESS_TEST__?.systemGraphRequests as
-          | WorkspaceKey[]
-          | undefined) ?? [];
-      win.__HARNESS_TEST__ = {
-        ...(win.__HARNESS_TEST__ ?? {}),
-        systemGraphRequests: [...previous, workspaceKey],
-      };
-      if (win.__MOCK_SYSTEM_GRAPH_FAIL_ONCE__) {
-        win.__MOCK_SYSTEM_GRAPH_FAIL_ONCE__ = false;
-        throw new ApiError(
-          500,
-          "System graph projection failed",
-          "System graph projection failed",
-        );
-      }
-      const degradedRemaining =
-        win.__MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__ ?? 0;
-      if (degradedRemaining > 0) {
-        state = "degraded";
-        win.__MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__ = degradedRemaining - 1;
-      }
-      state = win.__MOCK_SYSTEM_GRAPH_STATE__ ?? state;
-      revision = win.__MOCK_SYSTEM_GRAPH_REVISION__ ?? revision;
-      this.systemGraphRevision.set(
-        workspaceKey,
-        Math.max(this.systemGraphRevision.get(workspaceKey) ?? 0, revision),
-      );
-    }
-    const fixtureGraph: SystemGraph = {
-      kind: "system",
-      scope: { kind: "working-tree", workspaceKey },
-      nodes: [
-        { id: "agent:growth", agentKey: "growth", label: "Growth" },
-        { id: "agent:leasing", agentKey: "leasing", label: "Leasing" },
-        {
-          id: "agent:reporting",
-          agentKey: "reporting",
-          label: "Reporting",
-        },
-        {
-          id: "agent:research",
-          agentKey: "research",
-          label: "Research",
-        },
-        {
-          id: "agent:standalone",
-          agentKey: "standalone",
-          label: "Standalone",
-        },
-      ],
-      edges: [
-        {
-          from: "agent:research",
-          to: "agent:growth",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "blocking",
-        },
-        {
-          from: "agent:research",
-          to: "agent:growth",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "async",
-        },
-        {
-          from: "agent:research",
-          to: "agent:leasing",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "async",
-        },
-        {
-          from: "agent:growth",
-          to: "agent:research",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "async",
-        },
-        {
-          from: "agent:reporting",
-          to: "agent:leasing",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "blocking",
-        },
-      ],
-      warnings: [],
-    };
-    // Keep the original invocation-rich graph for acme-app's graph behavior
-    // specs. Every other mock project is an honest inventory projection of the
-    // agents beneath that exact root, which lets Project-axis tests prove parent
-    // and nested projects expose the same membership as the rail.
-    const projection = projectMockSystemGraphInventory(
-      selectedScope.cwd,
-      this.workflows,
-      this.workflowIdentityEvidence,
-    );
-    const graph = samePath(selectedScope.cwd, "/Users/demo/acme-app")
-      ? fixtureGraph
-      : {
-          kind: "system" as const,
-          scope: { kind: "working-tree" as const, workspaceKey },
-          nodes: projection.nodes,
-          edges: samePath(selectedScope.cwd, MOCK_POLSIA_ROOT)
-            ? MOCK_POLSIA_GRAPH_EDGES
-            : [],
-          warnings: projection.warnings,
-        };
-    if (
-      !samePath(selectedScope.cwd, "/Users/demo/acme-app") &&
-      state === "ready" &&
-      projection.degraded
-    ) {
-      state = "degraded";
-    }
-    const snapshot = { workspaceKey, revision, state, graph };
-    const graphKeys = new Set(graph.nodes.map((node) => node.agentKey));
-    const navigation = {
-      workspaceKey,
-      revision,
-      targets: projection.targets.filter((target) =>
-        graphKeys.has(target.agentKey),
-      ),
-    };
-    this.systemGraphSnapshots.set(workspaceKey, snapshot);
-    this.systemGraphNavigation.set(workspaceKey, navigation);
-    return snapshot;
-  }
-
-  async getSystemGraphNavigation(
-    workspaceKey: WorkspaceKey,
-  ): Promise<SystemGraphNavigationResponse> {
-    const snapshot =
-      this.systemGraphSnapshots.get(workspaceKey) ??
-      (await this.getSystemGraph(workspaceKey));
-    return (
-      this.systemGraphNavigation.get(workspaceKey) ?? {
-        workspaceKey,
-        revision: snapshot.revision,
-        targets: [],
-      }
-    );
   }
 
   async createSession(req: CreateSessionRequest): Promise<HarnessSession> {
@@ -2921,16 +2060,19 @@ export class MockApi implements HarnessApi {
         throw new Error("mock: couldn't create session");
       }
     }
-    if (req.scaffold) {
-      const separator = req.cwd.lastIndexOf("/");
-      await this.scaffoldAgent(req.cwd.slice(0, separator), req.cwd.slice(separator + 1), req.scaffold.template);
-    }
     const id = `sess-mock-${this.sessions.length + 1}`;
     const attachments: { path: string }[] = [];
     for (const attachment of req.initialAttachments ?? []) {
       attachments.push(attachment.kind === "path" ? attachment : await this.materializeMockFile(id, req.cwd, attachment));
     }
-    const initialPrompt = buildIdeaWithAttachments(req.initialPrompt ?? "", attachments);
+    // The same composition the server does (`first-request.ts`): the idea,
+    // the files, the linked sources, the session setup.
+    const initialPrompt = buildFirstPrompt({
+      idea: req.initialPrompt ?? "",
+      attachments,
+      sources: req.initialSources,
+      setup: req.initialSetup,
+    });
     recordCreateStep("session", req.cwd);
     if (typeof window !== "undefined" && initialPrompt) {
       const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
@@ -2942,7 +2084,12 @@ export class MockApi implements HarnessApi {
       boundWorkflowPath: null,
       harness: req.harness,
       cwd: req.cwd,
-      title: req.cwd.split("/").filter(Boolean).pop() ?? req.cwd,
+      title: this.defaultSessionTitle(req.cwd),
+      agentMapIdentity: {
+        projectId: this.studioProjectId(req.cwd),
+        userId: "user_mock",
+        sessionId: id,
+      },
       status: "starting",
       createdAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
@@ -2956,7 +2103,7 @@ export class MockApi implements HarnessApi {
       ready: false,
     };
     this.sessions = [...this.sessions, session];
-    session = this.studioSession(session, this.studioProjects());
+    session = this.studioSession(session);
     this.sessions = this.sessions.map((candidate) =>
       candidate.id === session.id ? session : candidate,
     );
@@ -3104,6 +2251,47 @@ export class MockApi implements HarnessApi {
     return resumed;
   }
 
+  async restartMcpSession(id: string): Promise<HarnessSession> {
+    const existing = this.sessions.find((session) => session.id === id);
+    if (!existing) throw new Error(`mock: no session to restart for ${id}`);
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.restartMcpSessionCalls as string[] | undefined) ??
+        [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        restartMcpSessionCalls: [...previous, id],
+      };
+    }
+    const restarting: HarnessSession = {
+      ...existing,
+      mcpAuthState: "restarting",
+    };
+    this.sessions = this.sessions.map((session) =>
+      session.id === id ? restarting : session,
+    );
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "session.status", session: restarting });
+    });
+    await delay(300);
+    const restarted: HarnessSession = {
+      ...restarting,
+      status: "running",
+      mcpAuthState: "current",
+      lastActiveAt: new Date().toISOString(),
+    };
+    this.sessions = this.sessions.map((session) =>
+      session.id === id ? restarted : session,
+    );
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "session.status", session: restarted });
+    });
+    return restarted;
+  }
+
   /** Mirrors the real route: registers the transcript-only row as a session
    *  record and hands it straight back as running, so mock mode exercises the
    *  adopt path rather than the create-a-fresh-session fallback. */
@@ -3122,6 +2310,11 @@ export class MockApi implements HarnessApi {
         harness: req.harness,
         cwd: req.cwd,
         title: req.title,
+        agentMapIdentity: {
+          projectId: this.studioProjectId(req.cwd),
+          userId: "user_mock",
+          sessionId: `sess-adopted-${req.agentSessionId.slice(0, 8)}`,
+        },
         createdAt: req.lastActiveAt,
         exitCode: null,
       }),
@@ -3194,8 +2387,18 @@ export class MockApi implements HarnessApi {
     return this.studioWorkflows();
   }
 
-  async getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {
+  async getWorkflowGraph(
+    workflowPath: string,
+    map?: CanvasMapRequest | null,
+  ): Promise<WorkflowGraphResponse> {
     await delay(80);
+    if (typeof window !== "undefined") {
+      // Every board read, for specs: which agent, and whether the map came along.
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = win.__HARNESS_TEST__ ?? {};
+      const calls = (win.__HARNESS_TEST__.workflowGraphCalls as unknown[] | undefined) ?? [];
+      win.__HARNESS_TEST__.workflowGraphCalls = [...calls, { path: workflowPath, map: map ?? null }];
+    }
     const workflow = this.workflows.find((item) => item.path === workflowPath);
     // 404 means "not a registered workflow" and NOTHING else — an agent whose
     // board is empty still answers 200. The mock keeps that distinction because
@@ -3244,7 +2447,9 @@ export class MockApi implements HarnessApi {
         ),
       };
     }
-    const graph = mockWorkflowGraph(workflow.name);
+    const graph = map?.map.steps
+      ? mockGraphFromMap(workflow.name, map)
+      : mockWorkflowGraph(workflow.name);
     return {
       ...base,
       status: "ok",
@@ -3306,6 +2511,13 @@ export class MockApi implements HarnessApi {
 
   async connectWorkflow(path: string): Promise<WorkflowInfo> {
     await delay(250);
+    // `?mockConnectRefuse=<folder name>`: the server finds no agent there.
+    const refused =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("mockConnectRefuse");
+    if (refused && path.split("/").filter(Boolean).pop() === refused)
+      throw new ApiError(422, "No agent found at that path", "No agent found at that path");
     const info: WorkflowInfo = {
       name: path.split("/").filter(Boolean).pop() ?? path,
       path,
@@ -3320,17 +2532,17 @@ export class MockApi implements HarnessApi {
   /**
    * The mock's stand-in for `POST /api/agents/move`.
    *
-   * A SECOND GUARD, deliberately: the rail asks `planMove` before dispatching,
-   * but the mover must not be the only thing between a bad destination and a
-   * clobbered agent — and in the reference prototype it was, so anything
+   * A SECOND GUARD, deliberately: the panel asks `refuseMove` before it
+   * enables Move, but the mover must not be the only thing between a bad
+   * destination and a clobbered agent — and in the reference prototype it was, so anything
    * reaching the registry another way clobbered silently. The real server stats
    * the destination (`src/server/agent-move.ts`); the mock has no disk, so it
    * checks what the registry can see, which is the same guard minus the `stat`.
    *
    * The move is recorded rather than applied to this instance's fixtures — see
    * `mockMoves` for why there is exactly one log — and then announced as
-   * `workflows.changed`, the same signal the real server broadcasts, so the rail
-   * re-derives the tree from the new path through its normal refresh path.
+   * `workflows.changed`, the same signal the real server broadcasts, so the map
+   * re-reads the agent at its new path through its normal refresh path.
    */
   async moveAgent(from: string, to: string): Promise<void> {
     recordAgentMove({ from, to });
@@ -3348,7 +2560,6 @@ export class MockApi implements HarnessApi {
       );
     if (samePath(from, to)) return;
     mockMoves.push({ from, to });
-    this.invalidateSystemGraphProjections();
     void import("./events").then(({ publishMockBusMessage }) => {
       publishMockBusMessage({ type: "workflows.changed" });
     });
@@ -3374,6 +2585,14 @@ export class MockApi implements HarnessApi {
     template = "default",
   ): Promise<AgentScaffoldResponse> {
     await delay(180);
+    // `?mockError=scaffold` forces the endpoint's refusal so the new-agent
+    // screen's error-under-the-field path is exercisable in a browser.
+    if (mockErrorTargets().has("scaffold"))
+      throw new ApiError(
+        409,
+        "POST /api/agents/scaffold → 409 (mock)",
+        `Can't create an agent in ${basenameOf(root)} right now.`,
+      );
     const refusal = refuseAgentName(name);
     if (refusal)
       throw new ApiError(
@@ -3465,74 +2684,17 @@ export class MockApi implements HarnessApi {
   }
 
   async listHarnesses(): Promise<HarnessEntry[]> {
+    if ((window as unknown as { __MOCK_HARNESS_REGISTRY_FAIL__?: boolean })
+      .__MOCK_HARNESS_REGISTRY_FAIL__) {
+      throw new Error("mock: harness registry unavailable");
+    }
     await delay(120);
-    return MOCK_HARNESSES;
-  }
-
-  /**
-   * The mock's stand-in for `<root>/.sapiom/studio-rail.json`.
-   *
-   * `localStorage`, keyed per project root, because the one thing this file has
-   * to be tested for is what it looks like ACROSS a page load — and the bug it
-   * exists to prevent lived in a mount effect, not in the serializer. A
-   * per-instance Map would be wiped by every reload and could never see it.
-   * Contents are the same text the server stores, so a spec asserting the
-   * written shape is asserting the real shape.
-   */
-  private railStateKey(projectRoot: string): string {
-    return `${MOCK_RAIL_STATE_PREFIX}${projectRoot.replace(/\/+$/, "")}`;
-  }
-
-  async getRailState(projectRoot: string): Promise<string | null> {
-    await delay(60);
-    // Test-only, mock mode only, matching __MOCK_SYSTEM_GRAPH_FAIL_ONCE__: a
-    // read-only checkout or a 5xx on this route is the one case where "safe to
-    // write" and "safe to draw" have different answers, and getting that wrong
-    // leaves the rail naming every system while the map shows an unlabelled
-    // blob. Reachable only by throwing the read.
-    if (
-      typeof window !== "undefined" &&
-      (window as unknown as { __MOCK_RAIL_STATE_FAIL__?: boolean })
-        .__MOCK_RAIL_STATE_FAIL__
-    ) {
-      throw new ApiError(500, "Rail state unreadable", "Rail state unreadable");
-    }
-    try {
-      return window.localStorage.getItem(this.railStateKey(projectRoot));
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * The store is written BEFORE the simulated latency, not after: two edits in
-   * quick succession have to land in the order they were made, and awaiting
-   * first let an earlier, slower write finish last — a reset that erased the
-   * file followed by a pending save that put it straight back.
-   */
-  async saveRailState(projectRoot: string, raw: string): Promise<void> {
-    recordRailStateWrite({ root: projectRoot, raw });
-    try {
-      window.localStorage.setItem(this.railStateKey(projectRoot), raw);
-    } catch {
-      // Private mode / quota: persistence is best-effort, the live state wins.
-    }
-    await delay(60);
-  }
-
-  async clearRailState(projectRoot: string): Promise<void> {
-    recordRailStateWrite({ root: projectRoot, raw: null });
-    try {
-      window.localStorage.removeItem(this.railStateKey(projectRoot));
-    } catch {
-      // Same: nothing stored is the goal state either way.
-    }
-    await delay(60);
-  }
-
-  async listLaunchEdges(): Promise<StudioRailLaunchEdge[]> {
-    await delay(120);
-    return MOCK_LAUNCH_EDGES;
+    const uninstalled =
+      (window as unknown as { __MOCK_UNINSTALLED_HARNESSES__?: string[] })
+        .__MOCK_UNINSTALLED_HARNESSES__ ?? [];
+    return MOCK_HARNESSES.map((entry) =>
+      uninstalled.includes(entry.id) ? { ...entry, installed: false } : entry,
+    );
   }
 
   async listMacros(): Promise<MacroDef[]> {
@@ -3576,56 +2738,16 @@ export class MockApi implements HarnessApi {
   async updateSettings(
     patch: Partial<HarnessSettings>,
   ): Promise<HarnessSettings> {
-    // Persisted BEFORE the simulated latency, for the same reason
-    // `saveRailState` is: dismissing the card hides it immediately, so a
-    // reload can (and in the spec does) start before this delay resolves. A
-    // write behind the delay would lose the dismiss to its own fixture.
+    // Persisted BEFORE the simulated latency: dismissing the card hides it
+    // immediately, so a reload can (and in the spec does) start before this
+    // delay resolves. A write behind the delay would lose the dismiss to its
+    // own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
-    const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
+    // Opening a project (a new `recentDirs` entry) mints the project and
+    // nothing else, like the server (flow-creation.md Q5): no automatic
+    // session, no seeding turn. The user types first.
     this.settings = { ...this.settings, ...patch };
-    // Opt-in parity fixture for the production project-open lifecycle: a newly
-    // durable project gets one ordinary first session titled Plan Agents. This
-    // is intentionally not routed through the mock create-session endpoint;
-    // the server owns it, so a project-name click still makes zero client
-    // session requests.
-    const autoPlanAgents =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockAutoPlanAgents") ===
-        "1";
-    const addedRoots = (patch.recentDirs ?? []).filter(
-      (root) => !previousRecentDirs.has(root),
-    );
-    if (autoPlanAgents && addedRoots.length > 0) {
-      const { publishMockBusMessage } = await import("./events");
-      for (const root of addedRoots) {
-        if (this.sessions.some((session) => samePath(session.cwd, root))) {
-          continue;
-        }
-        const projectId = this.studioProjectId(root);
-        const id = `sess-plan-agents-${this.sessions.length + 1}`;
-        const now = new Date().toISOString();
-        const session: HarnessSession = {
-          id,
-          agentSessionId: null,
-          boundWorkflowPath: null,
-          harness: "claude-code",
-          cwd: root,
-          title: "Plan Agents",
-          status: "running",
-          createdAt: now,
-          lastActiveAt: now,
-          ready: true,
-          agentMapIdentity: {
-            projectId,
-            userId: "user_mock",
-            sessionId: id,
-          },
-        };
-        this.sessions = [...this.sessions, session];
-        publishMockBusMessage({ type: "session.status", session });
-      }
-    }
     return this.settings;
   }
 
@@ -3726,6 +2848,24 @@ export class MockApi implements HarnessApi {
   async getAccountPlan(): Promise<AccountPlanView> {
     await delay(150);
     return MOCK_ACCOUNT_PLAN;
+  }
+
+  /**
+   * No App Link, unless `?mockAppLink=live` opts in. A durable App Link does not
+   * exist in mock mode, so the default fixture renders the bar exactly as an
+   * agent without one; the opt-in exists only so a spec can pin the chip's
+   * anatomy. It is not evidence the feature works (SAP-3255).
+   */
+  async getAppLink(workflowPath: string): Promise<DefinitionAppLinkView> {
+    await delay(50);
+    if (typeof window !== "undefined") {
+      const mode = new URLSearchParams(window.location.search).get("mockAppLink");
+      if (mode === "live") {
+        const slug = basenameOf(workflowPath) || "agent";
+        return { url: `https://apps.sapiom.ai/mock-org/${slug}`, status: "live" };
+      }
+    }
+    return { url: null, status: null };
   }
 
   /**

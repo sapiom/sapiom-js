@@ -1,0 +1,80 @@
+# Support desk demo: rehearsal checklist and failure drill
+
+Every command runs from `examples/support-desk` with `SAPIOM_API_KEY` set to the org key. Times are from
+our own runs on 2026-10-02.
+
+## Before the demo (T-30 min)
+
+1. **Reset.** `pnpm run reset-demo` closes every open issue and redraws its card. Intake links a
+   new message to any open issue it judges to be the same problem, so leftovers would capture the
+   demo's messages. `--dry-run` lists them first.
+2. **Install without urgent-pager.** `pnpm run setup --skip urgent-pager` (or plain
+   `pnpm run setup`, which leaves optional agents out). Expect `no changes` if nothing moved since
+   the last rehearsal, or about 40 s for a full deploy. Confirm the summary lists every trigger
+   as attached. The controller has none of its own: each ticket sets its own timer.
+3. **Take urgent-pager out** if a rehearsal left it in, so it can be added live: detach its
+   `issue.created` trigger (`DELETE /v1/workflows/triggers/<id>`; the id is in
+   `.sapiom/fleet-state.json`). setup re-attaches it.
+4. **Prepare the replay.** Set `scripts/replay.json` `prefix` to `""` for the live show (rehearsals
+   keep `[test]`). For the script to post itself, export
+   `SLACK_REPLAY_USER_TOKEN`, a user token (`xoxp-...`) of the test customer with `chat:write`.
+   Without it, someone posts each step by hand as the customer while the script watches.
+5. **Open the tabs:** the customer channel, the triage channel, the on-call user's DMs with the
+   support desk bot, the Sapiom Events page (`https://app.sapiom.ai/agents/events`), and Linear
+   (your desk's issues).
+
+## Run the demo
+
+1. `pnpm run replay`. It prints the steps (watch-only) or posts them, then prints each receipt,
+   run, issue card, draft card, reply and nudge with links. It exits 1 if any fleet run fails.
+2. **Bug report.** The issue card appears in triage about 30 s after the post; the draft card,
+   about 20 s after that. It cites a docs page or team article only if one applies; webhooks are
+   not in the public docs, so expect a low-confidence draft that asks for ids and timestamps.
+3. **Threaded follow-up.** It links to the same issue (no new card); copilot posts a new draft.
+4. **Live-add urgent-pager.** Before the outage step, run `pnpm run setup --only urgent-pager`
+   (37 s on Internal, under the 2-minute budget). The summary shows one agent and one trigger;
+   no other agent changes.
+5. **Outage.** Intake classifies it urgent; the on-call user gets a DM with the title and a link
+   to the triage thread, about 50 s after the post.
+6. **Question.** With `knowledge.docs_url` set to your docs site (an unset key means no docs at
+   all), copilot picks the docs deploy page, fetches it live, and drafts the answer with
+   the page linked under Sources. Add a policy or answer in the Console's Knowledge tab first to
+   show a team edit changing the next draft with no redeploy.
+   Click **Approve**: the reply lands in the customer thread and the card shows who sent it.
+7. **Thank-you.** No card: Jev's `is_issue` came back 0.04 in both rehearsals.
+8. **Escalate.** Click **Escalate** on the bug's draft card. One Linear issue appears in your desk's
+   Issues. The triage thread gets "Tracked as SAP-n" with the link; the customer thread gets "I've passed
+   this to our engineering team and will follow up in this thread." The card shows On Hold and the Linear id.
+9. **Nudges.** After the desk's `nudgeMinutes` (5 in the demo), the controller posts "No owner yet", "Draft waiting
+   for a decision" and "Customer is waiting for a reply" in the triage threads, when that ticket's timer
+   fires. To show it on demand, run `sapiom agents run --input '{"issueId":"<id>"}'` in `agents/controller`.
+   With an `sla` key set (README, SLAs), the nudges follow each priority's target instead.
+
+Afterwards: `pnpm run reset-demo`, and cancel the Linear issues the escalation created.
+
+## Failure drill: a disconnected Linear
+
+This shows a failed run that is replayed from the Events page once the cause is fixed. Rehearse it
+in a test org or with a throwaway issue; it creates one Linear issue.
+
+1. In the Sapiom dashboard, open **Connectors** and disconnect Linear.
+2. Post a bug in the customer channel and wait for its draft card.
+3. Click **Escalate**. The draft card shows Escalated, and the `issue.escalate` receipt's
+   escalation run fails: the Linear relay refuses the call. The issue stays as it was (no On Hold, no "Tracked as" reply), because
+   escalation records nothing until Linear answers.
+4. Open the receipt on the Events page (`https://app.sapiom.ai/agents/events/<receiptId>`; the
+   replay script prints the link). The fire shows as failed, with the relay error.
+5. Reconnect Linear (Connectors, with the relay slug `linear`).
+6. On the same receipt, click **Replay**. The new escalation run creates one Linear issue, replies
+   in both threads, and moves the issue On Hold. A second replay is a no-op: escalation finds the
+   recorded link and only repeats the identifier in triage.
+
+## Troubleshooting
+
+| Symptom                                        | Check                                                                                                            |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| No receipt for a customer post                 | The post came from a bot or was an edit; the connector drops both. Post as a real user.                          |
+| A demo message joined an old issue             | An issue was left open. `pnpm run reset-demo`, then post again.                                                  |
+| No draft card                                  | The copilot's `issue.created` trigger is detached; rerun `pnpm run setup`.                                       |
+| No DM for the outage                           | Intake classified it below urgent (the issue card shows the priority), or urgent-pager is not armed.             |
+| Nudges in the test channels between rehearsals | Open tickets keep their timers. `pnpm run reset-demo` closes them; a closed ticket's next tick clears its timer. |
