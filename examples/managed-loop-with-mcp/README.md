@@ -21,7 +21,10 @@ prepare ─┬─▶ ask ──(pause: models.run.result)──▶ report
 The default MCP server is DeepWiki's public server (`https://mcp.deepwiki.com/mcp`,
 no auth), which answers questions about public GitHub repositories, so `{}` in
 produces a real answer. To use your own Streamable HTTP MCP server, pass its URL as
-`mcpUrl`; set the `MCP_AUTH_TOKEN` secret if it needs a bearer token.
+`mcpUrl`. The template sends the server no credentials. For a server that needs
+auth, fix its URL in `index.ts` and add the header in `mcpFor`; never attach a
+credential to a URL taken from run input, or whoever starts a run can send it
+anywhere.
 
 ## Run it with Claude + the Sapiom MCP
 

@@ -540,7 +540,7 @@
       ],
       "setup": {
         "runsWithNoSetup": true,
-        "connectionCount": 2,
+        "connectionCount": 0,
         "settingCount": 2,
         "degradedWithoutSetup": "Asks DeepWiki's public MCP server about a public GitHub repository and returns the model's answer."
       }

@@ -25,9 +25,10 @@ loop, using a remote MCP server as the model's tools:
   rather wait inline in one step.
 - **A failed or empty run fails the step.** `report` never substitutes an answer.
   Keep that guard if you edit it.
-- **Credentials come from the environment.** `MCP_AUTH_TOKEN` is read from
-  `process.env` and sent as `authorization: Bearer <token>`. It is optional; the
-  default MCP server needs none.
+- **The MCP server gets no credentials.** `mcpUrl` comes from run input, so a
+  header attached to it would go wherever the caller points it. For a server that
+  needs auth, fix its URL in code, read the token from `process.env`, and add the
+  header in `mcpFor` for that URL only.
 
 ## Test it
 

@@ -6,58 +6,38 @@ import { mcpFor, parseMcpUrl, readInput, readRun } from "./index.ts";
 const DEEPWIKI = "https://mcp.deepwiki.com/mcp";
 const MINE = "https://mcp.example.com/mcp";
 
-// ── Entry input: malformed values become a readable rejection ───────────────
+// ── Entry input: an unusable server becomes a readable rejection ────────────
 
-test("readInput defaults an omitted server to DeepWiki, or to MCP_URL when set", () => {
-  assert.equal(readInput({}, undefined).mcpUrl, DEEPWIKI);
-  assert.equal(readInput({}, MINE).mcpUrl, MINE);
-  assert.equal(readInput({ mcpUrl: DEEPWIKI }, MINE).mcpUrl, DEEPWIKI);
+test("readInput defaults an omitted server to DeepWiki", () => {
+  assert.equal(readInput({}).mcpUrl, DEEPWIKI);
+  assert.equal(readInput({ mcpUrl: MINE }).mcpUrl, MINE);
 });
 
-test("readInput rejects a non-string or non-https server instead of failing the run", () => {
-  for (const mcpUrl of [
-    null,
-    42,
-    {},
-    "http://localhost:8080/mcp",
-    "not a url",
-  ]) {
-    const read = readInput({ mcpUrl }, undefined);
+test("readInput rejects a non-https server instead of failing the run", () => {
+  for (const mcpUrl of ["http://localhost:8080/mcp", "not a url", ""]) {
+    const read = readInput({ mcpUrl });
     assert.equal(read.ok, false, `mcpUrl ${JSON.stringify(mcpUrl)}`);
     assert.match(read.reason, /absolute https URL/);
+    assert.equal(read.mcpUrl, mcpUrl);
   }
 });
 
-test("readInput rejects a non-string question", () => {
-  const read = readInput({ question: 7 }, undefined);
-  assert.equal(read.ok, false);
-  assert.match(read.reason, /`question` must be a string/);
+test("readInput falls back to the default question when it is blank", () => {
+  const read = readInput({ question: "   " });
+  assert.equal(read.ok, true);
+  assert.match(read.question, /modelcontextprotocol/);
 });
 
-test("parseMcpUrl never hands a non-string to the URL parser", () => {
-  assert.equal(parseMcpUrl(undefined), null);
-  assert.equal(parseMcpUrl(null), null);
+test("parseMcpUrl trims and keeps an https URL", () => {
   assert.equal(parseMcpUrl(` ${MINE} `), MINE);
 });
 
-// ── The bearer token goes only to the configured server ─────────────────────
+// ── The server gets no credentials ──────────────────────────────────────────
 
-test("mcpFor sends the token to the MCP_URL origin", () => {
-  assert.deepEqual(mcpFor(MINE, "tok", MINE), {
-    url: MINE,
-    headers: { authorization: "Bearer tok" },
-  });
-});
-
-test("mcpFor never sends the token to a server the caller chose", () => {
-  assert.deepEqual(mcpFor("https://attacker.example/mcp", "tok", MINE), {
+test("mcpFor never attaches headers to a server taken from run input", () => {
+  assert.deepEqual(mcpFor("https://attacker.example/mcp"), {
     url: "https://attacker.example/mcp",
   });
-  assert.deepEqual(mcpFor(DEEPWIKI, "tok", undefined), { url: DEEPWIKI });
-});
-
-test("mcpFor sends no header without a token", () => {
-  assert.deepEqual(mcpFor(MINE, undefined, MINE), { url: MINE });
 });
 
 // ── The result: a failed or empty run is a failure, never an answer ─────────

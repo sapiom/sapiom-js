@@ -33,12 +33,12 @@ import { z } from "zod/v4";
  *
  * Runs with nothing: the default MCP server is DeepWiki's public server
  * (https://mcp.deepwiki.com/mcp, no auth), which answers questions about public
- * GitHub repositories. Point `mcpUrl` at another Streamable HTTP MCP server, or
- * set the `MCP_URL` secret to make your own server the default.
+ * GitHub repositories. Point `mcpUrl` at another public Streamable HTTP MCP
+ * server to use its tools instead.
  *
- * `MCP_AUTH_TOKEN` is sent only to the origin of the `MCP_URL` secret. A run
- * that passes some other `mcpUrl` gets no token, so a caller cannot send your
- * token to a server of their choosing.
+ * The server gets no credentials. To call a server that needs auth, fix its URL
+ * in code and add the header in `mcpFor`; never attach a credential to a URL
+ * taken from run input, or whoever starts a run can send it anywhere.
  */
 
 const DEFAULT_MCP_URL = "https://mcp.deepwiki.com/mcp";
@@ -52,35 +52,32 @@ const SYSTEM_PROMPT = [
 ].join(" ");
 
 /**
- * The entry contract. Both fields are optional and accept any value, so `{}`
- * produces a real run and a malformed value reaches `prepare`, which turns it
- * into a readable rejection instead of an entry-validation failure.
+ * The entry contract. Both fields default, so `{}` in produces a real run. A
+ * value the schema accepts but the run cannot use (a non-https URL) reaches
+ * `prepare`, which turns it into a readable rejection.
  */
 const entryInput = z.object({
   question: z
-    .unknown()
-    .optional()
+    .string()
+    .default(DEFAULT_QUESTION)
     .describe(
       "What to ask. The model may call the MCP server's tools to answer it.",
     ),
   mcpUrl: z
-    .unknown()
-    .optional()
+    .string()
+    .default(DEFAULT_MCP_URL)
     .describe("The Streamable HTTP MCP server whose tools the model can call."),
 });
 
 interface Shared extends Record<string, unknown> {
   question: string;
   mcpUrl: string;
-  /** True when `MCP_AUTH_TOKEN` was sent as a bearer token. */
-  authenticated: boolean;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
 
 /** Accept only an absolute https URL; anything else is a readable rejection. */
-export function parseMcpUrl(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
+export function parseMcpUrl(raw: string): string | null {
   try {
     const url = new URL(raw.trim());
     return url.protocol === "https:" ? url.toString() : null;
@@ -91,55 +88,31 @@ export function parseMcpUrl(raw: unknown): string | null {
 
 export type ReadInput =
   | { ok: true; question: string; mcpUrl: string }
-  | { ok: false; reason: string; mcpUrl: unknown };
+  | { ok: false; reason: string; mcpUrl: string | null };
 
-/**
- * Resolve the entry input. An omitted field takes its default (`MCP_URL` when
- * set, else DeepWiki); a present but unusable one is a rejection.
- */
-export function readInput(
-  input: { question?: unknown; mcpUrl?: unknown },
-  configuredUrl: string | undefined,
-): ReadInput {
-  if (input.question !== undefined && typeof input.question !== "string") {
-    return {
-      ok: false,
-      reason: "`question` must be a string.",
-      mcpUrl: input.mcpUrl ?? null,
-    };
-  }
+/** Resolve the entry input; an unusable server URL is a rejection. */
+export function readInput(input: {
+  question?: string;
+  mcpUrl?: string;
+}): ReadInput {
   const question = (input.question ?? "").trim() || DEFAULT_QUESTION;
-  const raw =
-    input.mcpUrl !== undefined
-      ? input.mcpUrl
-      : (configuredUrl ?? DEFAULT_MCP_URL);
-  const mcpUrl = parseMcpUrl(raw);
+  const mcpUrl = parseMcpUrl(input.mcpUrl ?? DEFAULT_MCP_URL);
   if (!mcpUrl) {
     return {
       ok: false,
       reason: "`mcpUrl` must be an absolute https URL.",
-      mcpUrl: raw ?? null,
+      mcpUrl: input.mcpUrl ?? null,
     };
   }
   return { ok: true, question, mcpUrl };
 }
 
 /**
- * The MCP server entry for `models.launch`. The bearer token goes only to the
- * origin of the configured `MCP_URL`; any other server gets no credentials.
+ * The MCP server entry for `models.launch`. It carries no credentials: the URL
+ * comes from run input, so a header here would go wherever the caller points it.
  */
-export function mcpFor(
-  mcpUrl: string,
-  token: string | undefined,
-  configuredUrl: string | undefined,
-): ModelMcp {
-  const configured = parseMcpUrl(configuredUrl);
-  const sameOrigin =
-    configured !== null &&
-    new URL(configured).origin === new URL(mcpUrl).origin;
-  return token && sameOrigin
-    ? { url: mcpUrl, headers: { authorization: `Bearer ${token}` } }
-    : { url: mcpUrl };
+export function mcpFor(mcpUrl: string): ModelMcp {
+  return { url: mcpUrl };
 }
 
 export type ReadRun =
@@ -164,8 +137,8 @@ const prepare = defineStep({
   name: "prepare",
   inputSchema: entryInput,
   next: ["ask", "rejected"],
-  async run(input: { question?: unknown; mcpUrl?: unknown }, ctx: Ctx) {
-    const read = readInput(input, process.env.MCP_URL);
+  async run(input: { question?: string; mcpUrl?: string }, ctx: Ctx) {
+    const read = readInput(input);
     if (!read.ok) {
       return goto("rejected", { reason: read.reason, mcpUrl: read.mcpUrl });
     }
@@ -183,15 +156,12 @@ const ask = defineStep({
   async run(_input: unknown, ctx: Ctx) {
     const question = ctx.shared.get("question") ?? DEFAULT_QUESTION;
     const mcpUrl = ctx.shared.get("mcpUrl") ?? DEFAULT_MCP_URL;
-    const mcp = mcpFor(mcpUrl, process.env.MCP_AUTH_TOKEN, process.env.MCP_URL);
-    // Recorded from the request actually sent, so `report` cannot disagree with it.
-    ctx.shared.set("authenticated", mcp.headers !== undefined);
 
     ctx.logger.info("launching the managed loop", { mcpUrl });
     const handle = await ctx.sapiom.models.launch({
       prompt: question,
       system: SYSTEM_PROMPT,
-      mcps: [mcp],
+      mcps: [mcpFor(mcpUrl)],
     });
     return await pauseUntilSignal(handle, { resumeStep: "report" });
   },
@@ -206,27 +176,25 @@ const report = defineStep({
   async run(run: ModelRunResultPayload, ctx: Ctx) {
     const read = readRun(run);
     if (!read.ok) return fail(read.reason);
-    const { answer } = read;
 
     return terminate({
       question: ctx.shared.get("question") ?? DEFAULT_QUESTION,
       mcpUrl: ctx.shared.get("mcpUrl") ?? DEFAULT_MCP_URL,
-      answer,
+      answer: read.answer,
       runId: run.runId,
       turns: run.result?.turns ?? null,
       servedClass: run.result?.servedClass ?? null,
       warnings: run.result?.warnings ?? [],
-      authenticated: ctx.shared.get("authenticated") === true,
     });
   },
 });
 
-/** Terminal off-ramp for unusable input. */
+/** Terminal off-ramp for an unusable `mcpUrl`. */
 const rejected = defineStep({
   name: "rejected",
   next: [],
   terminal: true,
-  async run(input: { reason: string; mcpUrl: unknown }) {
+  async run(input: { reason: string; mcpUrl: string | null }) {
     return terminate({ rejected: true, ...input });
   },
 });
