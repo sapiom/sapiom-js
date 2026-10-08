@@ -59,8 +59,8 @@ test("every existing manifest in the repo validates unchanged", () => {
   assert.deepEqual(problems, []);
   assert.equal(
     registry.templates.length,
-    12,
-    "the curated gallery is exactly 12 — update this floor and the copy gate deliberately when the set changes (culled dirs still on disk must not silently regrow it)",
+    13,
+    "the curated gallery is exactly 13 — update this floor and the copy gate deliberately when the set changes (culled dirs still on disk must not silently regrow it)",
   );
 });
 
