@@ -43,6 +43,8 @@ import type {
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "./agents/index.js";
+import { emit as eventsEmit } from "./events/index.js";
+import type { EmitEventSpec, EmitEventResult } from "./events/index.js";
 import {
   run as llmRun,
   submit as llmSubmit,
@@ -153,22 +155,69 @@ import type {
   SoundEffectInput,
   VoicesResult,
 } from "./speech/index.js";
+import * as decisions from "./decisions/index.js";
+import type {
+  DecisionQuestion,
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+} from "./decisions/index.js";
 import * as browserAutomation from "./browser-automation/index.js";
 import type {
   BrowserSession,
+  SessionTimeoutOptions,
   SessionSettlement,
   ScreenshotInput,
   Screenshot,
   IdentityCreateInput,
   Identity,
   WithSessionOptions,
+  WithManagedSessionInput,
+  WithManagedSessionOptions,
   ActiveSession,
+  ManagedBrowserApi,
+  ManagedBrowserSession,
 } from "./browser-automation/index.js";
 import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
+import * as google from "./connectors/google/index.js";
+import type {
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  SendEmailArgs,
+  SendEmailResult,
+} from "./connectors/google/index.js";
+// Type-only (erased at emit): the return type of `google.authClient()`. Referencing it
+// here does not make `google-auth-library` a runtime dependency of this module —
+// `authClient()` loads it dynamically, and only when called. Agent tsconfigs use
+// `skipLibCheck`, so this reference in the emitted `.d.ts` never forces the peer on agents
+// that only use `fetch()`.
+import type { OAuth2Client } from "google-auth-library";
+import * as github from "./connectors/github/index.js";
+import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
+import * as slack from "./connectors/slack/index.js";
+import type {
+  SlackPostEphemeralArgs,
+  SlackPostEphemeralResult,
+  SlackPostMessageArgs,
+  SlackPostMessageResult,
+  SlackReactionArgs,
+  SlackReactionResult,
+  SlackRepliesArgs,
+  SlackRepliesResult,
+  SlackUpdateArgs,
+  SlackUpdateResult,
+  SlackUserInfoArgs,
+  SlackUserInfoResult,
+} from "./connectors/slack/index.js";
+import { mcp } from "./connectors/mcp/index.js";
+import type { McpConnector } from "./connectors/mcp/index.js";
+import { ExecutionClient } from "./executions/client.js";
 
 export interface Sapiom {
+  readonly executions: ExecutionClient;
   readonly sandboxes: {
     create(opts: SandboxCreateOptions): Promise<Sandbox>;
     attach(
@@ -203,6 +252,10 @@ export interface Sapiom {
     run(spec: AgentRunSpec): Promise<AgentRunResult>;
     /** Launch a deployed agent; pass the handle to `pauseUntilSignal` to suspend on it. */
     launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
+  };
+  readonly events: {
+    /** SAP-3684: expose event emission through the gateway that accepts run credentials. */
+    emit(spec: EmitEventSpec): Promise<EmitEventResult>;
   };
   /**
    * Routed LLM calls through the gateway's `/v2` routing front-end. `run` is the
@@ -240,7 +293,10 @@ export interface Sapiom {
     /** Read a `run`/`redeem`/`callSession` result's plain-text reply, skipping a `thinking` block if present. */
     textOf(response: unknown): string | undefined;
     /** Read a `run`/`redeem`/`callSession` result's structured output (see `LlmRunSpec.output`). */
-    structuredOf<TSchema = unknown>(response: unknown, name?: string): TSchema | undefined;
+    structuredOf<TSchema = unknown>(
+      response: unknown,
+      name?: string,
+    ): TSchema | undefined;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -311,10 +367,17 @@ export interface Sapiom {
       domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
     };
   };
-  /** On-demand Postgres databases, returned with direct connection credentials. */
+  /**
+   * Postgres databases, returned with direct connection credentials. A Sapiom
+   * Postgres is permanent: it lives until you delete it and holds one slot of
+   * your plan's database limit while held. There is no lifetime to pick.
+   */
   readonly database: {
-    /** Provision a database (returns connection credentials). `duration` is required. */
-    create(input: CreateDatabaseInput): Promise<Database>;
+    /**
+     * Provision a database (returns connection credentials). Every field is
+     * optional; `create({})` works. A legacy `duration` is ignored.
+     */
+    create(input?: CreateDatabaseInput): Promise<Database>;
     /** Retrieve a database by its id or handle. */
     get(idOrHandle: string): Promise<Database>;
     /** List every database you own, each with connection credentials (read-only). */
@@ -442,7 +505,7 @@ export interface Sapiom {
     drop(namespace: string): Promise<void>;
   };
   /**
-   * READ-ONLY tenant vault secrets (SAP-1471): `list` returns key names, `get`
+   * READ-ONLY tenant vault secrets: `list` returns key names, `get`
    * one value (or null when absent), `getMany`/`getAll` a key→value map. No
    * set/delete by decision — write secrets from the dashboard or `@sapiom/core`'s
    * `VaultAPI`. Values are credentials: use them, don't persist or echo them.
@@ -454,8 +517,8 @@ export interface Sapiom {
     getAll(ref: string): Promise<Record<string, string>>;
   };
   /**
-   * Mint a durable, narrowly-scoped Sapiom API key for an artifact this step deploys
-   * (SAP-2300). The per-run credential expires with the step, so a long-lived child
+   * Mint a durable, narrowly-scoped Sapiom API key for an artifact this step deploys.
+   * The per-run credential expires with the step, so a long-lived child
    * (e.g. a deployed HTTP endpoint) needs its own key: `mintScoped` returns one that
    * is attenuated to a subset of this run's authority (never wildcard), attributed to
    * the workflow definition, and always expiring/revocable. Inject the returned `key`
@@ -463,6 +526,113 @@ export interface Sapiom {
    */
   readonly keys: {
     mintScoped(input: MintScopedInput): Promise<ScopedKey>;
+  };
+  /**
+   * Connection-backed third-party providers — OAuth/credential-backed
+   * capabilities resolved and governed server-side against the tenant's
+   * connector, distinct from Sapiom's first-party capabilities above.
+   */
+  readonly connectors: {
+    /**
+     * A live, tenant-scoped Google credential for in-run code.
+     * `authClient()` returns a real `google-auth-library` `OAuth2Client` whose HTTP is
+     * redirected through the connectors proxy — the OAuth token is resolved and injected
+     * SERVER-SIDE, so it never lives in the run env or on disk. `fetch()` is the generic
+     * proxied tail for an endpoint not covered by a method or the vendor SDK.
+     */
+    readonly google: {
+      /**
+       * A GENUINE `google-auth-library` `OAuth2Client` for the Google vendor SDKs
+       * (`googleapis`, `@googleapis/*`) — pass it straight to `drive({ version, auth })`.
+       * Every request it makes is redirected through the connectors proxy, which resolves
+       * the tenant's Google credential and injects it server-side (metered, governed), so
+       * the OAuth token never enters the run. A real client is required because the vendor
+       * SDKs call `authClient.request(...)` and type `auth` as `OAuth2Client | …`.
+       * `google-auth-library` is an optional peer, imported dynamically — it ships with
+       * `googleapis`/`@googleapis/*`, and this throws a clear error if missing.
+       */
+      authClient(): Promise<OAuth2Client>;
+      /**
+       * The generic proxied tail — for an endpoint not covered by a method or the vendor
+       * SDK. Pass an absolute Google URL (its host is forwarded via
+       * `x-sapiom-connector-host`) or a bare path (joined onto the connector's default
+       * origin server-side). The tenant credential + attribution are added automatically;
+       * the OAuth token is injected server-side, never in the run.
+       */
+      fetch(pathOrUrl: string, init?: RequestInit): Promise<Response>;
+      /**
+       * Google Drive server-side methods. The gateway resolves the tenant's
+       * Google credential internally and calls Drive — the token never reaches the run.
+       */
+      readonly drive: {
+        /** Share a Drive file. Throws 404 when no Google connector is connected. */
+        shareFile(args: DriveShareFileArgs): Promise<DrivePermission>;
+        /** Upload a new Drive file. */
+        uploadFile(args: DriveUploadFileArgs): Promise<DriveFile>;
+      };
+      /**
+       * Google Gmail server-side methods. The gateway resolves the tenant's
+       * Google credential internally and calls Gmail — the token never reaches the run.
+       */
+      readonly gmail: {
+        /**
+         * Send an email via Gmail. `to`/`cc`/`bcc` accept a single address or an
+         * array. Throws 404 when no Google connector is connected.
+         */
+        sendEmail(args: SendEmailArgs): Promise<SendEmailResult>;
+      };
+    };
+    /**
+     * GitHub server-side methods. The gateway resolves the tenant's
+     * GitHub credential — a static Personal Access Token — internally and calls GitHub;
+     * the PAT never reaches the run. GitHub exercises the `static`/`injected` credential
+     * strategy (the contrast to Google's OAuth) through the identical dispatch path.
+     */
+    readonly github: {
+      /**
+       * List the tenant's GitHub repositories. All args are optional — call with none
+       * to list the first page of every repo the PAT can see. Throws 404 when no
+       * GitHub connector is connected.
+       */
+      listRepos(args?: ListReposArgs): Promise<GitHubRepo[]>;
+    };
+    /**
+     * Slack Web API methods. The gateway resolves the tenant's Slack bot token internally
+     * and calls Slack; the token never reaches the run. Each throws 404 when no Slack
+     * connector is connected and 502 when Slack answers `ok: false`.
+     */
+    readonly slack: {
+      /** `chat.postMessage`: post to a channel or DM, in a thread when `threadTs` is set. */
+      postMessage(args: SlackPostMessageArgs): Promise<SlackPostMessageResult>;
+      /** `chat.update`: edit a message the bot posted. */
+      update(args: SlackUpdateArgs): Promise<SlackUpdateResult>;
+      /** `chat.postEphemeral`: a message only `user` sees. */
+      postEphemeral(
+        args: SlackPostEphemeralArgs,
+      ): Promise<SlackPostEphemeralResult>;
+      /** `reactions.add`: react to a message with an emoji. */
+      addReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
+      /** `reactions.remove`: remove the bot's reaction. */
+      removeReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
+      /** `conversations.replies`: a thread's parent message and replies, paginated. */
+      replies(args: SlackRepliesArgs): Promise<SlackRepliesResult>;
+      /** `users.info`: look up a user by id. */
+      userInfo(args: SlackUserInfoArgs): Promise<SlackUserInfoResult>;
+    };
+    /**
+     * The tenant's Linear connector over the MCP relay (slug `linear`). Its tools come
+     * from `listTools()` once the tenant has connected Linear and run Discover.
+     */
+    readonly linear: McpConnector;
+    /** The tenant's Notion connector over the MCP relay (slug `notion`). */
+    readonly notion: McpConnector;
+    /**
+     * Any MCP-backed connector by slug — a renamed or second Linear/Notion connector
+     * (`linear-2`) or a custom MCP server. `listTools()` / `callTool(name, args)`; a
+     * failed tool call is a result with `isError: true`, a JSON-RPC error throws
+     * `McpRelayError`.
+     */
+    mcp(slug: string): McpConnector;
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -480,19 +650,38 @@ export interface Sapiom {
     };
   };
   /**
+   * System One decisions — fixed-answer-set judgments with probabilities
+   * (a System One decision model via the Capability Router). Generated text → `llm.run`.
+   */
+  readonly decisions: {
+    /**
+     * Evaluate yes/no (`noul`), pick-one (`choice`), and rubric (`score`)
+     * questions over one state; the answers map is typed by the questions.
+     */
+    evaluate<Q extends Record<string, DecisionQuestion>>(
+      spec: DecisionsEvaluateSpec<Q>,
+    ): Promise<DecisionsEvaluateResponse<Q>>;
+  };
+  /**
    * Browser automation — sessions, screenshots, and identity management.
    * Use `withSession` for the safe auto-close pattern; use `sessions` +
    * `screenshot` + `identities` for direct control.
    */
   readonly browserAutomation: {
+    /** Run and control managed tasks with secret resource IDs. */
+    tasks: ManagedBrowserApi["tasks"];
+    /** Save, inspect, and delete browser profiles. */
+    profiles: ManagedBrowserApi["profiles"];
+    /** Control recordings and stream video through Sapiom. */
+    recordings: ManagedBrowserApi["recordings"];
     /** Open and close browser sessions. */
-    sessions: {
+    sessions: ManagedBrowserApi["sessions"] & {
       /** Open a new browser session. */
-      create(): Promise<BrowserSession>;
+      create(options?: SessionTimeoutOptions): Promise<BrowserSession>;
       /** Open a new browser session pre-authenticated with an identity. */
-      createWithIdentity(input: {
-        identityId: string;
-      }): Promise<BrowserSession>;
+      createWithIdentity(
+        input: { identityId: string } & SessionTimeoutOptions,
+      ): Promise<BrowserSession>;
       /** Close a session and settle its billing. */
       close(sessionId: string): Promise<SessionSettlement>;
     };
@@ -508,6 +697,12 @@ export interface Sapiom {
     withSession<T>(
       fn: (session: ActiveSession) => Promise<T>,
       opts?: WithSessionOptions,
+    ): Promise<T>;
+    /** Run a callback with a managed session and close it afterward. */
+    withManagedSession<T>(
+      input: WithManagedSessionInput,
+      fn: (session: ManagedBrowserSession) => Promise<T>,
+      options?: WithManagedSessionOptions,
     ): Promise<T>;
     /** Create and manage browser identities for authenticated sessions. */
     identities: {
@@ -538,7 +733,9 @@ export interface Sapiom {
 
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
 function bind(transport: Transport): Sapiom {
+  const managedBrowser = browserAutomation.bindManagedBrowser(transport);
   return {
+    executions: new ExecutionClient(transport),
     sandboxes: {
       create: (opts) => Sandbox.create(opts, transport),
       attach: (name, opts) => Sandbox.attach(name, opts, transport),
@@ -563,6 +760,9 @@ function bind(transport: Transport): Sapiom {
     agents: {
       run: (spec) => agentsRun(spec, transport),
       launch: (spec) => agentsLaunch(spec, transport),
+    },
+    events: {
+      emit: (spec) => eventsEmit(spec, transport),
     },
     llm: {
       run: (spec) => llmRun(spec, transport),
@@ -678,6 +878,34 @@ function bind(transport: Transport): Sapiom {
     keys: {
       mintScoped: (input) => keys.mintScoped(input, transport),
     },
+    connectors: {
+      google: {
+        authClient: () => google.authClient(transport),
+        fetch: (pathOrUrl, init) => google.fetch(pathOrUrl, init, transport),
+        drive: {
+          shareFile: (args) => google.driveShareFile(args, transport),
+          uploadFile: (args) => google.driveUploadFile(args, transport),
+        },
+        gmail: {
+          sendEmail: (args) => google.gmailSendEmail(args, transport),
+        },
+      },
+      github: {
+        listRepos: (args) => github.listRepos(args, transport),
+      },
+      slack: {
+        postMessage: (args) => slack.postMessage(args, transport),
+        update: (args) => slack.update(args, transport),
+        postEphemeral: (args) => slack.postEphemeral(args, transport),
+        addReaction: (args) => slack.addReaction(args, transport),
+        removeReaction: (args) => slack.removeReaction(args, transport),
+        replies: (args) => slack.replies(args, transport),
+        userInfo: (args) => slack.userInfo(args, transport),
+      },
+      linear: mcp("linear", transport),
+      notion: mcp("notion", transport),
+      mcp: (slug) => mcp(slug, transport),
+    },
     speech: {
       textToSpeech: {
         create: (input) => speech.createSpeech(input, transport),
@@ -689,9 +917,17 @@ function bind(transport: Transport): Sapiom {
         list: () => speech.listVoices(transport),
       },
     },
+    decisions: {
+      evaluate: (spec) => decisions.evaluate(spec, transport),
+    },
     browserAutomation: {
+      tasks: managedBrowser.tasks,
+      profiles: managedBrowser.profiles,
+      recordings: managedBrowser.recordings,
       sessions: {
-        create: () => browserAutomation.createSession(transport),
+        ...managedBrowser.sessions,
+        create: (options) =>
+          browserAutomation.createSession(options, transport),
         createWithIdentity: (input) =>
           browserAutomation.createSessionWithIdentity(input, transport),
         close: (sessionId) =>
@@ -700,6 +936,8 @@ function bind(transport: Transport): Sapiom {
       screenshot: (input) => browserAutomation.screenshot(input, transport),
       withSession: (fn, opts) =>
         browserAutomation.withSession(fn, opts, transport),
+      withManagedSession: (input, fn, options) =>
+        browserAutomation.withManagedSession(input, fn, options, transport),
       identities: {
         create: (input) => browserAutomation.createIdentity(input, transport),
       },

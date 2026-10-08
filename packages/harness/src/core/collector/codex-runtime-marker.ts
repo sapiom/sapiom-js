@@ -1,4 +1,4 @@
-import { canonicalDigest } from "../../shared/agent-map-canonical.js";
+import { canonicalDigest } from "@sapiom/agent-map/node/canonical";
 
 /** Non-secret correlation proof injected by the host into a fresh child kickoff. */
 export const codexRuntimeMarker = (runtimeEpoch: string): string =>

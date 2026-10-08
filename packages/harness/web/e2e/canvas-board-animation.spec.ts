@@ -9,15 +9,18 @@
  *
  * The reverse click channel: the served board posts
  * { type: "sapiom:node-click", stepName } when a node is clicked; the
- * parent maps that to the graph node's id and opens the step inspector.
+ * parent maps that to the graph node's id and shows the step's card.
+ *
+ * The board is the agent modal's (flow-map-chat-overlay.md 4.2b): served by
+ * path, so its runs are the agent's, attributed by the session's binding when
+ * the run started (`ObservedRun.workflowPath`).
  *
  * This spec covers the PARENT producer side (the postMessage bridge) and the
  * reverse click channel.
  *
- * Run-state bridge strategy: the mock canvas document at
- * public/canvas/sess-boot/ does NOT implement the sapiom:run-state listener
- * (it predates the SVG board format). We intercept the served document with
- * page.route and replace it with a minimal HTML page that:
+ * Run-state bridge strategy: the mock board does NOT implement the
+ * sapiom:run-state listener (it predates the SVG board format). We swap the
+ * modal frame's document for a minimal HTML page that:
  *   (a) listens for sapiom:run-state and echoes a receipt back to the parent
  *       as { type: "sapiom:run-state-received", ... }, AND
  *   (b) posts its graph and size data so the rest of CanvasPane's wiring works.
@@ -30,6 +33,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
+import { openAgentModal } from "./mock-navigation";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -98,19 +102,21 @@ const INSTRUMENTED_CANVAS_DOC = `<!DOCTYPE html>
 </body>
 </html>`;
 
-/** Navigate to the app with the instrumented canvas document intercepting the served board. */
-const loadWithInstrumentedBoard = async (page: Page): Promise<void> => {
-  // Route all canvas doc requests to the instrumented version.
-  await page.route("**/canvas/sess-boot/**", async (route) => {
-    await route.fulfill({ contentType: "text/html", body: INSTRUMENTED_CANVAS_DOC });
-  });
+/** (Re)load the modal frame with the instrumented document, as a served
+ *  board's own load would. */
+const swapInInstrumentedBoard = (page: Page): Promise<void> =>
+  page.evaluate((doc) => {
+    (document.querySelector(".agent-modal .canvas-iframe") as HTMLIFrameElement).srcdoc = doc;
+  }, INSTRUMENTED_CANVAS_DOC);
 
+/** leasing's agent modal, its board swapped for the instrumented document. */
+const loadWithInstrumentedBoard = async (page: Page): Promise<void> => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-
-  // Trigger canvas.reload so the iframe mounts.
-  await publish(page, { type: "canvas.reload", harnessSessionId: "sess-boot" });
+  await openAgentModal(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
+  await expect(page.locator(".canvas-loading--overlay")).toHaveCount(0, { timeout: 8_000 });
+  await swapInInstrumentedBoard(page);
   // Wait for the skeleton to clear so frameLoading is false (the bridge guards on this).
   await expect(page.locator(".canvas-loading--overlay")).toHaveCount(0, { timeout: 8_000 });
 };
@@ -161,12 +167,6 @@ test.describe("run-state bridge — CanvasPane posts sapiom:run-state into the i
       target: "prod",
     });
 
-    // Wait for the run chip to appear on the Steps tab (confirms run landed in state).
-    await page.getByTestId("right-tab-steps").click();
-    await expect(page.getByTestId("canvas-run-chip")).toBeVisible({ timeout: 8_000 });
-
-    // Switch back to the Canvas tab so frameLoading stays false and the board is mounted.
-    await page.getByTestId("right-tab-canvas").click();
     await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
 
     // The run-state bridge fires when the run lands in state and frameLoading is false.
@@ -211,18 +211,20 @@ test.describe("run-state bridge — CanvasPane posts sapiom:run-state into the i
       executionId,
       target: "local",
     });
-    await page.getByTestId("right-tab-steps").click();
-    await expect(page.getByTestId("canvas-run-chip")).toBeVisible({ timeout: 8_000 });
-    await page.getByTestId("right-tab-canvas").click();
+    // The run lands on the agent's board: the bridge posts it.
+    await installReceiptListener(page);
+    await expect
+      .poll(async () => (await collectRunStateReceipts(page)).length > 0, { timeout: 10_000 })
+      .toBe(true);
 
     // Install the receipt listener BEFORE the reload so it is already in place
     // when the new document loads and echoes back the re-posted run state.
     await installReceiptListener(page);
 
-    // Now trigger a canvas.reload — the iframe reloads and its onLoad handler
-    // must re-post the current run state to the new document; the new document
-    // echoes it back; the parent listener above records the echo.
-    await publish(page, { type: "canvas.reload", harnessSessionId: "sess-boot" });
+    // Now reload the frame's document — its onLoad handler must re-post the
+    // current run state to the new document; the new document echoes it back;
+    // the parent listener above records the echo.
+    await swapInInstrumentedBoard(page);
 
     // Poll for the receipt — the instrumented doc's echo arrives once the new
     // document has loaded and the onLoad re-post has fired.
@@ -281,10 +283,6 @@ test.describe("run-state bridge — CanvasPane posts sapiom:run-state into the i
       target: "local",
     });
 
-    await page.getByTestId("right-tab-steps").click();
-    await expect(page.getByTestId("canvas-run-chip")).toBeVisible({ timeout: 8_000 });
-    await page.getByTestId("right-tab-canvas").click();
-
     await expect
       .poll(async () => (await collectRunStateReceipts(page)).length > 0, { timeout: 10_000 })
       .toBe(true);
@@ -301,20 +299,41 @@ test.describe("run-state bridge — CanvasPane posts sapiom:run-state into the i
 });
 
 // ---------------------------------------------------------------------------
-// sapiom:node-click reverse channel — served board node click opens inspector
+// sapiom:node-click reverse channel — served board node click shows the step card
 // ---------------------------------------------------------------------------
 
-test.describe("sapiom:node-click reverse channel — board click opens the step inspector", () => {
+/** The graph the instrumented document posts, as data the node-click tests
+ *  can post from inside the entered page's board. */
+const INSTRUMENTED_GRAPH = {
+  name: "leasing",
+  entry: "intake",
+  nodes: [
+    { id: "intake", kind: "entry", label: "intake", role: "entry", description: "Logs the incoming order.", timeoutMs: null, inputSchema: null, capabilities: [] },
+    { id: "screen", kind: "step", label: "screen", role: "step", description: "Screens the applicant.", timeoutMs: null, inputSchema: null, capabilities: [] },
+    { id: "approve", kind: "step", label: "approve?", role: "step", description: "Branching gate.", timeoutMs: null, inputSchema: null, capabilities: [] },
+  ],
+  edges: [
+    { from: "intake", to: "screen", kind: "sequential", label: "" },
+    { from: "screen", to: "approve", kind: "sequential", label: "" },
+  ],
+  groups: [],
+  warnings: [],
+};
+
+test.describe("sapiom:node-click reverse channel — board click shows the step card", () => {
   test.beforeEach(async ({ page }) => {
-    await loadWithInstrumentedBoard(page);
-    // Wait for the graph to post so CanvasPane has a graph to look up step names.
-    // The instrumented doc posts sapiom-canvas:graph on load — wait for the graph
-    // to be parsed by the component by checking that the Steps tab shows content.
-    await page.getByTestId("right-tab-steps").click();
-    // The steps list renders once the graph arrives.
-    await expect(page.locator(".canvas-steps-surface")).toBeVisible({ timeout: 5_000 });
-    await page.getByTestId("right-tab-canvas").click();
+    // leasing's modal: the board by path, served as the frame's document.
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openAgentModal(page, "acme-app", "leasing");
     await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
+    await expect(page.locator(".canvas-loading--overlay")).toHaveCount(0, { timeout: 8_000 });
+    // The instrumented graph (an `approve` node labelled `approve?`), posted
+    // FROM the frame so it passes the pane's event.source guard, as a served
+    // board posts its own.
+    await page.frameLocator(".canvas-iframe").locator("body").evaluate((_, graph) => {
+      window.parent.postMessage({ type: "sapiom-canvas:graph", graph }, "*");
+    }, INSTRUMENTED_GRAPH);
   });
 
   /** Send a sapiom:node-click message FROM WITHIN the iframe's frame context.
@@ -328,14 +347,13 @@ test.describe("sapiom:node-click reverse channel — board click opens the step 
     }, stepName);
   };
 
-  test("a sapiom:node-click message from the iframe selects the step in the inspector", async ({
+  test("a sapiom:node-click message from the iframe selects the step in its card", async ({
     page,
   }) => {
     await sendNodeClickFromFrame(page, "intake");
 
-    await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake", { timeout: 5_000 });
+    await expect(page.getByTestId("step-card-title")).toHaveText("intake", { timeout: 5_000 });
     await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
-    await expect(page.getByTestId("right-tab-canvas")).toHaveClass(/is-active/);
   });
 
   test("sapiom:node-click for a step label that differs from its id still resolves correctly", async ({
@@ -345,7 +363,7 @@ test.describe("sapiom:node-click reverse channel — board click opens the step 
     // posts stepName="approve?" and the handler must resolve to node id "approve".
     await sendNodeClickFromFrame(page, "approve?");
 
-    await expect(page.getByTestId("canvas-inspector-title")).toContainText("approve", { timeout: 5_000 });
+    await expect(page.getByTestId("step-card-title")).toContainText("approve", { timeout: 5_000 });
     await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   });
 
@@ -353,8 +371,8 @@ test.describe("sapiom:node-click reverse channel — board click opens the step 
     await sendNodeClickFromFrame(page, "nonexistent-step");
 
     await page.waitForTimeout(200);
-    await expect(page.getByTestId("canvas-inspector-title")).toHaveCount(0);
-    await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
+    await expect(page.getByTestId("step-card-title")).toHaveCount(0);
+    await expect(page.getByTestId("step-card")).toHaveCount(0);
   });
 
   test("a sapiom:node-click message from the parent window (not the iframe) is ignored", async ({
@@ -367,6 +385,6 @@ test.describe("sapiom:node-click reverse channel — board click opens the step 
     });
 
     await page.waitForTimeout(200);
-    await expect(page.getByTestId("canvas-inspector-title")).toHaveCount(0);
+    await expect(page.getByTestId("step-card-title")).toHaveCount(0);
   });
 });

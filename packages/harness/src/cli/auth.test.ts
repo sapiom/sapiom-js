@@ -13,6 +13,9 @@ vi.mock("@sapiom/mcp/auth", () => ({
 }));
 
 import { ensureAuthenticated } from "./auth.js";
+vi.mock("../core/studio-credentials.js", () => ({
+  withStudioCredentialLock: (operation: () => Promise<unknown>) => operation(),
+}));
 
 const env = {
   name: "production",
@@ -29,7 +32,10 @@ describe("ensureAuthenticated", () => {
   });
 
   it("returns null and touches nothing when noAuth is set", async () => {
-    const result = await ensureAuthenticated({ interactive: true, noAuth: true });
+    const result = await ensureAuthenticated({
+      interactive: true,
+      noAuth: true,
+    });
     expect(result).toBeNull();
     expect(resolveEnvironment).not.toHaveBeenCalled();
   });
@@ -62,23 +68,37 @@ describe("ensureAuthenticated", () => {
   });
 
   it("runs browser auth and persists credentials when interactive with nothing cached", async () => {
+    const studioCredentials = {
+      accessToken: "sat_user",
+      refreshToken: "srt_user",
+      expiresAt: "2026-10-01T00:00:00Z",
+    };
     readCredentials.mockResolvedValue(null);
     performBrowserAuth.mockResolvedValue({
       apiKey: "key-2",
       tenantId: "tenant-2",
       organizationName: "Beta",
       apiKeyId: "apikey-2",
+      studioCredentials,
     });
 
     const result = await ensureAuthenticated({ interactive: true });
 
-    expect(performBrowserAuth).toHaveBeenCalledWith(env.appURL, env.apiURL);
-    expect(writeCredentials).toHaveBeenCalledWith(env.name, env.appURL, env.apiURL, {
-      apiKey: "key-2",
-      tenantId: "tenant-2",
-      organizationName: "Beta",
-      apiKeyId: "apikey-2",
+    expect(performBrowserAuth).toHaveBeenCalledWith(env.appURL, env.apiURL, {
+      studioIdentity: true,
     });
+    expect(writeCredentials).toHaveBeenCalledWith(
+      env.name,
+      env.appURL,
+      env.apiURL,
+      {
+        apiKey: "key-2",
+        tenantId: "tenant-2",
+        organizationName: "Beta",
+        apiKeyId: "apikey-2",
+        studioCredentials,
+      },
+    );
     expect(result).toEqual({
       userId: "tenant-2",
       tenantId: "tenant-2",

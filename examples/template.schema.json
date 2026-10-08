@@ -126,7 +126,7 @@
           },
           "duration": {
             "enum": ["15m", "1h", "4h", "24h", "7d"],
-            "description": "postgres only. 7d is the maximum and there is NO renew verb — a managed Postgres is scratch space, not a datastore. A template that needs durable state must say so in `notes`."
+            "description": "postgres only, and legacy: the platform no longer reads it. A Sapiom Postgres is permanent and metered by slot — see the served rule at https://api.sapiom.ai/v1/agents/authoring-rules#database-lifecycle. Omit it in a new template; existing declarations still parse."
           },
           "seed": {
             "type": "string",
@@ -135,7 +135,7 @@
           "ephemeral": {
             "type": "boolean",
             "default": true,
-            "description": "True when the resource is disposable per run. False signals the 7-day TTL problem applies and the template needs a durability story in `notes`."
+            "description": "True when the resource is disposable per run. False signals the template keeps state across runs and needs a durability story in `notes`."
           },
           "reuse": {
             "type": "object",
@@ -187,6 +187,44 @@
         "narrative": {
           "type": "string",
           "description": "One honest sentence for what an unconfigured run actually produces. Rendered VERBATIM on the shelf as `setup.degradedWithoutSetup` — must never imply a send that will not happen."
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "description": "The dashboard this template ships, if any. Absent ⇒ a template without a dashboard, which is most of them; nothing else about the template changes. The source lives under `entry` in this directory and clones with everything else, so the adopter owns editable code from the first moment. `start` / `port` / `build` are exactly what an App Link bundle manifest stores — the publish step maps them straight through, with `entry` as the bundle root. A hand-maintained mirror of the backend's `templateManifestSchema.app` (Sapiom `template-registry.service.ts`): the two MUST agree field for field, because a block that passes here and fails there is silently dropped on the wire — the exact failure `requiredSecrets` shipped with.",
+      "required": ["name", "entry", "start", "port", "preview"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The DASHBOARD's own name, not the template's — it is the preview card's heading under the template's H1 (\"Insight report dashboard\", not \"Scheduled Metrics Report\")."
+        },
+        "entry": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_-]+/)+$",
+          "description": "Directory holding the dashboard source, relative to this example dir, with a trailing slash (`\"app/\"`). It is the subtree the publish step uploads and the working directory `build` and `start` run in — so `start` is `node server.mjs`, not `node app/server.mjs`. Segments are plain slugs: no leading slash, no `.`/`..`, no hidden directories. Must exist on disk; the `manifest-app-entry` check enforces that."
+        },
+        "start": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shell command that serves the dashboard, run inside `entry` after `build`. It must listen on `port` and keep running."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TCP port `start` listens on. A real port: the bundle manifest cannot take anything else. Avoid 3000 — a local Sapiom backend usually holds it."
+        },
+        "build": {
+          "type": ["string", "null"],
+          "description": "Optional shell command run once inside `entry` before `start` — `npm install`, a bundler. Omit it, or write `null` or `\"\"`, when the dashboard needs no build step; the backend reads all three as the same thing. Prefer no build step: a dependency-free dashboard starts faster and cannot fail on an install."
+        },
+        "preview": {
+          "type": "string",
+          "pattern": "^https://[^\\s/?#]+(?:[/?#]\\S*)?$",
+          "description": "Absolute `https://` URL of a REAL screenshot of the rendered dashboard showing this template's own zero-setup output — never a drawn mock, never a live embed, never an empty state. Rendered by the detail page's dashboard card at 1200×760, so capture at that aspect ratio (`pnpm examples:app:screenshot <id>` does). `https` only, mirroring the backend, which rejects anything else as an injection sink rather than a screenshot; `http` would also be blocked as mixed content. Host it in this repo: commit `preview.png` beside `template.json` and point here at its `raw.githubusercontent.com/sapiom/sapiom-js/main/...` URL — the same host production already reads the manifest from. It resolves once the PR merges."
         }
       }
     }

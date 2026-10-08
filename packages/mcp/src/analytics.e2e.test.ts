@@ -34,6 +34,7 @@ const ALL_TOOL_NAMES = [
   "sapiom_dev_agents_clone",
   "sapiom_dev_agents_cron_preview",
   "sapiom_dev_agents_deploy",
+  "sapiom_dev_agents_emit_event",
   "sapiom_dev_agents_inspect",
   "sapiom_dev_agents_link",
   "sapiom_dev_agents_run",
@@ -42,11 +43,13 @@ const ALL_TOOL_NAMES = [
   "sapiom_dev_agents_schedule",
   "sapiom_dev_agents_schedule_cancel",
   "sapiom_dev_agents_schedule_inspect",
+  "sapiom_dev_agents_schedule_secret",
   "sapiom_dev_agents_signal",
   "sapiom_dev_app_delete",
   "sapiom_dev_app_list",
   "sapiom_dev_app_publish",
   "sapiom_dev_app_settings",
+  "sapiom_dev_map",
   "sapiom_dev_sandbox_check",
   "sapiom_dev_sandbox_configure",
   "sapiom_dev_sandbox_preview",
@@ -206,7 +209,9 @@ describe("analytics e2e (real stdio server)", () => {
           0,
         );
         // Sapiom-bound tools capture arguments in full.
-        expect((checkEvent!.data.args as { dir?: string }).dir).toBe(missingDir);
+        expect((checkEvent!.data.args as { dir?: string }).dir).toBe(
+          missingDir,
+        );
 
         // Both events share the server process's session.
         expect(checkEvent!.session_id).toBe(statusEvent!.session_id);

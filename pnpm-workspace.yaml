@@ -11,6 +11,7 @@ onlyBuiltDependencies:
   - electron
   - esbuild
   - "@electron/rebuild"
+  - opencode-ai
 
 # Upgrade the @electron/rebuild that electron-builder bundles (app-builder-lib
 # pins 3.6.1, which drags node-gyp@9.4.1 — its VS detection can't parse recent
@@ -20,3 +21,5 @@ onlyBuiltDependencies:
 # cross-platform rebuild HANG that the bare node-gyp override caused.
 overrides:
   "@electron/rebuild": ^3.7.0
+patchedDependencies:
+  "@assistant-ui/react-opencode@0.2.22": patches/@assistant-ui__react-opencode@0.2.22.patch

@@ -2,14 +2,13 @@
 
 The Electron host for `@sapiom/harness`. See [CLAUDE.md](CLAUDE.md) for packaging.
 
-## Agent Map release verification
+## Project map release verification
 
 After building the harness and packaging desktop, run `scripts/smoke.sh` from
-this package. Its `agent-map` check renders a saved fixture through the shipped
-SPA and local ELK worker, checks Vertical rendering across browser origins,
-retry after failure, live updates, and worker disposal. Viewing must leave saved
-map/history bytes unchanged. The report includes raw/gzip worker size and cold/
-warm UI readiness timings; a screenshot is saved beside the smoke report.
+this package. Its `project-map` check asks the packaged server for the launch
+folder's map, which loads the `@sapiom/mcp/map` scanner (and its TypeScript
+parser) from the packaged app. The mock browser suite never loads the scanner,
+so a packaging gap there shows up only in this check.
 Run with `CI` unset on a developer machine to use the runner's temporary profile.
 
 ## Coding-agent updates

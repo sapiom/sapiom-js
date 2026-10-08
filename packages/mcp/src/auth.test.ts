@@ -72,41 +72,90 @@ describe("performBrowserAuth", () => {
     vi.restoreAllMocks();
   });
 
-  it("should complete auth flow successfully", async () => {
-    const mockResult = {
-      apiKey: "sk-test",
-      tenantId: "t-123",
-      organizationName: "Test Org",
-      apiKeyId: "k-456",
-    };
+  it.each([false, true])(
+    "completes auth with optional Studio identity (%s)",
+    async (studioIdentity) => {
+      const mockResult = {
+        apiKey: "sk-test",
+        tenantId: "t-123",
+        organizationName: "Test Org",
+        apiKeyId: "k-456",
+        ...(studioIdentity && {
+          studioCredentials: {
+            accessToken: "sat_user",
+            refreshToken: "srt_user",
+            expiresAt: "2026-10-01T00:00:00Z",
+          },
+        }),
+      };
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockResult),
-    });
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockResult),
+      });
 
-    const authPromise = performBrowserAuth(
+      const authPromise = performBrowserAuth(
+        "https://app.test.com",
+        "https://api.test.com",
+        { studioIdentity },
+      );
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const { state, port } = extractAuthInfo();
+
+      await callbackToServer(Number(port), { code: "auth-code-123", state });
+
+      const result = await authPromise;
+      expect(result).toEqual(mockResult);
+      const request = vi.mocked(globalThis.fetch).mock.calls[0][1]!;
+      expect(JSON.parse(request.body as string).studioIdentity).toBe(
+        studioIdentity ? true : undefined,
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "https://api.test.com/v1/auth/cli/token",
+        expect.objectContaining({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: expect.stringContaining("auth-code-123"),
+        }),
+      );
+    },
+  );
+
+  it("keeps Terminal login working when an older backend rejects the Studio opt-in", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { message: ["property studioIdentity should not exist"] },
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          apiKey: "sk_old",
+          tenantId: "tenant",
+          apiKeyId: "key",
+          organizationName: "Org",
+        }),
+      );
+    const pending = performBrowserAuth(
       "https://app.test.com",
       "https://api.test.com",
+      { studioIdentity: true },
     );
-
-    await new Promise((r) => setTimeout(r, 100));
-
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const { state, port } = extractAuthInfo();
-
-    await callbackToServer(Number(port), { code: "auth-code-123", state });
-
-    const result = await authPromise;
-    expect(result).toEqual(mockResult);
-
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://api.test.com/v1/auth/cli/token",
-      expect.objectContaining({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: expect.stringContaining("auth-code-123"),
-      }),
-    );
+    await callbackToServer(Number(port), { code: "auth-code", state });
+    expect(await pending).not.toHaveProperty("studioCredentials");
+    const calls = vi.mocked(globalThis.fetch).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[1][1]!.body as string)).toEqual({
+      code: "auth-code",
+      redirectUri: `http://localhost:${port}/callback`,
+    });
   });
 
   it("should reject on state mismatch", async () => {

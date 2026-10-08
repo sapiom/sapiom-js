@@ -29,6 +29,11 @@ import {
   type AnalyticsHolder,
 } from "./analytics.js";
 import { VERSION } from "../_generated/version.js";
+import {
+  TransportHttpError,
+  parseRetryAfterMs,
+  readErrorBody,
+} from "./errors.js";
 
 /**
  * Client marker stamped on EVERY request so the gateway can tell SDK traffic
@@ -75,6 +80,10 @@ export interface Attribution {
 }
 
 export interface TransportConfig {
+  /** Opt-in transport selection. Only reviewed eligible capabilities can use executions. */
+  capabilityDelivery?: "legacy" | "executions";
+  /** Explicit Core base for routed capabilities and durable executions. Resolved at call time when omitted. */
+  coreBaseUrl?: string;
   /** Explicit tenant API key. Omit inside an agent step — the engine injects it ambiently. */
   apiKey?: string;
   /** Inject a fetch (tests / non-standard runtimes). Defaults to global fetch. */
@@ -105,11 +114,37 @@ const DEFAULT_AUTH_HEADER: AuthHeader = "x-sapiom-api-key";
 
 /** Per-request options the Transport understands, layered over a normal `RequestInit`. */
 export interface TransportRequestOptions {
+  /** Job HTTP traffic is distinct from logical capability completion. */
+  analyticsEvent?: "capability.execution.transport";
   /**
    * Which header carries the tenant credential. Defaults to `x-sapiom-api-key`.
    * A capability sets this only when its destination expects a different header.
    */
   authHeader?: AuthHeader;
+  /**
+   * The URL usage analytics records instead of the request URL. Set it when the
+   * request path carries a secret: pass the route template, e.g.
+   * `https://host/v1/tasks/:taskId`, so the secret never reaches telemetry.
+   */
+  analyticsUrl?: string;
+}
+
+/**
+ * The error usage analytics records for a failed fetch. Fetch errors may contain
+ * URLs, credentials or request data, so job errors are replaced, and so are errors
+ * from a request whose path carries a secret: only the error's name is kept.
+ */
+function trackedError(
+  error: unknown,
+  options: TransportRequestOptions,
+): unknown {
+  if (!error) return error;
+  if (options.analyticsEvent === "capability.execution.transport")
+    return new Error("Execution transport failed");
+  if (options.analyticsUrl === undefined) return error;
+  const redacted = new Error("Request failed");
+  if (error instanceof Error) redacted.name = error.name;
+  return redacted;
 }
 
 function attributionToHeaders(a: Attribution): Record<string, string> {
@@ -156,6 +191,8 @@ export function attributionFromEnv(): Attribution {
 }
 
 export class Transport {
+  readonly capabilityDelivery: "legacy" | "executions";
+  readonly coreBaseUrl: string | undefined;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly attribution: Attribution;
@@ -173,6 +210,8 @@ export class Transport {
   private analyticsHolder: AnalyticsHolder = {};
 
   constructor(config: TransportConfig = {}) {
+    this.capabilityDelivery = config.capabilityDelivery ?? "legacy";
+    this.coreBaseUrl = config.coreBaseUrl;
     this.apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
     this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.attribution = config.attribution ?? {};
@@ -194,6 +233,8 @@ export class Transport {
       fetch: this.fetchImpl,
       attribution: { ...this.attribution, ...attribution },
       resumeToken: this.resumeToken,
+      coreBaseUrl: this.coreBaseUrl,
+      capabilityDelivery: this.capabilityDelivery,
     });
     derived.analyticsHolder = this.analyticsHolder;
     return derived;
@@ -250,10 +291,10 @@ export class Transport {
         },
       });
     } catch (error) {
-      this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      this.trackCapabilityCall(url, init, startedAt, options, undefined, error);
       throw error;
     }
-    this.trackCapabilityCall(url, init, startedAt, response);
+    this.trackCapabilityCall(url, init, startedAt, options, response);
     return response;
   }
 
@@ -268,20 +309,21 @@ export class Transport {
     url: string,
     init: RequestInit,
     startedAt: number,
+    options: TransportRequestOptions,
     response?: Response,
     error?: unknown,
   ): void {
     try {
       analyticsFor(this.analyticsHolder, this.apiKey).track(
-        CAPABILITY_CALL_EVENT,
+        options.analyticsEvent ?? CAPABILITY_CALL_EVENT,
         capabilityCallData({
-          url,
+          url: options.analyticsUrl ?? url,
           method: init.method,
           requestBody: init.body,
           durationMs: Date.now() - startedAt,
           status: response?.status,
           ok: response?.ok ?? false,
-          error,
+          error: trackedError(error, options),
           attribution: this.attribution,
         }),
       );
@@ -290,7 +332,58 @@ export class Transport {
     }
   }
 
-  /** Authenticated JSON request — parses the body and throws on a non-2xx status. */
+  /** At most one completion per origin/ID in this client's last 1000 IDs / hour. */
+  observeExecution(
+    baseUrl: string,
+    state: import("../executions/types.js").ExecutionState,
+  ): void {
+    if (state.status === "queued" || state.status === "running") return;
+    try {
+      const cache = (this.analyticsHolder.executionCompletions ??= new Map());
+      const now = Date.now();
+      for (const [key, at] of cache)
+        if (at <= now - 3_600_000) cache.delete(key);
+      const key = `${baseUrl}:${state.id}`;
+      if (cache.has(key)) return;
+      cache.set(key, now);
+      if (cache.size > 1000) cache.delete(cache.keys().next().value!);
+      analyticsFor(this.analyticsHolder, this.apiKey).track(
+        CAPABILITY_CALL_EVENT,
+        {
+          ...capabilityCallData({
+            url: `${baseUrl}/v1/capabilities/${encodeURIComponent(state.capabilityId)}`,
+            method: "EXECUTION",
+            requestBody: undefined,
+            durationMs: Math.max(0, now - Date.parse(state.createdAt)),
+            ok: state.status === "succeeded",
+            attribution: this.attribution,
+          }),
+          capability: state.capabilityId,
+          execution_id: state.id,
+          execution_status: state.status,
+        },
+      );
+    } catch {
+      /* Telemetry cannot alter the result. */
+    }
+  }
+
+  observeExecutionWaitInterrupted(executionId: string): void {
+    try {
+      analyticsFor(this.analyticsHolder, this.apiKey).track(
+        "capability.execution.wait_interrupted",
+        { execution_id: executionId },
+      );
+    } catch {
+      /* Best effort. */
+    }
+  }
+
+  /**
+   * Authenticated JSON request — parses the body and throws on a non-2xx status.
+   * The throw is a {@link TransportHttpError} carrying the status and parsed
+   * body, so a capability can classify the rejection (see `agents.run`).
+   */
   async request<T>(
     url: string,
     init: RequestInit = {},
@@ -308,9 +401,18 @@ export class Transport {
       options,
     );
     if (!res.ok) {
-      throw new Error(
-        `${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`,
-      );
+      const method = init.method ?? "GET";
+      const { text, body } = await readErrorBody(res);
+      throw new TransportHttpError({
+        message: `${method} ${url} → ${res.status} ${text}`,
+        status: res.status,
+        method,
+        url,
+        body,
+        // Optional chaining: test doubles often build a bare `{ ok, status,
+        // text }` with no `headers` at all.
+        retryAfterMs: parseRetryAfterMs(res.headers?.get?.("retry-after")),
+      });
     }
     return (await res.json()) as T;
   }
@@ -327,3 +429,5 @@ export {
   resolveCoreBaseUrl,
   type CapabilityCallOptions,
 } from "./capability-call.js";
+
+export { TransportHttpError } from "./errors.js";

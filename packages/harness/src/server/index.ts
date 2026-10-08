@@ -1,32 +1,29 @@
-import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
-import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
-import { hasAuthoredAgentMap } from "../core/agent-map-initialization-record.js";
+import type { McpPreflightResult } from "../core/mcp-compatibility.js";
+import { LocalWorkspaceScopeCatalog } from "../core/workspace-scope-catalog.js";
+import { canonicalGraphPath, refreshCanonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
+import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 /**
  * Harness server — integration point for every workstream.
  *
  * Single process: serves the built SPA from dist/web, the REST surface, the
- * webhook ingest endpoint, canvas file serving, and the two WebSocket
+ * webhook ingest endpoint, and the two WebSocket
  * endpoints (/ws/terminal, /ws/events). Binds 127.0.0.1 only. See
  * src/shared/types.ts for the full protocol contract.
  */
 
-import { SubsessionCoordinatorStore, type SubsessionCoordinatorStoreEvent } from "../core/subsession-coordinator-store.js";
-import { SubsessionCoordinator, type SubsessionCoordinatorEvent } from "../core/subsession-coordinator.js";
-import { codexRuntimeMarker } from "../core/collector/codex-runtime-marker.js";
 import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
-import { AgentBriefService } from "../core/agent-brief-service.js";
-import { BuildPlanStore } from "../core/build-plan-store.js";
-import { BuildPlanService } from "../core/build-plan-service.js";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
 } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { realpath } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { scaffold } from "@sapiom/agent-core";
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 import { WebSocketServer } from "ws";
 import open from "open";
 
@@ -42,26 +39,18 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
-import type {
-  ProjectBootstrapLifecycleEvent,
-  ProjectAgentSession,
-  StudioProjectSummary,
-} from "../shared/agent-map.js";
+import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import {
-  preferredProjectRoot,
   projectRoots,
   projectSessionRoot,
 } from "../shared/project-roots.js";
-import { samePath } from "../shared/paths.js";
+import { samePath } from "@sapiom/agent-map/paths";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
-  AdapterNotFoundError,
-  ExternalHarnessError,
-  ProjectBootstrapClaimUnavailableError,
   ProjectSessionScopeUnavailableError,
   SessionManager,
-  SessionManagerClosingError,
   type LaunchOptsBuilder,
 } from "../core/session-manager.js";
 import { TaskManager } from "../core/task-manager.js";
@@ -110,6 +99,7 @@ import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
+import { trustClaudeCodeProject } from "../core/claude-code-trust.js";
 import {
   generateMcpConfig,
   type McpDevServerCommand,
@@ -124,13 +114,12 @@ import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
-import { CanvasWatcherManager } from "../core/canvas-watcher.js";
+import { observeCredentialStore } from "../core/credential-store-observer.js";
 import {
   sourceObservationsWithinScope,
   WorkspaceWatcherManager,
   type WorkflowSourceObservation,
 } from "../core/workspace-watcher.js";
-import { InstallWatcherManager } from "../core/install-watcher.js";
 import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
@@ -141,72 +130,38 @@ import {
   writeHarnessContextForLaunch,
   type StagedHarnessContext,
 } from "../core/workspace-context.js";
-import { ensureCanvasTemplate } from "../core/canvas-template.js";
-import { renderCanvasForSession } from "../core/canvas-render.js";
-import { invalidateExtractionCache } from "../core/canvas-cache.js";
-import {
-  CachedAgentInvocationProvider,
-  HarnessRegistryInventoryProvider,
-  LocalWorkspaceScopeCatalog,
-  SourceAgentInvocationProvider,
-  StaticSystemGraphBuilder,
-  type WorkspaceScope,
-} from "../core/system-graph.js";
-import {
-  canonicalGraphPath,
-  dirtyGraphSourceRoots,
-  graphSourceRootsWithinScope,
-  isWithinGraphPath,
-} from "../core/system-graph-inventory.js";
-import { SystemGraphStore } from "../core/system-graph-store.js";
-import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
 import { SharedWorkspaceWatchBroker } from "../core/workspace-watch-broker.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
   createDefinitionSlugResolver,
   resolveAgentsBaseUrl,
+  resolveCoreBaseUrl,
 } from "../core/definition-slug-resolver.js";
 import {
-  inspectManifestName,
   resolveManifestName,
 } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
+import { createOpenCodeRouter } from "./opencode.js";
 import {
   createApiKeyProvider,
   staticApiKeyProvider,
   type ApiKeyProvider,
 } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
-import { createSystemGraphRouter } from "./system-graph.js";
-import { createAgentMapRouter } from "./agent-map.js";
-import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
-import {
-  AgentMapCapabilityRegistry,
-  type AgentMapCapabilityEvent,
-} from "../core/agent-map-capability-registry.js";
-import {
-  StudioProjectCatalog,
-  type ReconciledStudioProjects,
-} from "../core/studio-project-catalog.js";
-import { ProjectBootstrapOutbox } from "../core/project-bootstrap-outbox.js";
-import {
-  createAgentMapMcpRouter,
-  type AgentMapMcpRouter,
-} from "./agent-map-mcp.js";
-import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
+import { createStudioProjectsRouter } from "./studio-projects.js";
+import { createProjectMapRouter, evaluateForKey, openProjectRoots, platformForKey } from "./project-map.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
-import {
-  isProjectSessionDispatchAuthorized,
-  localProjectPrincipal,
-} from "../core/project-session.js";
-import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-migration.js";
-import {
-  ProjectBootstrapCoordinator,
-  ProjectBootstrapCoordinatorClosedError,
-} from "../core/project-bootstrap.js";
+import { isProjectSessionDispatchAuthorized } from "../core/project-session.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
+import { AssistantAccess } from "../core/assistant-access.js";
+import {
+  OpenCodeHost,
+  authorizeMapChat,
+  mapChatProjectId,
+} from "../core/opencode-host.js";
+import { OpenCodeObserver } from "../core/opencode-observer.js";
+import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -218,8 +173,6 @@ import {
   type IngestRequestBody,
   type IngestSessionContext,
 } from "./ingest.js";
-import { createCanvasRouter } from "./canvas.js";
-import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createWorkflowGraphRouter } from "./workflow-graph.js";
 import { createStudioRailRouter } from "./studio-rail.js";
 import {
@@ -235,6 +188,7 @@ import { createRunsRouter } from "./runs.js";
 import { createTemplatesRouter } from "./templates.js";
 import { createAccountRouter } from "./account.js";
 import { createSecretsRouter } from "./secrets.js";
+import { createAppLinkRouter } from "./app-link.js";
 import { createPendingSecretsStore } from "../core/pending-secrets.js";
 import { createActionsRouter } from "./actions.js";
 import { createAuthRouter, createMutableAuthState } from "./auth-routes.js";
@@ -305,6 +259,8 @@ export interface HarnessServerOptions {
    *  server) plus the entry script it installed into the per-user npm prefix.
    *  See core/inject/mcp-config.ts. */
   sapiomDevMcp?: McpDevServerCommand;
+  /** Per-create/resume local preflight. Hosts own executable selection/installation. */
+  prepareSapiomDevMcp?: () => Promise<McpPreflightResult | undefined>;
   /** Root directory per-session generated agent configs are written under —
    *  and cleaned up from (exit-time delete + boot-time sweep, see
    *  core/inject/retention.ts). Defaults to `<stateRoot>/generated`. */
@@ -388,16 +344,10 @@ export interface HarnessServerOptions {
       epoch: number;
       sessionIds: readonly string[];
     }) => void | Promise<void>;
-    /** Called at the exact automatic Canvas execution boundary. */
-    beforeAutomaticCanvasLaunch?: (
-      workflowPath: string,
-    ) => void | Promise<void>;
   };
-  /** Internal deterministic seam for project/bootstrap crash-window tests. */
-  projectBootstrapTestHooks?: {
-    beforeSchedule?: (projectId: string) => void | Promise<void>;
-    afterProjectSessionNeeded?: (projectId: string) => void | Promise<void>;
-    afterListenBeforeRecovery?: (port: number) => void | Promise<void>;
+  /** Internal deterministic seam for post-listen startup-failure tests. */
+  startupTestHooks?: {
+    afterListen?: (port: number) => void | Promise<void>;
   };
 }
 
@@ -427,7 +377,6 @@ function packageRoot(): string {
  *   agent-created    a newly scaffolded agent's containing project
  *   agent-connected  one manually connected path, to settle syntax evidence
  *   agent-moved      the destination of a rail drag
- *   graph-refresh    a project graph open or explicit graph refresh
  *   requested        POST /api/workflows/scan — the "Add all" button
  *
  * POST /api/workflows/connect registers one path before its reconciliation
@@ -441,7 +390,6 @@ export type WorkflowScanReason =
   | "agent-created"
   | "agent-connected"
   | "agent-moved"
-  | "graph-refresh"
   | "requested";
 
 /**
@@ -562,8 +510,18 @@ function createDefaultBuildLaunchOpts(
    * DEFAULT_SYSTEM_PROMPT offline — injectable so tests never touch the network.
    */
   loadSystemPrompt: () => Promise<string> = fetchSystemPromptForActiveEnvironment,
+  prepareSapiomDevMcp?: () => Promise<McpPreflightResult | undefined>,
 ): LaunchOptsBuilder {
   return async (harnessSessionId, req, context) => {
+    const prepared = await prepareSapiomDevMcp?.().catch(() => undefined);
+    if (prepareSapiomDevMcp) {
+      console.error(`[harness] MCP compatibility: ${prepared?.kind ?? "unverified"}; shared map activation off`);
+    }
+    // A rejected preflight must not revive the host's unchecked static command.
+    const devServer = prepareSapiomDevMcp
+      ? prepared?.kind === "unavailable" ? undefined : prepared?.launch
+      : sapiomDevMcp;
+
     // Portable continue (SAP-2059). Resolved before the prompt file is
     // written, because for a `launch-flag` harness the brief IS part of that
     // file. Best-effort throughout: a brief that can't be assembled leaves
@@ -602,7 +560,8 @@ function createDefaultBuildLaunchOpts(
 
     // Reconcile with the shared credential store at the common launch
     // boundary. Create, resume, and background tasks all await this builder.
-    const apiKey = await apiKeyProvider.refresh();
+    await apiKeyProvider.refresh();
+    const { apiKey, generation } = apiKeyProvider.snapshot();
 
     // The served prompt (SAP-2810): loaded per session start, so a backend deploy
     // reaches an install that never upgraded @sapiom/harness. The default loader
@@ -629,18 +588,18 @@ function createDefaultBuildLaunchOpts(
         apiKey,
         generatedRoot,
         harnessVersion: readVersion(),
-        ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
-        ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
+        ...(devServer ? { devServer } : {}),
       }),
       promptPromise,
-      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
+      generateSkillsPlugin(harnessSessionId, {
+        generatedRoot,
+        environment: process.env.SAPIOM_ENVIRONMENT,
+      }),
     ]);
-    if (context?.focusedContext && !context.agentMapIdentity)
-      throw new Error("Focused project context requires a project-agent identity");
     const appendices = [
       viaSystemPrompt ? brief : null,
       context?.agentMapIdentity
-        ? projectAgentPromptAppendix(context.focusedContext)
+        ? projectAgentPromptAppendix()
         : null,
       context?.promptAppendix,
     ]
@@ -658,8 +617,15 @@ function createDefaultBuildLaunchOpts(
       settingsFile: settings.settingsPath,
       mcpConfigFile,
       systemPromptFile,
-      ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
+      ...(req.harness === "claude-code" || req.harness === "codex"
+        ? {
+            mcpCredentialLaunch: {
+              generation,
+              credentialBearing: apiKey !== null,
+            },
+          }
+        : {}),
       // Set on BOTH channels: the post-ready path hasn't delivered yet, but a
       // brief exists and will, and this is the flag that tells it to.
       ...(brief !== null && rehydrateFrom
@@ -669,6 +635,10 @@ function createDefaultBuildLaunchOpts(
   };
 }
 
+/**
+ * Starts Studio's HTTP server and session lifecycle services.
+ * Call the returned close() method to stop listeners and release resources.
+ */
 export const startServer = async (
   options: HarnessServerOptions,
 ): Promise<HarnessServer> => {
@@ -702,6 +672,13 @@ export const startServer = async (
       })
     : staticApiKeyProvider(null);
 
+  const assistantAccess = new AssistantAccess({
+    enabled: authEnabled,
+    harnessVersion: readVersion(),
+    getApiKey: () => apiKeyProvider.getKey(),
+  });
+  const openCodeBridge = new OpenCodeBridge(assistantAccess);
+
   // Mutable auth state — seeded from the boot-time identity and updated by the
   // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
   // auth router mutates this on every sign-in/sign-out; GET /api/auth/status
@@ -712,40 +689,15 @@ export const startServer = async (
   });
   const statePaths = resolveStatePaths(options.stateRoot);
   const codexRolloutBroker = new CodexRolloutBroker(options.codexHomeDir);
-  const projectBootstrapOutbox = new ProjectBootstrapOutbox(
-    join(statePaths.projectBootstrap, "project-outbox"),
-  );
-  let afterStudioProjectsCreatedCommit = async (
-    _projects: readonly StudioProjectSummary[],
-  ): Promise<void> => {};
-  let convergeReconciledProjectLifecycle = async (
-    _reconciled: ReconciledStudioProjects,
-  ): Promise<void> => {};
+  // A NEW PROJECT IS ONLY A PROJECT (flow-creation.md §4.1 step 3, Q5). Minting
+  // one in the catalog schedules nothing and starts no session. The user
+  // types first.
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
-    undefined,
-    undefined,
-    {
-      beforeProjectsCreatedCommit: (projects) =>
-        projectBootstrapOutbox.stage(projects),
-      afterProjectsCreatedCommit: (projects) =>
-        afterStudioProjectsCreatedCommit(projects),
-    },
   );
-  let emitAgentMapCapabilityEvent = (
-    _event: AgentMapCapabilityEvent,
-  ): void => {};
-  const agentMapCapabilities = new AgentMapCapabilityRegistry({
-    onEvent: (event) => emitAgentMapCapabilityEvent(event),
-  });
-  let agentMapMcpUrl: string | null = null;
-  let agentMapMcp: AgentMapMcpRouter | null = null;
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
-  // Authentication may change in-app without restarting Studio. Keep the
-  // planning principal live and server-private; browser auth DTOs expose only
-  // their existing boolean/organization fields.
-  let projectUserId = identity?.userId ?? null;
+  const projectPrincipal = `local:${machineId}`;
 
   // One-way identity migration: seed ~/.sapiom/analytics.json from the
   // legacy harness machine-id so existing installs keep the same anonymous_id
@@ -759,11 +711,8 @@ export const startServer = async (
    *  place the create route may write (see `listProjectDirs` below). */
   const defaultProjectRoot = options.projectRoot ?? launchDir;
 
-  // Serve-time slug enrichment: resolves each workflow's definitionSlug from
-  // the Sapiom Agents API when it's absent (deployed sapiom.json files carry
-  // only { "definitionId": "188" }, not the slug). Constructed once per server
-  // boot; caches successful id→slug resolutions in-memory (ids are stable).
-  // Never throws — a failed resolution leaves definitionSlug as-is.
+  // Serve-time definition enrichment (slug + build status) for linked
+  // workflows. One resolver per boot; never throws.
   const slugResolver = createDefinitionSlugResolver({
     apiKey: () => apiKeyProvider.getKey(),
     baseUrl: resolveAgentsBaseUrl(),
@@ -781,40 +730,73 @@ export const startServer = async (
       unavailable: workflow.definitionId != null,
     },
   });
-  // Auth guards cover individual lookups AND the complete async projection.
-  // Neither raw build fields nor retained display bits are written to disk.
+  /** A definition the account's list does not contain: never requested,
+   *  confirmed not deployed for this account. */
+  const notVisible = (
+    workflow: RegistryWorkflowInfo,
+  ): RegistryWorkflowInfo => ({
+    ...clearDeployment(workflow),
+    definitionAccess: "unavailable",
+    deploymentLookup: { lastConfirmedDeployed: false, unavailable: false },
+  });
+  /** Fill slug + build status for linked workflows from ONE tenant-scoped
+   *  list per pass (SAP-3214). Ids absent from the list are never requested
+   *  (the engine 404s them permanently) and are marked `definitionAccess:
+   *  "unavailable"`. Detail lookup only for a visible definition with no
+   *  ready build: only the detail shows a first deploy's in-flight build (a
+   *  rebuild of a ready definition reports `ready` in both). Signed out or
+   *  list unavailable: build fields cleared, retained display bit kept, no
+   *  per-id fallback. Auth guards cover the list, each lookup AND the complete
+   *  async projection. Neither raw build fields nor retained display bits are
+   *  written to disk. */
   const enrichWorkflows = async (
     workflows: RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
     const scope = deploymentGeneration;
-    const enriched = await Promise.all(
-      workflows.map(async (workflow) => {
-        const cleared = clearDeployment(workflow);
-        if (workflow.definitionId == null) return cleared;
-        const result = await slugResolver.resolveMetadata(
-          String(workflow.definitionId),
-        );
-        if (scope !== deploymentGeneration) return cleared;
-        if (result.status === "available")
-          return {
-            ...workflow,
-            definitionSlug: result.metadata.slug ?? workflow.definitionSlug,
-            activeBuildRunId: result.metadata.activeBuildRunId,
-            activeBuildRunStatus: result.metadata.activeBuildRunStatus,
-            deploymentLookup: {
-              lastConfirmedDeployed:
-                result.metadata.activeBuildRunStatus === "ready",
-              unavailable: false,
-            },
-          };
+    const cleared = (): RegistryWorkflowInfo[] =>
+      workflows.map(clearDeployment);
+    if (!workflows.some((workflow) => workflow.definitionId != null))
+      return cleared();
+    const list = await slugResolver.listVisible();
+    if (scope !== deploymentGeneration) return cleared();
+    if (list.status === "unavailable")
+      return workflows.map((workflow) => {
+        const row = clearDeployment(workflow);
+        if (workflow.definitionId == null) return row;
         return {
-          ...cleared,
+          ...row,
           deploymentLookup: {
             lastConfirmedDeployed:
-              result.status === "not-found"
-                ? false
-                : result.lastConfirmedDeployed,
-            unavailable: result.status === "unavailable",
+              list.lastConfirmedDeployed.get(String(workflow.definitionId)) ??
+              null,
+            unavailable: true,
+          },
+        };
+      });
+    const enriched = await Promise.all(
+      workflows.map(async (workflow) => {
+        if (workflow.definitionId == null) return clearDeployment(workflow);
+        const definitionId = String(workflow.definitionId);
+        const listed = list.visible.get(definitionId);
+        if (listed === undefined) return notVisible(workflow);
+        let metadata = listed;
+        if (listed.activeBuildRunStatus === null) {
+          const detail = await slugResolver.resolveMetadata(definitionId);
+          if (scope !== deploymentGeneration) return clearDeployment(workflow);
+          if (detail.status === "not-found") return notVisible(workflow);
+          // An unavailable detail changes nothing: the list already proved
+          // visibility and the absence of a ready build.
+          if (detail.status === "available") metadata = detail.metadata;
+        }
+        return {
+          ...workflow,
+          definitionAccess: "visible" as const,
+          definitionSlug: metadata.slug ?? workflow.definitionSlug,
+          activeBuildRunId: metadata.activeBuildRunId,
+          activeBuildRunStatus: metadata.activeBuildRunStatus,
+          deploymentLookup: {
+            lastConfirmedDeployed: metadata.activeBuildRunStatus === "ready",
+            unavailable: false,
           },
         };
       }),
@@ -847,24 +829,6 @@ export const startServer = async (
     } satisfies Partial<Record<HarnessKind, HarnessAdapter>>);
 
   const bus = new EventBus();
-  const canvasWatcher = new CanvasWatcherManager({
-    onChange: (harnessSessionId) =>
-      bus.publish({ type: "canvas.reload", harnessSessionId }),
-    // A workflow SOURCE edit auto re-renders the bound workflow — deterministic
-    // and free, so there's nothing to wait for and no button to press. Uses the
-    // preserve-on-failure path: while an agent is mid-edit the sources are
-    // transiently un-buildable, and flashing an extraction-error panel over a
-    // perfectly good diagram reads as broken. So keep the last good render until
-    // a later watched .ts/.tsx edit extracts successfully, then swap it in (the
-    // write flows back through onChange above as the iframe reload). Other fixes
-    // need an explicit Visualize retry because the watcher is intentionally
-    // source-limited. Only a workflow that has never rendered shows the honest
-    // error immediately.
-    onSourceChange: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      if (session) void autoRenderCanvas(session).catch(() => {});
-    },
-  });
   // The harness's own infrastructure shouldn't ever show up as a "discovered"
   // dev server in the Preview pane — a mention of our own listening port (in
   // an agent's own output, e.g. echoing SAPIOM_HARNESS_INGEST_URL) or the
@@ -925,6 +889,15 @@ export const startServer = async (
   } catch (err) {
     console.error("[harness] agent registry prune failed:", err);
   }
+  /** Hand-off and Open in session sessions start in a project root without
+   *  Claude Code's trust dialog (flow-map-chat-overlay.md §4.7 item 5). */
+  const pretrustProjectRoot = (root: string): Promise<void> =>
+    trustClaudeCodeProject(root).then(
+      () => {},
+      () => {
+        console.error("[harness] could not pre-trust a project for Claude Code");
+      },
+    );
   // Same hygiene for settings.json's recentDirs — dead entries are already
   // filtered from every read, but pruning here persists their removal.
   // Awaited so it can't race a settings PATCH once the server is listening.
@@ -940,26 +913,8 @@ export const startServer = async (
   // binding before SessionManager itself can be instantiated.
   // eslint-disable-next-line prefer-const
   let sessionManager!: SessionManager;
-  let projectBootstrap: ProjectBootstrapCoordinator | null = null;
-  let agentMapInitialization: AgentMapInitializationCoordinator | null = null;
-  let scheduleMapInitializations: (() => Promise<void>) | null = null;
   const pendingProjectCwds = new Set<string>();
-  const rawProjectRoots = async (): Promise<string[]> => {
-    const settings = await loadSettings(statePaths.settings);
-    return [
-      ...pendingProjectCwds,
-      ...(sessionManager ? sessionManager.listPendingCreates().map((session) => session.cwd) : []),
-      ...settings.recentDirs,
-      ...(sessionManager
-        ? sessionManager.list().map((session) => session.cwd)
-        : []),
-    ];
-  };
-  // Legacy System Graph routes retain every explicitly known root. Studio's
-  // durable project catalog uses the canonical derivation below; keeping the
-  // two catalogs separate avoids changing the existing graph authority while
-  // project/session identity converges on one server/client contract.
-  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(rawProjectRoots);
+  let restoredScopeDiscovery: Promise<void> | null = null;
   const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
     async () => {
       const settings = await loadSettings(statePaths.settings);
@@ -982,22 +937,34 @@ export const startServer = async (
             cwd: binding.localRootRef,
           })),
       );
-      const retainedProjectSessionRoots = new Set<string>();
-      // Pending launches contribute their trusted PROJECT root just like live
-      // sessions, not a descendant cwd that would mint a competing project.
-      const pendingCwds = [
-        ...pendingProjectCwds,
-        ...(sessionManager ? sessionManager.listPendingCreates() : []).flatMap((session) => {
-          if (!session.agentMapIdentity) return [session.cwd];
-          const root = projectSessionRoot(
-            { cwd: session.cwd, projectId: session.agentMapIdentity.projectId },
+      const readableSessionRoot = async (cwd: string, projectId: string) => {
+        try {
+          return projectSessionRoot(
+            { cwd: await refreshCanonicalGraphPath(cwd), projectId },
             durableRootCandidates,
           );
+        } catch {
+          // One unreadable session must not hide healthy workspace roots.
+          return null;
+        }
+      };
+      const retainedProjectSessionRoots = new Set<string>();
+      // Pending launches contribute their trusted PROJECT root just like live
+      // sessions. Resolve filesystem aliases before comparing with the catalog's
+      // canonical bindings, including during an awaited MCP preflight.
+      const pendingCwds = [
+        ...pendingProjectCwds,
+        ...(await Promise.all((sessionManager ? sessionManager.listPendingCreates() : []).map(async (session) => {
+          if (!session.agentMapIdentity) return [session.cwd];
+          const root = await readableSessionRoot(
+            session.cwd,
+            session.agentMapIdentity.projectId,
+          );
           return root ? [root] : [];
-        }),
+        }))).flat(),
       ];
       const sessions = sessionManager
-        ? sessionManager.list().flatMap((session) => {
+        ? (await Promise.all(sessionManager.list().map(async (session) => {
             if (!session.agentMapIdentity) {
               return [
                 {
@@ -1007,12 +974,9 @@ export const startServer = async (
                 },
               ];
             }
-            const root = projectSessionRoot(
-              {
-                cwd: session.cwd,
-                projectId: session.agentMapIdentity.projectId,
-              },
-              durableRootCandidates,
+            const root = await readableSessionRoot(
+              session.cwd,
+              session.agentMapIdentity.projectId,
             );
             // A neutral project session contributes its trusted project root,
             // never its descendant cwd. If its binding is stale, omit it from
@@ -1029,7 +993,7 @@ export const startServer = async (
               ];
             }
             return [];
-          })
+          }))).flat()
         : [];
       const candidates = [
         ...pendingCwds,
@@ -1083,7 +1047,6 @@ export const startServer = async (
     canonicalRoot: string;
     identityEvidence: WorkflowIdentityEvidence;
   };
-  let acceptedInventoryGeneration = initialInventorySnapshot.generation;
   let acceptedCanonicalWorkflowRoots: AcceptedCanonicalWorkflowRoot[] =
     initialInventorySnapshot.canonicalWorkflowRoots.map((entry) => ({
       ...entry,
@@ -1093,15 +1056,6 @@ export const startServer = async (
       ...entry,
       paths: [...entry.paths],
     }));
-  const acceptedScopeStatusByCanonicalRoot = new Map<
-    string,
-    "complete" | "degraded"
-  >([
-    [
-      initialInventorySnapshot.canonicalScopeRoot,
-      initialInventorySnapshot.status,
-    ],
-  ]);
   const acceptedCanonicalScopeByLexicalRoot = new Map<string, string>([
     [
       resolve(expandHome(launchDir)),
@@ -1120,20 +1074,6 @@ export const startServer = async (
       canonicalGraphPath(lexicalRoot)
     );
   };
-  const acceptedInventorySnapshot = (scope: WorkspaceScope) => {
-    const canonicalScopeRoot = acceptedCanonicalScopeRoot(scope.root);
-    return {
-      workflows: workflowsCache,
-      status:
-        acceptedScopeStatusByCanonicalRoot.get(canonicalScopeRoot) ??
-        ("degraded" as const),
-      generation: acceptedInventoryGeneration,
-      canonicalScopeRoot,
-      canonicalWorkflowRoots: acceptedCanonicalWorkflowRoots,
-      sourceObservations: acceptedSourceObservations,
-    };
-  };
-
   const discoveryObservationsForRoot = (
     root: string,
   ): WorkflowSourceObservation[] =>
@@ -1144,39 +1084,18 @@ export const startServer = async (
 
   const markAcceptedInventoryDirty = (root: string): void => {
     const canonicalRoot = acceptedCanonicalScopeRoot(root);
-    let changed = false;
-    let sawIntersectingStatus = false;
-    for (const [scopeRoot, status] of acceptedScopeStatusByCanonicalRoot) {
-      if (
-        isWithinGraphPath(scopeRoot, canonicalRoot) ||
-        isWithinGraphPath(canonicalRoot, scopeRoot)
-      ) {
-        sawIntersectingStatus = true;
-        if (status !== "degraded") {
-          acceptedScopeStatusByCanonicalRoot.set(scopeRoot, "degraded");
-          changed = true;
+    acceptedCanonicalWorkflowRoots = acceptedCanonicalWorkflowRoots.map(
+      (entry) => {
+        if (
+          entry.identityEvidence === "unknown" ||
+          (!isWithinWorkspacePath(canonicalRoot, entry.canonicalRoot) &&
+            !isWithinWorkspacePath(entry.canonicalRoot, canonicalRoot))
+        ) {
+          return entry;
         }
-      }
-    }
-    if (!sawIntersectingStatus) {
-      acceptedScopeStatusByCanonicalRoot.set(canonicalRoot, "degraded");
-      changed = true;
-    }
-    const nextRoots = acceptedCanonicalWorkflowRoots.map((entry) => {
-      if (
-        entry.identityEvidence === "unknown" ||
-        (!isWithinGraphPath(canonicalRoot, entry.canonicalRoot) &&
-          !isWithinGraphPath(entry.canonicalRoot, canonicalRoot))
-      ) {
-        return entry;
-      }
-      changed = true;
-      return { ...entry, identityEvidence: "unknown" as const };
-    });
-    if (changed) {
-      acceptedCanonicalWorkflowRoots = nextRoots;
-      acceptedInventoryGeneration += 1;
-    }
+        return { ...entry, identityEvidence: "unknown" as const };
+      },
+    );
   };
 
   const boundWorkflowForSession = (
@@ -1308,10 +1227,10 @@ export const startServer = async (
   // Exit-time deletion of generated/<id> (see the onStatusChange handler
   // below) can race a fast resume(): resume regenerates the dir via
   // buildLaunchOpts, and the rm scheduled at the previous exit could still
-  // be in flight. Serialize by awaiting any pending removal for this id
-  // before (re)generating its files.
+  // be in flight. Keep each removal until the next config build: its presence
+  // guards repeated exited broadcasts, and its promise serializes regeneration.
   const generatedRoot = options.generatedRoot ?? statePaths.generated;
-  const pendingGeneratedRemovals = new Map<string, Promise<void>>();
+  const generatedRemovals = new Map<string, Promise<void>>();
 
   /**
    * The git branch the PRIOR session was last on, from whichever adapter
@@ -1405,7 +1324,7 @@ export const startServer = async (
         workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
       scaffoldAgent: async ({ targetDir, template }) => {
         // `installDependencies: true` for the same reason the MCP tool passes
-        // it: the Canvas bundles the project on its first, unprompted render
+        // it: the Canvas bundles the project on its first read
         // and resolves `@sapiom/agent`/`zod` from the project's own
         // node_modules, so a never-installed agent opens on a "Could not
         // resolve …" error. Best-effort inside agent-core — a failed install
@@ -1440,47 +1359,27 @@ export const startServer = async (
       },
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
+      options.prepareSapiomDevMcp,
     );
+  /** Waits for prior cleanup before preparing this run's files and capabilities. */
   const buildLaunchOpts: LaunchOptsBuilder = async (
     harnessSessionId,
     req,
     context,
   ) => {
-    await pendingGeneratedRemovals.get(harnessSessionId);
+    await generatedRemovals.get(harnessSessionId);
+    generatedRemovals.delete(harnessSessionId);
     // Scope/bootstrap ownership is already resolved; prepare the user's new
     // project before config generation and PTY spawn, never during resume.
     const initialPrompt = context?.resume
       ? undefined
-      : await prepareFirstRequest(req, scaffoldDeps);
-    if (!context?.agentMapIdentity) {
-      return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
-    }
-    if (!agentMapMcpUrl) {
-      throw new Error("Agent Map MCP endpoint is not bound");
-    }
-    if (context.resume) await agentMapMcp?.revokeSession(harnessSessionId);
-    const capability = context.resume
-      ? agentMapCapabilities.rotate(context.agentMapIdentity)
-      : agentMapCapabilities.issue(context.agentMapIdentity);
-    const agentMapMcpMetadata = {
-      url: agentMapMcpUrl,
-      bearerToken: capability.token,
-    };
-    try {
-      const generated = await innerBuildLaunchOpts(harnessSessionId, req, {
-        ...context,
-        agentMapMcp: agentMapMcpMetadata,
-      });
-      return { ...generated, agentMapMcp: agentMapMcpMetadata, ...(initialPrompt ? { initialPrompt } : {}) };
-    } catch (error) {
-      agentMapCapabilities.revokeSession(harnessSessionId);
-      throw error;
-    }
+      : await prepareFirstRequest(req);
+    return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
   };
 
   const projectIdentityMigrationEvents: Array<{
     sessionId: string;
-    outcome: "migrated" | "rejected";
+    outcome: "migrated" | "rejected" | "dropped";
   }> = [];
   let projectScopeResolutionQueue: Promise<void> = Promise.resolve();
   const serializeProjectScopeResolution = <T>(
@@ -1493,150 +1392,93 @@ export const startServer = async (
     );
     return result;
   };
-  // A catalog mutation is durable before its lifecycle callback runs. Retain
-  // any not-yet-scheduled project IDs in memory so a retry can converge on the
-  // same project instead of creating another one after a transient failure.
-  const projectsAwaitingBootstrapSchedule = new Set<string>();
-  const closeCoordinatorOwnedSubsession: {
-    current?: (marker: {
-      projectId: string;
-      parentSessionId: string;
-      bindingId: string;
-      sessionId: string;
-    }) => Promise<void>;
-  } = {};
-  const scheduleBootstrapProjects = async (
-    projectIds: Iterable<string>,
-    userId: string,
-    scopeSessionId: string,
-  ): Promise<void> => {
-    const ids = [...new Set(projectIds)].sort();
-    for (const projectId of ids) {
-      projectsAwaitingBootstrapSchedule.add(projectId);
-    }
-    for (const projectId of ids) {
-      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-        throw new ProjectSessionScopeUnavailableError(scopeSessionId);
+  const resolveProjectSessionIdentity = async (
+    sessionId: string,
+    cwd: string,
+    {
+      persisted,
+      mayMintForCwd,
+    }: { persisted?: ProjectAgentSession; mayMintForCwd: boolean },
+  ): Promise<ProjectAgentSession> => {
+    return serializeProjectScopeResolution(async () => {
+      const identityFor = (projectId: string): ProjectAgentSession => ({
+        projectId,
+        sessionId,
+        userId: projectPrincipal,
+      });
+      if (persisted) {
+        if (persisted.sessionId !== sessionId) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+        if (!project || project.projectId !== persisted.projectId) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        return structuredClone(persisted);
       }
-      if (!projectBootstrap) {
-        throw new Error("project bootstrap coordinator is unavailable");
-      }
-      await options.projectBootstrapTestHooks?.beforeSchedule?.(projectId);
-      await projectBootstrap.scheduleProject(projectId, userId);
-      await projectBootstrapOutbox.complete(projectId);
-      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-        throw new ProjectSessionScopeUnavailableError(scopeSessionId);
-      }
-      projectsAwaitingBootstrapSchedule.delete(projectId);
-    }
-  };
 
+      let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+      if (project) return identityFor(project.projectId);
+
+      await studioProjectCatalog.reconcile(
+        await studioWorkspaceScopeCatalog.list(),
+      );
+      project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+
+      if (!project && mayMintForCwd) {
+        pendingProjectCwds.add(cwd);
+        try {
+          await studioProjectCatalog.reconcile(
+            await studioWorkspaceScopeCatalog.list(),
+          );
+          project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+        } finally {
+          pendingProjectCwds.delete(cwd);
+        }
+      }
+      if (!project) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return identityFor(project.projectId);
+    });
+  };
   sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
-    onSubsessionUserClosed: async (marker) => {
-      await closeCoordinatorOwnedSubsession.current?.(marker);
-    },
     buildLaunchOpts,
-    resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
-      const userId = localProjectPrincipal(projectUserId, machineId);
-      return serializeProjectScopeResolution(async () => {
-        const assertPrincipal = (): void => {
-          if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-            throw new ProjectSessionScopeUnavailableError(sessionId);
-          }
-        };
-        const identityFor = (projectId: string): ProjectAgentSession => ({
-          projectId,
-          sessionId,
-          userId,
-        });
-        assertPrincipal();
-        if (
-          persisted &&
-          (persisted.sessionId !== sessionId || persisted.userId !== userId)
-        ) {
-          throw new ProjectSessionScopeUnavailableError(sessionId);
-        }
-
-        // Resume/final-spawn validation is read-only. In particular, never add
-        // a descendant cwd as a candidate root before proving that the current
-        // durable project still owns it.
-        let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-        assertPrincipal();
-        if (persisted) {
-          if (!project || project.projectId !== persisted.projectId) {
-            throw new ProjectSessionScopeUnavailableError(sessionId);
-          }
-          return identityFor(project.projectId);
-        }
-
-        if (project) {
-          if (projectsAwaitingBootstrapSchedule.has(project.projectId)) {
-            await scheduleBootstrapProjects(
-              [project.projectId],
-              userId,
-              sessionId,
-            );
-          }
-          return identityFor(project.projectId);
-        }
-
-        const before = new Set(
-          (await studioProjectCatalog.list()).map(
-            (candidate) => candidate.projectId,
-          ),
-        );
-        assertPrincipal();
-        let reconciled = await studioProjectCatalog.reconcile(
-          await studioWorkspaceScopeCatalog.list(),
-        );
-        assertPrincipal();
-        project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-
-        if (!project) {
-          pendingProjectCwds.add(cwd);
-          try {
-            reconciled = await studioProjectCatalog.reconcile(
-              await studioWorkspaceScopeCatalog.list(),
-            );
-            assertPrincipal();
-            project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-          } finally {
-            pendingProjectCwds.delete(cwd);
-          }
-        }
-        assertPrincipal();
-        const createdProjectIds = reconciled.projects
-          .map((candidate) => candidate.projectId)
-          .filter((projectId) => !before.has(projectId));
-        await scheduleBootstrapProjects(createdProjectIds, userId, sessionId);
-        if (!project) return undefined;
-        return identityFor(project.projectId);
-      });
+    currentCredentialGeneration: () =>
+      apiKeyProvider.snapshot().generation,
+    resolveAgentMapIdentity: (sessionId, cwd, persisted) =>
+      resolveProjectSessionIdentity(sessionId, cwd, {
+        persisted,
+        mayMintForCwd: true,
+      }),
+    // Load-time migration only joins roots Studio already has open. Minting
+    // for a legacy cwd would resurrect a project the user removed.
+    migrateAgentMapIdentity: (sessionId, cwd) =>
+      resolveProjectSessionIdentity(sessionId, cwd, { mayMintForCwd: false }),
+    // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
+    // session is an ordinary session with no metadata that would make its
+    // first turn special.
+    prepareProjectSession: async (_identity, request) => {
+      // A Claude Code session waits for its project's trust record, so the
+      // dialog cannot win a race with the add-time write, and a project added
+      // before Studio pre-trusted roots gets one too. Only an added root
+      // (recentDirs) is trusted, never the session folder itself.
+      if (request.harness === "claude-code")
+        await loadSettings(statePaths.settings).then(async ({ recentDirs }) => {
+          // Compared resolved, so a symlink spelling on either side matches.
+          const real = (path: string) => realpath(path).catch(() => path);
+          const cwd = await real(request.cwd);
+          const roots = await Promise.all(recentDirs.map(real));
+          const root = recentDirs
+            .filter((_, i) => isWithinWorkspacePath(roots[i]!, cwd))
+            .sort((a, b) => b.length - a.length)[0];
+          return root ? pretrustProjectRoot(root) : undefined;
+        }, () => {});
+      return {};
     },
-    prepareProjectSession: async (identity, request) => {
-      if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
-        throw new ProjectSessionScopeUnavailableError(identity.sessionId);
-      }
-      const metadata = await projectBootstrap?.claimProject(
-        identity,
-        Boolean(request.initialPrompt || request.initialAttachments?.length) ||
-        request.initialUserInputPending === true ||
-          Boolean(request.rehydrateFrom),
-      );
-      if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
-        throw new ProjectSessionScopeUnavailableError(identity.sessionId);
-      }
-      return metadata
-        ? { initialTitle: "Plan Agents", projectBootstrap: metadata }
-        : {};
-    },
-    onTerminalInput: (sessionId, context) =>
-      projectBootstrap?.onTerminalInput(sessionId, context),
     onRuntimeEpochTransition: async (session, runtimeEpoch) => {
       if (adapters[session.harness]?.eventSource === "transcript-tail") {
         if (runtimeEpoch) {
@@ -1645,130 +1487,21 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Date.now(),
-            ...(sessionManager.getSubsessionBinding(session.id)
-              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
         } else {
           codexRolloutBroker.releaseSession(session.id);
         }
       }
-      if (!session.projectBootstrap) return;
-      if (!projectBootstrap) {
-        throw new Error("project bootstrap coordinator unavailable");
-      }
-      await projectBootstrap.transitionRuntimeEpoch(session, runtimeEpoch);
     },
     onProjectAgentIdentityMigration: (event) => {
       projectIdentityMigrationEvents.push(event);
-    },
-    onProjectBootstrapSession: async (session, mode, runtimeEpoch) => {
-      await projectBootstrap?.register(session, {
-        emptyProject: true,
-        mode,
-      }, runtimeEpoch);
-    },
-    onAgentMapSessionExit: async (sessionId) => {
-      agentMapCapabilities.revokeSession(sessionId);
-      await agentMapMcp?.revokeSession(sessionId);
-      await projectBootstrap?.releaseSessionClaim(sessionId);
     },
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: initializeSessionContext,
     prepareWorkspaceContext: prepareSessionContext,
-    ensureCanvasTemplate,
   });
   await sessionManager.init();
-  const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
-  const systemGraphInvocations = new CachedAgentInvocationProvider(
-    new SourceAgentInvocationProvider(),
-    undefined,
-    {
-      onChange: (sourceRoots) => {
-        const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
-        for (const scope of activeSystemGraphScopes.values()) {
-          const canonicalScope = {
-            workspaceKey: scope.workspaceKey,
-            root: canonicalGraphPath(scope.root),
-          };
-          if (
-            systemGraphStore.peek(canonicalScope.workspaceKey) &&
-            canonicalSourceRoots.some((sourceRoot) =>
-              isWithinGraphPath(canonicalScope.root, sourceRoot),
-            )
-          ) {
-            systemGraphStore.requestRefresh(canonicalScope);
-          }
-        }
-      },
-    },
-  );
-  const legacyGraphObservationsForRoot = (
-    root: string,
-  ): WorkflowSourceObservation[] =>
-    sourceObservationsWithinScope(acceptedCanonicalScopeRoot(root), [
-      ...acceptedSourceObservations,
-      ...systemGraphInvocations.invocationObservations(),
-    ]);
-  const systemGraphInventory = new HarnessRegistryInventoryProvider({
-    listWorkflows: () => workflowsCache,
-    inventorySnapshot: acceptedInventorySnapshot,
-    inspectManifestName: (sourceRoot, extractionOptions) =>
-      inspectManifestName(sourceRoot, undefined, extractionOptions),
-    onIdentityChange: (sourceRoots) => {
-      const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
-      for (const scope of activeSystemGraphScopes.values()) {
-        const canonicalScope = {
-          workspaceKey: scope.workspaceKey,
-          root: canonicalGraphPath(scope.root),
-        };
-        if (
-          systemGraphStore.peek(canonicalScope.workspaceKey) &&
-          canonicalSourceRoots.some((sourceRoot) =>
-            isWithinGraphPath(canonicalScope.root, sourceRoot),
-          )
-        ) {
-          systemGraphStore.requestRefresh(canonicalScope);
-        }
-      }
-    },
-  });
-  const systemGraphStore = new SystemGraphStore(
-    new StaticSystemGraphBuilder(systemGraphInventory, systemGraphInvocations),
-    {
-      onChange: ({ workspaceKey, revision, state }) => {
-        bus.publish({
-          type: "system-graph.changed",
-          workspaceKey,
-          revision,
-          state,
-        });
-      },
-    },
-  );
-
-  const refreshSystemGraphScopesForRoot = (
-    changedRoot: string,
-    excludedWorkspaceKey?: string,
-  ): void => {
-    const canonicalChangedRoot = canonicalGraphPath(changedRoot);
-    for (const scope of activeSystemGraphScopes.values()) {
-      if (scope.workspaceKey === excludedWorkspaceKey) continue;
-      if (!systemGraphStore.peek(scope.workspaceKey)) continue;
-      const scopeRoot = canonicalGraphPath(scope.root);
-      if (
-        !isWithinGraphPath(scopeRoot, canonicalChangedRoot) &&
-        !isWithinGraphPath(canonicalChangedRoot, scopeRoot)
-      ) {
-        continue;
-      }
-      systemGraphStore.requestRefresh({
-        workspaceKey: scope.workspaceKey,
-        root: scopeRoot,
-      });
-    }
-  };
-
   const sessionSweepTimer = setInterval(
     () => sessionManager.sweepDeadSessions(),
     SESSION_LIVENESS_SWEEP_MS,
@@ -1823,6 +1556,8 @@ export const startServer = async (
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
+    currentCredentialGeneration: () =>
+      apiKeyProvider.snapshot().generation,
     onCleanup: (taskId) => {
       void removeGeneratedSessionDir(taskId, { generatedRoot }).catch(
         (err: unknown) => {
@@ -1834,6 +1569,75 @@ export const startServer = async (
   taskManager.onStatusChange((task) => {
     bus.publish({ type: "task.status", task });
   });
+  let credentialRemovalTail: Promise<void> = Promise.resolve();
+  let credentialRemovalInFlight: {
+    generation: number;
+    operation: Promise<void>;
+  } | null = null;
+  const reconcileCredentialRemoval = (): Promise<void> => {
+    const generation = apiKeyProvider.snapshot().generation;
+    if (credentialRemovalInFlight?.generation === generation) {
+      return credentialRemovalInFlight.operation;
+    }
+    // Each distinct removal generation receives a fresh sweep after the prior
+    // one. A newer sign-in can launch work while an older sweep is waiting for
+    // exits, so sharing that older target snapshot would make disconnect lie.
+    const operation = credentialRemovalTail
+      .catch(() => {})
+      .then(() =>
+        Promise.all([
+          sessionManager.relaunchCredentialBearingSessions(generation),
+          taskManager.terminateCredentialBearingTasks(generation),
+        ]).then(() => {}),
+      );
+    const tracked = operation.finally(() => {
+      if (credentialRemovalInFlight?.operation === tracked) {
+        credentialRemovalInFlight = null;
+      }
+    });
+    credentialRemovalTail = tracked;
+    credentialRemovalInFlight = { generation, operation: tracked };
+    return tracked;
+  };
+  let credentialStoreObserver: ReturnType<typeof observeCredentialStore> = null;
+  const ensureCredentialStoreObserver = (): void => {
+    if (!authEnabled || credentialStoreObserver) return;
+    credentialStoreObserver = observeCredentialStore(
+      credentialsFilePath(),
+      async () => {
+        await apiKeyProvider.refresh();
+        await assistantAccess.refresh();
+      },
+      {
+        onError: (error) => {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            console.error("[harness] credential store observation failed");
+          }
+        },
+        onUnavailable: () => {
+          // A later key transition re-arms this. Avoid adding an unbounded
+          // watcher retry/fallback loop to the credential lifecycle.
+          credentialStoreObserver = null;
+        },
+      },
+    );
+  };
+  const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
+    ({ apiKey, generation }) => {
+      assistantAccess.clear();
+      void assistantAccess.refresh();
+      sessionManager.reconcileMcpCredentialGeneration(generation);
+      if (apiKey !== null) {
+        // First-run sign-in creates the directory after the boot-time watch
+        // attempt. Re-arm on that known transition without a polling fallback.
+        ensureCredentialStoreObserver();
+      } else {
+        void reconcileCredentialRemoval().catch(() => {
+          console.error("[harness] credential removal reconciliation failed");
+        });
+      }
+    },
+  );
 
   // Rolling summary (opt-in, `HarnessSettings.rollingSummary`): folds a live
   // session's record into a ≤500-word summary.md that a later portable
@@ -1900,34 +1704,8 @@ export const startServer = async (
         }),
       ),
     );
-    const after = workflowsCache;
-
-    // Auto-bind: if this session is still unbound, find the workflow at or
-    // directly under its cwd and bind it — same mechanism as
-    // PATCH /api/sessions/:id/workflow (setBoundWorkflowPath +
-    // writeSessionContext + renderCanvas). Only runs once: the guard
-    // `!session.boundWorkflowPath` is false on every subsequent rescan once
-    // the session is bound, so this is idempotent and never overrides an
-    // explicit/persisted binding.
-    if (!session.boundWorkflowPath) {
-      const cwdSep = session.cwd + sep;
-      const candidate =
-        after.find((w) => w.path === session.cwd) ??
-        after
-          .filter((w) => w.path.startsWith(cwdSep))
-          .sort((a, b) => a.path.length - b.path.length)[0] ??
-        null;
-      if (candidate) {
-        sessionManager.setBoundWorkflowPath(session.id, candidate.path);
-        // Re-read: setBoundWorkflowPath mutates the session object in place,
-        // so the session reference we already hold already carries the new
-        // binding — pass it directly, same as the PATCH handler does.
-        await writeSessionContext(session);
-        await autoRenderCanvas(session).catch((err: unknown) => {
-          console.error("[harness] auto-bind canvas render failed:", err);
-        });
-      }
-    }
+    // No auto-bind: an unbound project-root session never has an agent bound
+    // or rendered for it (design-map-chat.md I2). Binding is explicit.
   };
   const sharedWorkspaceWatchBroker = new SharedWorkspaceWatchBroker({
     // Desktop sessions can watch the profile itself. Eligibility checks take
@@ -1944,21 +1722,73 @@ export const startServer = async (
       // the next lease's normal background scan will reconcile the interval.
       supersedePublication();
       coordinatorEpoch += 1;
-      systemGraphInventory.invalidateScope(root);
-      systemGraphInvocations.invalidateScope(root);
       workflowRegistry.markDiscoveryDirty(root);
       markAcceptedInventoryDirty(root);
     },
   });
+  // The project map is recomputed from code on every read; this lease only
+  // tells an open map to read again. One lease per drawn root, held until
+  // shutdown; edits arriving together publish one reload.
+  const PROJECT_MAP_RELOAD_DEBOUNCE_MS = 500;
+  const projectMapWatches = new Map<
+    string,
+    { key: object; timer: ReturnType<typeof setTimeout> | null; projectIds: Set<string> }
+  >();
+  let projectMapWatchesStopped = false;
+  const watchProjectMapRoot = (projectId: string, root: string): void => {
+    if (projectMapWatchesStopped) return;
+    const existing = projectMapWatches.get(root);
+    if (existing) {
+      existing.projectIds.add(projectId);
+      return;
+    }
+    const watch = {
+      key: {},
+      timer: null as ReturnType<typeof setTimeout> | null,
+      projectIds: new Set([projectId]),
+    };
+    projectMapWatches.set(root, watch);
+    const changed = () => {
+      if (watch.timer) clearTimeout(watch.timer);
+      watch.timer = setTimeout(() => {
+        watch.timer = null;
+        for (const id of watch.projectIds) {
+          bus.publish({ type: "project-map.changed", projectId: id });
+        }
+      }, PROJECT_MAP_RELOAD_DEBOUNCE_MS);
+    };
+    void sharedWorkspaceWatchBroker
+      .subscribe(watch.key, {
+        root,
+        listSourceRoots: () => [root],
+        onSourceChange: changed,
+        onInventoryChange: changed,
+      })
+      .then(() => {
+        // Shutdown ran while this lease was starting: release it now.
+        if (projectMapWatchesStopped) sharedWorkspaceWatchBroker.unsubscribe(watch.key);
+      })
+      .catch(() => {
+        // Unwatchable roots still draw; the header's refresh reads them again.
+        projectMapWatches.delete(root);
+      });
+  };
+  const stopProjectMapWatches = (): void => {
+    projectMapWatchesStopped = true;
+    for (const watch of projectMapWatches.values()) {
+      if (watch.timer) clearTimeout(watch.timer);
+      sharedWorkspaceWatchBroker.unsubscribe(watch.key);
+    }
+    projectMapWatches.clear();
+  };
   const workspaceWatcher = new WorkspaceWatcherManager({
     sharedWatchBroker: sharedWorkspaceWatchBroker,
     listSourceRoots: (_harnessSessionId, cwd) =>
-      graphSourceRootsWithinScope(
+      sourceRootsWithinScope(
         cwd,
         workflowsCache.map((workflow) => workflow.path),
       ),
-    // Session and rail discovery own accepted registry evidence only. Legacy
-    // invocation observations must remain removable with the System Graph.
+    // Session and rail watchers consume accepted registry evidence only.
     listSourceObservations: (_harnessSessionId, cwd) =>
       discoveryObservationsForRoot(cwd),
     onPotentialChange: (harnessSessionId) => {
@@ -1966,8 +1796,7 @@ export const startServer = async (
       if (session && session.status !== "exited") {
         prepareDirtyWorkflowRoot(
           session.cwd,
-          undefined,
-          workspaceDiscoveryBudget(session.cwd),
+          { discoveryBudget: workspaceDiscoveryBudget(session.cwd) },
         );
       }
     },
@@ -1983,72 +1812,31 @@ export const startServer = async (
     },
   });
 
-  // Bridges the scaffold→`npm install` gap: a brand-new project renders a calm
-  // "preparing" placeholder (core/canvas-render.ts's depsMissing path) because
-  // its deps aren't installed yet, and neither watcher above re-fires when
-  // install completes (both ignore node_modules). This one notices deps landing
-  // and re-renders, so the placeholder becomes the step graph with no Retry.
-  const installWatcher = new InstallWatcherManager({
-    onInstalled: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      if (session && session.status !== "exited") {
-        void autoRenderCanvas(session).catch((err: unknown) => {
-          console.error("[harness] post-install canvas render failed:", err);
-        });
-      }
-    },
-    onTimeout: (harnessSessionId) => {
-      // Install never completed within the window (offline, npm missing on
-      // PATH in a stripped host). Restore the honest error panel so the user
-      // regains the Retry / Ask-coding-agent actions instead of a placeholder
-      // that would wait forever.
-      const session = sessionManager.get(harnessSessionId);
-      if (session && session.status !== "exited") {
-        void renderCanvasSurfacingDepErrors(session).catch((err: unknown) => {
-          console.error("[harness] install-timeout canvas render failed:", err);
-        });
-      }
-    },
-  });
-
   // Sessions that have already had their one-time on-start workspace rescan.
   // onStatusChange also fires on later status broadcasts (including the
   // bind/unbind frames setBoundWorkflowPath emits), so this guard keeps the
   // rescan to the FIRST transition to running — otherwise it re-fires on every
-  // bind change and would re-bind a session the user just unbound.
+  // bind change.
   const rescannedOnStart = new Set<string>();
 
   sessionManager.onStatusChange((session) => {
     bus.publish({ type: "session.status", session });
     if (session.status === "running") {
-      canvasWatcher.start(session.id, session.cwd);
       workspaceWatcher.start(session.id, session.cwd);
       // The workspace watcher captures the workflows already present at start as
       // its baseline and only fires onChange on a LATER change — so a session
       // that starts in a folder where the workflow already exists (a
-      // cloned/deployed template) never triggers a rescan and never auto-binds.
-      // Run the rescan ONCE on start to cover that case; the watcher covers
-      // workflows that appear afterward. Auto-bind stays guarded by
-      // !boundWorkflowPath, so an already-bound/resumed session is untouched.
+      // cloned/deployed template) never triggers a rescan, so the rail never
+      // learns of it. Run the rescan ONCE on start to cover that case; the
+      // watcher covers workflows that appear afterward. It never binds.
       if (!rescannedOnStart.has(session.id)) {
         rescannedOnStart.add(session.id);
         void rescanWorkspaceForSession(session.id).catch((err: unknown) => {
           console.error("[harness] initial workspace rescan failed:", err);
         });
-        // A resumed/already-bound session skips the rescan's auto-bind render
-        // (guarded by !boundWorkflowPath), so render it here — a reopened
-        // workflow shows its diagram on start without any manual trigger, now
-        // that the empty-state render button is gone.
-        if (session.boundWorkflowPath) {
-          void autoRenderCanvas(session).catch((err: unknown) => {
-            console.error("[harness] on-start canvas render failed:", err);
-          });
-        }
       }
     } else if (session.status === "exited") {
-      canvasWatcher.stop(session.id);
       workspaceWatcher.stop(session.id);
-      installWatcher.stop(session.id);
       portDetector.reset(session.id);
       executionDetector.reset(session.id);
       // Let a resumed session get a fresh on-start rescan.
@@ -2063,17 +1851,16 @@ export const startServer = async (
       // The generated config dir is dead once the pty is: every file in it
       // is regenerated by buildLaunchOpts on resume, and the agent's last
       // emit.cjs execution (SessionEnd) happens before its process exits.
+      // Metadata broadcasts can repeat status=exited. Schedule removal once
+      // per lifetime; resume starts its next lifetime before regenerating
+      // configuration and awaits this removal before writing new files.
+      if (generatedRemovals.has(session.id)) return;
       const removal = removeGeneratedSessionDir(session.id, { generatedRoot })
         .then(() => undefined)
         .catch((err: unknown) => {
           console.error("[harness] generated-dir cleanup failed:", err);
-        })
-        .finally(() => {
-          if (pendingGeneratedRemovals.get(session.id) === removal) {
-            pendingGeneratedRemovals.delete(session.id);
-          }
         });
-      pendingGeneratedRemovals.set(session.id, removal);
+      generatedRemovals.set(session.id, removal);
     }
   });
 
@@ -2098,9 +1885,8 @@ export const startServer = async (
   // scan/connect anywhere changes what every session's `workflows` list
   // should say, not just the session that triggered the scan.
   // Returns the workflows freshly discovered under `root` (not the whole
-  // merged registry) — callers use this to decide whether THIS scan turned
-  // up something new worth an unprompted canvas render, without conflating
-  // it with unrelated workflows some earlier scan already found elsewhere.
+  // merged registry), without conflating it with unrelated workflows some
+  // earlier scan already found elsewhere.
   //
   // Every call names WHY it is scanning. The registry is the thing the user
   // asked "how am I finding my agents?" about, and until this line existed the
@@ -2114,14 +1900,10 @@ export const startServer = async (
     repositoryBoundaries: string[];
   }
   interface ScanFlight {
-    canonicalRoot: string;
     lexicalRoot: string;
-    token: string;
     generation: number;
     acceptedGeneration: number;
-    acceptedChanged: boolean;
     pending: boolean;
-    dirty: boolean;
     reason: WorkflowScanReason;
     discoveryBudget: WorkspaceDiscoveryBudget;
     promise: Promise<CoordinatedScanResult>;
@@ -2136,15 +1918,13 @@ export const startServer = async (
     reject: (error: unknown) => void;
   }
   const scanFlights = new Map<string, ScanFlight>();
-  const outstandingDirtyPrerequisites = new Map<string, string>();
   let coordinatorEpoch = 0;
-  let mutationTokenSequence = 0;
   let coordinatorActive = true;
   let publicationWaiter: PublicationWaiter | null = null;
   let publicationQueue: Promise<void> = Promise.resolve();
   const sameTurnDirtyPreparations = new Map<
     string,
-    { canonicalRoot: string; lexicalRoot: string; token: string }
+    { canonicalRoot: string; lexicalRoot: string }
   >();
   const sameTurnDiscoveryBudgets = new Map<string, WorkspaceDiscoveryBudget>();
   const workspaceDiscoveryBudget = (root: string): WorkspaceDiscoveryBudget => {
@@ -2164,70 +1944,6 @@ export const startServer = async (
     return created;
   };
 
-  const intersectingGraphScopes = (changedRoot: string): WorkspaceScope[] => {
-    const canonicalChangedRoot = canonicalGraphPath(changedRoot);
-    const scopes: WorkspaceScope[] = [];
-    for (const scope of activeSystemGraphScopes.values()) {
-      const canonicalScope = {
-        workspaceKey: scope.workspaceKey,
-        root: canonicalGraphPath(scope.root),
-      };
-      if (
-        isWithinGraphPath(canonicalScope.root, canonicalChangedRoot) ||
-        isWithinGraphPath(canonicalChangedRoot, canonicalScope.root)
-      ) {
-        scopes.push(canonicalScope);
-      }
-    }
-    return scopes;
-  };
-  const staleSystemGraphScopesForRoot = (
-    changedRoot: string,
-    token: string,
-  ): void => {
-    for (const scope of intersectingGraphScopes(changedRoot)) {
-      systemGraphStore.markStale(scope, token);
-    }
-  };
-  const releaseSystemGraphPrerequisite = (token: string): void => {
-    // A symlink scope can be retargeted by the accepted scan, so release by
-    // token rather than recomputing containment against its former target.
-    for (const scope of activeSystemGraphScopes.values()) {
-      systemGraphStore.releasePrerequisite(
-        {
-          workspaceKey: scope.workspaceKey,
-          root: canonicalGraphPath(scope.root),
-        },
-        token,
-      );
-    }
-    outstandingDirtyPrerequisites.delete(token);
-  };
-  const cancelSystemGraphPrerequisite = (token: string): void => {
-    for (const scope of activeSystemGraphScopes.values()) {
-      systemGraphStore.cancelPrerequisite(scope.workspaceKey, token);
-    }
-    outstandingDirtyPrerequisites.delete(token);
-  };
-  const attachOutstandingPrerequisites = (scope: WorkspaceScope): void => {
-    const canonicalScope = {
-      workspaceKey: scope.workspaceKey,
-      root: canonicalGraphPath(scope.root),
-    };
-    for (const [token, dirtyRoot] of outstandingDirtyPrerequisites) {
-      if (
-        isWithinGraphPath(canonicalScope.root, dirtyRoot) ||
-        isWithinGraphPath(dirtyRoot, canonicalScope.root)
-      ) {
-        systemGraphStore.markStale(canonicalScope, token);
-      }
-    }
-  };
-  const reportSystemGraphRefreshFailure = (changedRoot: string): void => {
-    for (const scope of intersectingGraphScopes(changedRoot)) {
-      systemGraphStore.reportRefreshFailure(scope);
-    }
-  };
   const allFlightsAccepted = (): boolean =>
     [...scanFlights.values()].every(
       (flight) =>
@@ -2258,40 +1974,35 @@ export const startServer = async (
   };
   const prepareDirtyWorkflowRoot = (
     root: string,
-    tokenOverride?: string,
-    discoveryBudget?: WorkspaceDiscoveryBudget,
-  ): { canonicalRoot: string; lexicalRoot: string; token: string } => {
+    options: {
+      discoveryBudget?: WorkspaceDiscoveryBudget;
+      coalesce?: boolean;
+    } = {},
+  ): { canonicalRoot: string; lexicalRoot: string } => {
     const lexicalRoot = resolve(expandHome(root));
     const canonicalRoot = canonicalGraphPath(lexicalRoot);
-    if (!tokenOverride) {
+    if (options.coalesce !== false) {
       const existingPreparation = sameTurnDirtyPreparations.get(canonicalRoot);
       if (existingPreparation) return existingPreparation;
     }
-    const token = tokenOverride ?? `inventory:${canonicalRoot}`;
     supersedePublication();
     coordinatorEpoch += 1;
-    systemGraphInventory.invalidateScope(lexicalRoot);
-    systemGraphInvocations.invalidateScope(lexicalRoot);
     workflowRegistry.markDiscoveryDirty(lexicalRoot);
     markAcceptedInventoryDirty(lexicalRoot);
-    outstandingDirtyPrerequisites.set(token, canonicalRoot);
-    staleSystemGraphScopesForRoot(lexicalRoot, token);
     const currentFlight = scanFlights.get(canonicalRoot);
     if (currentFlight && !currentFlight.pending) {
       currentFlight.generation += 1;
       currentFlight.acceptedGeneration = 0;
-      currentFlight.acceptedChanged = false;
       currentFlight.pending = true;
-      currentFlight.dirty = true;
       // Every edit generation gets fresh memoization/counters. Reusing the
       // prior AgentSourceScanBudget can return old file promises after a raw
       // save, while an exhausted project allowance makes the trailing proof a
       // permanent false-negative.
       currentFlight.discoveryBudget =
-        discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
+        options.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
     }
-    const prepared = { canonicalRoot, lexicalRoot, token };
-    if (!tokenOverride) {
+    const prepared = { canonicalRoot, lexicalRoot };
+    if (options.coalesce !== false) {
       sameTurnDirtyPreparations.set(canonicalRoot, prepared);
       queueMicrotask(() => {
         if (sameTurnDirtyPreparations.get(canonicalRoot) === prepared) {
@@ -2332,9 +2043,6 @@ export const startServer = async (
             ...new Set([
               launchDir,
               ...[...scanFlights.values()].map((flight) => flight.lexicalRoot),
-              ...[...activeSystemGraphScopes.values()].map(
-                (scope) => scope.root,
-              ),
             ]),
           ];
           const snapshots: Array<{
@@ -2354,13 +2062,11 @@ export const startServer = async (
           const before = workflowsCache;
           const after = [...snapshot.workflows];
           const rowsChanged = !workflowListsEqual(before, after);
-          const acceptedFlights = [...scanFlights.values()];
           const nextCanonicalWorkflowRoots =
             snapshot.canonicalWorkflowRoots.map((entry) => ({ ...entry }));
           const nextSourceObservations = snapshot.sourceObservations.map(
             (entry) => ({ ...entry, paths: [...entry.paths] }),
           );
-          const nextScopeStatuses = new Map(acceptedScopeStatusByCanonicalRoot);
           const nextCanonicalScopeByLexicalRoot = new Map(
             acceptedCanonicalScopeByLexicalRoot,
           );
@@ -2373,20 +2079,7 @@ export const startServer = async (
               entry.snapshot.canonicalScopeRoot,
               entry.snapshot.canonicalScopeRoot,
             );
-            nextScopeStatuses.set(
-              entry.snapshot.canonicalScopeRoot,
-              entry.snapshot.status,
-            );
           }
-          const inventoryProjectionChanged =
-            JSON.stringify(acceptedCanonicalWorkflowRoots) !==
-              JSON.stringify(nextCanonicalWorkflowRoots) ||
-            JSON.stringify(acceptedSourceObservations) !==
-              JSON.stringify(nextSourceObservations) ||
-            JSON.stringify([...acceptedScopeStatusByCanonicalRoot].sort()) !==
-              JSON.stringify([...nextScopeStatuses].sort()) ||
-            JSON.stringify([...acceptedCanonicalScopeByLexicalRoot].sort()) !==
-              JSON.stringify([...nextCanonicalScopeByLexicalRoot].sort());
           let stagedContexts: StagedHarnessContext[] = [];
           if (rowsChanged) {
             let contextsStable = false;
@@ -2478,19 +2171,12 @@ export const startServer = async (
           workflowsCache = after;
           acceptedCanonicalWorkflowRoots = nextCanonicalWorkflowRoots;
           acceptedSourceObservations = nextSourceObservations;
-          acceptedScopeStatusByCanonicalRoot.clear();
-          for (const [scopeRoot, status] of nextScopeStatuses) {
-            acceptedScopeStatusByCanonicalRoot.set(scopeRoot, status);
-          }
           acceptedCanonicalScopeByLexicalRoot.clear();
           for (const [
             lexicalRoot,
             canonicalRoot,
           ] of nextCanonicalScopeByLexicalRoot) {
             acceptedCanonicalScopeByLexicalRoot.set(lexicalRoot, canonicalRoot);
-          }
-          if (rowsChanged || inventoryProjectionChanged) {
-            acceptedInventoryGeneration += 1;
           }
           if (rowsChanged) {
             const registeredPaths = new Set(
@@ -2504,35 +2190,6 @@ export const startServer = async (
               ) {
                 sessionManager.setBoundWorkflowPath(openSession.id, null);
               }
-            }
-          }
-          if (rowsChanged || inventoryProjectionChanged) {
-            // A scan prunes confirmed-missing rows registry-wide, not only below
-            // its requested root. Refresh every active projection so an
-            // unrelated workspace cannot retain a ghost node/navigation target.
-            for (const scope of activeSystemGraphScopes.values()) {
-              systemGraphStore.requestRefresh({
-                workspaceKey: scope.workspaceKey,
-                root: canonicalGraphPath(scope.root),
-              });
-            }
-          } else {
-            for (const flight of acceptedFlights) {
-              if (flight.acceptedChanged && !flight.dirty) {
-                refreshSystemGraphScopesForRoot(flight.lexicalRoot);
-              }
-            }
-          }
-          const acceptedCanonicalRoots = new Set(
-            acceptedFlights.map((flight) => flight.canonicalRoot),
-          );
-          for (const [token, dirtyRoot] of [...outstandingDirtyPrerequisites]) {
-            // A terminal dirty attempt deliberately keeps its token armed. A
-            // later ordinary scan of that exact root inherits the proof by
-            // publication: once its newest generation is in this quiescent
-            // accepted snapshot, release every producer token for that root.
-            if (acceptedCanonicalRoots.has(dirtyRoot)) {
-              releaseSystemGraphPrerequisite(token);
             }
           }
           if (rowsChanged) bus.publish({ type: "workflows.changed" });
@@ -2568,9 +2225,8 @@ export const startServer = async (
       : {
           lexicalRoot: resolve(expandHome(root)),
           canonicalRoot: canonicalGraphPath(resolve(expandHome(root))),
-          token: `inventory:${canonicalGraphPath(resolve(expandHome(root)))}`,
         };
-    const { lexicalRoot, canonicalRoot, token } = prepared;
+    const { lexicalRoot, canonicalRoot } = prepared;
     if (!scanOptions.dirty) {
       supersedePublication();
       coordinatorEpoch += 1;
@@ -2580,12 +2236,10 @@ export const startServer = async (
       if (!existing.pending) {
         existing.generation += 1;
         existing.acceptedGeneration = 0;
-        existing.acceptedChanged = false;
         existing.discoveryBudget =
           scanOptions.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
       }
       existing.pending = true;
-      existing.dirty ||= scanOptions.dirty === true;
       if (scanOptions.discoveryBudget) {
         existing.discoveryBudget = scanOptions.discoveryBudget;
       }
@@ -2595,14 +2249,10 @@ export const startServer = async (
     }
 
     const flight: ScanFlight = {
-      canonicalRoot,
       lexicalRoot,
-      token,
       generation: 1,
       acceptedGeneration: 0,
-      acceptedChanged: false,
       pending: false,
-      dirty: scanOptions.dirty === true,
       reason,
       discoveryBudget:
         scanOptions.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot),
@@ -2615,7 +2265,7 @@ export const startServer = async (
       let retries = 0;
       let retryGeneration = 0;
       while (coordinatorActive) {
-        // Shared watcher fanout invokes session and graph subscribers in the
+        // Shared watcher fanout invokes session and created-agent subscribers in the
         // same turn. Let every sibling register/coalesce before one pass
         // captures the generation; a genuinely later edit still increments
         // it during the held scan and gets exactly one trailing pass.
@@ -2661,7 +2311,6 @@ export const startServer = async (
             continue;
           }
           flight.acceptedGeneration = generation;
-          flight.acceptedChanged = outcome.changed;
           let published = false;
           while (
             !published &&
@@ -2671,7 +2320,6 @@ export const startServer = async (
             published = await requestAcceptedPublication();
           }
           if (!published) continue;
-          void scheduleMapInitializations?.().catch(() => {});
           if (generation !== flight.generation || flight.pending) {
             continue;
           }
@@ -2708,7 +2356,6 @@ export const startServer = async (
           };
         } catch (error) {
           flight.acceptedGeneration = 0;
-          flight.acceptedChanged = false;
           if (!coordinatorActive) throw error;
           if (generation !== flight.generation || flight.pending) {
             continue;
@@ -2724,7 +2371,6 @@ export const startServer = async (
             }
             continue;
           }
-          reportSystemGraphRefreshFailure(flight.lexicalRoot);
           supersedePublication();
           throw error;
         }
@@ -2744,273 +2390,21 @@ export const startServer = async (
     return flight.promise;
   };
 
-  const refreshSystemGraphInventory = async (
-    scope: WorkspaceScope,
-    includeRetainedRoots = true,
-  ) => {
-    const canonicalScope = {
-      workspaceKey: scope.workspaceKey,
-      root: canonicalGraphPath(scope.root),
-    };
-    const roots = includeRetainedRoots
-      ? [
-          ...graphSourceRootsWithinScope(
-            scope.root,
-            workflowsCache.map((workflow) => workflow.path),
-          ),
-          scope.root,
-        ]
-      : [scope.root];
-    const discoveryBudget = workspaceDiscoveryBudget(scope.root);
-    await Promise.all(
-      [...new Set(roots)].map((root) =>
-        scanWorkflowsAndBroadcast(root, "graph-refresh", {
-          dirty: true,
-          discoveryBudget,
-        }),
-      ),
-    );
-    const refreshed = await systemGraphStore.waitForCurrentRefresh(
-      canonicalScope.workspaceKey,
-    );
-    if (!refreshed) {
-      throw new Error("Workspace graph scope retired during refresh");
-    }
-    return refreshed;
-  };
-
-  const workflowRootsForGraphScope = (scope: WorkspaceScope): string[] =>
-    graphSourceRootsWithinScope(
-      scope.root,
-      workflowsCache.map((workflow) => workflow.path),
-    );
-
-  const systemGraphWatcher = new SystemGraphWatcherManager(
-    {
-      listSourceRoots: workflowRootsForGraphScope,
-      // Direct-invocation observations are a private legacy graph input during
-      // coexistence; they never participate in session/rail discovery.
-      listSourceObservations: (scope) =>
-        legacyGraphObservationsForRoot(scope.root),
-      onPotentialChange: (scope, sourcePaths) => {
-        const discoveryBudget = workspaceDiscoveryBudget(scope.root);
-        prepareDirtyWorkflowRoot(scope.root, undefined, discoveryBudget);
-        if (sourcePaths === null) {
-          systemGraphInventory.invalidateScope(scope.root);
-          systemGraphInvocations.invalidateScope(scope.root);
-        } else {
-          for (const root of dirtyGraphSourceRoots(
-            scope.root,
-            workflowsCache.map((workflow) => workflow.path),
-            sourcePaths,
-          )) {
-            prepareDirtyWorkflowRoot(root, undefined, discoveryBudget);
-            systemGraphInventory.invalidateSource(root);
-            systemGraphInvocations.invalidateSource(root);
-          }
-        }
-      },
-      onSourceChange: async (scope, sourcePaths) => {
-        const canonicalScope = {
-          workspaceKey: scope.workspaceKey,
-          root: canonicalGraphPath(scope.root),
-        };
-        const dirtyRoots =
-          sourcePaths === null
-            ? workflowRootsForGraphScope(scope)
-            : dirtyGraphSourceRoots(
-                canonicalScope.root,
-                workflowsCache.map((workflow) => workflow.path),
-                sourcePaths,
-              );
-        if (sourcePaths === null) {
-          systemGraphInventory.invalidateScope(canonicalScope.root);
-          systemGraphInvocations.invalidateScope(canonicalScope.root);
-        } else {
-          for (const workflowRoot of dirtyRoots) {
-            systemGraphInventory.invalidateSource(workflowRoot);
-            systemGraphInvocations.invalidateSource(workflowRoot);
-          }
-        }
-        const discoveryBudget = workspaceDiscoveryBudget(scope.root);
-        await Promise.all(
-          [...new Set([...dirtyRoots, scope.root])].map((root) =>
-            scanWorkflowsAndBroadcast(root, "graph-refresh", {
-              dirty: true,
-              discoveryBudget,
-            }),
-          ),
-        );
-      },
-      onInventoryChange: async (scope) => {
-        try {
-          // A structural boundary event (for example `candidate/.git`) must
-          // first be reconciled from the containing scope. Treating every
-          // retained row as an explicit selection here would immediately
-          // direct-scan and resurrect the candidate the parent just retired.
-          await refreshSystemGraphInventory(scope, false);
-        } catch (err) {
-          console.error("[harness] workspace graph inventory refresh failed");
-          throw err;
-        }
-      },
-    },
-    { sharedBroker: sharedWorkspaceWatchBroker },
-  );
-
-  const listWorkspaceScopesAndRetain = async () => {
-    let scopes = await workspaceScopeCatalog.list();
+  // A scope the client sees always names its owning project. When identity
+  // storage is unavailable no scope can be published; folders and sessions
+  // stay reachable through the rail's own root projection.
+  const listReconciledWorkspaceScopes = async (): Promise<
+    WorkspaceScopeSummary[]
+  > => {
     try {
-      const studioScopes = await studioWorkspaceScopeCatalog.list();
-      const reconciliation = await studioProjectCatalog.reconcile(studioScopes);
-      await convergeReconciledProjectLifecycle(reconciliation);
-      const reconciled = reconciliation.workspaceScopes;
-      // Both catalogs key canonical filesystem roots. Cwd retains its display
-      // spelling and can be a symlink alias; prefer reconciled project metadata.
-      const byWorkspaceKey = new Map(
-        reconciled.map((scope) => [scope.workspaceKey, scope]),
+      const reconciliation = await studioProjectCatalog.reconcile(
+        await studioWorkspaceScopeCatalog.list(),
       );
-      for (const scope of scopes) {
-        if (!byWorkspaceKey.has(scope.workspaceKey)) {
-          byWorkspaceKey.set(scope.workspaceKey, scope);
-        }
-      }
-      scopes = [...byWorkspaceKey.values()].sort((left, right) =>
-        left.cwd.localeCompare(right.cwd),
-      );
+      return reconciliation.workspaceScopes;
     } catch {
-      // Agent Map is additive in E1. A bad/unavailable new catalog cannot
-      // strand the legacy rail or System Graph during coexistence.
       console.error("[harness] Studio project catalog is unavailable");
+      return [];
     }
-    const retained = new Set(scopes.map((scope) => scope.workspaceKey));
-    systemGraphWatcher.retain(retained);
-    systemGraphStore.retain(retained);
-    for (const workspaceKey of activeSystemGraphScopes.keys()) {
-      if (!retained.has(workspaceKey)) {
-        activeSystemGraphScopes.delete(workspaceKey);
-      }
-    }
-    return scopes;
-  };
-
-  /** Enrich only the bound workflow before a Canvas render. Canvas extraction
-   *  needs the registry snapshot to resolve the binding, but its cloud badge
-   *  needs the same mutable build projection exposed by /api/state. Limiting
-   *  the lookup to the bound workflow avoids one remote request per linked
-   *  agent on every source-triggered auto-render. */
-  const canvasWorkflowsForSession = async (
-    session: Pick<HarnessSession, "boundWorkflowPath">,
-  ): Promise<WorkflowInfo[]> => {
-    if (session.boundWorkflowPath == null) return workflowsCache;
-    const boundIndex = workflowsCache.findIndex(
-      (workflow) => workflow.path === session.boundWorkflowPath,
-    );
-    if (boundIndex === -1) return workflowsCache;
-    const [enrichedBound] = await enrichWorkflows([workflowsCache[boundIndex]]);
-    const workflows = [...workflowsCache];
-    workflows[boundIndex] = enrichedBound;
-    return workflows;
-  };
-
-  const automaticCanvasAuthorized = async (
-    session: Pick<HarnessSession, "boundWorkflowPath">,
-    expectedWorkflowPath = session.boundWorkflowPath,
-  ): Promise<boolean> => {
-    if (
-      !expectedWorkflowPath ||
-      session.boundWorkflowPath !== expectedWorkflowPath
-    ) {
-      return false;
-    }
-    const workflow = workflowsCache.find(
-      (candidate) => candidate.path === expectedWorkflowPath,
-    );
-    if (!workflow) return false;
-    // A retained cloud definition link is explicit legacy authorization even
-    // when the local marker is no longer present. Marker-only rows require
-    // both fresh accepted proof and a hardened launch-time recheck so a queued
-    // automatic render cannot race an offline marker removal.
-    if (workflow.definitionId !== null) return true;
-    const evidence = acceptedCanonicalWorkflowRoots.find(
-      (entry) => entry.workflowPath === workflow.path,
-    )?.identityEvidence;
-    if (evidence !== "marker") return false;
-    return (await inspectAgentProjectMarker(workflow.path)).status === "valid";
-  };
-
-  // Renders a session's bound workflow via the fully deterministic pipeline —
-  // against the live workflowsCache plus the bound definition's current cloud
-  // build projection; structure + derived annotations, no LLM, no user token.
-  // A cheap no-op for an unbound session (the canvas router serves the empty
-  // state on its own). Never throws (see core/canvas-render.ts); best-effort,
-  // like every other canvas write here.
-  // autoRenderCanvas is the UNPROMPTED variant (session-create/boot) that
-  // won't replace a workflow's existing render with an error panel when its
-  // extraction fails.
-  // A depsMissing render (fresh scaffold, pre-install) shows the "preparing"
-  // placeholder; arm the install watcher to re-render once deps land. Any other
-  // outcome means we no longer need to wait — cancel a pending watcher (no-op
-  // if none). Shared by every render trigger so the arm/disarm stays in lockstep
-  // with what the pane is actually showing.
-  const reactToRenderOutcome = (
-    session: HarnessSession,
-    outcome: Awaited<ReturnType<typeof renderCanvasForSession>>,
-  ): void => {
-    if (outcome.depsMissing && outcome.workflowPath) {
-      installWatcher.start(session.id, outcome.workflowPath);
-    } else {
-      installWatcher.stop(session.id);
-    }
-  };
-  const renderCanvas = async (session: HarnessSession): Promise<void> => {
-    const outcome = await renderCanvasForSession(
-      session,
-      await canvasWorkflowsForSession(session),
-    );
-    reactToRenderOutcome(session, outcome);
-  };
-  const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
-    const workflowPath = session.boundWorkflowPath;
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const workflows = await canvasWorkflowsForSession(session);
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const outcome = await renderCanvasForSession(session, workflows, {
-      preserveExistingOnFailure: true,
-      authorizeBeforeExtraction: () =>
-        automaticCanvasAuthorized(session, workflowPath),
-      beforeExtractionLaunchAuthorization: workflowPath
-        ? () =>
-            options.workflowDiscoveryTestHooks?.beforeAutomaticCanvasLaunch?.(
-              workflowPath,
-            )
-        : undefined,
-    });
-    reactToRenderOutcome(session, outcome);
-  };
-  // Used only by the install-watcher timeout: forces extraction even with deps
-  // missing so the honest esbuild error panel (and its Retry/Ask actions) is
-  // written instead of the placeholder. Does NOT re-arm the watcher — its
-  // outcome is an extraction failure, not depsMissing.
-  const renderCanvasSurfacingDepErrors = async (
-    session: HarnessSession,
-  ): Promise<void> => {
-    const workflowPath = session.boundWorkflowPath;
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const workflows = await canvasWorkflowsForSession(session);
-    if (!(await automaticCanvasAuthorized(session, workflowPath))) return;
-    const outcome = await renderCanvasForSession(session, workflows, {
-      surfaceErrorOnMissingDeps: true,
-      authorizeBeforeExtraction: () =>
-        automaticCanvasAuthorized(session, workflowPath),
-      beforeExtractionLaunchAuthorization: workflowPath
-        ? () =>
-            options.workflowDiscoveryTestHooks?.beforeAutomaticCanvasLaunch?.(
-              workflowPath,
-            )
-        : undefined,
-    });
-    reactToRenderOutcome(session, outcome);
   };
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(
@@ -3024,57 +2418,43 @@ export const startServer = async (
     };
   });
 
-  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
-  // caps even on long-lived installs. Runs through the store's exclusive queue
-  // so the sweep's read→filter→rename window never races a concurrent append.
-  // Fire-and-forget — a slow FS is no reason to delay server startup.
-  const runNdjsonSweep = (): void => {
-    void eventStore
-      .runExclusive(() => sweepNdjson(eventStorePath))
-      .catch((err: unknown) => {
-        console.error("[harness] events.ndjson retention sweep failed:", err);
+  // Bound archive work per pass and run passes one at a time. Remaining work
+  // or a read/write failure skips cleanup; the next timer tick retries the
+  // conversations that are not yet archived.
+  let recordMaintenance = Promise.resolve();
+  // Session-exit sweeps can evict archives between passes. Remember completed
+  // writes until event cleanup succeeds, so a large backfill makes progress.
+  const archivedDuringBackfill = new Set<string>();
+  const runRecordMaintenance = (): Promise<void> => {
+    recordMaintenance = recordMaintenance.then(async () => {
+      const { archived, complete } = await backfillSessionRecords({
+        conversationIds: async () => (await sessionRecordReader.conversationIds())
+          .filter((id) => !archivedDuringBackfill.has(id)),
+        readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
+        archive: recordArchive,
+        isLiveSession: (id) => {
+          const session = sessionManager.get(id);
+          return session !== undefined && session.status !== "exited";
+        },
       });
-  };
-  runNdjsonSweep();
-  const ndjsonRetentionTimer = setInterval(
-    runNdjsonSweep,
-    NDJSON_RETENTION_SWEEP_MS,
-  );
-  ndjsonRetentionTimer.unref?.();
-
-  // One boot-time pass that archives conversations the log still holds but the
-  // archive doesn't, then sweeps the archive's own caps. This is what covers the
-  // two cases archiving-at-exit can't: a harness that was force-killed (no exit
-  // transition, no session.end), and every session that ended before this
-  // existed — whose history would otherwise vanish at its 30-day mark.
-  //
-  // It races the ndjson sweep queued above, and deliberately doesn't wait for
-  // it: reads run outside the store's exclusive queue by design (see store.ts),
-  // and either order is correct here — win the race and the record is archived
-  // from bytes retention was about to delete, lose it and the record is archived
-  // from what survived. Both beat not archiving it.
-  //
-  // Fire-and-forget: boot must not wait on it. The cost is one full index build
-  // (~130 ms against a 50 MB log), which the first history open would have paid
-  // anyway.
-  const recordBackfill = backfillSessionRecords({
-    conversationIds: () => sessionRecordReader.conversationIds(),
-    readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
-    archive: recordArchive,
-    isLiveSession: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      return session !== undefined && session.status !== "exited";
-    },
-    onCapped: (remaining) => {
-      console.error(
-        `[harness] session record backfill hit its per-boot cap; ${remaining} conversation(s) left for the next boot`,
-      );
-    },
-  })
-    .then(() => recordArchive.sweep())
-    .catch((err: unknown) => {
-      console.error("[harness] session record backfill failed:", err);
+      for (const id of archived) archivedDuringBackfill.add(id);
+      if (!complete) {
+        console.warn("[harness] archive backfill reached its limit; keeping source events until the next pass");
+        return;
+      }
+      await recordArchive.sweep();
+      // The exclusive queue also protects retention's read/filter/rename from
+      // concurrent event appends.
+      await eventStore.runExclusive(() => sweepNdjson(eventStorePath));
+      archivedDuringBackfill.clear();
+    }).catch((err: unknown) => {
+      console.error("[harness] session record maintenance failed:", err);
     });
+    return recordMaintenance;
+  };
+  void runRecordMaintenance();
+  const ndjsonRetentionTimer = setInterval(runRecordMaintenance, NDJSON_RETENTION_SWEEP_MS);
+  ndjsonRetentionTimer.unref?.();
 
   const harnessVersion = readVersion();
   const batcher = createHarnessEmitter({
@@ -3112,55 +2492,6 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
-  const emitProjectBootstrapLifecycle = (
-    event: ProjectBootstrapLifecycleEvent,
-  ): void => {
-    const session = sessionManager.get(event.sessionId);
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next(event.sessionId),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: event.sessionId,
-      // Bootstrap lifecycle correlation uses the server-owned harness session.
-      // Provider session identity is unnecessary and may originate in a hook.
-      agentSessionId: null,
-      harness: session?.harness ?? "claude-code",
-      type: event.name,
-      payload: {
-        project_id: event.projectId,
-        ...("queueDepth" in event
-          ? {
-              queue_depth: Math.max(0, Math.min(10_000, event.queueDepth)),
-            }
-          : {}),
-        ...("attemptId" in event && event.attemptId
-          ? { attempt_id: event.attemptId }
-          : {}),
-        ...("retryOrdinal" in event
-          ? { retry_ordinal: event.retryOrdinal }
-          : {}),
-        ...("retryable" in event
-          ? {
-              error_code: event.errorCode,
-              retryable: event.retryable,
-            }
-          : {}),
-        ...("reason" in event ? { reason: event.reason } : {}),
-        ...("inputId" in event
-          ? {
-              input_id: event.inputId,
-              error_code: event.errorCode,
-            }
-          : {}),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-
   for (const migration of projectIdentityMigrationEvents.splice(0)) {
     const migrationEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -3183,45 +2514,6 @@ export const startServer = async (
     batcher.enqueue(migrationEvent);
   }
 
-  const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
-    statePaths.agentMap,
-    {
-      onEvent: (event) => {
-        const sessionId = `agent-map-${event.projectId}`;
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: sessionId,
-          agentSessionId: null,
-          harness: "claude-code",
-          type: event.name,
-          payload: {
-            project_id: event.projectId,
-            ...(event.name === "agent_map.workspace_read_failed"
-              ? {
-                  error_code: event.errorCode,
-                  ...(event.schemaVersion !== undefined
-                    ? { schema_version: event.schemaVersion }
-                    : {}),
-                }
-              : event.name === "agent_map.workspace_migrated"
-                ? { from_schema_version: event.fromSchemaVersion }
-                : {}),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
-  // Shared startup reset precedes every bootstrap/map-state recovery. Late reads apply the same policy.
-  await agentMapWorkspaceStore.resetLegacyMaps();
-  // Pristine historical format-2 wrappers require a separate backed-up conversion.
-  await agentMapWorkspaceStore.migrateEmptyLegacyContainers();
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
@@ -3249,14 +2541,11 @@ export const startServer = async (
       if (
         !session ||
         !session.agentMapIdentity ||
-        localProjectPrincipal(event.userId, event.machineId) !==
-          session.agentMapIdentity.userId ||
         (runtimeEpoch !== undefined &&
           !sessionManager.acceptsIngestRuntimeEpoch(session.id, runtimeEpoch))
       ) return null;
       const authorized = await isProjectSessionDispatchAuthorized({
         session,
-        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
         resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
       });
       if (
@@ -3276,192 +2565,6 @@ export const startServer = async (
       bus.publish({ type: "workflows.changed" });
     },
   });
-  const agentMapProposalService = new AgentMapProposalService(
-    agentMapWorkspaceStore,
-    {
-      // Persistence is authoritative and completes before this callback. The
-      // shared event socket gives an already-open map the accepted delta; a
-      // disconnected browser recovers from the durable snapshot on reconnect.
-      onAccepted: (delta) =>
-        bus.publish({ type: "agent-map.proposal.changed", delta }),
-    },
-  );
-  const buildPlanStore = new BuildPlanStore(agentMapWorkspaceStore);
-  const buildPlanService = new BuildPlanService(
-    buildPlanStore,
-    {
-      onOutcome: (event) => {
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(event.sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: event.sessionId,
-          agentSessionId: null,
-          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
-          type: "build_plan.operation",
-          payload: {
-            project_id: event.projectId,
-            operation: event.operation,
-            outcome: event.outcome,
-            plan_version: event.version,
-            diagnostic_count: Math.max(0, Math.min(64, event.diagnosticCount)),
-            affected_count: Math.max(0, Math.min(256, event.affectedCount)),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
-  const agentBriefService = new AgentBriefService(
-    buildPlanStore,
-    {
-      onOutcome: (event) => {
-        const analyticsEvent: AnalyticsEvent = {
-          eventId: randomUUID(),
-          seq: seqCounter.next(event.sessionId),
-          ts: new Date().toISOString(),
-          userId: identity?.userId ?? null,
-          tenantId: identity?.tenantId ?? null,
-          machineId,
-          harnessSessionId: event.sessionId,
-          agentSessionId: null,
-          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
-          type: "agent_brief.refresh",
-          payload: {
-            project_id: event.projectId,
-            outcome: event.outcome,
-            created_count: Math.min(128, event.createdCount),
-            new_version_count: Math.min(128, event.newVersionCount),
-            unchanged_count: Math.min(128, event.unchangedCount),
-            retired_count: Math.min(128, event.retiredCount),
-            impacted_workstream_count: Math.min(256, event.impactedWorkstreamCount),
-            diagnostic_category: event.diagnosticCategory,
-            projection_exact_count: Math.min(128, event.projectionExactCount),
-            projection_truncated_count: Math.min(128, event.projectionTruncatedCount),
-            projection_rejected_count: Math.min(128, event.projectionRejectedCount),
-          },
-        };
-        void eventStore.append(analyticsEvent).catch(() => {});
-        batcher.enqueue(analyticsEvent);
-      },
-    },
-  );
-  const emitSubsessionEvent = (
-    event: SubsessionCoordinatorEvent | SubsessionCoordinatorStoreEvent,
-  ): void => {
-    const eventSessionId =
-      "sessionId" in event && event.sessionId
-        ? event.sessionId
-        : `subsession-${event.projectId}`;
-    if (event.name === "subsession.kickoff_submitted" &&
-      sessionManager.get(eventSessionId)?.harness === "codex") {
-      // An idle fresh Codex may have outlived the initial discovery window.
-      // Submission creates its rollout; restart collection, never the kickoff.
-      void startCodexTailerFor(eventSessionId).catch(() => {
-        console.error("[harness] codex kickoff transcript discovery failed");
-      });
-    }
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next(eventSessionId),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: eventSessionId,
-      agentSessionId: null,
-      harness: sessionManager.get(eventSessionId)?.harness ?? "claude-code",
-      type: event.name,
-      payload: {
-        project_id: event.projectId,
-        ...("count" in event && event.count !== undefined
-          ? { count: Math.max(0, Math.min(16, event.count)) }
-          : {}),
-        ...("code" in event && event.code ? { error_code: event.code } : {}),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-  const subsessionCoordinatorStore = new SubsessionCoordinatorStore(
-    statePaths.agentMap,
-    { onEvent: emitSubsessionEvent },
-  );
-  closeCoordinatorOwnedSubsession.current = async (marker) => {
-    await subsessionCoordinatorStore.closeOwnedBinding(marker);
-  };
-  const subsessionCoordinator = new SubsessionCoordinator({
-    store: subsessionCoordinatorStore,
-    sessionManager,
-    planningStore: buildPlanStore,
-    eventReader: eventStore,
-    onEvent: emitSubsessionEvent,
-  });
-  emitAgentMapCapabilityEvent = (event) => {
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next("agent-map-capability"),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: "agent-map-capability",
-      agentSessionId: null,
-      harness: "claude-code",
-      type: "agent_map.capability",
-      payload: {
-        name: event.name,
-        ...(event.reason ? { reason: event.reason } : {}),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-  const implementationOptions = {
-    catalog: studioProjectCatalog, store: agentMapWorkspaceStore, preferences: studioWorkspacePreferences,
-    listWorkflows: () => workflowsCache, isWorkflowScanComplete: (roots: readonly string[]) => isWorkflowScanComplete(roots),
-    listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
-  };
-  const implementationBindings = createAgentMapImplementations(implementationOptions);
-  agentMapMcp = createAgentMapMcpRouter({
-    capabilities: agentMapCapabilities,
-    service: agentMapProposalService,
-    buildPlanService,
-    agentBriefService,
-    subsessionCoordinator,
-    readSnapshotFor: async ({ projectId }) => {
-      const project = await studioProjectCatalog.resolve(projectId);
-      if (!project) throw new AgentMapMcpProjectUnavailableError();
-      const snapshot = await agentMapProposalService.read(projectId);
-      return { schemaVersion: 1 as const, project, ...snapshot };
-    },
-    onEvent: (event) => {
-      const analyticsEvent: AnalyticsEvent = {
-        eventId: randomUUID(),
-        seq: seqCounter.next("agent-map-mcp"),
-        ts: new Date().toISOString(),
-        userId: identity?.userId ?? null,
-        tenantId: identity?.tenantId ?? null,
-        machineId,
-        harnessSessionId: "agent-map-mcp",
-        agentSessionId: null,
-        harness: "claude-code",
-        type: "agent_map.mcp_tool",
-        payload: {
-          tool: event.tool,
-          outcome: event.outcome,
-          latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
-          ...(event.errorCode ? { error_code: event.errorCode } : {}),
-        },
-      };
-      void eventStore.append(analyticsEvent).catch(() => {});
-      batcher.enqueue(analyticsEvent);
-    },
-  });
   const isWorkflowScanComplete = async (
     roots: readonly string[],
   ): Promise<boolean> =>
@@ -3477,7 +2580,6 @@ export const startServer = async (
   ): Promise<RegistryWorkflowInfo[]> => {
     const scopes = await studioWorkspaceScopeCatalog.list();
     const reconciled = await studioProjectCatalog.reconcile(scopes);
-    await convergeReconciledProjectLifecycle(reconciled);
     const projects = reconciled.projects;
     const annotations = new Map<
       string,
@@ -3513,330 +2615,66 @@ export const startServer = async (
     });
   };
 
-  const initializationProject = async (projectId: string) => {
-    const implementations = await readProjectImplementations(implementationOptions, projectId);
-    if (!implementations) return null;
-    const { roots, inventory } = implementations;
-    const agents = inventory.candidates.map(({ agentId, path, name }) => ({ agentId, path, name }));
-    const available = options.availableHarnesses ?? Object.keys(adapters);
-    const recent = sessionManager.list().filter((session) => session.agentMapIdentity?.projectId === projectId &&
-      available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
-      .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
-    const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
-    return { userId: localProjectPrincipal(projectUserId, machineId), available: roots.length > 0,
-      discoveryComplete: inventory.discoveryComplete, agents, provider: available.includes(preferred) ? preferred : null };
-  };
-  agentMapInitialization = new AgentMapInitializationCoordinator({
-    store: agentMapWorkspaceStore, proposals: agentMapProposalService, project: initializationProject,
-    infer: ({ projectId, attemptId, provider, prompt, signal }) => taskManager.runStructuredInference({
-      projectId, attemptId, harness: provider, prompt, signal, schema: INITIAL_MAP_OUTPUT_SCHEMA,
-    }),
-    onChange: (status) => {
-      bus.publish({ type: "agent-map.initialization.changed", status });
-      const sessionId = `agent-map-${status.projectId}`;
-      const event: AnalyticsEvent = { eventId: randomUUID(), seq: seqCounter.next(sessionId), ts: new Date().toISOString(),
-        userId: identity?.userId ?? null, tenantId: identity?.tenantId ?? null, machineId,
-        harnessSessionId: sessionId, agentSessionId: null, harness: "claude-code", type: "agent_map.initialization",
-        payload: { project_id: status.projectId, status: status.status, error_code: status.errorCode } };
-      void eventStore.append(event).catch(() => {}); batcher.enqueue(event);
-    },
-  });
-  let initializationSchedule: Promise<void> | null = null;
-  let initializationDiscovery: Promise<void> | null = null;
-  let initializationReschedule = false;
-  const scheduleExistingMaps = (): Promise<void> => {
-    if (initializationSchedule) { initializationReschedule = true; return initializationSchedule; }
-    if (!coordinatorActive) return Promise.resolve();
-    const operation = (async () => {
-      do {
-        initializationReschedule = false;
-        for (const project of await studioProjectCatalog.list()) {
-          if (!coordinatorActive) break;
-          await agentMapInitialization!.schedule(project.projectId).catch(() => {
-            // Invalid/unreadable workspaces remain map-load errors, never missing-map jobs.
-          });
-        }
-      } while (coordinatorActive && initializationReschedule);
-    })();
-    initializationSchedule = operation;
-    const settled = () => {
-      initializationSchedule = null;
-      // A discovery notification can arrive between the loop's last condition
-      // and this promise callback. Keep that final notification too.
-      if (coordinatorActive && initializationReschedule) void scheduleExistingMaps().catch(() => {});
-    };
-    void operation.then(settled, settled);
-    return operation;
-  };
-  const isMeaningfullyEmptyProject = async (projectId: string): Promise<boolean> => {
-    const aggregate = await agentMapWorkspaceStore.readAggregate(projectId);
-    return !hasAuthoredAgentMap(aggregate) && aggregate.current.buildPlan === null;
-  };
-  projectBootstrap = new ProjectBootstrapCoordinator({
-    root: statePaths.projectBootstrap,
-    legacyStateRoot: legacyProjectSessionStateRoot(statePaths.root),
-    sessionManager,
-    canDispatch: (session) =>
-      isProjectSessionDispatchAuthorized({
-        session,
-        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
-        resolveProject: (projectId) =>
-          studioProjectCatalog.resolveIdentity(projectId),
-      }),
-    isMeaningfullyEmpty: isMeaningfullyEmptyProject,
-    claimMapGeneration: (projectId) => agentMapInitialization!.reserveForBootstrap(projectId),
-    onEvent: emitProjectBootstrapLifecycle,
-  });
-  afterStudioProjectsCreatedCommit = async (projects) => {
-    try {
-      await scheduleBootstrapProjects(
-        projects.map((project) => project.projectId),
-        localProjectPrincipal(projectUserId, machineId),
-        "unclaimed",
-      );
-    } catch {
-      // The catalog and its write-ahead markers are already durable. Do not
-      // turn a successfully allocated project into an apparent create failure;
-      // every reconciliation boundary retries the project-keyed schedule.
-      console.error("[harness] project bootstrap scheduling deferred");
-    }
-  };
-  try {
-    const pending = await projectBootstrapOutbox.pending();
-    const recoverableProjectIds: string[] = [];
-    for (const entry of pending) {
-      if (await studioProjectCatalog.resolve(entry.projectId)) {
-        recoverableProjectIds.push(entry.projectId);
-      } else {
-        // A write-ahead marker whose catalog transaction never committed is
-        // an expected crash artifact, not a project to recreate implicitly.
-        await projectBootstrapOutbox.complete(entry.projectId);
-      }
-    }
-    await scheduleBootstrapProjects(
-      recoverableProjectIds,
-      localProjectPrincipal(projectUserId, machineId),
-      "unclaimed",
-    );
-  } catch {
-    // Leave every unresolved marker durable for the next boot. Logging uses a
-    // fixed classification because entries and storage paths are private.
-    console.error("[harness] project bootstrap outbox recovery failed");
-  }
-  for (const session of sessionManager.list()) {
-    if (!session.projectBootstrap) continue;
-    let emptyProject = true;
-    try {
-      emptyProject = await isMeaningfullyEmptyProject(
-        session.projectBootstrap.projectId,
-      );
-    } catch {
-      // Registration still recovers generating state and preserves its FIFO;
-      // the project route will surface any unavailable workspace later.
-    }
-    await projectBootstrap
-      .register(session, { emptyProject, mode: "boot" }, null)
-      .catch(() => {
-        // Session IDs and storage/provider errors stay out of logs. The
-        // coordinator emits its bounded lifecycle classification separately.
-        console.error("[harness] project bootstrap registration failed");
-      });
-  }
-  sessionManager.onStatusChange((session, { runtimeEpoch }) => {
-    void projectBootstrap!.onSessionStatus(session, runtimeEpoch).catch(() => {
-      console.error("[harness] project bootstrap status transition failed");
-    });
-  });
-  const projectFirstSessionStarts = new Map<string, Promise<void>>();
-  const ensureProjectFirstSession = (
-    projectId: string,
-    root: string,
-  ): Promise<void> => {
-    const existing = projectFirstSessionStarts.get(projectId);
-    if (existing) return existing;
-    const operation = (async () => {
-      const userId = localProjectPrincipal(projectUserId, machineId);
-      if (!(await projectBootstrap!.needsProjectSession(projectId, userId))) {
-        return;
-      }
-      await options.projectBootstrapTestHooks?.afterProjectSessionNeeded?.(
-        projectId,
-      );
-      try {
-        await sessionManager.create(
-          {
-            cwd: root,
-            harness: options.defaultHarnessKind ?? "claude-code",
-          },
-          { requireProjectBootstrapClaim: true },
-        );
-      } catch (error) {
-        // An explicit ordinary create may have claimed and published the first
-        // session after needsProjectSession() returned. That is successful
-        // convergence, not a reason to spawn an unrequested second session.
-        if (error instanceof ProjectBootstrapClaimUnavailableError) return;
-        // Embedded/test hosts may intentionally register no local adapter, and
-        // an external-only adapter cannot own a Studio PTY. Keep the durable
-        // project bootstrap intent unclaimed so a later boot with an available
-        // ordinary adapter can converge it. Generic user-created sessions still
-        // surface these errors through their existing request path.
-        if (
-          error instanceof AdapterNotFoundError ||
-          error instanceof ExternalHarnessError
-        ) {
-          console.error(
-            "[harness] project bootstrap session start deferred: adapter_unavailable",
-          );
-          return;
-        }
-        // Shutdown can race a queued reconciliation callback. The coordinator
-        // and outbox are already durable, so there is no work to resurrect in
-        // a server that is closing.
-        if (error instanceof SessionManagerClosingError) return;
-        throw error;
-      }
-      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-        throw new ProjectSessionScopeUnavailableError("unclaimed");
-      }
-    })();
-    projectFirstSessionStarts.set(projectId, operation);
-    void operation.then(
-      () => {
-        if (projectFirstSessionStarts.get(projectId) === operation) {
-          projectFirstSessionStarts.delete(projectId);
-        }
-      },
-      () => {
-        if (projectFirstSessionStarts.get(projectId) === operation) {
-          projectFirstSessionStarts.delete(projectId);
-        }
-      },
-    );
-    return operation;
-  };
-
-  convergeReconciledProjectLifecycle = async (reconciled) => {
-    const userId = localProjectPrincipal(projectUserId, machineId);
-    // A prior post-commit attempt may have failed after its marker was
-    // durable. Reconciliation is an idempotent opportunity to finish those
-    // exact new-project lifecycles; projects without an intent remain inert.
-    await scheduleBootstrapProjects(
-      projectsAwaitingBootstrapSchedule,
-      userId,
-      "unclaimed",
-    );
-    if (!agentMapMcpUrl) return;
-    for (const project of reconciled.projects) {
-      const launchRoot = preferredProjectRoot(
-        reconciled.workspaceScopes
-          .filter((scope) => scope.projectId === project.projectId)
-          .map((scope) => scope.cwd),
-      );
-      if (launchRoot) {
-        await ensureProjectFirstSession(project.projectId, launchRoot);
-      }
-    }
-  };
-
+  /**
+   * OPENING A FOLDER MINTS ITS PROJECT AND STOPS (flow-creation.md §4.1 step
+   * 3, §4.5). The catalog is reconciled so the durable Studio project exists
+   * before the client re-reads state; no session is created and no seeding
+   * turn is scheduled. The user types first.
+   */
   const initializeOpenedProject = async (
     requestedRoot: string,
   ): Promise<void> => {
-    const userId = localProjectPrincipal(projectUserId, machineId);
+    await pretrustProjectRoot(requestedRoot);
     pendingProjectCwds.add(requestedRoot);
-    let starts: Array<{ projectId: string; launchRoot: string }> = [];
     try {
-      starts = await serializeProjectScopeResolution(async () => {
-        const before = new Set(
-          (await studioProjectCatalog.list()).map(
-            (project) => project.projectId,
-          ),
-        );
-        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-          throw new ProjectSessionScopeUnavailableError("unclaimed");
-        }
-        const reconciled = await studioProjectCatalog.reconcile(
+      await serializeProjectScopeResolution(async () => {
+        await studioProjectCatalog.reconcile(
           await studioWorkspaceScopeCatalog.list(),
         );
-        const requestedProject =
-          await studioProjectCatalog.resolveIdentityForPath(requestedRoot);
-        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-          throw new ProjectSessionScopeUnavailableError("unclaimed");
-        }
-        const createdProjectIds = reconciled.projects
-          .map((project) => project.projectId)
-          .filter((projectId) => !before.has(projectId));
-        const scheduledProjectIds = [
-          ...new Set([
-            ...createdProjectIds,
-            ...projectsAwaitingBootstrapSchedule,
-          ]),
-        ];
-        await scheduleBootstrapProjects(
-          scheduledProjectIds,
-          userId,
-          "unclaimed",
-        );
-
-        const projectsToStart = new Set(createdProjectIds);
-        if (requestedProject) projectsToStart.add(requestedProject.projectId);
-        for (const projectId of scheduledProjectIds) {
-          projectsToStart.add(projectId);
-        }
-        return [...projectsToStart].sort().flatMap((projectId) => {
-          const launchRoot = preferredProjectRoot(
-            reconciled.workspaceScopes
-              .filter((scope) => scope.projectId === projectId)
-              .map((scope) => scope.cwd),
-          );
-          return launchRoot ? [{ projectId, launchRoot }] : [];
-        });
       });
     } finally {
       pendingProjectCwds.delete(requestedRoot);
     }
-    for (const start of starts) {
-      await ensureProjectFirstSession(start.projectId, start.launchRoot);
-    }
   };
 
   // One ordinary-session input authority serves the canonical REST endpoint
-  // and its bounded planner-era compatibility alias. Bootstrap FIFO ownership
-  // stays behind this boundary so neither transport can invent eligibility,
-  // preemption, or dispatch semantics of its own.
+  // and its bounded planner-era compatibility alias.
   const submitSessionInput = async (
     sessionId: string,
     text: string,
     submit: boolean,
-    requestId?: string,
-  ): Promise<SessionInputSubmissionResult> => {
-    const bootstrapCoordinator = projectBootstrap;
-    if (bootstrapCoordinator?.ownsInput(sessionId, requestId)) {
-      if (submit) {
-        const result = await bootstrapCoordinator.enqueueWithReceipt(
-          sessionId,
-          text,
-          requestId,
-        );
-        return { ok: true, receipt: result.receipt };
-      }
-      // A user-owned draft must also win over automatic bootstrap, but it
-      // must remain editable rather than entering the durable submit FIFO.
-      // Retire lifecycle ownership and clear any background text staged
-      // before Enter, then preserve ordinary submit:false semantics.
-      const runtimeEpoch = sessionManager.getRuntimeEpoch(sessionId);
-      if (runtimeEpoch !== null) {
-        bootstrapCoordinator.onTerminalInput(sessionId, {
-          runtimeEpoch,
-          blockingPrompt: false,
-        });
-      }
-      sessionManager.preemptBackgroundInput(sessionId);
-    }
-    return { ok: await sessionManager.submitInput(sessionId, text, submit) };
-  };
+  ): Promise<SessionInputSubmissionResult> => ({
+    ok: await sessionManager.submitInput(sessionId, text, submit),
+  });
 
+  const openCodeHost = new OpenCodeHost({
+    access: assistantAccess,
+    createObserver: (hosted, id, update) =>
+      new OpenCodeObserver(hosted, id, update),
+    bridge: openCodeBridge,
+    origin: () => `http://127.0.0.1:${actualPort}`,
+    stateRoot: statePaths.root,
+    authorize: async (id) => {
+      if (mapChatProjectId(id) !== null)
+        return authorizeMapChat(id, (projectId) =>
+          studioProjectCatalog.resolveIdentity(projectId),
+        );
+      const session = sessionManager.get(id);
+      if (!session || !(await isProjectSessionDispatchAuthorized({
+        session,
+        resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+      }))) return null;
+      return { harnessSessionId: id, cwd: session.cwd };
+    },
+  });
+  const getAssistantState = () => openCodeHost.getAssistantState();
+  const unsubscribeAssistant = openCodeHost.subscribeAssistantState(() =>
+    bus.publish({ type: "assistant.state", snapshot: getAssistantState() }),
+  );
   const app: Express = express();
   app.disable("x-powered-by");
+  app.use("/opencode-runtime", openCodeBridge.router);
+  app.use("/opencode", createOpenCodeRouter(openCodeHost, options.bootToken));
 
   // Everything under /api requires the boot token; mounted as middleware
   // (not a router) so it also gates the workflows/macros routers below,
@@ -3858,6 +2696,7 @@ export const startServer = async (
   app.use(
     "/api",
     createRestRouter({
+      getAssistantState,
       sessionManager,
       adapters,
       version: readVersion(),
@@ -3869,7 +2708,7 @@ export const startServer = async (
           }
         : null,
       listWorkflows: readPublicWorkflows,
-      listWorkspaceScopes: listWorkspaceScopesAndRetain,
+      listWorkspaceScopes: listReconciledWorkspaceScopes,
       listStudioProjects: async () => {
         try {
           return await studioProjectCatalog.list();
@@ -3882,26 +2721,17 @@ export const startServer = async (
       findWorkflow: (workflowPath) =>
         workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
-      renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
       onRecentDirAdded: initializeOpenedProject,
-      onSessionCreated: (cwd, harnessSessionId) => {
-        scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true })
-          .then(({ found }) => {
-            // Only auto-render when THIS session's own directory turned up a
-            // workflow — an unrelated project scanned earlier elsewhere in
-            // the registry shouldn't unprompt-render into a brand new,
-            // unrelated session's pane.
-            if (found.length === 0) return;
-            const session = sessionManager.get(harnessSessionId);
-            if (session) return autoRenderCanvas(session);
-          })
-          .catch((err: unknown) => {
+      onSessionCreated: (cwd) => {
+        scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true }).catch(
+          (err: unknown) => {
             console.error(
               "[harness] agent scan on session create failed:",
               err,
             );
-          });
+          },
+        );
       },
       submitSessionInput,
       launchDir,
@@ -3926,110 +2756,28 @@ export const startServer = async (
   );
   app.use(
     "/api",
-    createAgentMapRouter({
-      implementations: implementationBindings,
+    createStudioProjectsRouter({
       catalog: studioProjectCatalog,
-      initialization: agentMapInitialization,
-      store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
-      currentUserId: () => localProjectPrincipal(projectUserId, machineId),
+      currentUserId: () => projectPrincipal,
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
-      onProjectCreated: async (project) => {
-        const userId = localProjectPrincipal(projectUserId, machineId);
-        await scheduleBootstrapProjects(
-          [project.projectId],
-          userId,
-          "unclaimed",
-        );
-      },
-      onRootBound: async (project, root) => {
-        const userId = localProjectPrincipal(projectUserId, machineId);
-        // Recover a project whose durable create committed just before its
-        // lifecycle callback failed, without enrolling an older project merely
-        // because one of its bindings changed.
-        if (projectsAwaitingBootstrapSchedule.has(project.projectId)) {
-          await scheduleBootstrapProjects(
-            [project.projectId],
-            userId,
-            "unclaimed",
-          );
-        }
-        const identity = await studioProjectCatalog.resolveIdentity(
-          project.projectId,
-        );
-        const launchRoot = identity
-          ? preferredProjectRoot(
-              identity.rootBindings
-                .filter((binding) => binding.status === "active")
-                .map((binding) => binding.localRootRef),
-            )
-          : null;
-        await ensureProjectFirstSession(project.projectId, launchRoot ?? root);
-      },
     }),
   );
   app.use(
     "/api",
-    createSystemGraphRouter({
-      scopeResolver: {
-        resolve: async (workspaceKey) => {
-          const scope = (await listWorkspaceScopesAndRetain()).find(
-            (candidate) => candidate.workspaceKey === workspaceKey,
-          );
-          return scope ? { workspaceKey, root: canonicalGraphPath(scope.cwd) } : null;
-        },
+    createProjectMapRouter({
+      resolveProject: async (projectId) => {
+        const project = await studioProjectCatalog.resolveIdentity(projectId);
+        if (!project) return null;
+        const scopes = await studioWorkspaceScopeCatalog.list();
+        const roots = await openProjectRoots(project.rootBindings, scopes);
+        return { projectId: project.projectId, displayName: project.displayName, roots };
       },
-      store: systemGraphStore,
-      onScopeAccess: (scope) => {
-        const firstAccess = !activeSystemGraphScopes.has(scope.workspaceKey);
-        activeSystemGraphScopes.set(scope.workspaceKey, scope);
-        // A destructive signal may predate this store entry (or arrive while
-        // the scope was retired). Attach every intersecting producer token
-        // synchronously before store.get can project old clickable inventory.
-        attachOutstandingPrerequisites(scope);
-        if (firstAccess) {
-          // A scope can be reopened after an interval with no continuous
-          // watcher lease. Its accepted rows remain useful for the immediate
-          // cache-backed graph, but pre-lease completeness/identity proof is
-          // no longer fresh enough to report ready or authorize legacy work.
-          markAcceptedInventoryDirty(scope.root);
-          void scanWorkflowsAndBroadcast(scope.root, "graph-refresh").catch(
-            (err: unknown) => {
-              console.error("[harness] workspace graph discovery failed:", err);
-            },
-          );
-        }
-        return systemGraphWatcher.start(scope);
-      },
-      onScopeRefresh: async (scope) => {
-        try {
-          systemGraphInventory.retryFailedInspections(scope);
-          systemGraphInvocations.retryFailed(scope.root);
-          return await refreshSystemGraphInventory(scope);
-        } catch {
-          console.error("[harness] workspace graph manual refresh failed");
-          if (!systemGraphStore.peek(scope.workspaceKey)) {
-            throw new Error("Workspace graph scope is no longer active");
-          }
-          return systemGraphStore.reportRefreshFailure(scope);
-        }
-      },
-    }),
-  );
-  app.use(
-    "/api",
-    createCanvasRenderRouter({
-      getSession: (harnessSessionId) => sessionManager.get(harnessSessionId),
-      listWorkflows: canvasWorkflowsForSession,
-      // Keep the install watcher in lockstep with what this route just put on
-      // screen — without this, a depsMissing render through the POST route
-      // showed the "preparing" placeholder with nothing armed to replace it.
-      onOutcome: (harnessSessionId, outcome) => {
-        const session = sessionManager.get(harnessSessionId);
-        if (session) reactToRenderOutcome(session, outcome);
-      },
+      platform: () => platformForKey(apiKeyProvider.getKey(), resolveCoreBaseUrl()),
+      evaluate: () => evaluateForKey(apiKeyProvider.getKey(), resolveCoreBaseUrl()),
+      onRootRead: watchProjectMapRoot,
     }),
   );
   // Wrap the registry so GET /api/workflows also returns enriched slugs —
@@ -4043,36 +2791,20 @@ export const startServer = async (
         (outcome) => publicWorkflowInfos(outcome.found),
       ),
     connectPath: async (inputPath: string) => {
-      mutationTokenSequence += 1;
-      const prepared = prepareDirtyWorkflowRoot(
-        inputPath,
-        `connect:${mutationTokenSequence}`,
+      // Each explicit mutation invalidates evidence before awaiting I/O, even
+      // when another preparation for this root happened in the same turn.
+      prepareDirtyWorkflowRoot(inputPath, { coalesce: false });
+      const workflow = await workflowRegistry.connectPath(inputPath);
+      const outcome = await scanWorkflowsAndBroadcast(
+        workflow.path,
+        "agent-connected",
+        { dirty: true },
       );
-      try {
-        const workflow = await workflowRegistry.connectPath(inputPath);
-        const scan = scanWorkflowsAndBroadcast(
-          workflow.path,
-          "agent-connected",
-          { dirty: true },
-        );
-        // scanWorkflowsAndBroadcast synchronously installs its own flight
-        // token before returning. The mutation token no longer owns freshness.
-        cancelSystemGraphPrerequisite(prepared.token);
-        const outcome = await scan;
-        return publicWorkflowInfo(
-          workflowsCache.find(
-            (candidate) => candidate.path === workflow.path,
-          ) ??
-            outcome.found.find(
-              (candidate) => candidate.path === workflow.path,
-            ) ??
-            workflow,
-        );
-      } catch (error) {
-        cancelSystemGraphPrerequisite(prepared.token);
-        reportSystemGraphRefreshFailure(prepared.lexicalRoot);
-        throw error;
-      }
+      return publicWorkflowInfo(
+        workflowsCache.find((candidate) => candidate.path === workflow.path) ??
+          outcome.found.find((candidate) => candidate.path === workflow.path) ??
+          workflow,
+      );
     },
     scanWithBoundaries: async (root: string) => {
       const outcome = await scanWorkflowsAndBroadcast(root, "requested", {
@@ -4123,6 +2855,17 @@ export const startServer = async (
       },
     }),
   );
+  // The session bar's durable App Link chip (SAP-3255): same key, same
+  // path-addressed agent resolution as the Secrets tab.
+  app.use(
+    createAppLinkRouter({
+      apiKey: apiKeyProvider,
+      resolveWorkflow: (id) => {
+        const workflow = workflowsCache.find((w) => w.path === id);
+        return workflow ? { path: workflow.path } : null;
+      },
+    }),
+  );
   // Direct action macros (Deploy / Prod-run) — server-side, key never reaches
   // the browser, no Claude Code. Resolves a workflow :id (its path) against the
   // same live cache the rest router's findWorkflow uses.
@@ -4158,9 +2901,8 @@ export const startServer = async (
       pendingSecrets,
     }),
   );
-  // IA-01: the session-free, workflow-keyed canvas route. Same derivation the
-  // session-bound render uses, keyed by the agent's absolute path instead of a
-  // session id — so a board can be read for an agent that has never hosted a
+  // IA-01: the session-free, workflow-keyed canvas route, keyed by the agent's
+  // absolute path — so a board can be read for an agent that has never hosted a
   // session. Resolution goes through the same live cache actions.ts uses, so
   // only registered agents are ever read from disk.
   app.use(
@@ -4243,7 +2985,9 @@ export const startServer = async (
   app.use(createAgentScaffoldRouter(scaffoldDeps));
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
-    createFsRouter(),
+    createFsRouter({
+      findAgentPath: (agentPath) => workflowsCache.find((w) => w.path === agentPath)?.path ?? null,
+    }),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>
@@ -4252,17 +2996,6 @@ export const startServer = async (
         sessionManager.get(harnessSessionId)?.cwd ?? null,
       getBoundWorkflowPath: (harnessSessionId) =>
         sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
-      // The visualize/refresh macro forces a fresh deterministic re-render:
-      // drop the bound workflow's extraction cache so a source change (new or
-      // removed steps) is picked up, then re-render. Fully deterministic and
-      // instant — no task, no user token, nothing to already-be-running.
-      renderCanvas: async (harnessSessionId) => {
-        const session = sessionManager.get(harnessSessionId);
-        if (!session) return;
-        if (session.boundWorkflowPath)
-          invalidateExtractionCache(session.boundWorkflowPath);
-        await renderCanvas(session);
-      },
       injectInput: async (harnessSessionId, text, submit) => {
         // Two-phase write: a combined text+\r lands in Claude Code as a
         // bracketed paste and never submits.
@@ -4307,14 +3040,12 @@ export const startServer = async (
       bus,
       authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
-      onProjectUserChanged: (userId) => {
+      onProjectUserChanged: () => {
+        assistantAccess.clear();
+        void assistantAccess.refresh();
         deploymentAuthChanged();
-        projectUserId = userId;
-        for (const session of sessionManager.list()) {
-          agentMapCapabilities.revokeSession(session.id);
-          void agentMapMcp?.revokeSession(session.id);
-        }
       },
+      onCredentialRemoved: reconcileCredentialRemoval,
     }),
   );
 
@@ -4349,10 +3080,6 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
-    decorateEvent: (event, runtimeEpoch) =>
-      projectBootstrap!.decorateLocalEvent(event, runtimeEpoch),
-    projectTelemetryEvent: (event) =>
-      projectBootstrap!.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
@@ -4385,12 +3112,6 @@ export const startServer = async (
         .catch(() => {
           console.error("[harness] created agent registration failed");
         });
-      void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
-        console.error("[harness] project bootstrap completion failed");
-      });
-      void subsessionCoordinator.onEventPersisted(event, runtimeEpoch).catch(() => {
-        console.error("[harness] subsession acknowledgement failed");
-      });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);
       // The normal end of a session: the SessionEnd hook's event is in the
@@ -4442,8 +3163,6 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Number.isNaN(sinceMs) ? Date.now() : sinceMs,
-            ...(sessionManager.getSubsessionBinding(session.id)
-              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
       if (claim.outcome === "claimed")
         return { path: claim.path, ambiguous: false };
@@ -4550,20 +3269,9 @@ export const startServer = async (
     }
   });
 
-  // Canvas is intentionally unauthenticated (see canvas.ts) — served straight
-  // off the session's cwd, no boot token required.
-  app.use(
-    createCanvasRouter((harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      return session
-        ? { cwd: session.cwd, boundWorkflowPath: session.boundWorkflowPath }
-        : undefined;
-    }),
-  );
-
-  // Capability-authenticated MCP is independent of browser boot-token auth.
-  // Keep it before static/SPA fallback so POST/GET/DELETE remain protocol routes.
-  app.use(agentMapMcp.router);
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
+  });
 
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
@@ -4590,9 +3298,13 @@ export const startServer = async (
     {
       path: "/ws/events",
       wss: eventsWss,
-      onConnection: createEventsWebSocketHandler(bus, options.bootToken),
+      onConnection: createEventsWebSocketHandler(bus, options.bootToken, getAssistantState),
     },
   ]);
+
+  if (authEnabled) {
+    ensureCredentialStoreObserver();
+  }
 
   let serverClose: Promise<void> | null = null;
   const closeServer = (): Promise<void> => {
@@ -4610,13 +3322,15 @@ export const startServer = async (
         }
       };
 
+      credentialStoreObserver?.close();
+      unsubscribeCredentialChanges();
+      assistantAccess.close();
+      await settle(() => openCodeHost.close());
+      unsubscribeAssistant();
+      openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
-      const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
-      scheduleMapInitializations = null;
-      await agentMapInitialization?.close();
-      await initializationSchedule?.catch(() => {});
       coordinatorEpoch += 1;
       clearInterval(sessionSweepTimer);
       clearInterval(ndjsonRetentionTimer);
@@ -4624,15 +3338,9 @@ export const startServer = async (
       await settle(() =>
         rejectPublication(new Error("Agent discovery coordinator is closed")),
       );
-      await settle(() => canvasWatcher.stopAll());
       await settle(() => workspaceWatcher.stopAll());
       await settle(() => createdAgentWatcher.stopAll());
-      await settle(() => systemGraphWatcher.stopAll());
-      activeSystemGraphScopes.clear();
-      await settle(() => systemGraphInvocations.clear());
-      await settle(() => systemGraphInventory.clear());
-      await settle(() => systemGraphStore.clear());
-      await settle(() => installWatcher.stopAll());
+      stopProjectMapWatches();
       for (const tailer of codexTailers.values()) {
         await settle(() => tailer.stop());
       }
@@ -4658,17 +3366,15 @@ export const startServer = async (
       // indefinitely if a store or transport never settles. Timing out this
       // wait leaves the existing writes intact; it never reopens admission.
       const drainsSettled = (async () => {
-        await settle(() => initializationDiscovery ?? Promise.resolve());
-        await bootstrapClosing;
+        await settle(() => restoredScopeDiscovery ?? Promise.resolve());
         await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
-          await recordBackfill;
+          await recordMaintenance;
           while (pendingRecordArchives.size > 0) {
             await Promise.all([...pendingRecordArchives]);
           }
         });
-        await settle(() => agentMapMcp?.close());
         await settle(() => batcher.close());
       })();
       const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
@@ -4731,15 +3437,13 @@ export const startServer = async (
     const address = httpServer.address();
     actualPort =
       typeof address === "object" && address ? address.port : options.port;
-    agentMapMcpUrl = `http://${host}:${actualPort}/mcp/agent-map`;
+    void assistantAccess.refresh();
     // Covers the ephemeral `port: 0` case where only the bound address is real.
     portDetector.addExcludedPort(actualPort);
-    await options.projectBootstrapTestHooks?.afterListenBeforeRecovery?.(
-      actualPort,
-    );
+    await options.startupTestHooks?.afterListen?.(actualPort);
 
     // Discovery owns scheduling; browser navigation only observes status. Resume queued work after listen.
-    initializationDiscovery = initialWorkflowScan.then(async () => {
+    restoredScopeDiscovery = initialWorkflowScan.then(async () => {
       if (!coordinatorActive) return;
       // Discovery completeness belongs to an exact root. Desktop's launchDir
       // scan cannot certify projects elsewhere (or even its own child roots).
@@ -4753,42 +3457,7 @@ export const startServer = async (
           });
         }
       }
-      if (coordinatorActive) {
-        scheduleMapInitializations = scheduleExistingMaps;
-        await scheduleExistingMaps();
-      }
     }).catch(() => {});
-
-    // A project intent is persisted before its first PTY is created. Reconcile
-    // that crash window only after the MCP endpoint is bound: every ordinary
-    // project session receives its capability during launch preparation, so an
-    // earlier recovery attempt would fail before spawning and leave a tombstone.
-    for (const summary of await studioProjectCatalog.list()) {
-      const project = await studioProjectCatalog.resolveIdentity(
-        summary.projectId,
-      );
-      const root = project
-        ? preferredProjectRoot(
-            project.rootBindings
-              .filter((binding) => binding.status === "active")
-              .map((binding) => binding.localRootRef),
-          )
-        : null;
-      if (!project || !root) continue;
-      await ensureProjectFirstSession(summary.projectId, root).catch(
-        (error: unknown) => {
-          console.error(
-            `[harness] project bootstrap session recovery failed: ${
-              error instanceof ProjectBootstrapCoordinatorClosedError
-                ? "coordinator_closed"
-                : error instanceof ProjectSessionScopeUnavailableError
-                  ? "scope_unavailable"
-                  : "session_start_failed"
-            }`,
-          );
-        },
-      );
-    }
 
     // The app otherwise opens to an empty terminal pane — not fire-and-forget
     // because a spawn failure here (e.g. claude not on PATH) is worth
@@ -4803,20 +3472,13 @@ export const startServer = async (
         .some(
           (session) =>
             session.status !== "exited" &&
-            session.agentMapIdentity?.projectId === launchProject.projectId,
+            session.agentMapIdentity.projectId === launchProject.projectId,
         ),
     );
     if ((options.autoCreateSession ?? true) && !recoveredLaunchProjectSession) {
       const harness = options.defaultHarnessKind ?? "claude-code";
       sessionManager
         .create({ cwd: launchDir, harness })
-        .then(async (session) => {
-          // Reuses the scan already kicked off above rather than scanning
-          // launchDir twice — only renders when it actually found something,
-          // same "discoverable" gate as the REST onSessionCreated path.
-          const { found } = await initialWorkflowScan;
-          if (found.length > 0) await autoRenderCanvas(session);
-        })
         .catch((err: unknown) => {
           console.error("[harness] auto-create boot session failed:", err);
         });

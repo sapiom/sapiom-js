@@ -18,6 +18,7 @@ export function TooltipLayer(): JSX.Element {
     let anchor: Element | null = null;
 
     const hide = (): void => {
+      changes.disconnect();
       anchor = null;
       tip.dataset.show = "false";
       // Empty when hidden — stale text must never linger in the DOM.
@@ -36,6 +37,10 @@ export function TooltipLayer(): JSX.Element {
       const text = titled.dataset.tooltip || titled.dataset.tipStash;
       if (!text) return;
       anchor = el;
+      changes.observe(document.body, {
+        childList: true, subtree: true, attributes: true,
+        attributeFilter: ["data-tooltip", "title"],
+      });
       tip.textContent = text;
       tip.dataset.show = "true";
       const rect = el.getBoundingClientRect();
@@ -57,6 +62,18 @@ export function TooltipLayer(): JSX.Element {
       tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
     };
 
+    // Observe only while a tooltip is visible. State changes and removed
+    // anchors need no pointer movement to refresh or clear their old text.
+    const changes = new MutationObserver(() => {
+      if (!anchor?.isConnected) return hide();
+      const current = anchor as HTMLElement;
+      const text = current.dataset.tooltip || current.title || current.dataset.tipStash;
+      if (text === tip.textContent) return;
+      anchor = null;
+      hide();
+      show(current);
+    });
+
     const onOver = (e: Event): void => show(e.target as Element);
     const onOut = (e: Event): void => {
       if (anchor && !anchor.contains((e as PointerEvent).relatedTarget as Node)) hide();
@@ -68,6 +85,7 @@ export function TooltipLayer(): JSX.Element {
     document.addEventListener("scroll", hide, true);
     window.addEventListener("blur", hide);
     return () => {
+      changes.disconnect();
       document.removeEventListener("pointerover", onOver, true);
       document.removeEventListener("pointerout", onOut, true);
       document.removeEventListener("pointerdown", hide, true);

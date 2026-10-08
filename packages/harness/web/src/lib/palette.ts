@@ -185,7 +185,7 @@ export function buildPaletteItems(src: PaletteSources): PaletteItem[] {
     .map((session) => ({
       id: `session:${session.id}`,
       kind: "session" as const,
-      label: sessionDisplayName(session, sessions, sessionNames),
+      label: sessionDisplayName(session, sessionNames),
       meta: session.cwd,
       sessionId: session.id,
       current: session.id === activeSessionId || undefined,
@@ -205,7 +205,7 @@ export function buildPaletteItems(src: PaletteSources): PaletteItem[] {
         item: {
           id: `past:${session.id}`,
           kind: "past" as const,
-          label: sessionDisplayName(session, sessions, sessionNames),
+          label: sessionDisplayName(session, sessionNames),
           meta: session.cwd,
           sessionId: session.id,
           recency: parseTime(session.lastActiveAt),

@@ -97,6 +97,198 @@ export function checkNoSliceParse({ path, source }) {
   return errors;
 }
 
+/**
+ * The floor a structured `llm.run` cap has to clear (SAP-3280).
+ *
+ * A routed label emits a `thinking` block before the forced tool call and those tokens are
+ * spent out of `max_tokens`, so a cap sized for the answer alone can end the turn before the
+ * tool call is emitted — leaving nothing to read, on the hardest inputs only. This is a floor,
+ * not the recommendation: the examples use 4096. What it forbids is the order of magnitude
+ * that starves the call.
+ */
+export const STRUCTURED_CAP_FLOOR = 2048;
+
+/**
+ * The opening of an `llm.run` call: optional type arguments (`llm.run<Verdict>(`), optional
+ * whitespace before the parenthesis, and whatever follows it — the spec may open on the same
+ * line or the next. The type-argument class is anything but parentheses, so `<Array<T>>` is
+ * covered without a real parser.
+ */
+const LLM_RUN_OPEN = /\bllm\.run\s*(?:<[^()]*>)?\s*\(/;
+/** A literal cap, or the identifier holding one — `max_tokens: LEAF_MAX_TOKENS` is the idiom here. */
+const CAP_ASSIGNMENT = /max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/;
+const NUMERIC_CONST =
+  /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(\d[\d_]*)\s*;/g;
+
+/** In-file `const NAME = 700;` declarations, so a named cap is read as the number it is. */
+export function numericConstsOf(source) {
+  const consts = new Map();
+  for (const [, name, value] of source.matchAll(NUMERIC_CONST)) {
+    consts.set(name, Number(value.replaceAll("_", "")));
+  }
+  return consts;
+}
+
+/**
+ * The number a `max_tokens:` value stands for — the literal itself, or the in-file const it
+ * names — or `undefined` when it is neither (imported, computed).
+ */
+export function resolveCap(cap, consts) {
+  return /^\d/.test(cap) ? Number(cap.replaceAll("_", "")) : consts.get(cap);
+}
+
+/**
+ * Every `max_tokens:` in `source` resolved to a number, with the line it sits on. A value that
+ * cannot be resolved is left out, the same way {@link checkStructuredOutputCap} skips it.
+ */
+export function resolvedCapsOf(source) {
+  const consts = numericConstsOf(source);
+  const caps = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const hit = CAP_ASSIGNMENT.exec(lines[i]);
+    if (!hit) continue;
+    const value = resolveCap(hit[1], consts);
+    if (value !== undefined) caps.push({ line: i + 1, value });
+  }
+  return caps;
+}
+
+/**
+ * The index of the line on which the parenthesis opened at `lines[start]` (from `column`) is
+ * closed again — the extent of one call. Parentheses inside a `'…'` / `"…"` string, a
+ * template literal (including nested `${…}` expressions and their own strings), a `//`
+ * comment or a `/* … *\/` comment are not counted, because a prompt reads "(1-5)" or ":)"
+ * often enough that an early false close would hide `output` and `max_tokens` from the check.
+ * Braces and brackets are balanced inside a well-formed argument list, so only parentheses
+ * are tracked. A regex literal containing a parenthesis is the accepted edge — telling `/`
+ * the operator from `/` the delimiter needs a parser, and no template writes a regex inside
+ * its `llm.run` call. Runs to the end of the file when the call never closes.
+ */
+function callEndOf(lines, start, column) {
+  let depth = 0;
+  // Lexical context stack: a quote character for a string, "${" for a template
+  // expression, "{" for a brace nested inside one, "//" or "/*" for a comment.
+  const modes = [];
+  const top = () => modes[modes.length - 1];
+
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (top() === "//") modes.pop();
+    for (let c = i === start ? column : 0; c < line.length; c += 1) {
+      const ch = line[c];
+      const next = line[c + 1];
+      const mode = top();
+
+      if (mode === "/*") {
+        if (ch === "*" && next === "/") {
+          modes.pop();
+          c += 1;
+        }
+        continue;
+      }
+      if (mode === "'" || mode === '"') {
+        if (ch === "\\") c += 1;
+        else if (ch === mode) modes.pop();
+        continue;
+      }
+      if (mode === "`") {
+        if (ch === "\\") c += 1;
+        else if (ch === "`") modes.pop();
+        else if (ch === "$" && next === "{") {
+          modes.push("${");
+          c += 1;
+        }
+        continue;
+      }
+
+      // Code: the call itself, or an expression inside a template literal.
+      if (ch === "/" && next === "/") {
+        modes.push("//");
+        break;
+      }
+      if (ch === "/" && next === "*") {
+        modes.push("/*");
+        c += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") {
+        modes.push(ch);
+        continue;
+      }
+      if (mode === "${" || mode === "{") {
+        // Inside a template expression its parentheses are balanced and belong to it,
+        // so only the braces that lead back out to the template are tracked.
+        if (ch === "{") modes.push("{");
+        else if (ch === "}") modes.pop();
+        continue;
+      }
+      if (ch === "(") depth += 1;
+      else if (ch === ")" && (depth -= 1) === 0) return i;
+    }
+    // A quoted string cannot span lines; an unterminated one is a typo, not a context.
+    if (top() === "'" || top() === '"') modes.pop();
+  }
+  return lines.length - 1;
+}
+
+/**
+ * Reject a structured `llm.run` whose cap thinking can exhaust — in a template source or in
+ * a fenced snippet under `examples/`, since both are copied verbatim by the next author.
+ *
+ * Scoped to the call it reads, not the file: a plain-text call bounded on purpose (a
+ * `textOf` reply capped at 700) is legitimate and left alone. Only a call that also declares
+ * `output` is judged, because that is the one whose failure is silent.
+ *
+ * A named cap is resolved against the file's own `const NAME = <number>` declarations —
+ * `max_tokens: LEAF_MAX_TOKENS` is already the idiom in `fan-out-and-combine`, and a check that
+ * only read digits would have been bypassed by writing the starved number one line higher. The
+ * call is found by its opening parenthesis and read to the matching close, so a generic call
+ * (`llm.run<Verdict>(`), a spec that opens on the next line, and a one-line call are all one
+ * call each. What it still cannot see is a cap imported from another module or computed at
+ * runtime, or a call made through an alias (`const ask = ctx.sapiom.llm.run`); those are the
+ * known edges, and the templates do not do them.
+ *
+ * @param path    repository-relative path, for the message
+ * @param source  the file's contents
+ * @returns string[] of problems, one per offending call
+ */
+export function checkStructuredOutputCap({ path, source }) {
+  const errors = [];
+  const lines = source.split("\n");
+  const consts = numericConstsOf(source);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const open = LLM_RUN_OPEN.exec(lines[i]);
+    if (!open) continue;
+
+    const end = callEndOf(lines, i, open.index + open[0].length - 1);
+    let capLine = -1;
+    let declaresOutput = false;
+    for (let j = i; j <= end; j += 1) {
+      if (/\boutput\s*:/.test(lines[j])) declaresOutput = true;
+      if (capLine === -1 && CAP_ASSIGNMENT.test(lines[j])) capLine = j;
+    }
+    // The next call starts after this one; a line may hold at most one `llm.run(`.
+    i = end;
+    if (!declaresOutput || capLine === -1) continue;
+
+    const value = resolveCap(CAP_ASSIGNMENT.exec(lines[capLine])[1], consts);
+    if (value === undefined || value >= STRUCTURED_CAP_FLOOR) continue;
+
+    errors.push(
+      `llm-surface: ${path}:${capLine + 1} caps a structured llm.run at ${value} tokens. ` +
+        "Thinking is spent out of the same budget, so a cap this size can end the turn before " +
+        "the forced tool call is emitted — the structured result then never arrives, on the " +
+        "hardest inputs only (SAP-3280). Size it for thinking plus output " +
+        `(at least ${STRUCTURED_CAP_FLOOR}; the examples use 4096); billing settles on the tokens ` +
+        "actually produced.",
+    );
+  }
+
+  return errors;
+}
+
 export function checkOneShotLlmTemplate({
   id,
   indexSource,

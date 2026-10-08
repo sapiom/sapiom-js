@@ -11,7 +11,7 @@
 //   (defaults to the HOST platform; any further args pass through, e.g.
 //   -c.mac.notarize=true)
 import { execFileSync } from "node:child_process";
-import { cpSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as os from "node:os";
@@ -115,6 +115,11 @@ assertHarnessVersion(
 cpSync(join(pkgDir, "dist"), join(deployDir, "dist"), { recursive: true });
 cpSync(join(pkgDir, "electron-builder.yml"), join(deployDir, "electron-builder.yml"));
 cpSync(join(pkgDir, "assets"), join(deployDir, "assets"), { recursive: true });
+mkdirSync(join(deployDir, "scripts"), { recursive: true });
+cpSync(
+  join(pkgDir, "scripts", "include-opencode-runtime.mjs"),
+  join(deployDir, "scripts", "include-opencode-runtime.mjs"),
+);
 
 console.log(`[pack] electron-builder ${platform} → ${outputDir} (v${version}, channel "${channel}")`);
 // The `.bin` entry is `electron-builder.cmd` on Windows, `electron-builder` on POSIX.

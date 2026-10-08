@@ -33,11 +33,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openHistoryRow(page: Page, testid: string): Promise<void> {
-  await page.getByTestId("history-trigger").click();
-  await expect(page.getByTestId("history-menu")).toBeVisible();
-  // Past-session rows moved into a flyout sub-card opened from this row.
-  // Hover to open it — a click would toggle it (mouse-enter already opened it).
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId(testid).click();
 }
@@ -62,8 +58,7 @@ test("a claude-code history row renders its session turn by turn", async ({ page
 });
 
 test("a CODEX session renders the same way — this reads our events, not a vendor transcript", async ({ page }) => {
-  await page.getByTestId("history-trigger").click();
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId(CODEX_EXITED_ROW).click();
 
@@ -100,8 +95,7 @@ test("the reconstruction is labeled where the user reads it, with its gaps named
 test("truncation and an unfinished turn are stated, not smoothed over", async ({ page }) => {
   // The leasing record carries both: a truncated Edit result and a trailing
   // turn that never completed.
-  await page.getByTestId("history-trigger").click();
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId(CLAUDE_EXITED_ROW).click();
   await expect(page.getByTestId("session-transcript")).toBeVisible();

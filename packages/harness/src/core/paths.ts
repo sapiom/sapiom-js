@@ -4,17 +4,11 @@
  * expresses well-known paths with a leading `~`.
  */
 
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { expandHome } from "@sapiom/agent-map/node/state-paths";
+export { expandHome } from "@sapiom/agent-map/node/state-paths";
 
 import { HARNESS_HOME, HARNESS_PATHS } from "../shared/types.js";
-
-/** Expand a leading `~` (home directory) in a path, then resolve to absolute. */
-export function expandHome(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
-  return resolve(path);
-}
 
 /** Absolute locations of every piece of persistent harness state, all rooted
  *  under one directory. See resolveStatePaths(). */
@@ -28,7 +22,6 @@ export interface HarnessStatePaths {
   studioProjects: string;
   pendingSecrets: string;
   agentMap: string;
-  projectBootstrap: string;
   generated: string;
   records: string;
   sampleProject: string;
@@ -60,7 +53,6 @@ export function resolveStatePaths(stateRoot?: string): HarnessStatePaths {
     studioProjects: join(root, relativeToHome(HARNESS_PATHS.studioProjects)),
     pendingSecrets: join(root, relativeToHome(HARNESS_PATHS.pendingSecrets)),
     agentMap: join(root, relativeToHome(HARNESS_PATHS.agentMap)),
-    projectBootstrap: join(root, "agent-map", "project-bootstrap"),
     generated: join(root, relativeToHome(HARNESS_PATHS.generated)),
     records: join(root, relativeToHome(HARNESS_PATHS.records)),
     sampleProject: join(root, relativeToHome(HARNESS_PATHS.sampleProject)),

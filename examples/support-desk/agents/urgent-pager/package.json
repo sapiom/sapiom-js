@@ -1,0 +1,14 @@
+{
+  "name": "support-desk-urgent-pager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Support desk agent urgent-pager. Dependencies resolve from examples/support-desk/package.json.",
+  "dependencies": {
+    "@sapiom/agent": "^0.14.5",
+    "@sapiom/tools": "^0.41.0",
+    "pg-mem": "^3.0.14",
+    "postgres": "^3.4.9",
+    "zod": "^4.1.12"
+  }
+}

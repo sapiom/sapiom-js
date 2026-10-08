@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION,
   type StudioWorkspaceSelection,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { StudioWorkspacePreferenceStore } from "./studio-workspace-preferences.js";
 
 describe("StudioWorkspacePreferenceStore", () => {
@@ -249,7 +249,7 @@ describe("StudioWorkspacePreferenceStore", () => {
     ).rejects.toMatchObject({ code: "malformed_state" });
   });
 
-  it("isolates users, keeps transient absence in memory, and durably repairs proven deletion", async () => {
+  it("shares project preferences across users and durably repairs proven deletion", async () => {
     const value = await fixture();
     const projectRoot = path.join(value.root, "project");
     const store = new StudioWorkspacePreferenceStore(value.file);
@@ -282,8 +282,48 @@ describe("StudioWorkspacePreferenceStore", () => {
           true,
         )
       ).selection.kind,
-    ).toBe("agent-map");
+    ).toBe("agent");
 
+    await store.put(
+      "user-b",
+      value.projectId,
+      { kind: "agent-map", projectId: value.projectId },
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    const persisted = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      preferences: Array<{ userId: string; projectId: string }>;
+    };
+    expect(persisted.preferences).toHaveLength(1);
+    expect(persisted.preferences[0]).toMatchObject({
+      userId: "user-b",
+      projectId: value.projectId,
+    });
+
+    expect(
+      (
+        await store.current(
+          "user-a",
+          value.projectId,
+          [projectRoot],
+          value.workflows,
+          true,
+        )
+      ).selection.kind,
+    ).toBe("agent-map");
+    await store.put(
+      "user-a",
+      value.projectId,
+      {
+        kind: "agent",
+        projectId: value.projectId,
+        agentId: current.agents[0]!.agentId,
+      },
+      [projectRoot],
+      value.workflows,
+      true,
+    );
     expect(
       await store.current("user-a", value.projectId, [projectRoot], [], false),
     ).toMatchObject({ repaired: false, selection: { kind: "agent-map" } });
@@ -320,6 +360,272 @@ describe("StudioWorkspacePreferenceStore", () => {
         true,
       ),
     ).toMatchObject({ repaired: true, selection: { kind: "agent-map" } });
+  });
+
+  it.each([
+    {
+      label: "newer row second",
+      newerFirst: false,
+      olderUpdatedAt: "2026-01-01T00:00:00.000Z",
+      newerUpdatedAt: "2026-01-02T00:00:00.000Z",
+    },
+    {
+      label: "newer row first",
+      newerFirst: true,
+      olderUpdatedAt: "2026-01-01T00:00:00.000Z",
+      newerUpdatedAt: "2026-01-02T00:00:00.000Z",
+    },
+    {
+      label: "later row on a timestamp tie",
+      newerFirst: false,
+      olderUpdatedAt: "2026-01-01T00:00:00.000Z",
+      newerUpdatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ])(
+    "reads the newest duplicate project preference when the $label",
+    async ({ newerFirst, olderUpdatedAt, newerUpdatedAt }) => {
+      const value = await fixture();
+      const projectRoot = path.join(value.root, "project");
+      const store = new StudioWorkspacePreferenceStore(value.file);
+      const current = await store.current(
+        "user-seed",
+        value.projectId,
+        [projectRoot],
+        value.workflows,
+        true,
+      );
+      const older = {
+        userId: "user-a",
+        projectId: value.projectId,
+        selection: { kind: "agent-map" as const, projectId: value.projectId },
+        updatedAt: olderUpdatedAt,
+      };
+      const newer = {
+        userId: "user-b",
+        projectId: value.projectId,
+        selection: {
+          kind: "agent" as const,
+          projectId: value.projectId,
+          agentId: current.agents[0]!.agentId,
+        },
+        updatedAt: newerUpdatedAt,
+      };
+      const preferences = newerFirst ? [newer, older] : [older, newer];
+      const persisted = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+        schemaVersion: number;
+        agentBindings: unknown[];
+      };
+      await fs.writeFile(
+        value.file,
+        JSON.stringify({ ...persisted, preferences }),
+        "utf8",
+      );
+
+      const reopened = new StudioWorkspacePreferenceStore(value.file);
+      const selected = await reopened.current(
+        "user-c",
+        value.projectId,
+        [projectRoot],
+        value.workflows,
+        true,
+      );
+      expect(selected).toMatchObject({
+        repaired: false,
+        selection: { kind: "agent", agentId: current.agents[0]!.agentId },
+      });
+      const afterRead = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+        preferences: unknown[];
+      };
+      expect(afterRead.preferences).toEqual(preferences);
+    },
+  );
+
+  it("deduplicates duplicate rows when current repairs a missing selection", async () => {
+    const value = await fixture();
+    const projectRoot = path.join(value.root, "project");
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    await store.current(
+      "user-seed",
+      value.projectId,
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    const otherProjectId =
+      "project_00000000-0000-4000-8000-000000000002";
+    const otherPreference = {
+      userId: "other-user",
+      projectId: otherProjectId,
+      selection: {
+        kind: "agent-map" as const,
+        projectId: otherProjectId,
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const persisted = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      schemaVersion: number;
+      agentBindings: unknown[];
+    };
+    await fs.writeFile(
+      value.file,
+      JSON.stringify({
+        ...persisted,
+        preferences: [
+          {
+            userId: "user-a",
+            projectId: value.projectId,
+            selection: {
+              kind: "agent-map",
+              projectId: value.projectId,
+            },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            userId: "user-b",
+            projectId: value.projectId,
+            selection: {
+              kind: "agent",
+              projectId: value.projectId,
+              agentId: "agent_00000000-0000-4000-8000-000000000099",
+            },
+            updatedAt: "2026-01-02T00:00:00.000Z",
+          },
+          otherPreference,
+        ],
+      }),
+      "utf8",
+    );
+
+    const reopened = new StudioWorkspacePreferenceStore(value.file);
+    const repaired = await reopened.current(
+      "user-c",
+      value.projectId,
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    expect(repaired).toMatchObject({
+      repaired: true,
+      selection: { kind: "agent-map", projectId: value.projectId },
+    });
+    const afterRepair = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      preferences: Array<{
+        userId: string;
+        projectId: string;
+        selection: unknown;
+      }>;
+    };
+    expect(
+      afterRepair.preferences.filter(
+        (preference) => preference.projectId === value.projectId,
+      ),
+    ).toEqual([
+      {
+        userId: "user-c",
+        projectId: value.projectId,
+        selection: { kind: "agent-map", projectId: value.projectId },
+        updatedAt: expect.any(String),
+      },
+    ]);
+    expect(
+      afterRepair.preferences.filter(
+        (preference) => preference.projectId === otherProjectId,
+      ),
+    ).toEqual([otherPreference]);
+  });
+
+  it("deduplicates preference rows on put and preserves other project rows", async () => {
+    const value = await fixture();
+    const projectRoot = path.join(value.root, "project");
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    await store.current(
+      "user-seed",
+      value.projectId,
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    const otherProjectId =
+      "project_00000000-0000-4000-8000-000000000002";
+    const otherPreference = {
+      userId: "other-user",
+      projectId: otherProjectId,
+      selection: {
+        kind: "agent-map" as const,
+        projectId: otherProjectId,
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const persisted = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      schemaVersion: number;
+      agentBindings: unknown[];
+    };
+    await fs.writeFile(
+      value.file,
+      JSON.stringify({
+        ...persisted,
+        preferences: [
+          {
+            userId: "user-a",
+            projectId: value.projectId,
+            selection: {
+              kind: "agent-map",
+              projectId: value.projectId,
+            },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            userId: "user-b",
+            projectId: value.projectId,
+            selection: {
+              kind: "agent-map",
+              projectId: value.projectId,
+            },
+            updatedAt: "2026-01-02T00:00:00.000Z",
+          },
+          otherPreference,
+        ],
+      }),
+      "utf8",
+    );
+
+    const reopened = new StudioWorkspacePreferenceStore(value.file);
+    const updated = await reopened.put(
+      "user-c",
+      value.projectId,
+      { kind: "agent-map", projectId: value.projectId },
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    expect(updated.selection).toEqual({
+      kind: "agent-map",
+      projectId: value.projectId,
+    });
+    const afterPut = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      preferences: Array<{
+        userId: string;
+        projectId: string;
+        selection: unknown;
+      }>;
+    };
+    expect(
+      afterPut.preferences.filter(
+        (preference) => preference.projectId === value.projectId,
+      ),
+    ).toEqual([
+      {
+        userId: "user-c",
+        projectId: value.projectId,
+        selection: { kind: "agent-map", projectId: value.projectId },
+        updatedAt: expect.any(String),
+      },
+    ]);
+    expect(
+      afterPut.preferences.filter(
+        (preference) => preference.projectId === otherProjectId,
+      ),
+    ).toEqual([otherPreference]);
   });
 
   it("preserves an agent preference when PUT races a degraded empty inventory", async () => {

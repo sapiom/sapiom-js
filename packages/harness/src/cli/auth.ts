@@ -4,6 +4,7 @@ import {
   writeCredentials,
   performBrowserAuth,
 } from "@sapiom/mcp/auth";
+import { withStudioCredentialLock } from "../core/studio-credentials.js";
 
 export interface HarnessIdentity {
   userId: string;
@@ -36,7 +37,9 @@ export async function ensureAuthenticated(
 ): Promise<HarnessIdentity | null> {
   if (options.noAuth) return null;
 
-  const env = await resolveEnvironment(options.environment ?? process.env.SAPIOM_ENVIRONMENT);
+  const env = await resolveEnvironment(
+    options.environment ?? process.env.SAPIOM_ENVIRONMENT,
+  );
 
   const existing = await readCredentials(env.name);
   if (existing) {
@@ -51,13 +54,20 @@ export async function ensureAuthenticated(
 
   if (!options.interactive) return null;
 
-  const result = await performBrowserAuth(env.appURL, env.apiURL);
-  await writeCredentials(env.name, env.appURL, env.apiURL, {
-    apiKey: result.apiKey,
-    tenantId: result.tenantId,
-    organizationName: result.organizationName,
-    apiKeyId: result.apiKeyId,
+  const result = await performBrowserAuth(env.appURL, env.apiURL, {
+    studioIdentity: true,
   });
+  await withStudioCredentialLock(() =>
+    writeCredentials(env.name, env.appURL, env.apiURL, {
+      apiKey: result.apiKey,
+      tenantId: result.tenantId,
+      organizationName: result.organizationName,
+      apiKeyId: result.apiKeyId,
+      ...(result.studioCredentials && {
+        studioCredentials: result.studioCredentials,
+      }),
+    }),
+  );
 
   return {
     userId: result.tenantId,

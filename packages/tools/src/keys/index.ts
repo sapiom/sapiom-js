@@ -123,8 +123,9 @@ export function toTtlSeconds(ttl: number | string): number {
 export async function mintScoped(
   input: MintScopedInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<ScopedKey> {
+  const coreBaseUrl = resolveCoreBaseUrl(baseUrl ?? transport.coreBaseUrl);
   const ttl = toTtlSeconds(input.ttl);
   const scope =
     input.scope === undefined
@@ -135,7 +136,7 @@ export async function mintScoped(
 
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/api-keys/scoped/workflow`,
+      `${coreBaseUrl}/v1/api-keys/scoped/workflow`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

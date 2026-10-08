@@ -22,7 +22,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
+import { addProject } from "./mock-navigation";
 
 const ACME = "/Users/demo/acme-app";
 
@@ -37,29 +37,21 @@ const FIXTURES = [
 ];
 
 /**
- * Every project row that prints the same name as an agent row inside it.
+ * Every agent row the rail draws, by project.
  *
- * That stutter — the folder said `dashboard-keeper` and the only thing in it
- * said `dashboard-keeper` again — was 15 of one real install's 40 rows. The
- * project row a merged root agent OWNS is excluded, because it IS that agent's
- * row: it carries the agent's `workflow-<name>` testid deliberately, and one
- * row saying one thing is the fix, not the defect.
+ * The stutter this guarded — a folder said `dashboard-keeper` and the only
+ * thing in it said `dashboard-keeper` again — was 15 of one real install's 40
+ * rows. The rail draws no agent rows at all now (flow-navigation.md Q3), so
+ * the stutter is impossible by construction; the sweep pins that no agent row
+ * comes back under any fixture.
  */
 async function stutteringRows(page: Page): Promise<string[]> {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll(".rail-list > .workspace-group")).flatMap((group) => {
-      const testid = group.getAttribute("data-testid") ?? "";
-      const label = testid.replace(/^workspace-group-/, "");
-      // The label of a project opened inside another is a path
-      // (`polsia/services/workers`); what a stutter would repeat is its last
-      // segment.
-      const leaf = label.split("/").pop() ?? label;
-      const header = group.querySelector(":scope > .workspace-row");
-      return Array.from(group.querySelectorAll("[data-testid^='workflow-']"))
-        .filter((row) => row !== header && row.classList.contains("workflow-item"))
-        .map((row) => (row.getAttribute("data-testid") ?? "").replace(/^workflow-/, ""))
-        .filter((name) => name === leaf)
-        .map((name) => `${label} > ${name}`);
+    Array.from(document.querySelectorAll(".rail-list > .rail-project")).flatMap((group) => {
+      const label = (group.getAttribute("data-testid") ?? "").replace(/^rail-project-/, "");
+      return Array.from(group.querySelectorAll("[data-testid^='workflow-']")).map(
+        (row) => `${label} > ${(row.getAttribute("data-testid") ?? "").replace(/^workflow-/, "")}`,
+      );
     }),
   );
 }
@@ -73,18 +65,16 @@ test.describe("SYMPTOM: no project row is a single agent wearing its own folder'
     });
   }
 
-  test("a root that IS an agent renders as ONE row, not a header plus a twin", async ({ page }) => {
+  test("a root that IS an agent renders as ONE header, and its agent is on the map", async ({ page }) => {
     // The positive half of the sweep. An empty result above is also what a
-    // rail with no rows at all returns, so this pins the mechanism that
-    // actually prevents the stutter: the root agent is MERGED into the project
-    // row, which then carries its testid and its focus behaviour.
+    // rail with no rows at all returns, so this pins that the project is on
+    // screen as one header and its agent is reached where agents live now.
     await page.goto("/?mockFixtures=deep");
-    const group = page.getByTestId("workspace-group-dashboard-keeper");
-    await expect(group).toBeVisible();
-    await expect(group.getByTestId("workflow-dashboard-keeper")).toHaveCount(1);
-    await expect(
-      group.locator(":scope > .workspace-row[data-testid='workflow-dashboard-keeper']"),
-    ).toHaveCount(1);
+    const block = page.getByTestId("rail-project-dashboard-keeper");
+    await expect(block).toBeVisible();
+    await expect(block.locator(".rail-project-row")).toHaveCount(1);
+    await page.getByTestId("project-select-dashboard-keeper").click();
+    await expect(page.getByTestId("map-agent-dashboard-keeper")).toBeVisible();
   });
 });
 
@@ -98,62 +88,55 @@ test.describe("Remove project", () => {
     // A destructive action standing at full strength on every project row
     // would be the loudest thing in the rail; invisible even to the keyboard
     // would be worse. Both halves are CSS, so both are asserted on screen.
-    // Remove lives inside the row's ⋮ (SAP-2982); the session shortcut sits
-    // beside that menu and shares the same row-owned reveal contract.
-    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row");
-    const actions = row.locator(":scope > .workspace-row-action");
+    // New chat is the one verb visible at rest (flow 4.6.1), so the reveal
+    // contract is asserted across every OTHER action on the row.
+    const row = page.getByTestId("workspace-group-acme-app");
+    const actions = row.locator(
+      ":scope > .workspace-row-action:not(.rail-project-new-chat)",
+    );
     const opacities = (): Promise<string[]> =>
       actions.evaluateAll((elements) =>
         elements.map((element) => getComputedStyle(element).opacity),
       );
+    const count = await actions.count();
+    expect(count).toBeGreaterThan(0);
+    const all = (value: string): string[] => Array(count).fill(value);
 
-    expect(await opacities()).toEqual(["0", "0"]);
+    expect(await opacities()).toEqual(all("0"));
     await row.hover();
-    await expect.poll(opacities).toEqual(["1", "1"]);
+    await expect.poll(opacities).toEqual(all("1"));
 
     await page.mouse.move(0, 0);
-    await expect.poll(opacities).toEqual(["0", "0"]);
-    await actions.first().focus();
-    await expect
-      .poll(() =>
-        actions.first().evaluate((element) => getComputedStyle(element).opacity),
-      )
-      .toBe("1");
-    await actions.nth(1).focus();
-    await expect
-      .poll(() =>
-        actions.nth(1).evaluate((element) => getComputedStyle(element).opacity),
-      )
-      .toBe("1");
+    await expect.poll(opacities).toEqual(all("0"));
+    // Keyboard reveal, one control at a time: a row action the pointer never
+    // touches must still show itself when it takes focus.
+    for (let index = 0; index < count; index += 1) {
+      await actions.nth(index).focus();
+      await expect
+        .poll(() =>
+          actions
+            .nth(index)
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("1");
+    }
   });
 
-  test("an OPEN menu holds its trigger on screen after the pointer leaves", async ({ page }) => {
-    // The popover is anchored to the ⋮. Letting the trigger fade back to
-    // opacity 0 when the pointer leaves the row leaves a card floating beside
-    // nothing — the anchor is invisible and the menu looks unmoored.
-    const menu = page.getByTestId("project-menu-acme-app");
-    await menu.click();
-    await page.mouse.move(0, 0);
-    await expect(page.getByTestId("project-menu-card-acme-app")).toBeVisible();
-    await expect
-      .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
-      .toBe("1");
-  });
-
-  test("a COLLAPSED project row does not grow a standing ⋮", async ({ page }) => {
+  test("a COLLAPSED project row does not grow a standing remove", async ({ page }) => {
     // `.workspace-row.is-collapsed .workspace-row-action[aria-expanded]` tests
-    // only that the attribute is PRESENT, and a menu trigger always carries
-    // one — so without the exclusion in styles.css every collapsed project row
-    // wore a permanent ⋮, which is exactly the standing control the rail's
-    // hover-reveal exists to avoid.
+    // only that the attribute is PRESENT. The ⋮ this replaced always carried
+    // one, so every collapsed project row wore a permanent overflow until an
+    // exclusion was added for it. Plain row actions carry no `aria-expanded`,
+    // so the destructive one must stay hidden at rest on its own — the standing
+    // control the rail's hover-reveal exists to avoid.
     await page.getByTestId("project-disclosure-acme-app").click();
-    const row = page.getByTestId("workspace-group-acme-app").locator(":scope > .workspace-row");
+    const row = page.getByTestId("workspace-group-acme-app");
     await expect(row).toHaveClass(/is-collapsed/);
     await page.mouse.move(0, 0);
     await expect
       .poll(() =>
         page
-          .getByTestId("project-menu-acme-app")
+          .getByTestId("project-remove-acme-app")
           .evaluate((element) => getComputedStyle(element).opacity),
       )
       .toBe("0");
@@ -162,7 +145,6 @@ test.describe("Remove project", () => {
   test("the confirm NAMES the number of sessions it ends, and says nothing on disk is touched", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     const confirm = page.getByTestId("remove-project-confirm");
     await expect(confirm).toBeVisible();
@@ -179,7 +161,6 @@ test.describe("Remove project", () => {
   test("says so plainly when there is nothing to end", async ({ page }) => {
     // rfq-agent has one exited session and no live one. An abstract warning
     // here would be a lie in the only direction that matters.
-    await openProjectMenu(page, "rfq-agent");
     await page.getByTestId("project-remove-rfq-agent").click();
     await expect(page.getByTestId("remove-project-confirm-count")).toHaveText(
       "No running sessions to end.",
@@ -187,31 +168,28 @@ test.describe("Remove project", () => {
   });
 
   test("Keep project changes nothing", async ({ page }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByRole("button", { name: "Keep project" }).click();
     await expect(page.getByTestId("remove-project-confirm")).toHaveCount(0);
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+    await expect(page.getByTestId("rail-session-sess-boot")).toBeVisible();
   });
 
-  test("removes the project and its agents, ends its live sessions, and does NOT come back on reload", async ({
+  test("removes the project and its sessions, ends its live ones, and does NOT come back on reload", async ({
     page,
   }) => {
-    // Before: the project, the agent inside it, and its entry in the stored
+    // Before: the project, its sessions, and its entry in the stored
     // directory list.
-    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+    await expect(page.getByTestId("rail-session-sess-boot")).toBeVisible();
     expect(await recentDirPaths(page)).toContain(ACME);
 
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
 
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
-    // The agent inside it goes with it. Left behind it would reappear under
-    // the unrooted-agents header, and a removal that only relocates its rows
-    // has not removed anything.
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
+    // Its session rows go with it: a removal that only relocates its rows has
+    // not removed anything.
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(0);
     // Its LIVE sessions were actually ended — the two the confirm counted, and
     // only those. `killSessionCalls` is the mock's record of the real DELETE.
     await expect
@@ -236,7 +214,7 @@ test.describe("Remove project", () => {
     await page.reload();
     await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(0);
   });
 
   test("comes back when the folder is opened again — removal is not a blocklist", async ({
@@ -247,17 +225,16 @@ test.describe("Remove project", () => {
     // into a hidden project would leave an agent that exists and nothing
     // shows; giving it a root of its own would mint `acme-app/leasing`, which
     // is the accumulation this ticket closes.
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
 
-    await page.getByTestId("add-existing-agents").click();
-    await page.getByTestId("folder-field-input").fill(`${ACME}/leasing`);
-    await page.getByTestId("aw-add").click();
+    await addProject(page, `${ACME}/leasing`);
 
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(page.getByTestId("workflow-leasing")).toBeVisible();
+    // Its agent is back on its map.
+    await page.getByTestId("project-select-acme-app").click();
+    await expect(page.getByTestId("map-agent-leasing")).toBeVisible();
     // And it came back as ONE project, not as a new `acme-app/leasing` row.
     await expect(page.getByTestId("workspace-group-acme-app/leasing")).toHaveCount(0);
   });
@@ -271,7 +248,6 @@ test.describe("Remove project", () => {
     // so it cannot be confused with the `workers` subdirectory row inside it.
     await expect(page.getByTestId("workspace-group-polsia/services/workers")).toBeVisible();
 
-    await openProjectMenu(page, "polsia");
     await page.getByTestId("project-remove-polsia").click();
     await page.getByTestId("remove-project-confirm-btn").click();
 
@@ -282,14 +258,14 @@ test.describe("Remove project", () => {
     const nested = page.getByTestId("workspace-group-workers");
     await expect(nested).toBeVisible();
     await expect(page.getByTestId("workspace-group-polsia/services/workers")).toHaveCount(0);
-    // The nested project's own agents stay reachable...
-    await expect(nested.getByTestId("workflow-queue")).toBeVisible();
-    await expect(nested.getByTestId("workflow-ads-worker")).toBeVisible();
-    // ...while agents that lived only under the closed root are gone, rather
-    // than falling through to the unrooted-agents header.
-    await expect(page.getByTestId("workflow-gateway")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-mailer")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-rollup")).toHaveCount(0);
+    // The nested project's own agents stay reachable on its map...
+    await page.getByTestId("project-select-workers").click();
+    await expect(page.getByTestId("map-agent-queue")).toBeVisible();
+    await expect(page.getByTestId("map-agent-ads-worker")).toBeVisible();
+    // ...while agents that lived only under the closed root are not its.
+    await expect(page.getByTestId("map-agent-gateway")).toHaveCount(0);
+    await expect(page.getByTestId("map-agent-mailer")).toHaveCount(0);
+    await expect(page.getByTestId("map-agent-rollup")).toHaveCount(0);
   });
 });
 

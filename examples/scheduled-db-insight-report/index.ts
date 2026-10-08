@@ -445,13 +445,12 @@ async function resolveConnectionString(
     db = await ctx.sapiom.database.get(handle);
   } catch {
     // Two ways to land here and the API cannot tell them apart: the handle has
-    // never existed, or it expired. A managed Postgres caps at 7d with no renew
-    // verb, so on a schedule the second case is the likely one — which is why the
-    // run reports that it provisioned rather than silently starting over.
+    // never existed, or it was deleted. A Sapiom Postgres is permanent, so on a
+    // schedule the second case means someone removed it — which is why the run
+    // reports that it provisioned rather than silently starting over.
     provisioned = true;
     db = await ctx.sapiom.database.create({
       handle,
-      duration: "7d",
       name: "DB Insight Report demo",
       description: "Demo dataset the scheduled insight report snapshots",
     });
@@ -668,7 +667,7 @@ const snapshot = defineStep({
           : [
               `Reported on the managed demo database \`${handle}\`, not your data.`,
               target.provisioned
-                ? "This run provisioned it: a Sapiom Postgres caps at 7 days with no renew verb, so on a schedule an earlier run's data may have expired."
+                ? "This run provisioned it: no database with that handle existed. A Sapiom Postgres is permanent, so on a schedule this means an earlier run's database was deleted."
                 : null,
               seeded ? "Demo rows were loaded before the snapshot." : null,
               `Set \`${DATABASE_URL_KEY}\` or point \`dbHandle\` at your own database to report on real data.`,

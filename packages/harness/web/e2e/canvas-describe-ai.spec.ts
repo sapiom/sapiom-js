@@ -1,60 +1,34 @@
 /**
- * "Describe with AI" — the canvas overview action that hands the bound agent the
- * job of authoring the deterministic `description` fields in the workflow
- * source. It runs a HIDDEN background macro (headless `claude -p`, never the
- * interactive terminal); the source watcher re-renders the canvas once the
- * agent saves. The button shows an optimistic loading state on click.
+ * "Describe with AI" — the board overview's action that hands a coding agent
+ * the job of authoring the deterministic `description` fields in the agent's
+ * source. Since verbs went by path (flow-map-chat-overlay.md 4.4b, SAP-3839)
+ * it follows the macro rule: a NEW session at the project root whose first
+ * message carries the describe prompt and the agent as context, opened in the
+ * full view. The source watcher re-renders the board once it saves.
  *
- * These tests assert the affordance shows for a bound workflow, that the click
- * runs the background "describe" macro carrying the workflow identity + the
- * source-editing prompt (as the macro `subject`), and that the button reflects a
- * loading state. The actual file edit is the agent's job (a real headless run),
- * out of scope for the mock — we verify the launch via __HARNESS_TEST__.lastMacroRun.
+ * These tests assert the affordance on the agent modal's board, that the click
+ * starts that session with the right first message, and that the Rewrite
+ * variant's confirm can stop it. We verify the launch via
+ * __HARNESS_TEST__.createSessionCalls.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { openAgentModal } from "./mock-navigation";
 
-type MacroRun = { id: string; req: { harnessSessionId: string; workflowPath?: string; subject?: string } };
-
-/** Navigate to a clean slate with the Canvas board (and its overview) visible. */
+/** Navigate to a clean slate with leasing's board open in its agent modal. */
 const loadBoard = async (page: Page): Promise<void> => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await page.evaluate(() => {
-    (
-      window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }
-    ).__HARNESS_TEST__.publish({ type: "canvas.reload", harnessSessionId: "sess-boot" });
-  });
+  await openAgentModal(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
 };
 
-/** Poll for the last macro run recorded by MockApi.runMacro. */
-const lastMacroRun = async (page: Page): Promise<MacroRun> => {
-  let result: MacroRun | null = null;
-  await expect
-    .poll(
-      async () => {
-        result = await page.evaluate(() => {
-          const win = window as unknown as {
-            __HARNESS_TEST__?: {
-              lastMacroRun?: { id: string; req: { harnessSessionId: string; workflowPath?: string; subject?: string } };
-            };
-          };
-          return win.__HARNESS_TEST__?.lastMacroRun ?? null;
-        });
-        return result;
-      },
-      { timeout: 3000, message: "expected lastMacroRun to be set" },
-    )
-    .not.toBeNull();
-  return result!;
-};
-
-/** Clear the recorded macro run so a "nothing ran" assertion is unambiguous. */
-const clearLastMacroRun = (page: Page): Promise<void> =>
-  page.evaluate(() => {
-    const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-    if (win.__HARNESS_TEST__) delete win.__HARNESS_TEST__["lastMacroRun"];
-  });
+/** Every session the mock was asked to create, oldest first. */
+const createCalls = (page: Page) =>
+  page.evaluate(
+    () =>
+      ((window as unknown as { __HARNESS_TEST__?: { createSessionCalls?: unknown[] } }).__HARNESS_TEST__
+        ?.createSessionCalls ?? []) as Array<{ req: { cwd: string; initialPrompt?: string } }>,
+  );
 
 test.describe("Describe with AI", () => {
   test.beforeEach(async ({ page }) => {
@@ -62,7 +36,7 @@ test.describe("Describe with AI", () => {
   });
 
   test("the overview offers a Describe-with-AI action for the bound workflow", async ({ page }) => {
-    // leasing is bound with a live boot session, so a run target exists and the
+    // leasing's modal: the board is the agent's, by path, so the
     // button renders. (leasing's mock overview already has copy, so the label is
     // the 'Rewrite' variant — the affordance is what matters here.)
     const btn = page.getByTestId("canvas-describe-ai");
@@ -74,33 +48,32 @@ test.describe("Describe with AI", () => {
     );
   });
 
-  test("clicking runs the hidden describe macro (workflow + prompt) and shows a loading state", async ({ page }) => {
+  test("clicking starts a project-root session whose first message is the describe job", async ({ page }) => {
     // leasing already has a description → the Rewrite variant confirms first; accept it.
     page.on("dialog", (d) => void d.accept());
-    const btn = page.getByTestId("canvas-describe-ai");
-    await btn.click();
+    const before = (await createCalls(page)).length;
+    await page.getByTestId("canvas-describe-ai").click();
 
-    // It runs the background "describe" macro (not a terminal inject), carrying
-    // the workflow identity + the source-editing prompt as `subject`.
-    const run = await lastMacroRun(page);
-    expect(run.id).toBe("describe");
-    expect(run.req.workflowPath).toBe("/Users/demo/acme-app/leasing");
-    expect(run.req.subject ?? "").toContain("leasing");
-    expect(run.req.subject ?? "").toContain("/Users/demo/acme-app/leasing");
-    expect((run.req.subject ?? "").toLowerCase()).toContain("description");
-    expect(run.req.subject ?? "").toContain("defineStep");
-    expect(run.req.subject ?? "").toContain("whole agent");
-    expect((run.req.subject ?? "").toLowerCase()).not.toContain("workflow");
-
-    // Instant feedback: the button flips to a disabled loading state.
-    await expect(btn).toBeDisabled();
-    await expect(btn).toContainText(/describing/i);
+    // A new session at the PROJECT root, never bound, with the agent's
+    // identity and the source-editing prompt as its first message.
+    await expect.poll(async () => (await createCalls(page)).length).toBe(before + 1);
+    const { req } = (await createCalls(page)).at(-1)!;
+    expect(req.cwd).toBe("/Users/demo/acme-app");
+    const prompt = req.initialPrompt ?? "";
+    expect(prompt).toContain("leasing");
+    expect(prompt).toContain("/Users/demo/acme-app/leasing");
+    expect(prompt.toLowerCase()).toContain("description");
+    expect(prompt).toContain("defineStep");
+    expect(prompt).toContain("whole agent");
+    expect(prompt.toLowerCase()).not.toContain("workflow");
+    // It opens in the full view, leaving the map.
+    await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
   });
 
   test("the Rewrite variant confirms first — dismissing it runs nothing", async ({ page }) => {
     // leasing has an existing description, so the button is the destructive
     // Rewrite. Dismissing the confirm must launch no run and leave the button idle.
-    await clearLastMacroRun(page);
+    const before = (await createCalls(page)).length;
     page.on("dialog", (d) => {
       expect(d.message()).toBe(
         "Rewrite this agent's descriptions? The coding agent will edit the source and may replace text you wrote by hand.",
@@ -108,13 +81,10 @@ test.describe("Describe with AI", () => {
       void d.dismiss();
     });
     await page.getByTestId("canvas-describe-ai").click();
-    // Past the mock's macro delay — if it were going to run, it has.
+    // Past any async start — if a session were going to be made, it has.
     await page.waitForTimeout(500);
-    const run = await page.evaluate(() => {
-      const win = window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } };
-      return win.__HARNESS_TEST__?.lastMacroRun ?? null;
-    });
-    expect(run).toBeNull();
+    expect((await createCalls(page)).length).toBe(before);
+    await expect(page.getByTestId("agent-modal")).toBeVisible();
     await expect(page.getByTestId("canvas-describe-ai")).toBeEnabled();
   });
 });

@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   checkLlmCopySurface,
   checkNoSliceParse,
+  checkStructuredOutputCap,
+  resolvedCapsOf,
   checkOneShotLlmTemplate,
   checkStubStructuredOutput,
   structuredOutputStepsOf,
@@ -281,5 +283,300 @@ test("leaves a text stub for a text-reading step alone", () => {
       },
     }),
     [],
+  );
+});
+
+// ── SAP-3280: a structured call's cap has to cover thinking ─────────────────
+
+test("rejects a structured llm.run capped below the floor", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/AUTHORING.md",
+    source: [
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: {",
+      '    messages: [{ role: "user", content: prompt }],',
+      "    max_tokens: 500,",
+      "  },",
+      "  output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+
+  assert.equal(errors.length, 1);
+  assert.ok(
+    errors[0].includes("examples/AUTHORING.md:4"),
+    "names the cap's line",
+  );
+  assert.ok(errors[0].includes("Thinking is spent out of the same budget"));
+});
+
+test("accepts a structured call sized for thinking plus output", () => {
+  assert.deepEqual(
+    checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages, max_tokens: 4096 },",
+        "  output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },",
+        "});",
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
+test("leaves a deliberately bounded plain-text call alone", () => {
+  // A `textOf` reply capped at 700 is a length choice, and truncating it is visible.
+  // The silent failure is the structured one, so only calls declaring `output` are judged.
+  assert.deepEqual(
+    checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages, max_tokens: 700 },",
+        "});",
+        'const narrative = ctx.sapiom.llm.textOf(res) ?? "";',
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
+test("resolves a cap held in an in-file constant", () => {
+  // The bypass a digits-only check leaves open: write the starved number one line higher.
+  // `fan-out-and-combine` already caps its calls this way.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const PLAN_MAX_TOKENS = 512;",
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: PLAN_MAX_TOKENS },",
+      "  output: { name: PLAN_TOOL, schema: PLAN_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("at 512 tokens"), "reports the resolved value");
+});
+
+test("accepts a named cap that clears the floor", () => {
+  assert.deepEqual(
+    checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        "const PLAN_MAX_TOKENS = 4096;",
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages, max_tokens: PLAN_MAX_TOKENS },",
+        "  output: { name: PLAN_TOOL, schema: PLAN_SCHEMA },",
+        "});",
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
+test("skips a cap it cannot resolve rather than guessing", () => {
+  // An imported or computed cap is the known edge — pinned here so it stays a decision
+  // rather than becoming a surprise. No template does this today.
+  assert.deepEqual(
+    checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        'import { PLAN_MAX_TOKENS } from "./config.js";',
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages, max_tokens: PLAN_MAX_TOKENS },",
+        "  output: { name: PLAN_TOOL, schema: PLAN_SCHEMA },",
+        "});",
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
+test("judges a generic call, with or without a space before the parenthesis", () => {
+  // `llm.run<Verdict>({` is the valid TypeScript form and was invisible to a literal match.
+  for (const open of [
+    "const res = await ctx.sapiom.llm.run<Verdict>({",
+    "const res = await ctx.sapiom.llm.run<Array<Verdict>>({",
+    "const res = await ctx.sapiom.llm.run ({",
+  ]) {
+    const errors = checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        open,
+        "  request: { messages, max_tokens: 256 },",
+        "  output: { name: JUDGE, schema: JUDGE_SCHEMA },",
+        "});",
+      ].join("\n"),
+    });
+    assert.equal(errors.length, 1, open);
+    assert.ok(errors[0].includes("at 256 tokens"), open);
+  }
+});
+
+test("judges a call whose spec opens on the line after the parenthesis", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const res = await ctx.sapiom.llm.run(",
+      "  {",
+      "    request: { messages, max_tokens: 300 },",
+      "    output: { name: JUDGE, schema: JUDGE_SCHEMA },",
+      "  },",
+      ");",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:3"), "names the cap's line");
+});
+
+test("resolves a named cap on a generic call", () => {
+  // The two bypasses combined: the generic form and the starved number one line higher.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const CAP = 1200;",
+      "const res = await ctx.sapiom.llm.run<Verdict>({",
+      "  request: { messages, max_tokens: CAP },",
+      "  output: { name: JUDGE, schema: JUDGE_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("at 1200 tokens"), "reports the resolved value");
+});
+
+test("reads a one-line call as one call, not as the start of the next", () => {
+  // `llm.run(spec)` closes on its own line; a scan that ran on to the next `});` would
+  // attribute the following structured call's cap to it and report it twice.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const a = await ctx.sapiom.llm.run(textSpec);",
+      "const b = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: 256 },",
+      "  output: { name: RANK, schema: RANK_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:3"));
+});
+
+test("does not let a parenthesis inside the prompt end the call early", () => {
+  // A prompt reads "(1-5)" or ":)" often enough; a scan that counted those would close the
+  // call before `max_tokens` and `output` and the starved cap would pass.
+  for (const prompt of [
+    'content: "Rate this ticket (1-5) and smile :)",',
+    "content: 'Close paren first ) then open (',",
+    'content: "Escaped quote \\" then ) inside",',
+  ]) {
+    const errors = checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: {",
+        `    messages: [{ role: "user", ${prompt} }],`,
+        "    max_tokens: 256,",
+        "  },",
+        "  output: { name: RATE, schema: RATE_SCHEMA },",
+        "});",
+      ].join("\n"),
+    });
+    assert.equal(errors.length, 1, prompt);
+    assert.ok(errors[0].includes("index.ts:4"), prompt);
+  }
+});
+
+test("reads through a template-literal prompt, including a nested ${fn(x)} expression", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: {",
+      '    messages: [{ role: "user", content: `Summarize ${title(item)} (briefly) :) ${JSON.stringify({ a: ")" })}',
+      "as a list)` }],",
+      "    max_tokens: 256,",
+      "  },",
+      "  output: { name: SUMMARY, schema: SUMMARY_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:5"), "names the cap's line");
+});
+
+test("ignores parentheses in line and block comments inside the call", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: { messages }, // one turn (see README)",
+      "  /* the cap ) below is",
+      "     starved */",
+      "  max_tokens: 256,",
+      "  output: { name: RATE, schema: RATE_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:5"), "names the cap's line");
+});
+
+test("still ends the call at its real close after a string", () => {
+  // The string handling must not swallow the closing parenthesis that follows it, or the
+  // next call's cap would be attributed to this one.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      'const a = await ctx.sapiom.llm.run({ request: { messages: [{ role: "user", content: "hi )" }], max_tokens: 64 } });',
+      "const b = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: 256 },",
+      "  output: { name: RANK, schema: RANK_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:3"));
+});
+
+test("resolvedCapsOf reads every cap in a document, literal or named", () => {
+  // The floor guard in agent-core's skill-sync test reads caps this way, so a canonical
+  // example cannot hide a starved cap behind a const.
+  assert.deepEqual(
+    resolvedCapsOf(
+      [
+        "const CAP = 1200;",
+        "  request: { messages, max_tokens: CAP },",
+        "  request: { messages, max_tokens: 4096 },",
+        "  request: { messages, max_tokens: IMPORTED },",
+      ].join("\n"),
+    ),
+    [
+      { line: 2, value: 1200 },
+      { line: 3, value: 4096 },
+    ],
+  );
+});
+
+test("judges each call in a file separately", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const a = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: 700 },",
+      "});",
+      "const b = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: 256 },",
+      "  output: { name: RANK, schema: RANK_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+
+  assert.equal(errors.length, 1);
+  assert.ok(
+    errors[0].includes("index.ts:5"),
+    "reports the structured call, not the text one",
   );
 });

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   SharedWorkspaceWatchBroker,
+  normalizeWatchPath,
   type SharedWorkspaceWatchSubscriber,
   type WorkspaceWatchFactory,
   type WorkspaceWatchHandle,
@@ -28,6 +29,21 @@ function subscriber(
     ...overrides,
   };
 }
+
+describe("normalizeWatchPath", () => {
+  it("turns a Windows-reported path into forward-slash form", () => {
+    expect(normalizeWatchPath("src\\agents\\leads\\index.ts", "\\")).toBe("src/agents/leads/index.ts");
+  });
+
+  it("leaves POSIX paths, including ones containing a literal backslash, intact", () => {
+    expect(normalizeWatchPath("src/agents/index.ts", "/")).toBe("src/agents/index.ts");
+    expect(normalizeWatchPath("src/weird\\name.ts", "/")).toBe("src/weird\\name.ts");
+  });
+
+  it("normalizes Windows-reported paths so skip-dir segments are still recognized", () => {
+    expect(normalizeWatchPath("node_modules\\pkg\\index.ts", "\\")).toBe("node_modules/pkg/index.ts");
+  });
+});
 
 describe("SharedWorkspaceWatchBroker", () => {
   beforeEach(async () => {

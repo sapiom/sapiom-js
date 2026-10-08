@@ -14,7 +14,6 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FocusedSessionContextProjection } from "../core/focused-session-context.js";
 import { startServer, type HarnessServer } from "./index.js";
 import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
@@ -110,25 +109,9 @@ describe("served system prompt reaches the launched session", () => {
       expect(prompt).not.toContain("then stop");
       expect(prompt).toContain("ctx.sapiom.llm.run");
       expect(prompt).toContain("sapiom_dev_agents_*");
-      expect(prompt).toContain("build_plan_rebase");
+      expect(prompt).toContain("sapiom_dev_map");
     },
   );
-
-  it("adds an optional focused overlay after the unchanged common project prompt", async () => {
-    server = await boot(async () => SERVED_PROMPT);
-    const focused = (
-      `<focused-project-context trust="untrusted">\n{}\n</focused-project-context>`
-    ) as FocusedSessionContextProjection;
-    const session = await server.sessionManager.create(
-      { cwd, harness: "claude-code" },
-      { focusedContext: () => focused },
-    );
-
-    const prompt = await systemPromptFile(session.id);
-    expect(prompt.match(/<studio-project-agent>/gu)).toHaveLength(1);
-    expect(prompt.indexOf(PROJECT_AGENT_PROMPT_APPENDIX)).toBeLessThan(prompt.indexOf(focused));
-    expect(prompt).toContain(focused);
-  });
 
   it("re-reads it on resume, so a redeployed prompt reaches a continued session", async () => {
     let served = SERVED_PROMPT;

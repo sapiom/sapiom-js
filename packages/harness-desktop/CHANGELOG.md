@@ -1,5 +1,161 @@
 # @sapiom/harness-desktop
 
+## 0.4.16
+
+### Patch Changes
+
+- efef2da: Studio's agent map now shows Jev's role and edge labels, as `sapiom_dev_map` does: cached per project and shown only at p ≥ 0.8. Edges from different agents no longer merge into one shared line, so each line shows who calls whom. `accountEvaluate` is exported from `@sapiom/mcp/map`.
+- Updated dependencies [efef2da]
+  - @sapiom/harness@0.21.2
+
+## 0.4.15
+
+### Patch Changes
+
+- 362c8ba: The project map opens on macOS and Windows when Studio holds the project folder under a different spelling of the same path. On macOS, temp folders sit behind `/var` → `/private/var`. Studio now compares the real paths.
+- Updated dependencies [362c8ba]
+  - @sapiom/harness@0.21.1
+
+## 0.4.14
+
+### Patch Changes
+
+- 2cb4224: The desktop app now ships the `@sapiom/harness` release that computes the project map from code. Agents appear in systems as containers, every agent node opens its folder and agent window, and the map header has a ref selector and refresh. The agent window's Canvas reads its steps from the same map. The release also carries the Assistant access fix from harness 0.19.2.
+- 45c2846: Studio's project map now shows what your code does. It is computed by `sapiom_dev_map`, the same tool your coding agent can call, every time the map opens or the project's code changes. Nothing about the map is stored.
+
+  - **Systems** are agents joined by the launches, events, signals and timers the code proves, drawn as containers. Agents in no system stand alone. Every agent on the map is a real agent folder, so **Open agent** and **Open in Finder** work on every node.
+  - **Agents** show **Deployed** or **Draft** from your signed-in account, a dot when they changed since the version you are looking at, and the resources they share with another agent.
+  - **Versions** come from git. In a git project, the project bar has a version selector (Working copy, `HEAD`, branches) and a refresh.
+
+  Removed, with the stored map:
+
+  - the automatic map generation for new projects;
+  - the "Version N" history;
+  - the proposal tools and links between map nodes and agents;
+  - the `agent_map_read`, `agent_map_validate` and `agent_map_propose` session tools;
+  - the `/api/projects/:id/agent-map/*` routes.
+
+  `@sapiom/agent-map` keeps the Studio project catalog, root bindings and the current-workspace preference. Its map, proposal, version, binding and build-plan exports are removed. Existing `~/.sapiom/harness/agent-map/projects/` folders are no longer read and can be deleted.
+
+- Updated dependencies [fe4a4fb]
+- Updated dependencies [45c2846]
+  - @sapiom/harness@0.21.0
+
+## 0.4.13
+
+### Patch Changes
+
+- Updated dependencies [5a88d10]
+- Updated dependencies [600ac11]
+  - @sapiom/harness@0.20.0
+
+## 0.4.12
+
+### Patch Changes
+
+- e3f45ac: Ship `@sapiom/harness` 0.19.1 in the desktop app: the project map chat with hand-off, the agent modal (Canvas, Runs, Secrets), App Links in the project header, Show in Finder, terminal-first sessions, and Claude Code trust for added projects.
+
+## 0.4.11
+
+### Patch Changes
+
+- Updated dependencies [5a55a34]
+- Updated dependencies [a879a93]
+  - @sapiom/harness@0.19.0
+
+## 0.4.10
+
+### Patch Changes
+
+- d80b6c7: Agent Studio: New project and Add project run the folder step first. The rail's top control is one filled `New project` button with no menu: on desktop it opens the OS folder picker directly, on the web a one-field folder dialog on the shared dialog shell; the chosen folder opens as a project and the new-agent screen opens scoped to it. `Add project` (the Projects header's folder-plus) runs the same step and stops. The `Create new agent` CTA and the `Add existing agents` row are gone, and the desktop host no longer sends new agents to `~/.sapiom/harness/projects` (flow-creation.md rev 4 §4.1, §4.5, §4.7, Q8).
+- 61b969f: Update checks now say when github.com is not reachable from the current network (a proxy or sign-on page answered instead of GitHub) and what to check, instead of reporting a GitHub rate limit, a bare "403 Forbidden", or "no release published yet". The updater log records the response status, server and content-type for support.
+- Updated dependencies [bf4a404]
+- Updated dependencies [afa4569]
+- Updated dependencies [fe5b74d]
+- Updated dependencies [d80b6c7]
+- Updated dependencies [c71bc50]
+- Updated dependencies [969caef]
+- Updated dependencies [54c6362]
+- Updated dependencies [c71bc50]
+- Updated dependencies [c71bc50]
+- Updated dependencies [79a52f9]
+- Updated dependencies [4bbea8d]
+- Updated dependencies [5f3f25b]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [c87678c]
+  - @sapiom/harness@0.18.0
+
+## 0.4.9
+
+### Patch Changes
+
+- 575267a: Bundle the Google and GitHub capability clients and fix local agent checks and runs when dependencies such as Google client libraries call `require()` at runtime.
+
+## 0.4.7
+
+### Patch Changes
+
+- Updated dependencies [758ba40]
+- Updated dependencies [7776065]
+- Updated dependencies [c39980b]
+- Updated dependencies [ad9789a]
+- Updated dependencies [b260034]
+- Updated dependencies [3a60ca7]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [6c96a5b]
+- Updated dependencies [a56328d]
+- Updated dependencies [d26b29b]
+- Updated dependencies [5602d4e]
+- Updated dependencies [4da9937]
+- Updated dependencies [84f5767]
+- Updated dependencies [e28f255]
+- Updated dependencies [768d9e4]
+- Updated dependencies [d72433a]
+- Updated dependencies [ec252d3]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [ed89616]
+- Updated dependencies [e6e510e]
+- Updated dependencies [4b1ebc5]
+- Updated dependencies [93fa8df]
+- Updated dependencies [66542da]
+- Updated dependencies [4936ce9]
+- Updated dependencies [df39da5]
+- Updated dependencies [d775192]
+- Updated dependencies [1a33894]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fc8b07b]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [49e82a9]
+- Updated dependencies [cf3e872]
+- Updated dependencies [f618e7e]
+- Updated dependencies [5602d4e]
+- Updated dependencies [e40920e]
+- Updated dependencies [0f28c4e]
+- Updated dependencies [d07acd9]
+- Updated dependencies [d2be8aa]
+- Updated dependencies [f13cad3]
+- Updated dependencies [2b9f75e]
+- Updated dependencies [c343fd1]
+- Updated dependencies [b177f49]
+- Updated dependencies [48ab09f]
+- Updated dependencies [bcd6167]
+- Updated dependencies [9ddb57c]
+- Updated dependencies [981c940]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [b460c9a]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [42fcacc]
+- Updated dependencies [7776065]
+- Updated dependencies [9b957ca]
+- Updated dependencies [c2128f6]
+- Updated dependencies [e59da42]
+  - @sapiom/harness@0.17.0
+
 ## 0.4.6
 
 ### Patch Changes

@@ -1,11 +1,15 @@
 /**
- * SAP-3200: a project row carries a live-session mark.
+ * The rail's session marks (flow-navigation.md 4.1.2, design-eng NAVIGATION.md;
+ * design.md §4.1: rewritten from SAP-3200's project live mark).
  *
- * `project-live.test.ts` pins the derivation; what a unit test cannot see is
- * whether the mark reaches the row, stands there without being hovered, and
- * LEAVES when the last session ends. The disappearing direction is the half
- * that has to be driven through the browser: it depends on the rail
- * re-deriving from the session list rather than remembering what it drew.
+ * The rail lists sessions now, so "is anything running in here" is answered on
+ * each session's own row rather than by a count on its project: live (filled
+ * green, the `.session-dot` running state), idle (filled neutral: running and
+ * quiet for ten minutes or more), exited (hollow). `rail-sessions.test.ts` pins
+ * the derivation; what a unit test cannot see is whether the mark reaches the
+ * row, stands there without being hovered, and CHANGES when a session ends or
+ * goes quiet. That depends on the rail re-deriving from the session list and
+ * the shell's clock rather than remembering what it drew.
  *
  * Mock fixtures this leans on (web/src/lib/mock-data.ts), at `?seed=0`:
  *   - `sess-boot` and `sess-leasing-2` are both running in /Users/demo/acme-app
@@ -15,14 +19,10 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/** End the active session through the tab menu's confirm dialog. Clicks
- *  straight through, the way `session-scope.spec.ts` does: asserting the
- *  dialog visible first catches it mid pop-in and the confirm is then
- *  unstable. */
+/** End the selected session through its header menu's confirm dialog. */
 const endActiveSession = async (page: Page): Promise<void> => {
   await page.getByTestId("session-menu").click();
   await page.getByTestId("session-end-btn").click();
-  await page.getByTestId("end-session-confirm-btn").click();
 };
 
 test.beforeEach(async ({ page }) => {
@@ -31,33 +31,30 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
 });
 
-test("a project holding live sessions carries the mark, counted and named", async ({
+test("a live session's row carries the live mark, in the dot recipe's running state", async ({
   page,
 }) => {
-  const mark = page.getByTestId("project-live-acme-app");
+  const row = page.getByTestId("rail-session-sess-boot");
+  await expect(row).toHaveAttribute("data-mark", "live");
+  const mark = page.getByTestId("rail-session-mark-sess-boot");
   await expect(mark).toBeVisible();
   // The dot recipe in its running state, not a second one.
   await expect(mark).toHaveClass(/session-dot/);
   await expect(mark).toHaveAttribute("data-status", "running");
-  // Never a bare dot: both live sessions are counted, in both the accessible
-  // name and the tooltip.
-  await expect(mark).toHaveAttribute("aria-label", "2 live sessions");
-  await expect(mark).toHaveAttribute("data-tooltip", "2 live sessions");
+  // Never a bare dot: it says what it means.
+  await expect(mark).toHaveAttribute("aria-label", "Live: the agent is working");
 });
 
 test("the mark STANDS: it is on screen without hovering the row", async ({
   page,
 }) => {
-  // The `+` and the ⋮ beside it are hover-revealed (`.workspace-row-action`,
-  // opacity 0 at rest). The mark answers a question asked at a glance, so it
-  // must not be.
-  //
-  // The element's own opacity is not enough on its own: it would still read 1
-  // inside a faded ancestor. So walk the chain to the row and multiply, which
+  // The row's × is hover-revealed. The mark answers a question asked at a
+  // glance, so it must not be. Walk the chain to the row and multiply, which
   // catches the mark being nested into a hover-revealed cluster as well as the
   // mark being given `opacity: 0` directly.
+  await page.locator(".rail-header-label").hover();
   const effective = await page
-    .getByTestId("project-live-acme-app")
+    .getByTestId("rail-session-mark-sess-boot")
     .evaluate((element) => {
       let node: HTMLElement | null = element as HTMLElement;
       let opacity = 1;
@@ -74,114 +71,88 @@ test("the mark STANDS: it is on screen without hovering the row", async ({
   expect(effective).toEqual({ opacity: 1, insideHoverAction: false });
 });
 
-test("a project whose only session has exited carries no mark", async ({
+test("an exited session's row carries the hollow exited mark", async ({
   page,
 }) => {
-  await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
-  await expect(page.getByTestId("project-live-rfq-agent")).toHaveCount(0);
-});
-
-test("a project with no sessions at all carries no mark", async ({ page }) => {
-  await expect(
-    page.getByTestId("workspace-group-onboarding-flow"),
-  ).toBeVisible();
-  await expect(page.getByTestId("project-live-onboarding-flow")).toHaveCount(0);
-});
-
-test("the mark counts down as sessions end, and goes when the last one does", async ({
-  page,
-}) => {
-  const mark = page.getByTestId("project-live-acme-app");
-  await expect(mark).toHaveAttribute("aria-label", "2 live sessions");
-
-  // Both live sessions in the fixtures are acme-app's, so ending them one at a
-  // time walks the mark down and then off.
-  await endActiveSession(page);
-  await expect(mark).toHaveAttribute("aria-label", "1 live session");
-  await expect(mark).toBeVisible();
-
-  await endActiveSession(page);
-  await expect(page.getByTestId("project-live-acme-app")).toHaveCount(0);
-});
-
-test("agent rows are untouched: the mark is a fact about a project", async ({
-  page,
-}) => {
-  const leasing = page.getByTestId("workflow-leasing");
-  await expect(leasing).toBeVisible();
-  // The rail still lists no sessions and an agent row still carries only its
-  // deploy glyph.
-  await expect(leasing.locator(".session-dot")).toHaveCount(0);
-  await expect(
-    page.locator("[data-testid^='workflow-session-dot-']"),
-  ).toHaveCount(0);
-  await expect(page.locator("[data-testid^='rail-session-']")).toHaveCount(0);
-});
-
-/**
- * The Group axis carries the SAME mark on its headers, by the membership rule
- * `liveSessionsOnAgents` pins: bound to a member, or unbound in a member's own
- * folder.
- *
- * The positive needs a session BOUND to a group member, which no fixture had:
- * every live mock session belongs to `acme-app`, which has one agent and so
- * renders no group sections, while `deep` has the groups and no sessions. So
- * `?mockBoundSession=1` seeds exactly one, bound to `gateway`, behind its own
- * parameter, invisible to every other spec that counts sessions on `deep`.
- */
-const openGroupAxis = async (page: Page): Promise<void> => {
-  await page.getByTestId("history-trigger").click();
-  await page.getByTestId("filing-group-by").selectOption("group");
-  await page.keyboard.press("Escape");
-  // The create row appears only once the stored arrangement AND the launch
-  // edges have loaded, so it is the honest "the groups are drawn" signal.
-  await expect(page.getByTestId("group-create-polsia")).toBeVisible();
-};
-
-test.describe("the Group axis", () => {
-  test("group headers carry no mark when nothing under them is live", async ({
-    page,
-  }) => {
-    await page.goto("/?mockFixtures=deep");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openGroupAxis(page);
-
-    await expect(
-      page.locator('[data-testid^="group-row-"]').first(),
-    ).toBeVisible();
-    await expect(page.locator('[data-testid^="group-live-"]')).toHaveCount(0);
-
-    // The project row above them still reports its own sessions, so the axis
-    // has not simply stopped deriving.
-    await expect(page.getByTestId("project-live-acme-app")).toHaveAttribute(
-      "aria-label",
-      "2 live sessions",
-    );
+  await expect(page.getByTestId("rail-session-sess-rfq")).toHaveAttribute(
+    "data-mark",
+    "exited",
+  );
+  const mark = page.getByTestId("rail-session-mark-sess-rfq");
+  await expect(mark).not.toHaveAttribute("data-status", "running");
+  const style = await mark.evaluate((element) => {
+    const css = getComputedStyle(element);
+    return { background: css.backgroundColor, border: css.borderTopWidth };
   });
+  expect(style.background).toBe("rgba(0, 0, 0, 0)");
+  expect(style.border).not.toBe("0px");
+});
 
-  test("the header of the group holding the bound session carries the mark, alone", async ({
+test("a project with no sessions at all carries no session rows", async ({
+  page,
+}) => {
+  await expect(
+    page.getByTestId("rail-project-onboarding-flow").locator(".rail-session-row"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("rail-project-onboarding-flow")).toHaveAttribute(
+    "data-session-count",
+    "0",
+  );
+});
+
+test("ending a session drops its row to the exited mark, and the row stays", async ({
+  page,
+}) => {
+  await expect.poll(() =>
+    page.getByTestId("session-context").getAttribute("data-session-id"),
+  ).toBe("sess-boot");
+  await endActiveSession(page);
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-mark",
+    "exited",
+  );
+  // The other live session in the same project is untouched.
+  await expect(page.getByTestId("rail-session-sess-leasing-2")).toHaveAttribute(
+    "data-mark",
+    "live",
+  );
+});
+
+test("the mark is about a session, so the rail carries no agent rows and no project count", async ({
+  page,
+}) => {
+  await expect(page.locator(".rail-list [data-testid^='workflow-']")).toHaveCount(0);
+  await expect(page.locator("[data-testid^='project-live-']")).toHaveCount(0);
+  // A session bound to an agent names it on the row instead.
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-agent",
+    "leasing",
+  );
+});
+
+test.describe("idle", () => {
+  test("a running session quiet for ten minutes reads idle, without any event arriving", async ({
     page,
   }) => {
-    await page.goto("/?mockFixtures=deep&mockBoundSession=1");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openGroupAxis(page);
-
-    const gateway = page.getByTestId("group-live-gateway");
-    await expect(gateway).toBeVisible();
-    await expect(gateway).toHaveAttribute("data-status", "running");
-    await expect(gateway).toHaveAttribute("aria-label", "1 live session");
-
-    // Its neighbours in the same project are unaffected: one session belongs to
-    // one group, and `mailer` holds none of it.
-    await expect(page.getByTestId("group-live-mailer")).toHaveCount(0);
-    await expect(page.getByTestId("group-live-Ungrouped")).toHaveCount(0);
-    await expect(page.locator('[data-testid^="group-live-"]')).toHaveCount(1);
-
-    // And the project row it sits under counts the same session, by
-    // containment: the session is rooted at the polsia root.
-    await expect(page.getByTestId("project-live-polsia")).toHaveAttribute(
-      "aria-label",
-      "1 live session",
+    await page.clock.install();
+    await page.goto("/?seed=0");
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-mark",
+      "live",
     );
+    // The shell's clock ticks the marks; no session event is involved.
+    await page.clock.fastForward("11:00");
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-mark",
+      "idle",
+    );
+    const mark = page.getByTestId("rail-session-mark-sess-boot");
+    await expect(mark).not.toHaveAttribute("data-status", "running");
+    await expect(mark).toHaveAttribute(
+      "aria-label",
+      "Idle: running, quiet for a while",
+    );
+    // The tooltip is the one word; the aria-label above keeps the meaning.
+    await expect(mark).toHaveAttribute("data-tooltip", "Idle");
   });
 });

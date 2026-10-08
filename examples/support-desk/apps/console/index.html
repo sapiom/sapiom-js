@@ -1,0 +1,2298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Support Desk</title>
+    <style>
+      :root {
+        --bg: #f5f5f3;
+        --panel: #ffffff;
+        --ink: #1c1c1a;
+        --muted: #6b6b66;
+        --line: #e3e3de;
+        --soft: #f0f0ec;
+        --accent: #2f5bd3;
+        --on-accent: #ffffff;
+        --ok: #1f7a43;
+        --warn: #a15c00;
+        --bad: #b42318;
+        --s-new: #2f5bd3;
+        --s-on_you: #a15c00;
+        --s-on_customer: #6b46c1;
+        --s-on_hold: #6b6b66;
+        --s-closed: #1f7a43;
+        --sel: #eef2fc;
+        --shadow: 0 8px 28px rgba(28, 28, 26, 0.08);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #141413;
+          --panel: #1c1c1a;
+          --ink: #ecece6;
+          --muted: #9a9a92;
+          --line: #33332f;
+          --soft: #262623;
+          --accent: #7d9bff;
+          --on-accent: #10131c;
+          --ok: #5cc98a;
+          --warn: #e0a24a;
+          --bad: #f07a6e;
+          --s-new: #7d9bff;
+          --s-on_you: #e0a24a;
+          --s-on_customer: #b39bf0;
+          --s-on_hold: #9a9a92;
+          --s-closed: #5cc98a;
+          --sel: #222a3d;
+          --shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      /* Grid and flex containers set display, which would otherwise beat the hidden attribute. */
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          sans-serif;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      code {
+        font:
+          12px ui-monospace,
+          monospace;
+      }
+      .wrap {
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      header {
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      header .wrap {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        align-items: center;
+        justify-content: space-between;
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
+      header h1 {
+        font-size: 15px;
+        margin: 0;
+      }
+      button {
+        font: inherit;
+        font-size: 13px;
+        border: 1px solid var(--line);
+        background: var(--soft);
+        color: var(--ink);
+        border-radius: 6px;
+        padding: 4px 10px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      button.danger {
+        border-color: var(--bad);
+        color: var(--bad);
+        background: transparent;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      button:focus-visible,
+      select:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      tr:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      select,
+      textarea,
+      input[type="text"],
+      input[type="number"] {
+        font: inherit;
+        font-size: 13px;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--ink);
+        min-width: 0;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .warn {
+        color: var(--warn);
+      }
+      .bad {
+        color: var(--bad);
+      }
+      .num {
+        font-variant-numeric: tabular-nums;
+      }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.warn {
+        background: var(--warn);
+      }
+      .dot.bad {
+        background: var(--bad);
+      }
+      .pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 0 8px;
+        font-size: 12px;
+        line-height: 18px;
+        white-space: nowrap;
+        border: 1px solid currentColor;
+      }
+      .toast {
+        font-size: 12px;
+        padding: 2px 10px;
+        border-radius: 6px;
+        background: var(--soft);
+        max-width: min(100%, 720px);
+        overflow-wrap: anywhere;
+      }
+
+      /* summary strip: the status counts are the board's filters */
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 18px;
+        align-items: center;
+        padding: 12px 0 4px;
+      }
+      .stat {
+        display: inline-flex;
+        gap: 6px;
+        align-items: baseline;
+        white-space: nowrap;
+      }
+      .stat strong {
+        font-variant-numeric: tabular-nums;
+      }
+      button.stat {
+        background: none;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 2px 0;
+        font-size: 14px;
+      }
+      button.stat[aria-pressed="true"] {
+        border-bottom-color: currentColor;
+      }
+      .stat .dot {
+        align-self: center;
+      }
+      .summary .sep {
+        width: 1px;
+        height: 16px;
+        background: var(--line);
+      }
+
+      /* tabs: daily work on the left, the README and test tools on the right */
+      /* One row that scrolls on a phone, so System and Testing stay on the right. */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+        margin: 8px 0 16px;
+      }
+      .tabs .spacer {
+        flex: 1;
+        min-width: 12px;
+      }
+      .tabs button {
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        background: transparent;
+        padding: 8px 12px;
+        color: var(--muted);
+      }
+      .tabs button.secondary {
+        font-size: 12px;
+      }
+      .tabs button[aria-selected="true"] {
+        border-bottom-color: var(--accent);
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .card h2 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 0 0 10px;
+        font-weight: 600;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .card h2 .row,
+      .card h2 .note {
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 400;
+      }
+      .stack {
+        display: grid;
+        gap: 16px;
+        min-width: 0;
+        align-content: start;
+      }
+      .view {
+        padding-bottom: 32px;
+      }
+
+      /* tickets: the board, with the drawer on the right */
+      .tickets {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 16px;
+        align-items: start;
+      }
+      .tickets.solo {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .scroll {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 10px 8px 0;
+        border-top: 1px solid var(--line);
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+      th {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--muted);
+        border-top: 0;
+        padding-top: 0;
+      }
+      td.title {
+        white-space: normal;
+        width: 100%;
+        min-width: 200px;
+      }
+      .clamp {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      #board tbody tr {
+        cursor: pointer;
+      }
+      #board tbody tr:hover {
+        background: var(--soft);
+      }
+      #board tbody tr[aria-selected="true"] {
+        background: var(--sel);
+      }
+      .prio-urgent {
+        color: var(--bad);
+        font-weight: 600;
+      }
+      .prio-high {
+        color: var(--warn);
+      }
+      .linear-state {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .drawer {
+        position: sticky;
+        top: 8px;
+        box-shadow: var(--shadow);
+        display: grid;
+        gap: 14px;
+      }
+      .drawer .head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: start;
+      }
+      .drawer h3 {
+        margin: 2px 0 0;
+        font-size: 16px;
+        line-height: 1.35;
+        text-wrap: balance;
+      }
+      .drawer .close-x {
+        background: none;
+        border: 0;
+        font-size: 18px;
+        line-height: 1;
+        color: var(--muted);
+        padding: 2px 4px;
+      }
+      dl.facts,
+      dl.kv {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 6px 14px;
+        margin: 0;
+      }
+      dl.kv {
+        gap: 2px 10px;
+        margin-top: 4px;
+      }
+      dl.facts dt,
+      dl.kv dt {
+        color: var(--muted);
+      }
+      dl.facts dd,
+      dl.kv dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+      }
+      .actions {
+        display: grid;
+        gap: 8px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+      .actions .label {
+        font-size: 12px;
+        color: var(--muted);
+        width: 100%;
+      }
+      .draft-text {
+        background: var(--soft);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 13px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 240px;
+        overflow: auto;
+      }
+      .acct-ticket {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        padding: 4px 0;
+      }
+      .acct-ticket span:nth-child(2) {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .below {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+      }
+      .metric .v {
+        font-size: 22px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric .k {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 34px;
+        margin-top: 6px;
+      }
+      .bars i {
+        flex: 1;
+        background: var(--accent);
+        opacity: 0.35;
+        border-radius: 2px 2px 0 0;
+        min-height: 1px;
+      }
+      .bars i:last-child {
+        opacity: 1;
+      }
+      @media (max-width: 1000px) {
+        .tickets,
+        .below {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .drawer {
+          position: static;
+          order: -1;
+        }
+      }
+
+      /* fleet */
+      .agent {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 6px 0;
+        border-top: 1px solid var(--line);
+      }
+      .agent:first-child {
+        border-top: 0;
+      }
+      .agent .name {
+        flex: 1;
+        min-width: 0;
+      }
+      .agent details {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .agent summary {
+        cursor: pointer;
+      }
+      .agent ul {
+        margin: 4px 0 0;
+        padding-left: 16px;
+      }
+      .switch {
+        position: relative;
+        width: 34px;
+        height: 20px;
+        flex: none;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: var(--soft);
+        padding: 0;
+      }
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--muted);
+        transition: left 0.15s;
+      }
+      .switch[aria-checked="true"] {
+        background: var(--ok);
+        border-color: var(--ok);
+      }
+      .switch[aria-checked="true"]::after {
+        left: 16px;
+        background: #fff;
+      }
+      textarea {
+        width: 100%;
+        min-height: 140px;
+        resize: vertical;
+      }
+      .form {
+        display: grid;
+        gap: 10px;
+      }
+      .form label {
+        display: grid;
+        gap: 4px;
+        font-size: 13px;
+      }
+      .form label.check {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .sla-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px 10px;
+      }
+      .sla-grid input {
+        width: 100%;
+      }
+      .kb-form {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .kb-form label {
+        display: grid;
+        gap: 2px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .kb-off td:not(:last-child) {
+        color: var(--muted);
+      }
+      .confirm {
+        border: 1px solid var(--bad);
+        border-radius: 6px;
+        padding: 8px;
+      }
+
+      /* system, settings and testing */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+        gap: 16px;
+        align-items: start;
+      }
+      .settings {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+      }
+      .flow {
+        display: flex;
+        flex-direction: column;
+      }
+      .box {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 10px;
+        background: var(--bg);
+      }
+      .box strong {
+        display: block;
+      }
+      .arrow {
+        text-align: center;
+        color: var(--muted);
+        padding: 3px 0;
+        font-size: 12px;
+      }
+      .side {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+        gap: 6px;
+      }
+      .sysagent {
+        padding: 8px 0;
+        border-top: 1px solid var(--line);
+      }
+      .sysagent:first-child {
+        border-top: 0;
+      }
+      .cues {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+        gap: 12px;
+      }
+      .cue .text {
+        margin: 6px 0;
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        #board tbody tr {
+          transition: background 120ms;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <h1>Support Desk</h1>
+        <div id="toast" class="toast" hidden role="status"></div>
+        <label class="row muted"
+          >Desk<select id="desk" aria-label="Desk"></select
+        ></label>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div class="summary" id="summary" aria-label="Summary">
+        <span class="muted">loading…</span>
+      </div>
+
+      <nav class="tabs" role="tablist">
+        <button role="tab" id="tab-tickets" aria-selected="true">
+          Tickets
+        </button>
+        <button role="tab" id="tab-kb" aria-selected="false">Knowledge</button>
+        <button role="tab" id="tab-settings" aria-selected="false">
+          Settings
+        </button>
+        <span class="spacer"></span>
+        <button
+          role="tab"
+          id="tab-system"
+          class="secondary"
+          aria-selected="false"
+        >
+          System
+        </button>
+        <button
+          role="tab"
+          id="tab-testing"
+          class="secondary"
+          aria-selected="false"
+        >
+          Testing
+        </button>
+      </nav>
+
+      <!-- Tickets -->
+      <section id="view-tickets" class="view">
+        <div class="tickets solo" id="tickets">
+          <div class="card">
+            <h2>
+              <span
+                >Tickets <span class="note muted" id="board-note"></span
+              ></span>
+            </h2>
+            <div class="scroll"><table id="board"></table></div>
+          </div>
+          <aside
+            class="card drawer"
+            id="drawer"
+            aria-label="Ticket"
+            hidden
+          ></aside>
+        </div>
+
+        <div class="below">
+          <section class="card">
+            <h2>
+              Metrics
+              <span class="row"
+                ><select id="mt-window" aria-label="Window">
+                  <option value="24h">24 hours</option>
+                  <option value="7d">7 days</option>
+                </select></span
+              >
+            </h2>
+            <div id="metrics" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>
+              Failed events
+              <button id="rcpt-refresh">Refresh</button>
+            </h2>
+            <div id="receipts" class="muted">loading…</div>
+          </section>
+        </div>
+      </section>
+
+      <!-- Knowledge -->
+      <section id="view-kb" class="view" hidden>
+        <div class="card">
+          <h2>
+            Team knowledge
+            <span class="row"
+              ><button id="kb-new" class="mut primary">
+                New article
+              </button></span
+            >
+          </h2>
+          <p class="muted" style="margin-top: 0">
+            The copilot reads these on every draft. A <strong>policy</strong> is
+            a rule it always follows; an <strong>answer</strong> is a Q&amp;A it
+            may quote. An article is for one desk or for all desks; this tab
+            lists the selected desk's articles and the all-desks ones. Changes
+            apply to the next draft.
+          </p>
+          <div class="kb-form">
+            <label
+              >Public docs (all desks): a site that publishes
+              <code>llms.txt</code>, or the <code>llms.txt</code> URL itself.
+              Empty: the copilot drafts from these articles only.<input
+                id="kb-docs-url"
+                type="url"
+                placeholder="https://docs.example.com"
+            /></label>
+            <div class="row">
+              <button id="kb-docs-save" class="mut">Save docs source</button>
+              <button id="kb-docs-clear" class="mut">Remove</button>
+              <span id="kb-docs-state" class="hint"></span>
+            </div>
+          </div>
+          <div id="kb-form" class="kb-form" hidden>
+            <label
+              >Kind<select id="kb-kind">
+                <option value="policy">policy</option>
+                <option value="answer">answer</option>
+              </select></label
+            >
+            <label>Applies to<select id="kb-desk"></select></label>
+            <label
+              >Title<input id="kb-title" type="text" maxlength="200"
+            /></label>
+            <label
+              >Body<textarea id="kb-body" maxlength="8000"></textarea>
+            </label>
+            <div class="row">
+              <button id="kb-save" class="mut primary">Save</button>
+              <button id="kb-cancel">Cancel</button>
+              <span id="kb-error" class="muted"></span>
+            </div>
+          </div>
+          <div class="scroll">
+            <div id="kb-list" class="muted">loading…</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="view-settings" class="view" hidden>
+        <div class="grid settings">
+          <section class="card">
+            <h2>Desk <span class="note muted" id="set-desk-name"></span></h2>
+            <div class="form">
+              <label
+                >Name<input id="set-name" type="text" maxlength="80"
+              /></label>
+              <label
+                >Triage channel<input
+                  id="set-triage"
+                  type="text"
+                  placeholder="C0123ABCD" /><span
+                  class="hint"
+                  id="set-triage-link"
+                ></span
+              ></label>
+              <label
+                >Linear team<input id="set-linear-team" type="text" /><span
+                  class="hint"
+                  id="set-linear-team-name"
+                ></span
+              ></label>
+              <label
+                >Linear project<input
+                  id="set-linear-project"
+                  type="text" /><span class="hint" id="set-linear-name"></span
+              ></label>
+              <label>On-call<select id="set-oncall"></select></label>
+              <label
+                >First nudge after (minutes)<input
+                  id="set-nudge"
+                  type="number"
+                  min="1"
+                  step="1"
+              /></label>
+              <label class="check"
+                ><input id="set-default" type="checkbox" /> Default desk for
+                channels without one</label
+              >
+              <div class="row">
+                <button id="set-desk-save" class="mut primary">
+                  Save desk
+                </button>
+                <span id="set-desk-state" class="hint"></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Escalation to a person</h2>
+            <div class="form">
+              <label
+                >Levels (minutes)<input
+                  id="esc-levels"
+                  type="text"
+                  placeholder="30, 120"
+                  aria-label="Escalation levels in minutes"
+              /></label>
+              <label
+                >Group to mention<input
+                  id="esc-group"
+                  type="text"
+                  placeholder="S0123ABCD"
+                  aria-label="Slack user group id"
+              /></label>
+              <label
+                >On-call override<input
+                  id="esc-oncall"
+                  type="text"
+                  aria-label="On-call override"
+              /></label>
+              <div class="row">
+                <button id="esc-save" class="mut primary">Save</button>
+                <button id="esc-off" class="mut">Turn off</button>
+              </div>
+              <div id="esc-state" class="hint">loading…</div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>
+              Nudges, digest and customer messages
+              <span class="note muted">every desk</span>
+            </h2>
+            <div class="form">
+              <label
+                >Repeat nudges every (minutes)<input
+                  id="set-repeat"
+                  type="text"
+                /><span class="hint"
+                  >While the reason holds; the last gap repeats. Empty: the
+                  default. <code>0</code>: nudge once.</span
+                ></label
+              >
+              <div>
+                <div style="font-size: 13px; margin-bottom: 4px">
+                  Digest flags open tickets older than (hours)
+                </div>
+                <div class="sla-grid">
+                  <label class="hint"
+                    >urgent<input id="sla-urgent" type="number" min="1"
+                  /></label>
+                  <label class="hint"
+                    >high<input id="sla-high" type="number" min="1"
+                  /></label>
+                  <label class="hint"
+                    >normal<input id="sla-normal" type="number" min="1"
+                  /></label>
+                  <label class="hint"
+                    >low<input id="sla-low" type="number" min="1"
+                  /></label>
+                </div>
+                <div class="hint" id="set-digest" style="margin-top: 4px"></div>
+              </div>
+              <label class="check"
+                ><input id="set-notify" type="checkbox" /> Tell the customer
+                when Linear marks the fix Done</label
+              >
+              <div class="row">
+                <button id="set-fleet-save" class="mut primary">Save</button>
+                <span id="set-fleet-state" class="hint"
+                  >Applies on the next run. No redeploy.</span
+                >
+              </div>
+            </div>
+          </section>
+
+          <section class="card" id="sla">
+            <h2>SLA <span class="note muted">every desk</span></h2>
+            <p class="hint">
+              First- and next-response targets per priority, in minutes; with
+              <code>businessHours: true</code> a target counts only minutes
+              inside the business window. Set, they replace the desks' nudge
+              minutes.
+            </p>
+            <textarea id="sla-json" spellcheck="false"></textarea>
+            <div class="row">
+              <button id="sla-save" class="mut primary">Save</button>
+              <button id="sla-clear" class="mut">Use nudge minutes</button>
+              <span id="sla-state" class="hint"></span>
+            </div>
+            <div id="sla-error" class="bad" style="white-space: pre-wrap"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- System -->
+      <section id="view-system" class="view grid" hidden>
+        <div class="stack">
+          <section class="card">
+            <h2>
+              Fleet
+              <span class="row">
+                <button id="pause" class="mut">Pause</button>
+                <button id="resume" class="mut">Resume</button>
+              </span>
+            </h2>
+            <div id="fleet" class="muted">loading…</div>
+            <div class="hint" style="margin-top: 6px">
+              Pause and Resume leave urgent-pager alone.
+            </div>
+          </section>
+          <section class="card">
+            <h2>Channels</h2>
+            <div id="sys-channels" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>How events come in</h2>
+            <div class="flow">
+              <div class="side">
+                <div class="box">
+                  <strong>Slack</strong>Events API (messages, reactions) and
+                  interactivity (button clicks)
+                </div>
+                <div class="box">
+                  <strong>Agents and the Console</strong
+                  ><code>ctx.sapiom.events.emit</code> (<code>issue.*</code>); a
+                  Console ticket action emits
+                  <code>slack.block_actions</code>
+                </div>
+              </div>
+              <div class="arrow">↓ Slack only</div>
+              <div class="box">
+                <strong>Sapiom Slack connector</strong>checks the Slack
+                signature, drops bot posts and edits, emits
+                <code>slack.message.created</code> /
+                <code>slack.reaction_added</code> /
+                <code>slack.block_actions</code>
+              </div>
+              <div class="arrow">↓ all</div>
+              <div class="box">
+                <strong>Engine receipt</strong>one per event, deduped on the
+                Slack event id, trigger id or emit id
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Trigger match</strong>by exact event type, one fire per
+                matching agent
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Run</strong>the agent's steps, in a sandbox
+              </div>
+              <div class="arrow" style="margin-top: 6px">separately</div>
+              <div class="box">
+                <strong>Timers and crons</strong>the controller runs for one
+                ticket when that ticket's timer fires; the digest runs on a
+                daily schedule. The watchdog runs on the engine's
+                <code>sapiom.run.failed</code>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="stack">
+          <section class="card">
+            <h2>Agents</h2>
+            <div id="sys-agents" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>Shared database</h2>
+            <div id="sys-tables" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>Linear</h2>
+            <div id="sys-linear" class="muted">loading…</div>
+          </section>
+        </div>
+      </section>
+
+      <!-- Testing -->
+      <section id="view-testing" class="view" hidden>
+        <section class="card" style="margin-bottom: 16px">
+          <h2>Testing</h2>
+          <div class="form">
+            <div class="row">
+              <button id="ctl-run" class="mut">Reset ticket timers</button>
+              <span class="hint"
+                >One controller run that sets every open ticket's timer again;
+                anything already due fires within a minute.</span
+              >
+            </div>
+            <div class="row">
+              <button id="reset" class="mut danger">Reset board</button>
+              <span class="hint">Closes every open ticket on this desk.</span>
+            </div>
+            <div id="reset-confirm" hidden class="confirm">
+              <div style="margin-bottom: 6px">
+                Close <strong id="open-count">every open</strong> ticket on desk
+                <strong id="reset-desk"></strong> and redraw its card?
+              </div>
+              <div class="row">
+                <button id="reset-yes" class="mut danger">
+                  Yes, close them
+                </button>
+                <button id="reset-no">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <div class="row" style="margin-bottom: 10px">
+          <span class="muted"
+            >Cue cards: type these in the customer channel as a person; the
+            connector drops bot posts.</span
+          >
+          <label class="row"
+            ><input type="checkbox" id="cue-prefix" checked /> include the
+            <code id="cue-prefix-text"></code> prefix</label
+          >
+        </div>
+        <div id="cues" class="cues"></div>
+      </section>
+    </main>
+
+    <script>
+      const TAB_KEY = "console-tab";
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      const link = (url, text) =>
+        url
+          ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`
+          : esc(text);
+      const none = '<span class="muted">—</span>';
+      const store = {
+        get(k) {
+          try {
+            return localStorage.getItem(k) || "";
+          } catch {
+            return "";
+          }
+        },
+        set(k, v) {
+          try {
+            v ? localStorage.setItem(k, v) : localStorage.removeItem(k);
+          } catch {}
+        },
+      };
+
+      const STATUS = {
+        new: "New",
+        on_you: "On You",
+        on_customer: "On Customer",
+        on_hold: "On Hold",
+        closed: "Closed",
+      };
+      const statusPill = (s) =>
+        `<span class="pill" style="color:var(--s-${esc(s)})">${esc(STATUS[s] || s)}</span>`;
+      const prio = (p) =>
+        `<span class="prio-${esc(p || "none")}">${esc(p || "—")}</span>`;
+
+      // --- mutating buttons ----------------------------------------------------------------
+      /** Mutating buttons carry .mut and are disabled only by state (data-off) or while running. */
+      function syncButtons() {
+        for (const b of document.querySelectorAll(".mut"))
+          b.disabled = b.dataset.off === "1" || b.dataset.busy === "1";
+      }
+      function setOff(el, off) {
+        el.dataset.off = off ? "1" : "0";
+      }
+
+      /** Every result shows in the header for a few seconds, beside the controls. */
+      let toastTimer;
+      // Set when the page's preview session is gone (a 401): every later request would fail the
+      // same way, so the page stops calling and keeps one message up instead.
+      let expired = false;
+      function sessionGone() {
+        if (expired) return;
+        expired = true;
+        log(
+          "Session expired FAILED: this Console page's session ended. Reopen the Console from its Sapiom link (apps.sapiom.ai/<org>/<console>) to keep working.",
+        );
+      }
+      function log(line) {
+        if (expired && !/^Session expired/.test(line)) return;
+        const t = $("toast");
+        t.textContent = line;
+        t.className = `toast ${/FAILED/.test(line) ? "bad" : "ok"}`;
+        t.hidden = false;
+        clearTimeout(toastTimer);
+        if (!expired) toastTimer = setTimeout(() => (t.hidden = true), 8000);
+      }
+
+      // --- desks ---------------------------------------------------------------------------
+      /** The selected desk's slug, kept in the query string so a link opens on the same desk. */
+      let desk = new URLSearchParams(location.search).get("desk") || "";
+      let desks = [];
+      let desksReady = false;
+      const deskName = (slug) =>
+        desks.find((d) => d.slug === slug)?.name || slug;
+      /** `path` scoped to the selected desk. */
+      const scoped = (path) =>
+        desk
+          ? `${path}${path.includes("?") ? "&" : "?"}desk=${encodeURIComponent(desk)}`
+          : path;
+      async function loadDesks() {
+        try {
+          desks = (await get("/api/desks")).desks;
+        } catch (e) {
+          log(`desks FAILED: ${e.message}`);
+          return;
+        }
+        if (!desks.some((d) => d.slug === desk))
+          desk = (desks.find((d) => d.isDefault) || desks[0] || {}).slug || "";
+        $("desk").innerHTML = desks
+          .map(
+            (d) =>
+              `<option value="${esc(d.slug)}">${esc(d.name)}${d.isDefault ? " (default)" : ""}</option>`,
+          )
+          .join("");
+        $("desk").value = desk;
+        $("reset-desk").textContent = deskName(desk);
+      }
+      $("desk").onchange = () => {
+        desk = $("desk").value;
+        history.replaceState(null, "", `?desk=${encodeURIComponent(desk)}`);
+        $("reset-desk").textContent = deskName(desk);
+        $("reset-confirm").hidden = true;
+        Object.assign(S, { counts: null, failed: null, metrics: null });
+        filter = null;
+        closeDrawer();
+        people = { members: [], defaultActor: null };
+        loadPeople();
+        refreshBoard();
+        refreshReceipts();
+        refreshMetrics();
+        refreshEscalation();
+        if (!$("view-kb").hidden) loadKb();
+        if (!$("view-settings").hidden) loadSettings();
+        closeKbForm();
+      };
+
+      /**
+       * fetch, except that a 401 ends the page's requests. No answer can be a dropped connection
+       * that comes back, so it shows a warning, polling goes on, and the next answer clears it.
+       */
+      let unreachable = false;
+      async function call(path, init) {
+        if (expired) throw new Error("session expired");
+        let r;
+        try {
+          r = await fetch(path, init);
+        } catch (err) {
+          unreachable = true;
+          log(
+            `Unreachable FAILED: the Console server did not answer (${err.message}); retrying`,
+          );
+          throw err;
+        }
+        if (unreachable) {
+          unreachable = false;
+          if (/^Unreachable/.test($("toast").textContent))
+            $("toast").hidden = true;
+        }
+        if (r.status === 401) {
+          sessionGone();
+          throw new Error("session expired");
+        }
+        return r;
+      }
+      async function get(path) {
+        const r = await call(path, { cache: "no-store" });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || r.statusText);
+        return body;
+      }
+      async function post(path, body, method = "POST") {
+        const r = await call(path, {
+          method,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body || {}),
+        });
+        const out = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(out.error || r.statusText);
+        return out;
+      }
+
+      function summarize(out) {
+        if (out.agents)
+          return out.agents.map(summarize).join("; ") || "nothing to do";
+        if (out.key)
+          return `${out.key} ${out.on ? "on" : "off"} (created [${out.created}] resumed [${out.resumed}] deleted [${out.deleted}])`;
+        if (out.closed)
+          return `closed ${out.closed.length}: ${out.closed.map((c) => `#${c.number} card ${c.card}`).join(", ") || "none open"}`;
+        if (out.executionId || out.id)
+          return `execution ${out.executionId || out.id}`;
+        return JSON.stringify(out).slice(0, 300);
+      }
+
+      /** Run a mutating action: disable its button while it runs, show the ids, refresh. */
+      async function act(btn, label, path, body) {
+        btn.dataset.busy = "1";
+        btn.disabled = true;
+        try {
+          log(`${label}: ${summarize(await post(path, body))}`);
+        } catch (e) {
+          log(`${label} FAILED: ${e.message}`);
+        } finally {
+          await Promise.all([refreshFleet(), refreshBoard()]);
+          btn.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+
+      // --- summary strip -------------------------------------------------------------------
+      const S = { counts: null, failed: null, metrics: null };
+      /** The board's status filter; null is every open ticket. */
+      let filter = null;
+      const usd = (v) => (v == null ? "—" : `$${v.toFixed(v < 1 ? 3 : 2)}`);
+      const secs = (v) => (v == null ? "—" : `${v.toFixed(1)} s`);
+      function renderSummary() {
+        const parts = [];
+        if (S.counts)
+          parts.push(
+            Object.keys(STATUS)
+              .map(
+                (k) =>
+                  `<button class="stat" data-filter="${k}" aria-pressed="${filter === k}"><span class="dot" style="background:var(--s-${k})"></span>${STATUS[k]} <strong>${S.counts[k] || 0}</strong></button>`,
+              )
+              .join(""),
+          );
+        if (S.failed)
+          parts.push(
+            `<span class="stat"><span class="dot ${S.failed.length ? "bad" : "ok"}"></span><strong>${S.failed.length}</strong> failed events</span>`,
+          );
+        if (S.metrics && S.metrics.cost.meanUsd != null)
+          parts.push(
+            `<span class="stat"><span class="muted">${S.metrics.window} cost / ticket</span> <strong>${usd(S.metrics.cost.meanUsd)}</strong></span>`,
+          );
+        if (parts.length)
+          $("summary").innerHTML = parts.join('<span class="sep"></span>');
+      }
+      $("summary").onclick = (e) => {
+        const b = e.target.closest("button[data-filter]");
+        if (!b) return;
+        filter = filter === b.dataset.filter ? null : b.dataset.filter;
+        renderSummary();
+        refreshBoard();
+      };
+
+      // --- fleet ---------------------------------------------------------------------------
+      let fleet = [];
+      async function refreshFleet() {
+        try {
+          fleet = await get("/api/fleet");
+          renderFleet();
+          renderSystemAgents();
+        } catch (e) {
+          $("fleet").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      const open = new Set();
+      function renderFleet() {
+        $("fleet").className = "";
+        $("fleet").innerHTML = fleet
+          .map((a) => {
+            if (!a.deployed)
+              return `<div class="agent"><span class="dot"></span><div class="name"><strong>${esc(a.key)}</strong><div class="warn" style="font-size:12px">not deployed: run <code>pnpm run setup --only ${esc(a.key)}</code></div></div></div>`;
+            const active = a.triggers.filter(
+              (t) => t.state === "active",
+            ).length;
+            const dot = a.on ? "ok" : active ? "warn" : "";
+            const list = a.triggers
+              .map(
+                (t) =>
+                  `<li><code>${esc(t.label)}</code> ${t.id ? `#${esc(t.id)}` : ""} <span class="${t.state === "active" ? "ok" : t.state === "paused" ? "warn" : ""}">${t.state}</span></li>`,
+              )
+              .join("");
+            return `<div class="agent"><span class="dot ${dot}"></span><div class="name"><strong>${esc(a.key)}</strong>
+              <details data-key="${esc(a.key)}" ${open.has(a.key) ? "open" : ""}><summary>${active} of ${a.triggers.length} trigger${a.triggers.length === 1 ? "" : "s"}</summary><ul>${list}</ul></details></div>
+              <button class="switch mut" role="switch" aria-checked="${a.on}" aria-label="${esc(a.key)} ${a.on ? "on" : "off"}" data-agent="${esc(a.key)}"></button></div>`;
+          })
+          .join("");
+        for (const d of $("fleet").querySelectorAll("details"))
+          d.ontoggle = () =>
+            d.open ? open.add(d.dataset.key) : open.delete(d.dataset.key);
+        for (const b of $("fleet").querySelectorAll("button[data-agent]")) {
+          const on = b.getAttribute("aria-checked") !== "true";
+          b.onclick = () =>
+            act(
+              b,
+              `${on ? "on" : "off"} ${b.dataset.agent}`,
+              `/api/agents/${b.dataset.agent}/${on ? "on" : "off"}`,
+            );
+        }
+        const ctl = fleet.find((a) => a.key === "controller");
+        setOff($("ctl-run"), !ctl?.deployed);
+        syncButtons();
+      }
+      $("pause").onclick = (e) =>
+        act(e.target, "pause fleet", "/api/fleet/pause");
+      $("resume").onclick = (e) =>
+        act(e.target, "resume fleet", "/api/fleet/resume");
+      $("ctl-run").onclick = (e) =>
+        act(e.target, "controller run now", "/api/controller/run");
+
+      // --- board ---------------------------------------------------------------------------
+      let openCount = 0;
+      let rows = [];
+      function age(t) {
+        const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
+        if (s < 90) return `${Math.round(s)}s`;
+        if (s < 5400) return `${Math.round(s / 60)}m`;
+        if (s < 129600) return `${Math.round(s / 3600)}h`;
+        return `${Math.round(s / 86400)}d`;
+      }
+      const linearCell = (i) =>
+        i.linear
+          ? `${link(i.linearUrl, i.linear)}${i.linearState ? ` <span class="linear-state">· ${esc(i.linearState)}</span>` : ""}`
+          : none;
+      async function refreshBoard() {
+        const forDesk = desk;
+        const forFilter = filter;
+        try {
+          const b = await get(
+            scoped(`/api/board${filter ? `?status=${filter}` : ""}`),
+          );
+          if (desk !== forDesk || filter !== forFilter) return;
+          S.counts = b.counts;
+          openCount = ["new", "on_you", "on_customer", "on_hold"].reduce(
+            (n, s) => n + (b.counts[s] || 0),
+            0,
+          );
+          setOff($("reset"), openCount === 0);
+          syncButtons();
+          renderSummary();
+          rows = b.issues;
+          renderBoard();
+        } catch (e) {
+          $("board").innerHTML =
+            `<tbody><tr><td class="bad">${esc(e.message)}</td></tr></tbody>`;
+        }
+      }
+      function renderBoard() {
+        $("board-note").textContent = filter
+          ? `${STATUS[filter]}, ${rows.length}`
+          : `open, ${rows.length}`;
+        const selectedId = drawer?.kind === "ticket" ? drawer.id : null;
+        $("board").innerHTML =
+          `<thead><tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>SLA</th><th>Owner</th><th>Draft</th><th>Linear</th><th>Age</th></tr></thead><tbody>` +
+          (rows.length
+            ? rows
+                .map(
+                  (i) =>
+                    `<tr tabindex="0" data-ticket="${esc(i.id)}" aria-selected="${i.id === selectedId}"><td class="num">#${i.number}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td><a href="#" data-account="${esc(i.accountId)}">${esc(i.account)}</a></td><td>${statusPill(i.status)}</td><td>${prio(i.priority)}</td><td class="${i.slaLabel?.includes("breached") ? "bad" : "muted"}">${i.slaLabel ? esc(i.slaLabel) : none}</td><td>${i.owner ? esc(i.owner) : none}</td><td>${i.draft ? esc(i.draft) : none}</td><td>${linearCell(i)}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
+                )
+                .join("")
+            : `<tr><td colspan="10" class="muted">${filter ? "No tickets with this status." : "No open tickets."}</td></tr>`) +
+          "</tbody>";
+      }
+      $("board").onclick = (e) => {
+        const acct = e.target.closest("a[data-account]");
+        if (acct) {
+          e.preventDefault();
+          return openDrawer("account", acct.dataset.account);
+        }
+        if (e.target.closest("a")) return;
+        const row = e.target.closest("tr[data-ticket]");
+        if (row) openDrawer("ticket", row.dataset.ticket);
+      };
+      $("board").onkeydown = (e) => {
+        const row = e.target.closest?.("tr[data-ticket]");
+        if (row && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          openDrawer("ticket", row.dataset.ticket);
+        }
+      };
+
+      // --- drawer: one ticket, or one account ----------------------------------------------
+      /** What the drawer shows: { kind: "ticket" | "account", id }, or null. */
+      let drawer = null;
+      let drawerSeq = 0;
+      function openDrawer(kind, id) {
+        drawer = { kind, id };
+        $("tickets").classList.remove("solo");
+        $("drawer").hidden = false;
+        $("drawer").innerHTML = '<span class="muted">loading…</span>';
+        renderBoard();
+        refreshDrawer();
+      }
+      function closeDrawer() {
+        drawer = null;
+        $("drawer").hidden = true;
+        $("tickets").classList.add("solo");
+        renderBoard();
+      }
+      async function refreshDrawer() {
+        if (!drawer) return;
+        // A redraw would close the picker under the viewer's cursor.
+        if (document.activeElement?.id === "actor") return;
+        const seq = ++drawerSeq;
+        const { kind, id } = drawer;
+        try {
+          const data = await get(
+            scoped(`/api/${kind === "ticket" ? "tickets" : "accounts"}/${id}`),
+          );
+          if (seq !== drawerSeq || !drawer) return;
+          // Keep the focus on a button the redraw replaces, so a keyboard user stays in place.
+          const focused = document.activeElement?.dataset?.act;
+          $("drawer").innerHTML =
+            kind === "ticket" ? ticketHtml(data) : accountHtml(data);
+          if (focused)
+            $("drawer").querySelector(`[data-act="${focused}"]`)?.focus();
+          syncButtons();
+        } catch (e) {
+          if (seq !== drawerSeq) return;
+          $("drawer").innerHTML =
+            `<div class="head"><span class="bad">${esc(e.message)}</span><button class="close-x" data-close aria-label="Close panel">×</button></div>`;
+        }
+      }
+      const head = (over, title) =>
+        `<div class="head"><div><span class="muted num">${over}</span><h3>${esc(title)}</h3></div><button class="close-x" data-close aria-label="Close panel">×</button></div>`;
+      // --- acting as: the App Link forwards no viewer identity, so the viewer says who they are --
+      let people = { members: [], defaultActor: null };
+      const actorKey = () => `console-actor:${desk}`;
+      /** The remembered choice when it is still on the desk's list, else the desk's on-call. */
+      const actor = () => {
+        const kept = store.get(actorKey());
+        return people.members.some((m) => m.id === kept)
+          ? kept
+          : people.defaultActor || "";
+      };
+      async function loadPeople() {
+        const forDesk = desk;
+        try {
+          const p = await get(scoped("/api/members"));
+          if (desk === forDesk) people = p;
+        } catch (e) {
+          log(`acting-as list FAILED: ${e.message}`);
+        }
+      }
+      const actorPicker = () =>
+        `<label class="row hint">Acting as<select id="actor" aria-label="Acting as">${
+          people.members
+            .map(
+              (m) =>
+                `<option value="${esc(m.id)}"${m.id === actor() ? " selected" : ""}>${esc(m.name)}</option>`,
+            )
+            .join("") || '<option value="">nobody on this desk</option>'
+        }</select></label>`;
+
+      /** Button state survives a redraw: a click in flight keeps its button disabled. */
+      const busy = new Set();
+      const actButton = (t, verb, label, cls = "") =>
+        `<button class="mut ${cls}" data-act="${verb}" data-busy="${busy.has(`${t.id}:${verb}`) ? "1" : "0"}">${label}</button>`;
+      function ticketHtml(t) {
+        const closed = t.status === "closed";
+        const draftActions = t.pendingDraft
+          ? `<div class="row"><span class="label">Draft</span>${actButton(t, "approve", "Approve and send", "primary")}${actButton(t, "escalate", "Escalate")}${actButton(t, "dismiss", "Dismiss")}</div>`
+          : "";
+        const ticketActions = [
+          !t.owner && !closed ? actButton(t, "take", "Take") : "",
+          t.status === "on_hold" ? actButton(t, "resolve", "Resolved") : "",
+          !closed ? actButton(t, "close", "Close", "danger") : "",
+        ].join("");
+        return `${head(`#${t.number} · ${esc(t.account)}`, t.title || "(untitled)")}
+          ${closed ? "" : actorPicker()}
+          <dl class="facts">
+            <dt>Status</dt><dd>${statusPill(t.status)}</dd>
+            <dt>Priority</dt><dd>${prio(t.priority)}</dd>
+            <dt>Owner</dt><dd>${t.owner ? esc(t.owner) : '<span class="muted">nobody</span>'}</dd>
+            <dt>Draft</dt><dd>${t.draft ? esc(t.draft) : '<span class="muted">none yet</span>'}</dd>
+            <dt>Linear</dt><dd>${linearCell(t)}</dd>
+            <dt>Account</dt><dd><a href="#" data-account="${esc(t.accountId)}">${esc(t.account)}</a></dd>
+            <dt>Age</dt><dd>${age(t.createdAt)}</dd>
+          </dl>
+          <div class="links">
+            ${t.slackUrl ? link(t.slackUrl, "Slack thread ↗") : '<span class="muted">No triage card yet</span>'}
+            ${t.linear && t.linearUrl ? link(t.linearUrl, `${t.linear} ↗`) : ""}
+          </div>
+          ${t.pendingDraft ? `<div class="draft-text">${esc(t.pendingDraft.text)}</div>` : ""}
+          ${
+            draftActions || ticketActions
+              ? `<div class="actions">${draftActions}${ticketActions ? `<div class="row"><span class="label">Ticket</span>${ticketActions}</div>` : ""}
+                <div class="hint">The agents handle these as if clicked in Slack by the person you act as, and the Slack card redraws.</div></div>`
+              : ""
+          }`;
+      }
+      function accountHtml(a) {
+        return `${head("Account", a.name)}
+          <dl class="facts">
+            <dt>Channel</dt><dd>${link(`https://slack.com/archives/${a.channelId}`, a.channelId)}</dd>
+            <dt>Open</dt><dd class="num">${a.open}</dd>
+            <dt>Closed (30 d)</dt><dd class="num">${a.closedLast30Days}</dd>
+            <dt>Last contact</dt><dd>${a.lastContactAt ? `${age(a.lastContactAt)} ago` : '<span class="muted">none</span>'}</dd>
+          </dl>
+          <div><div class="hint" style="margin-bottom:4px">Tickets</div>
+            ${
+              a.tickets
+                .map(
+                  (t) =>
+                    `<div class="acct-ticket"><a href="#" data-open="${esc(t.id)}">#${t.number}</a><span>${esc(t.title || "(untitled)")}</span>${statusPill(t.status)}</div>`,
+                )
+                .join("") || '<span class="muted">none</span>'
+            }
+          </div>`;
+      }
+      $("drawer").onchange = (e) => {
+        if (e.target.id === "actor") store.set(actorKey(), e.target.value);
+      };
+      $("drawer").onclick = async (e) => {
+        if (e.target.closest("[data-close]")) return closeDrawer();
+        const acct = e.target.closest("a[data-account]");
+        if (acct) {
+          e.preventDefault();
+          return openDrawer("account", acct.dataset.account);
+        }
+        const openT = e.target.closest("a[data-open]");
+        if (openT) {
+          e.preventDefault();
+          return openDrawer("ticket", openT.dataset.open);
+        }
+        const b = e.target.closest("button[data-act]");
+        if (!b || drawer?.kind !== "ticket") return;
+        const id = drawer.id;
+        const verb = b.dataset.act;
+        const key = `${id}:${verb}`;
+        busy.add(key);
+        b.dataset.busy = "1";
+        syncButtons();
+        try {
+          const out = await post(scoped(`/api/tickets/${id}/actions/${verb}`), {
+            actor: actor(),
+          });
+          log(
+            `${verb} #${out.number}: sent (receipt ${out.receiptId}${out.duplicate ? ", already sent" : ""}); the Slack card redraws when the agent finishes`,
+          );
+        } catch (err) {
+          log(`${verb} FAILED: ${err.message}`);
+        }
+        // The agent's run takes a few seconds; the button stays disabled until the drawer catches up.
+        setTimeout(() => {
+          busy.delete(key);
+          refreshBoard();
+          refreshDrawer();
+        }, 4000);
+      };
+
+      // --- failed events -------------------------------------------------------------------
+      const clock = (t) => (t ? new Date(t).toLocaleTimeString() : "—");
+      async function refreshReceipts() {
+        try {
+          const { receipts: list, truncated } = await get(
+            scoped("/api/receipts/failed"),
+          );
+          S.failed = list;
+          renderSummary();
+          $("receipts").className = "";
+          $("receipts").innerHTML = list.length
+            ? `<table>${list
+                .map(
+                  (r) =>
+                    `<tr><td class="num">${esc(r.id)}</td><td style="white-space:normal">${esc(r.eventType)}${r.fleetWide ? ` <span class="muted" title="Raised before any ticket existed, so it cannot be tied to a desk; it shows on every desk.">(fleet-wide)</span>` : ""}<div class="muted" style="font-size:12px">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button class="mut" data-replay="${esc(r.id)}">Replay</button></td></tr>`,
+                )
+                .join("")}</table>`
+            : `<span class="muted">No failed deliveries to fleet agents.</span>`;
+          if (truncated)
+            $("receipts").innerHTML +=
+              `<div class="muted" style="margin-top:6px">Truncated: only the newest receipts were read; older failures may be missing.</div>`;
+          for (const b of $("receipts").querySelectorAll("button[data-replay]"))
+            b.onclick = () =>
+              act(
+                b,
+                `replay receipt ${b.dataset.replay}`,
+                `/api/receipts/${b.dataset.replay}/replay`,
+              ).then(refreshReceipts);
+          syncButtons();
+        } catch (e) {
+          $("receipts").innerHTML =
+            `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("rcpt-refresh").onclick = refreshReceipts;
+
+      // --- metrics -------------------------------------------------------------------------
+      async function refreshMetrics() {
+        try {
+          const m = await get(
+            scoped(`/api/metrics?window=${$("mt-window").value}`),
+          );
+          S.metrics = m;
+          renderSummary();
+          const c = m.cost;
+          const versus =
+            c.meanUsd == null
+              ? ""
+              : c.meanUsd <= c.targetUsdPerTicket
+                ? "ok"
+                : "bad";
+          const L = m.latency;
+          const top = Math.max(1, ...m.perDay);
+          const bars =
+            m.perDay.length > 1
+              ? `<div class="bars" aria-hidden="true">${m.perDay.map((n) => `<i style="height:${Math.round((n / top) * 100)}%" title="${n}"></i>`).join("")}</div>`
+              : "";
+          $("metrics").className = "";
+          $("metrics").innerHTML = `
+            <div class="metrics">
+              <div class="metric"><div class="v ${versus}">${usd(c.meanUsd)}</div><div class="k">cost per ticket (mean) · p90 ${usd(c.p90Usd)}</div></div>
+              <div class="metric"><div class="v">${secs(L.messageToDraftCard.p50)}</div><div class="k">message → draft, p50 · p90 ${secs(L.messageToDraftCard.p90)}</div></div>
+              <div class="metric"><div class="v">${secs(L.messageToCard.p50)}</div><div class="k">message → ticket card, p50 · p90 ${secs(L.messageToCard.p90)}</div></div>
+              <div class="metric"><div class="v">${m.issues}</div><div class="k">tickets opened${m.perDay.length > 1 ? `, per day` : ""}</div>${bars}</div>
+            </div>
+            <div class="hint" style="margin-top:8px">Target ${usd(c.targetUsdPerTicket)} / ticket. Total ${usd(c.totalUsd)} (LLM ${usd(c.llmUsd)} · capability ${usd(c.capabilityUsd)}).${m.capped ? ` Cost and timing cover the newest ${m.priced} tickets.` : ""}${m.runsMissing ? ` ${m.runsMissing} run${m.runsMissing === 1 ? "" : "s"} not priced yet; reload to fill in.` : ""}${c.unpriced ? ` ${c.unpriced} ticket${c.unpriced === 1 ? "" : "s"} with no priced run are left out of the mean.` : ""} Sandbox compute may show $0 on internal orgs.</div>`;
+        } catch (e) {
+          $("metrics").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("mt-window").onchange = refreshMetrics;
+
+      // --- settings ------------------------------------------------------------------------
+      let settings = null;
+      const SLA = ["urgent", "high", "normal", "low"];
+      const minutesList = (v) =>
+        v
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map(Number);
+      function cronText(d) {
+        if (!d) return "No digest trigger in fleet.json.";
+        const m = /^(\d+) (\d+) \* \* \*$/.exec(d.cron);
+        const when = m
+          ? `daily at ${m[2].padStart(2, "0")}:${m[1].padStart(2, "0")}`
+          : `on cron ${d.cron}`;
+        return `Digest posts ${when} ${d.timezone || "UTC"}; the schedule is set by setup (fleet.json).`;
+      }
+      function showSettings(s) {
+        settings = s;
+        const d = s.desk;
+        $("set-desk-name").textContent = d.name;
+        $("set-name").value = d.name;
+        $("set-triage").value = d.triageChannel;
+        $("set-linear-team").value = d.linearTeamId || "";
+        $("set-linear-project").value = d.linearProjectId || "";
+        $("set-linear-name").innerHTML = s.linearProject?.url
+          ? link(s.linearProject.url, s.linearProject.name)
+          : "";
+        $("set-triage-link").innerHTML = link(
+          `https://slack.com/archives/${d.triageChannel}`,
+          "Open the channel in Slack ↗",
+        );
+        $("set-linear-team-name").textContent = s.linearTeam || "";
+        // The stored on-call stays selectable even when they are not on the desk's list.
+        const people = [...s.members];
+        if (d.oncallSlackId && !people.some((m) => m.id === d.oncallSlackId))
+          people.unshift({
+            id: d.oncallSlackId,
+            name: s.oncallName || d.oncallSlackId,
+          });
+        $("set-oncall").innerHTML =
+          '<option value="">nobody</option>' +
+          people
+            .map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`)
+            .join("");
+        $("set-oncall").value = d.oncallSlackId || "";
+        $("set-nudge").value = d.nudgeMinutes;
+        $("set-default").checked = d.isDefault;
+        // A default desk stops being one only when another desk becomes the default.
+        $("set-default").disabled = d.isDefault;
+        const f = s.fleet;
+        const repeat = f["nudge.repeat_minutes"];
+        $("set-repeat").value = repeat
+          ? repeat.length
+            ? repeat.join(", ")
+            : "0"
+          : "";
+        $("set-repeat").placeholder =
+          `default ${s.defaults["nudge.repeat_minutes"].join(", ")}`;
+        for (const k of SLA) {
+          $(`sla-${k}`).value = f["digest.sla_hours"]?.[k] ?? "";
+          $(`sla-${k}`).placeholder = s.defaults["digest.sla_hours"][k];
+        }
+        $("set-digest").textContent = cronText(s.digest);
+        $("set-notify").checked = f["linear_sync.notify_customer"];
+      }
+      /** Prefilled when `sla` is unset: the README example. */
+      const SLA_EXAMPLE = {
+        businessHours: {
+          timeZone: "America/New_York",
+          days: [1, 2, 3, 4, 5],
+          start: "09:00",
+          end: "17:00",
+        },
+        targets: {
+          urgent: {
+            firstResponseMinutes: 15,
+            nextResponseMinutes: 15,
+            businessHours: false,
+          },
+          high: {
+            firstResponseMinutes: 60,
+            nextResponseMinutes: 60,
+            businessHours: false,
+          },
+          normal: {
+            firstResponseMinutes: 480,
+            nextResponseMinutes: 480,
+            businessHours: true,
+          },
+          low: {
+            firstResponseMinutes: 480,
+            nextResponseMinutes: 480,
+            businessHours: true,
+          },
+        },
+      };
+      // A tab switch must not replace edits not yet saved, nor an older response a newer one.
+      let slaDirty = false;
+      let slaSeq = 0;
+      // Bumped on every keystroke, so a save reloads the editor only if nothing was typed meanwhile.
+      let slaRev = 0;
+      $("sla-json").oninput = () => {
+        slaDirty = true;
+        slaRev++;
+      };
+      // The label follows the server, even when the editor keeps the operator's text.
+      function showSlaState(sla) {
+        $("sla-state").textContent = sla
+          ? "in use"
+          : "not set: the desks' nudge minutes apply (example shown)";
+      }
+      async function loadSla(force = false) {
+        if (slaDirty && !force) return;
+        const seq = ++slaSeq;
+        const rev = slaRev;
+        $("sla-error").textContent = "";
+        try {
+          const { sla } = await get("/api/sla");
+          if (seq !== slaSeq) return;
+          showSlaState(sla);
+          // Typing during the GET wins even over a forced reload.
+          if (slaRev !== rev || (slaDirty && !force)) return;
+          $("sla-json").value = JSON.stringify(sla || SLA_EXAMPLE, null, 2);
+          slaDirty = false;
+        } catch (e) {
+          $("sla-error").textContent = e.message;
+        }
+      }
+      /**
+       * One SLA write at a time: a PUT and a DELETE in flight together could land in either order and
+       * bring back a cleared SLA. Uses the page's busy flag, which syncButtons would otherwise undo.
+       */
+      async function slaWrite(request, done) {
+        const buttons = [$("sla-save"), $("sla-clear")];
+        for (const b of buttons) b.dataset.busy = "1";
+        syncButtons();
+        const rev = slaRev;
+        $("sla-error").textContent = "";
+        try {
+          try {
+            showSlaState((await request()).sla);
+          } catch (e) {
+            $("sla-error").textContent = e.message;
+            return;
+          }
+          log(done);
+          if (slaRev === rev) await loadSla(true);
+          refreshBoard();
+        } finally {
+          for (const b of buttons) b.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("sla-save").onclick = () => {
+        let body;
+        try {
+          body = JSON.parse($("sla-json").value);
+        } catch {
+          $("sla-error").textContent = "not valid JSON";
+          return;
+        }
+        return slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved");
+      };
+      $("sla-clear").onclick = () =>
+        slaWrite(
+          () => post("/api/sla", undefined, "DELETE"),
+          "SLA removed: the desks' nudge minutes apply",
+        );
+      async function loadSettings() {
+        const forDesk = desk;
+        try {
+          const s = await get(scoped("/api/settings"));
+          if (desk === forDesk) showSettings(s);
+        } catch (e) {
+          $("set-desk-state").className = "hint bad";
+          $("set-desk-state").textContent = e.message;
+        }
+      }
+      async function saveSettings(btn, path, body, state) {
+        btn.dataset.busy = "1";
+        syncButtons();
+        $(state).className = "hint";
+        try {
+          showSettings(await post(scoped(path), body, "PUT"));
+          $(state).textContent = "Saved. Applies on the next run.";
+          if (path.endsWith("/desk")) await loadDesks();
+        } catch (e) {
+          $(state).className = "hint bad";
+          $(state).textContent = e.message;
+        } finally {
+          btn.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("set-desk-save").onclick = (e) => {
+        if (!settings) return;
+        const d = settings.desk;
+        const text = (id) => $(id).value.trim();
+        const body = {};
+        if (text("set-name") !== d.name) body.name = text("set-name");
+        if (text("set-triage") !== d.triageChannel)
+          body.triageChannel = text("set-triage");
+        if (text("set-linear-team") !== (d.linearTeamId || ""))
+          body.linearTeamId = text("set-linear-team") || null;
+        if (text("set-linear-project") !== (d.linearProjectId || ""))
+          body.linearProjectId = text("set-linear-project") || null;
+        if (text("set-oncall") !== (d.oncallSlackId || ""))
+          body.oncallSlackId = text("set-oncall") || null;
+        if (Number($("set-nudge").value) !== d.nudgeMinutes)
+          body.nudgeMinutes = Number($("set-nudge").value);
+        if ($("set-default").checked && !d.isDefault) body.isDefault = true;
+        if (!Object.keys(body).length) {
+          $("set-desk-state").textContent = "Nothing changed.";
+          return;
+        }
+        saveSettings(e.target, "/api/settings/desk", body, "set-desk-state");
+      };
+      $("set-fleet-save").onclick = (e) => {
+        const repeat = $("set-repeat").value.trim();
+        const sla = {};
+        for (const k of SLA)
+          if ($(`sla-${k}`).value !== "") sla[k] = Number($(`sla-${k}`).value);
+        saveSettings(
+          e.target,
+          "/api/settings/fleet",
+          {
+            "nudge.repeat_minutes":
+              repeat === "" ? null : repeat === "0" ? [] : minutesList(repeat),
+            "digest.sla_hours": Object.keys(sla).length ? sla : null,
+            "linear_sync.notify_customer": $("set-notify").checked,
+          },
+          "set-fleet-state",
+        );
+      };
+
+      function showEscalation({ entry, oncallFallback }) {
+        $("esc-levels").value = entry ? entry.levels.join(", ") : "";
+        $("esc-group").value = entry?.groupId || "";
+        $("esc-oncall").value = entry?.oncallSlackId || "";
+        $("esc-oncall").placeholder = oncallFallback || "desk on-call";
+        $("esc-state").className = "hint";
+        $("esc-state").textContent = entry
+          ? `On: level ${entry.levels.map((m, i) => `${i + 1} at ${m} min`).join(", ")}.`
+          : "Off: this desk never escalates to a person.";
+      }
+      // `busy` rather than `disabled`, which syncButtons resets on every `.mut` button.
+      function escalationLocked(on) {
+        for (const id of ["esc-save", "esc-off"])
+          $(id).dataset.busy = on ? "1" : "0";
+        syncButtons();
+      }
+      // Only the newest call may touch the form: a slug check alone misses a switch away and back.
+      let escalationSeq = 0;
+      // One request at a time, so the server applies saves in click order and a load sees them.
+      let escalationQueue = Promise.resolve();
+      async function escalationCall(body) {
+        const seq = ++escalationSeq;
+        const path = scoped("/api/escalation");
+        escalationLocked(true);
+        const request = escalationQueue.then(() =>
+          body ? post(path, body, "PUT") : get(path),
+        );
+        escalationQueue = request.catch(() => {});
+        try {
+          const out = await request;
+          if (seq !== escalationSeq) return;
+          showEscalation(out);
+          escalationLocked(false);
+        } catch (e) {
+          if (seq !== escalationSeq) return;
+          $("esc-state").className = "hint bad";
+          $("esc-state").textContent = e.message;
+          // A failed save leaves the loaded form valid; a failed load leaves nothing to save.
+          escalationLocked(!body);
+        }
+      }
+      const refreshEscalation = () => escalationCall(null);
+      $("esc-save").onclick = () => {
+        const body = { levels: minutesList($("esc-levels").value) };
+        const group = $("esc-group").value.trim();
+        const oncall = $("esc-oncall").value.trim();
+        if (group) body.groupId = group;
+        if (oncall) body.oncallSlackId = oncall;
+        escalationCall(body);
+      };
+      $("esc-off").onclick = () => escalationCall({ off: true });
+
+      // --- testing -------------------------------------------------------------------------
+      $("reset").onclick = () => {
+        $("open-count").textContent = `${openCount} open`;
+        $("reset-confirm").hidden = false;
+      };
+      $("reset-no").onclick = () => ($("reset-confirm").hidden = true);
+      $("reset-yes").onclick = async (e) => {
+        $("reset-confirm").hidden = true;
+        await act(
+          e.target,
+          `reset board (${deskName(desk)})`,
+          scoped("/api/board/reset"),
+          { confirm: "reset" },
+        );
+      };
+
+      let cues = { prefix: "", steps: [] };
+      const cueText = (c) =>
+        $("cue-prefix").checked && cues.prefix
+          ? `${cues.prefix} ${c.text}`
+          : c.text;
+      async function loadCues() {
+        cues = await get("/api/cues");
+        $("cue-prefix-text").textContent = cues.prefix;
+        $("cues").innerHTML = cues.steps
+          .map(
+            (c, n) =>
+              `<section class="card cue"><h2>${n + 1}. ${esc(c.label)} <button data-cue="${n}">Copy</button></h2><div class="text">${esc(c.text)}</div><div class="muted">${esc(c.expect)}</div></section>`,
+          )
+          .join("");
+        for (const b of $("cues").querySelectorAll("button[data-cue]")) {
+          b.onclick = async () => {
+            const text = cueText(cues.steps[Number(b.dataset.cue)]);
+            try {
+              await navigator.clipboard.writeText(text);
+            } catch {
+              // Clipboard blocked (insecure context, iframe): fall back to a selected textarea.
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+            }
+            b.textContent = "Copied";
+            setTimeout(() => (b.textContent = "Copy"), 1500);
+          };
+        }
+      }
+
+      // --- system --------------------------------------------------------------------------
+      let systemLoaded = false;
+      let systemAgents = [];
+      async function loadSystem() {
+        try {
+          const s = await get("/api/system");
+          systemLoaded = true;
+          const ch = (c, name) => link(c.url, `${name} (${c.channelId})`);
+          $("sys-channels").className = "";
+          $("sys-channels").innerHTML = `
+            <div class="flow" style="gap:6px">
+            ${s.slack.customers
+              .map(
+                (c) =>
+                  `<div class="box"><strong>${ch(c, "Customer channel")}</strong>Stands in for <em>${esc(c.accountName)}</em>'s shared Slack Connect channel (desk <code>${esc(c.desk || "default")}</code>). The customer posts here; the bot only reacts and posts the approved reply in the customer's thread.</div>`,
+              )
+              .join("")}
+            ${s.desks
+              .map(
+                (d) =>
+                  `<div class="box"><strong>${ch(d.triage, `${d.name} triage`)}</strong>Desk <code>${esc(d.slug)}</code>${d.isDefault ? " (default)" : ""}: ticket cards, mirrored customer messages, AI drafts with Approve / Escalate / Dismiss, and nudges after ${esc(d.nudgeMinutes)} min.</div>`,
+              )
+              .join("")}
+            </div>
+            ${s.slack.teamId ? "" : `<p class="warn">Slack team id unavailable, so channels are not linked.</p>`}`;
+          systemAgents = s.agents;
+          renderSystemAgents();
+          $("sys-tables").className = "";
+          $("sys-tables").innerHTML =
+            `<div class="muted" style="margin-bottom:4px">Postgres, handle <code>${esc(s.dbHandle)}</code></div><dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
+          $("sys-linear").className = "";
+          $("sys-linear").innerHTML =
+            s.desks
+              .map(
+                (d) =>
+                  `<div>${esc(d.name)}: ${link(d.linear.url, d.linear.name)}</div>`,
+              )
+              .join("") +
+            `<div class="muted">escalation creates an issue in the ticket's desk's project for each escalated ticket; its description starts <code>${esc(s.escalationMarker)}&lt;issueId&gt;</code></div>`;
+        } catch (e) {
+          $("sys-channels").innerHTML =
+            `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      function renderSystemAgents() {
+        if (!systemAgents.length) return;
+        $("sys-agents").className = "";
+        $("sys-agents").innerHTML = systemAgents
+          .map((a) => {
+            const live = fleet.find((f) => f.key === a.key);
+            const state = !live
+              ? ""
+              : !live.deployed
+                ? `<span class="warn">not deployed</span>`
+                : `<span class="${live.on ? "ok" : "muted"}">${live.on ? "on" : "off"}</span>`;
+            const trig = (live?.triggers || [])
+              .map((t) => `${t.label}${t.id ? ` #${t.id}` : ""} (${t.state})`)
+              .join(", ");
+            return `<div class="sysagent"><div class="row"><span class="dot ${live?.on ? "ok" : ""}"></span><strong>${link(a.url, a.key)}</strong> ${state}</div>
+              <dl class="kv">
+                <dt>listens</dt><dd>${a.listens.map((x) => `<code>${esc(x)}</code>`).join(", ") || "—"}</dd>
+                <dt>triggers</dt><dd class="muted">${esc(trig || "—")}</dd>
+                <dt>emits</dt><dd>${a.emits.map((x) => `<code>${esc(x)}</code>`).join(", ") || "nothing"}</dd>
+                <dt>writes</dt><dd>${esc(a.writes)}</dd>
+                <dt>agent</dt><dd><code>${esc(a.slug)}</code>${a.definitionId ? ` · definition ${esc(a.definitionId)}` : ""}</dd>
+              </dl></div>`;
+          })
+          .join("");
+      }
+
+      // --- knowledge -----------------------------------------------------------------------
+      function showDocsSource({ docsUrl, indexUrl }) {
+        $("kb-docs-url").value = docsUrl || "";
+        $("kb-docs-state").className = "hint";
+        $("kb-docs-state").textContent = docsUrl
+          ? `Reads ${indexUrl}; fetched pages are cached for an hour.`
+          : "Not set: no docs are fetched or cited.";
+      }
+      async function loadDocsSource() {
+        try {
+          showDocsSource(await get("/api/knowledge/source"));
+        } catch (e) {
+          $("kb-docs-state").className = "hint bad";
+          $("kb-docs-state").textContent = e.message;
+        }
+      }
+      async function saveDocsSource(btn, docsUrl) {
+        btn.dataset.busy = "1";
+        syncButtons();
+        try {
+          showDocsSource(
+            await post("/api/knowledge/source", { docsUrl }, "PUT"),
+          );
+          log(
+            docsUrl ? `docs source set to ${docsUrl}` : "docs source removed",
+          );
+        } catch (e) {
+          $("kb-docs-state").className = "hint bad";
+          $("kb-docs-state").textContent = e.message;
+        } finally {
+          btn.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("kb-docs-save").onclick = (e) =>
+        saveDocsSource(e.target, $("kb-docs-url").value.trim() || null);
+      $("kb-docs-clear").onclick = (e) => saveDocsSource(e.target, null);
+
+      let kbArticles = [];
+      let kbEditing = null; // an article id, "new", or null
+      let kbConfirm = null; // the id whose Delete awaits a second click
+      async function loadKb() {
+        // A response for a desk that is no longer selected must not replace the visible list.
+        const forDesk = desk;
+        try {
+          const articles = await get(scoped("/api/kb"));
+          if (desk !== forDesk) return;
+          kbArticles = articles;
+          renderKb();
+        } catch (e) {
+          if (desk === forDesk) $("kb-list").textContent = e.message;
+        }
+      }
+      const deskSlugById = (id) => desks.find((d) => d.id === id)?.slug || id;
+      function renderKb() {
+        const rows = kbArticles.map((a) => {
+          const confirming = kbConfirm === a.id;
+          return `<tr class="${a.enabled ? "" : "kb-off"}">
+            <td>${esc(a.kind)}</td>
+            <td style="white-space:normal">${esc(a.title)}</td>
+            <td>${a.deskId ? esc(deskName(deskSlugById(a.deskId))) : '<span class="muted">all desks</span>'}</td>
+            <td>${a.enabled ? "on" : "off"}</td>
+            <td title="${esc(a.updatedBy || "")}">${esc(age(a.updatedAt))} ago</td>
+            <td><div class="row">
+              <button class="mut" data-kb="edit" data-id="${esc(a.id)}">Edit</button>
+              <button class="mut" data-kb="toggle" data-id="${esc(a.id)}">${a.enabled ? "Disable" : "Enable"}</button>
+              <button class="mut danger" data-kb="delete" data-id="${esc(a.id)}">${confirming ? "Confirm delete" : "Delete"}</button>
+            </div></td></tr>`;
+        });
+        $("kb-list").className = "";
+        $("kb-list").innerHTML = rows.length
+          ? `<table><tr><th>Kind</th><th>Title</th><th>Desk</th><th>Enabled</th><th>Updated</th><th></th></tr>${rows.join("")}</table>`
+          : '<div class="muted">No articles yet. The copilot answers from the public docs alone, or, with no docs source set, asks a clarifying question and keeps confidence low.</div>';
+        syncButtons();
+      }
+      function openKbForm(article) {
+        kbEditing = article ? article.id : "new";
+        $("kb-kind").value = article ? article.kind : "policy";
+        // A new article starts on the selected desk; an existing one keeps its scope.
+        $("kb-desk").innerHTML =
+          `<option value="">All desks</option>` +
+          desks
+            .map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`)
+            .join("");
+        $("kb-desk").value = article
+          ? article.deskId || ""
+          : desks.find((d) => d.slug === desk)?.id || "";
+        $("kb-title").value = article ? article.title : "";
+        $("kb-body").value = article ? article.body : "";
+        $("kb-error").textContent = "";
+        $("kb-form").hidden = false;
+        $("kb-title").focus();
+      }
+      function closeKbForm() {
+        kbEditing = null;
+        $("kb-form").hidden = true;
+      }
+      async function kbAct(label, fn) {
+        try {
+          await fn();
+          log(label);
+          await loadKb();
+          return true;
+        } catch (e) {
+          log(`${label} FAILED: ${e.message}`);
+          return false;
+        }
+      }
+      $("kb-new").onclick = () => openKbForm(null);
+      $("kb-cancel").onclick = closeKbForm;
+      $("kb-save").onclick = async () => {
+        const body = {
+          kind: $("kb-kind").value,
+          deskId: $("kb-desk").value || null,
+          title: $("kb-title").value,
+          body: $("kb-body").value,
+        };
+        const id = kbEditing;
+        $("kb-error").textContent = "";
+        try {
+          if (id === "new") await post("/api/kb", body);
+          else await post(`/api/kb/${id}`, body, "PUT");
+        } catch (e) {
+          $("kb-error").textContent = e.message;
+          return;
+        }
+        log(id === "new" ? "article created" : "article saved");
+        closeKbForm();
+        await loadKb();
+      };
+      $("kb-list").onclick = async (ev) => {
+        const b = ev.target.closest("button[data-kb]");
+        if (!b) return;
+        const article = kbArticles.find((a) => a.id === b.dataset.id);
+        if (!article) return;
+        const verb = b.dataset.kb;
+        if (verb === "edit") return openKbForm(article);
+        if (verb === "toggle")
+          return void kbAct(
+            `${article.enabled ? "disabled" : "enabled"} "${article.title}"`,
+            () =>
+              post(
+                `/api/kb/${article.id}`,
+                { enabled: !article.enabled },
+                "PUT",
+              ),
+          );
+        if (kbConfirm !== article.id) {
+          kbConfirm = article.id;
+          return renderKb();
+        }
+        kbConfirm = null;
+        await kbAct(`deleted "${article.title}"`, () =>
+          post(`/api/kb/${article.id}`, undefined, "DELETE"),
+        );
+        if (kbEditing === article.id) closeKbForm();
+      };
+
+      // --- tabs ----------------------------------------------------------------------------
+      const TABS = ["tickets", "kb", "settings", "system", "testing"];
+      function showTab(name) {
+        if (!TABS.includes(name)) name = "tickets";
+        for (const t of TABS) {
+          $(`view-${t}`).hidden = t !== name;
+          $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
+        }
+        store.set(TAB_KEY, name);
+        if (name === "system" && !systemLoaded) loadSystem();
+        // Before loadDesks resolves no desk is selected; its continuation loads these.
+        if (name === "kb" && desksReady) loadKb();
+        if (name === "kb") loadDocsSource();
+        if (name === "settings" && desksReady) loadSettings();
+        // Fleet-wide, so it loads even when the desk settings fail or no desk is ready yet.
+        if (name === "settings") loadSla();
+      }
+      for (const t of TABS) $(`tab-${t}`).onclick = () => showTab(t);
+
+      syncButtons();
+      showTab(location.hash.slice(1) || store.get(TAB_KEY) || "tickets");
+      refreshFleet();
+      // The desk is known before the first scoped request, so nothing renders the wrong desk.
+      loadDesks().then(() => {
+        desksReady = true;
+        loadPeople();
+        refreshBoard();
+        refreshReceipts();
+        refreshMetrics();
+        refreshEscalation();
+        if (!$("view-kb").hidden) loadKb();
+        if (!$("view-settings").hidden) loadSettings();
+      });
+      loadCues().catch((e) => ($("cues").textContent = e.message));
+      setInterval(() => {
+        refreshBoard();
+        refreshDrawer();
+      }, 3000);
+      setInterval(refreshFleet, 10000);
+      setInterval(refreshReceipts, 20000);
+      setInterval(refreshMetrics, 60000);
+    </script>
+  </body>
+</html>

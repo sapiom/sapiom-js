@@ -2,12 +2,14 @@ import * as http from "node:http";
 import * as crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { URL, URLSearchParams } from "node:url";
+import type { StudioCredentials } from "./credentials.js";
 
 export interface AuthResult {
   apiKey: string;
   tenantId: string;
   organizationName: string;
   apiKeyId: string;
+  studioCredentials?: StudioCredentials;
 }
 
 /**
@@ -42,9 +44,10 @@ function openBrowser(url: string): void {
               "-WindowStyle",
               "Hidden",
               "-EncodedCommand",
-              Buffer.from(`Start-Process '${url.replace(/'/g, "''")}'`, "utf16le").toString(
-                "base64",
-              ),
+              Buffer.from(
+                `Start-Process '${url.replace(/'/g, "''")}'`,
+                "utf16le",
+              ).toString("base64"),
             ],
             { stdio: "ignore", windowsHide: true, detached: true },
           )
@@ -64,6 +67,7 @@ function openBrowser(url: string): void {
 export async function performBrowserAuth(
   appURL: string,
   apiURL: string,
+  options: { studioIdentity?: boolean } = {},
 ): Promise<AuthResult> {
   const state = crypto.randomBytes(32).toString("hex");
 
@@ -138,7 +142,12 @@ export async function performBrowserAuth(
       try {
         const address = server.address() as { port: number };
         const redirectUri = `http://localhost:${address.port}/callback`;
-        const result = await exchangeCodeForApiKey(apiURL, code, redirectUri);
+        const result = await exchangeCodeForApiKey(
+          apiURL,
+          code,
+          redirectUri,
+          options.studioIdentity,
+        );
         settled = true;
         clearTimeout(timeout);
         server.close();
@@ -182,17 +191,32 @@ async function exchangeCodeForApiKey(
   apiURL: string,
   code: string,
   redirectUri: string,
+  studioIdentity?: boolean,
 ): Promise<AuthResult> {
   const response = await fetch(`${apiURL}/v1/auth/cli/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, redirectUri }),
+    body: JSON.stringify({
+      code,
+      redirectUri,
+      ...(studioIdentity && { studioIdentity: true }),
+    }),
   });
 
   if (!response.ok) {
     let message = `Token exchange failed (${response.status})`;
     try {
-      const body = (await response.json()) as { message?: string };
+      const body = (await response.json()) as { message?: string | string[] };
+      // An older backend rejects the opt-in before consuming the auth code.
+      // Preserve ordinary Terminal login; Assistant stays off without a pair.
+      if (
+        studioIdentity &&
+        response.status === 400 &&
+        Array.isArray(body.message) &&
+        body.message.includes("property studioIdentity should not exist")
+      ) {
+        return exchangeCodeForApiKey(apiURL, code, redirectUri);
+      }
       if (body.message) {
         message = `Token exchange failed: ${body.message}`;
       }

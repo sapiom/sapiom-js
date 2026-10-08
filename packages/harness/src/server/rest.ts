@@ -1,3 +1,4 @@
+import type { AssistantStateSnapshot } from "../shared/assistant-state.js";
 /**
  * REST surface under /api — see src/shared/types.ts for the full contract
  * table. This router covers the session-lifecycle endpoints (W1); workflows,
@@ -30,8 +31,8 @@ import type {
   WorkflowInfo,
   SessionInputSubmissionResult,
 } from "../shared/types.js";
-import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
-import type { StudioProjectSummary } from "../shared/agent-map.js";
+import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
+import type { StudioProjectSummary } from "@sapiom/agent-map";
 import {
   CREATE_SESSION_JSON_LIMIT_BYTES,
   JSON_BODY_LIMIT_BYTES,
@@ -42,6 +43,8 @@ import {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -80,7 +83,12 @@ const createSessionSchema = z
       z.object({ kind: z.literal("path"), path: z.string().min(1).max(4096).refine((text) => !text.includes("\0")) }).strict(),
       z.object({ kind: z.literal("inline"), dataUrl: z.string().min(1), filename: z.string().trim().min(1).max(255) }).strict(),
     ])).max(100).optional(),
-    scaffold: z.object({ template: z.string().regex(/^[a-z0-9][a-z0-9-]*$/i) }).strict().optional(),
+    // Links ride the first prompt as text the agent reads; the harness never
+    // fetches them, so the only guards are shape and size.
+    initialSources: z.array(
+      z.string().trim().min(1).max(2048).url().refine((text) => /^https?:\/\//i.test(text)),
+    ).max(50).optional(),
+    initialSetup: z.string().max(16_000).refine((text) => !text.includes("\0")).optional(),
     initialUserInputPending: z.boolean().optional(),
     rehydrateFrom: z.string().min(1).optional(),
     theme: z.enum(["light", "dark"]).optional(),
@@ -90,7 +98,6 @@ const createSessionSchema = z
 const injectInputSchema = z.object({
   text: z.string(),
   submit: z.boolean().optional(),
-  requestId: z.string().min(1).max(200).optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
 
 const attachFileSchema = z.object({
@@ -131,9 +138,6 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
   "plan.upgrade_clicked",
   "agent_map.entered",
   "agent_map.workspace_load_failed",
-  "agent_map.proposal_created",
-  "agent_map.proposal_visible",
-  "agent_map.validation_failed",
 ];
 
 /**
@@ -191,6 +195,7 @@ async function agentHoldsConversation(
 }
 
 export interface RestRouterOptions {
+  getAssistantState?: () => AssistantStateSnapshot;
   sessionManager: SessionManager;
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
@@ -201,7 +206,7 @@ export interface RestRouterOptions {
     organizationName: string;
   } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
-  /** Workspace identities backing the folder projection and system-graph route. */
+  /** Scope identities joining visible folders to durable Studio projects. */
   listWorkspaceScopes?: () =>
     | WorkspaceScopeSummary[]
     | Promise<WorkspaceScopeSummary[]>;
@@ -221,13 +226,6 @@ export interface RestRouterOptions {
    *  successful bind/unbind. Never throws — a write failure is logged by the
    *  implementation, not surfaced as a request error. */
   writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
-  /** Re-renders the session's canvas (its bound workflow, or the workspace
-   *  overview when unbound) via the deterministic pipeline — called after a
-   *  successful bind/unbind so the pane reflects the new selection without
-   *  waiting on the agent to run the Visualize macro itself. Never throws
-   *  (core/canvas-render.ts's contract); defaults to a no-op for tests that
-   *  don't care about canvas output. */
-  renderCanvas?: (session: HarnessSession) => Promise<void>;
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
@@ -239,15 +237,13 @@ export interface RestRouterOptions {
    * and, when the scan discovers one, render the new session's canvas. */
   onSessionCreated?: (cwd: string, harnessSessionId: string) => void;
   /**
-   * Optional lifecycle-aware input boundary. It lets a pending project
-   * bootstrap yield durably to real user input; ordinary sessions fall back
-   * to SessionManager.submitInput.
+   * Optional input boundary shared with the rolling alias; without it the
+   * route falls back to SessionManager.submitInput.
    */
   submitSessionInput?: (
     sessionId: string,
     text: string,
     submit: boolean,
-    requestId?: string,
   ) => Promise<boolean | SessionInputSubmissionResult>;
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
@@ -386,6 +382,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
           ? { agentsBaseUrl: options.agentsBaseUrl }
           : {}),
       };
+      if (options.getAssistantState) state.assistant = options.getAssistantState();
       res.json(state);
     } catch (err) {
       next(err);
@@ -509,6 +506,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       if (
         err instanceof ExternalHarnessError ||
+        err instanceof McpCredentialGenerationChangedError ||
         err instanceof ProjectSessionScopeUnavailableError ||
         err instanceof SessionManagerClosingError
       ) {
@@ -573,7 +571,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // `session` here already reflects the new boundWorkflowPath — the
       // callee resolves it against the live registry itself.
       await options.writeWorkspaceContext(session);
-      await (options.renderCanvas ?? (async () => {}))(session);
       res.json(sessionManager.get(req.params.id));
     } catch (err) {
       next(err);
@@ -691,12 +688,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   /**
-   * Maps a resume failure onto its status code. Shared by both routes that
-   * resume — `/sessions/:id/resume` and `/sessions/adopt` — so a
-   * transcript-only row that turns out not to be resumable answers with the
-   * same 409 + `code` the UI already knows how to surface. Returns false when
-   * the error isn't a resume-shaped one, so the caller falls through to
-   * `next(err)`.
+   * Map failures shared by direct resume, transcript adoption, and the scoped
+   * MCP restart. A conversation that cannot be resumed answers with the same
+   * 409 + `code` on every path. Unknown errors still fall through to next().
    */
   const sendResumeError = (res: express.Response, err: unknown): boolean => {
     if (err instanceof UnknownSessionError) {
@@ -718,6 +712,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
     if (
       err instanceof ExternalHarnessError ||
       err instanceof AgentSessionIdentityReservedError ||
+      err instanceof McpCredentialGenerationChangedError ||
+      err instanceof McpSessionRestartUnavailableError ||
       err instanceof ProjectSessionScopeUnavailableError ||
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionNotResumeableError
@@ -847,6 +843,15 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
+  router.post("/sessions/:id/restart-mcp", async (req, res, next) => {
+    try {
+      res.json(await sessionManager.restartForMcpCredentials(req.params.id));
+    } catch (err) {
+      if (sendResumeError(res, err)) return;
+      next(err);
+    }
+  });
+
   router.delete("/sessions/:id", async (req, res, next) => {
     const existed = sessionManager.get(req.params.id) !== undefined;
     if (!existed) {
@@ -874,7 +879,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
             req.params.id,
             parsed.data.text,
             submit,
-            parsed.data.requestId,
           )
         : await sessionManager.submitInput(
             req.params.id,
@@ -894,23 +898,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
         err instanceof ExternalHarnessError ||
         err instanceof SessionBackgroundInputPreemptedError ||
         err instanceof SessionInputIsolationError
-      ) {
-        res.status(409).json({ error: err.message, code: err.code });
-        return;
-      }
-      if (
-        err instanceof Error &&
-        "code" in err &&
-        err.code === "project_bootstrap_dispatch_forbidden"
-      ) {
-        res.status(403).json({ error: err.message, code: err.code });
-        return;
-      }
-      if (
-        err instanceof Error &&
-        "code" in err &&
-        (err.code === "project_bootstrap_request_id_reused" ||
-          err.code === "project_bootstrap_input_capacity")
       ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;

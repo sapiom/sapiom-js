@@ -14,6 +14,7 @@
  *   - track("session.created") fires on new session creation
  */
 import { expect, test } from "@playwright/test";
+import { openNewAgentScreen } from "./mock-navigation";
 
 type TestHarnessWindow = {
   __HARNESS_TEST__: {
@@ -197,7 +198,7 @@ test.describe("UI event tracking (track() calls)", () => {
 
   test("new session creation emits track('session.created')", async ({ page }) => {
     // Creating a new agent starts a session from the composer.
-    await page.getByTestId("rail-create-new").click();
+    await openNewAgentScreen(page);
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await page.getByTestId("composer-input").fill("Summarize new issues each morning.");
     await page.getByTestId("composer-send").click();

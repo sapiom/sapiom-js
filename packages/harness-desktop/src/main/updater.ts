@@ -419,7 +419,7 @@ async function runCheck(
     // NEVER forward the raw message: for a channel with no published release,
     // electron-updater appends the whole releases Atom feed and a stack trace, so
     // it is kilobytes of XML — which went straight into a toast once.
-    const { kind, summary } = classifyUpdateError(err instanceof Error ? err.message : String(err));
+    const { kind, summary, detail } = classifyUpdateError(err instanceof Error ? err.message : String(err));
     // A network-class failure gets ONE quick retry before it reaches the user:
     // the first outbound connection of a fresh process is the one AV/proxies/
     // cold TLS eat (measured: an ERR_EMPTY_RESPONSE first check whose immediate
@@ -430,7 +430,9 @@ async function runCheck(
       await new Promise((resolve) => setTimeout(resolve, CHECK_RETRY_DELAY_MS));
       return runCheck(current, attempt + 1);
     }
-    log(`on-demand check failed (${kind}): ${summary}`);
+    // `detail` is the response status/server/content-type, so a screenshot of
+    // the log settles "GitHub or the network?".
+    log(`on-demand check failed (${kind}): ${summary}${detail ? ` [${detail}]` : ""}`);
     if (kind === "no-release") return { kind: "no-release", channel: current.channel };
     return { kind: "failed", message: summary };
   }
@@ -603,7 +605,8 @@ function startUpdater(deps: UpdaterDeps): void {
     // Expected in the field, and never fatal: no network, a release without
     // metadata, an AppImage the user extracted, a .deb with no working package
     // manager. The app keeps working on the version it has.
-    log(`check failed: ${classifyUpdateError(err.message).summary}`);
+    const { kind, summary, detail } = classifyUpdateError(err.message);
+    log(`check failed (${kind}): ${summary}${detail ? ` [${detail}]` : ""}`);
   });
 
   const check = (): void => {

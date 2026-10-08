@@ -4,7 +4,10 @@ import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 // `resolveEnvironment` reads ~/.sapiom/credentials.json, so the wrapper's tests would
 // otherwise depend on whichever environments the machine running them has logged into.
 const resolveEnvironment = vi.hoisted(() => vi.fn());
-vi.mock("@sapiom/mcp/auth", () => ({ resolveEnvironment }));
+vi.mock("@sapiom/mcp/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sapiom/mcp/auth")>()),
+  resolveEnvironment,
+}));
 
 import { DEFAULT_SYSTEM_PROMPT } from "./default.js";
 import {
@@ -34,20 +37,14 @@ describe("fetchSystemPrompt", () => {
   });
 
   it("returns the fetched body on a 200 response", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("You are the coding agent, but deployed."),
-    }) as unknown as typeof globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response("You are the coding agent, but deployed.", { status: 200 })) as unknown as typeof globalThis.fetch;
     await expect(fetchSystemPrompt(env)).resolves.toBe(
       "You are the coding agent, but deployed.",
     );
   });
 
   it("requests the system-prompt endpoint on the resolved apiURL", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("ok"),
-    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
     globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
     await fetchSystemPrompt(env);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -57,18 +54,12 @@ describe("fetchSystemPrompt", () => {
   });
 
   it("falls back to the bundled prompt on a non-200", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      text: () => Promise.resolve("Not found"),
-    }) as unknown as typeof globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response("Not found", { status: 404 })) as unknown as typeof globalThis.fetch;
     await expect(fetchSystemPrompt(env)).resolves.toBe(DEFAULT_SYSTEM_PROMPT);
   });
 
   it("falls back when the body is empty", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("   "),
-    }) as unknown as typeof globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response("   ", { status: 200 })) as unknown as typeof globalThis.fetch;
     await expect(fetchSystemPrompt(env)).resolves.toBe(DEFAULT_SYSTEM_PROMPT);
   });
 
@@ -142,10 +133,7 @@ describe("fetchSystemPromptForActiveEnvironment", () => {
   it("resolves the environment and serves what the backend returns", async () => {
     delete process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED;
     resolveEnvironment.mockResolvedValue(env);
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("# Deployed prompt"),
-    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response("# Deployed prompt", { status: 200 }));
     globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
 
     await expect(fetchSystemPromptForActiveEnvironment("production")).resolves.toBe(

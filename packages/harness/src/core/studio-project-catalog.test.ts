@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
-} from "./studio-project-catalog.js";
+} from "@sapiom/agent-map/node/studio-project-catalog";
+import { resolveProjectRootForPath } from "@sapiom/agent-map/project-roots";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -190,7 +191,7 @@ describe("StudioProjectCatalog", () => {
       .toBe(project.projectId);
   });
 
-  it("preserves separate legacy project identities when Windows roots become ambiguous", async () => {
+  it("publishes no scope for a root claimed by two projects, so clients and the resolver agree it has no owner", async () => {
     const { catalogPath } = await fixture();
     const catalog = new StudioProjectCatalog(catalogPath);
     const first = await catalog.create("First legacy project");
@@ -205,15 +206,26 @@ describe("StudioProjectCatalog", () => {
     const restarted = new StudioProjectCatalog(catalogPath);
     expect((await restarted.list()).map(({ projectId }) => projectId).sort())
       .toEqual([first.projectId, second.projectId].sort());
-    expect(await restarted.resolveIdentityForPath("C:\\Work\\Project\\src")).toBeNull();
+    const descendant = "C:\\Work\\Project\\src";
+    expect(await restarted.resolveIdentityForPath(descendant)).toBeNull();
     const result = await restarted.reconcile([
       { workspaceKey: "ambiguous", cwd: "C:\\Work\\Project" },
+      { workspaceKey: "ambiguous-lower", cwd: "c:\\work\\project" },
       { workspaceKey: "unrelated", cwd: "/unrelated-project" },
     ]);
-    expect(result.workspaceScopes.find(({ workspaceKey }) => workspaceKey === "ambiguous"))
-      .toEqual({ workspaceKey: "ambiguous", cwd: "C:\\Work\\Project" });
-    expect(result.workspaceScopes.find(({ workspaceKey }) => workspaceKey === "unrelated")?.projectId)
-      .toMatch(/^project_/);
+    // Neither spelling of the conflicted root is published, so no client can
+    // hold a project id for it that the server resolver would refuse.
+    expect(result.workspaceScopes.map(({ workspaceKey }) => workspaceKey))
+      .toEqual(["unrelated"]);
+    expect(result.workspaceScopes[0]?.projectId).toMatch(/^project_/);
+    expect(
+      resolveProjectRootForPath(
+        descendant,
+        result.workspaceScopes.map(({ cwd, projectId }) => ({ cwd, projectId })),
+      ),
+    ).toBeNull();
+    expect(await restarted.resolveIdentityForPath(descendant)).toBeNull();
+    // Durable bindings are left for an explicit repair; both projects survive.
     expect(await restarted.resolve(first.projectId)).not.toBeNull();
     expect(await restarted.resolve(second.projectId)).not.toBeNull();
   });
@@ -419,7 +431,7 @@ describe("StudioProjectCatalog", () => {
     ).toEqual([]);
   });
 
-  it("preserves unsafe live scopes without Agent Map assignment and accepts legal path whitespace", async () => {
+  it("drops unsafe live scopes from the published catalog and accepts legal path whitespace", async () => {
     const { root, catalogPath } = await fixture();
     const spaced = path.join(root, "project ");
     await fs.mkdir(spaced);
@@ -431,23 +443,16 @@ describe("StudioProjectCatalog", () => {
 
     expect(reconciled.projects).toHaveLength(1);
     expect(reconciled.projects[0]?.displayName).toBe("project");
-    expect(reconciled.workspaceScopes).toEqual(
-      expect.arrayContaining([
-        {
-          workspaceKey: "workspace-unsafe",
-          cwd: `${root}/bad\npath`,
-        },
-        expect.objectContaining({ cwd: spaced }),
-      ]),
-    );
-    expect(
-      reconciled.workspaceScopes.find(
-        (scope) => scope.workspaceKey === "workspace-unsafe",
-      ),
-    ).not.toHaveProperty("projectId");
+    expect(reconciled.workspaceScopes).toEqual([
+      {
+        workspaceKey: "workspace-spaced",
+        cwd: spaced,
+        projectId: reconciled.projects[0]?.projectId,
+      },
+    ]);
   });
 
-  it("keeps every conflicting legacy-key root unassigned in both orders and after restart", async () => {
+  it("gives each conflicting legacy-key root its own project, untrusting the shared key, in both orders and after restart", async () => {
     const { root, catalogPath } = await fixture();
     const alpha = path.join(root, "alpha");
     const beta = path.join(root, "beta");
@@ -464,19 +469,26 @@ describe("StudioProjectCatalog", () => {
       [...forwardScopes].reverse(),
     );
 
-    for (const result of [forward, reversed]) {
-      expect(result.projects).toEqual([]);
-      expect(result.workspaceScopes).toEqual(
-        expect.arrayContaining(forwardScopes),
+    const byRoot = (result: typeof forward) =>
+      Object.fromEntries(
+        result.workspaceScopes.map((scope) => [scope.cwd, scope.projectId]),
       );
+    for (const result of [forward, reversed]) {
+      expect(result.projects).toHaveLength(2);
       expect(result.workspaceScopes).toHaveLength(2);
-      expect(
-        result.workspaceScopes.every(
-          (scope) => !Object.prototype.hasOwnProperty.call(scope, "projectId"),
-        ),
-      ).toBe(true);
+      for (const scope of result.workspaceScopes) {
+        expect(scope.projectId).toMatch(/^project_/);
+      }
+      expect(byRoot(result)[alpha]).not.toBe(byRoot(result)[beta]);
     }
-    expect(await new StudioProjectCatalog(catalogPath).list()).toEqual([]);
+    expect(byRoot(reversed)).toEqual(byRoot(forward));
+    expect(await new StudioProjectCatalog(catalogPath).list()).toHaveLength(2);
+    const raw = JSON.parse(await fs.readFile(catalogPath, "utf8")) as {
+      projects: { legacyWorkspaceKeys: string[] }[];
+    };
+    for (const project of raw.projects) {
+      expect(project.legacyWorkspaceKeys).toEqual([]);
+    }
   });
 
   it("rejects a move onto another binding in the same project and remains restart-readable", async () => {

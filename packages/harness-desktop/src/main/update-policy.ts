@@ -198,7 +198,53 @@ export type UpdateErrorKind =
   | "offline"
   /** GitHub answered 429 — throttled, self-clearing; retrying now makes it worse. */
   | "rate-limited"
+  /**
+   * Something on this network answered in place of GitHub: a proxy, a captive
+   * portal, or a sign-on gate. Retrying changes nothing; the user has to sort
+   * out their access to github.com.
+   */
+  | "intercepted"
   | "other";
+
+/** An HTML document anywhere in the message: an error body, or where the Atom feed should be. */
+const HTML_DOCUMENT = /<!doctype\s+html|<html[\s>]|<\/html>/i;
+
+/**
+ * The response facts electron-updater leaves in its error message.
+ *
+ * builder-util-runtime formats every HTTP failure as
+ * `${status} ${statusMessage}\n<JSON description>\nHeaders: <JSON headers>`, and
+ * GitHubProvider embeds that text when it rewraps a `/releases/latest` failure,
+ * so the headers are already in the string we get.
+ */
+interface UpdateHttpEvidence {
+  /** From the error head only (start of a line, or after `HttpError:`) — never from a URL. */
+  status?: number;
+  server?: string;
+  contentType?: string;
+  /** A `Headers: {…}` blob is present at all. */
+  hasHeaders: boolean;
+  /** GitHub signed it: `x-github-request-id`, or `server: github.com` exactly. */
+  fromGitHub: boolean;
+  /** `retry-after` or any `x-ratelimit-*` header. */
+  throttled: boolean;
+}
+
+function readHttpEvidence(head: string): UpdateHttpEvidence {
+  const status = /(?:^|HttpError:\s*)(\d{3})(?=\s|$)/m.exec(head);
+  const at = head.search(/Headers:\s*\{/);
+  const headers = at < 0 ? "" : head.slice(at);
+  const header = (name: string): string | undefined => new RegExp(`"${name}":\\s*"([^"]*)"`, "i").exec(headers)?.[1];
+  const server = header("server");
+  return {
+    status: status ? Number(status[1]) : undefined,
+    server,
+    contentType: header("content-type"),
+    hasHeaders: at >= 0,
+    fromGitHub: header("x-github-request-id") !== undefined || server?.trim().toLowerCase() === "github.com",
+    throttled: header("retry-after") !== undefined || /"x-ratelimit-[a-z-]*":/i.test(headers),
+  };
+}
 
 /**
  * Turn electron-updater's error into one short, human line.
@@ -212,15 +258,39 @@ export type UpdateErrorKind =
  * normal state — a stable install correctly ignores pre-releases, so before the
  * first final release there is genuinely nothing to find — and calling it an error
  * teaches users to distrust the feature.
+ *
+ * `detail` is for the log only: `status=403 server=corp-proxy content-type=text/html`,
+ * nothing else (no body, no cookies, no redirect URL), so a screenshot of the log
+ * settles "GitHub or the network?" without leaking anything.
  */
-export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summary: string } {
+export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summary: string; detail?: string } {
   // Cut the appended feed first: everything from `, XML:` on is the Atom document.
   const withoutXml = raw.split(/,\s*XML:/)[0] ?? raw;
   // Then the first line, because the rest is a stack trace.
   const firstLine = (withoutXml.split(/\r?\n/)[0] ?? "").trim();
   const collapsed = firstLine.replace(/\s+/g, " ");
+  const evidence = readHttpEvidence(withoutXml);
+  const detail =
+    [
+      evidence.status !== undefined ? `status=${evidence.status}` : "",
+      evidence.server ? `server=${evidence.server}` : "",
+      evidence.contentType ? `content-type=${evidence.contentType}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
-  // 429 FIRST — ahead of both no-release and net::ERR. A 429 is GitHub
+  // A response GitHub did not send, decided first: read by status alone a proxy's
+  // 429 toasts as "rate-limited" (it never clears), its 403 as jargon, and its
+  // sign-in page in place of the feed as "no release published yet".
+  if (isIntercepted(raw, evidence)) {
+    return {
+      kind: "intercepted",
+      summary: "github.com isn't reachable from this network. Check that you can open github.com, then try again.",
+      detail,
+    };
+  }
+
+  // 429 next — ahead of both no-release and net::ERR. A 429 is GitHub
   // answering, not unreachable (so it must not take the offline branch, whose
   // caller retries immediately). More subtly, it must not take the no-release
   // branch either: electron-updater's GitHubProvider wraps ANY failure of its
@@ -229,21 +299,39 @@ export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summa
   // Requests", so testing no-release first told a throttled user "nothing is
   // published yet" — the one message that invites them to click again, when
   // clicking is exactly what deepens the limit.
-  if (/\b429\b|too many requests/i.test(collapsed)) {
+  // A 403 carrying throttle headers is GitHub's secondary rate limit.
+  if (evidence.status === 429 || /too many requests/i.test(collapsed) || (evidence.status === 403 && evidence.throttled)) {
     return {
       kind: "rate-limited",
       summary: "GitHub is rate-limiting this network — it clears on its own; try again in a while",
+      detail,
     };
   }
   if (/unable to find latest version|ensure a production release exists|no published versions/i.test(collapsed)) {
-    return { kind: "no-release", summary: "no release has been published on this channel yet" };
+    return { kind: "no-release", summary: "no release has been published on this channel yet", detail };
   }
   if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|net::ERR/i.test(collapsed)) {
-    return { kind: "offline", summary: "could not reach GitHub" };
+    return { kind: "offline", summary: "could not reach GitHub", detail };
   }
   // Unknown: keep it, but bounded. A truncated real message still beats a generic
   // one when someone has to diagnose it from a screenshot.
   const MAX = 160;
   const summary = collapsed.length > MAX ? `${collapsed.slice(0, MAX - 1).trimEnd()}…` : collapsed;
-  return { kind: "other", summary: summary || "the update check failed" };
+  return { kind: "other", summary: summary || "the update check failed", detail };
+}
+
+/** `raw` is the whole message, because the HTML may be the appended "feed". */
+function isIntercepted(raw: string, evidence: UpdateHttpEvidence): boolean {
+  // Anything GitHub itself signed is GitHub's answer, whatever it says; and a
+  // throttled 403/429 is a throttle whoever sent it ("wait, then retry" is right).
+  // 401/407 are challenges, and a retry-after does not make them a rate limit.
+  if (evidence.fromGitHub || (evidence.throttled && (evidence.status === 403 || evidence.status === 429))) return false;
+  // GitHub does not challenge anonymous reads of a public repo's releases, and
+  // 407 has exactly one issuer: a proxy demanding credentials.
+  if (evidence.status === 401 || evidence.status === 403 || evidence.status === 407) return true;
+  // A 429 whose headers we can see, naming neither GitHub nor a throttle. A 429
+  // with no headers blob at all stays a rate limit — there is nothing to say otherwise.
+  if (evidence.status === 429 && evidence.hasHeaders) return true;
+  // A page meant for a browser, which GitHub's release endpoints never send us.
+  return HTML_DOCUMENT.test(raw);
 }

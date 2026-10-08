@@ -1,5 +1,364 @@
 # @sapiom/harness
 
+## 0.21.2
+
+### Patch Changes
+
+- efef2da: Studio's agent map now shows Jev's role and edge labels, as `sapiom_dev_map` does: cached per project and shown only at p ≥ 0.8. Edges from different agents no longer merge into one shared line, so each line shows who calls whom. `accountEvaluate` is exported from `@sapiom/mcp/map`.
+- Updated dependencies [efef2da]
+  - @sapiom/mcp@0.19.2
+
+## 0.21.1
+
+### Patch Changes
+
+- 362c8ba: The project map opens on macOS and Windows when Studio holds the project folder under a different spelling of the same path. On macOS, temp folders sit behind `/var` → `/private/var`. Studio now compares the real paths.
+
+## 0.21.0
+
+### Minor Changes
+
+- fe4a4fb: An agent's Canvas now matches the project map. It shows the agent's steps at the version the map is drawing, and every agent it calls or that calls it as a card at the edge of the board. A call's line starts at the step that makes it when the code shows which step does. Agents without a `sapiom.json` now get a Canvas too.
+
+  Removed:
+
+  - the per-agent board files under `.sapiom/canvas/renders/`;
+  - the session board at `/canvas/:sessionId/`;
+  - the server render that wrote them.
+
+  The Canvas is computed when you open it and reads again when the project's code changes. Existing `.sapiom/canvas/` folders in your projects can be deleted.
+
+- 45c2846: Studio's project map now shows what your code does. It is computed by `sapiom_dev_map`, the same tool your coding agent can call, every time the map opens or the project's code changes. Nothing about the map is stored.
+
+  - **Systems** are agents joined by the launches, events, signals and timers the code proves, drawn as containers. Agents in no system stand alone. Every agent on the map is a real agent folder, so **Open agent** and **Open in Finder** work on every node.
+  - **Agents** show **Deployed** or **Draft** from your signed-in account, a dot when they changed since the version you are looking at, and the resources they share with another agent.
+  - **Versions** come from git. In a git project, the project bar has a version selector (Working copy, `HEAD`, branches) and a refresh.
+
+  Removed, with the stored map:
+
+  - the automatic map generation for new projects;
+  - the "Version N" history;
+  - the proposal tools and links between map nodes and agents;
+  - the `agent_map_read`, `agent_map_validate` and `agent_map_propose` session tools;
+  - the `/api/projects/:id/agent-map/*` routes.
+
+  `@sapiom/agent-map` keeps the Studio project catalog, root bindings and the current-workspace preference. Its map, proposal, version, binding and build-plan exports are removed. Existing `~/.sapiom/harness/agent-map/projects/` folders are no longer read and can be deleted.
+
+### Patch Changes
+
+- Updated dependencies [45c2846]
+  - @sapiom/agent-map@0.4.0
+  - @sapiom/mcp@0.19.1
+
+## 0.20.0
+
+### Minor Changes
+
+- 600ac11: Studio no longer starts a Plan Agents session for a new project, and the unused build-plan and delegation tools are gone.
+
+### Patch Changes
+
+- 5a88d10: `@sapiom/mcp` adds `sapiom_dev_map`. It computes the agent map from code on every call and stores nothing. You can pass a project folder, optionally with a git `ref`, or your own description of agents.
+
+  - **Systems** are agents joined by code-proven calls, events and timers. Each edge carries the file and line that proves it.
+  - **Shared resources** (vault keys, databases, connectors) show on each agent that uses them and never join two agents into a system.
+  - **Steps** come from `agents check`.
+  - **Triggers and deploy state** come from the signed-in account.
+
+  The source scan Studio's agent Canvas uses now lives in `@sapiom/mcp/map`, and `@sapiom/harness` imports it from there. The Canvas behaves the same.
+
+- Updated dependencies [5a88d10]
+- Updated dependencies [600ac11]
+- Updated dependencies [ec3d07a]
+  - @sapiom/mcp@0.19.0
+  - @sapiom/agent-map@0.3.0
+  - @sapiom/agent@0.14.8
+  - @sapiom/agent-core@0.15.4
+
+## 0.19.2
+
+### Patch Changes
+
+- 31ac640: The project map's card and map chat appear after a restart again: Studio asks Sapiom once whether the Assistant is on (at start, on sign-in, and every five minutes) and every screen reads that one answer. The Terminal / Assistant switch moves into the session header.
+- 31ac640: The Agent Map header no longer has an Expand button; the map already fills the view.
+
+## 0.19.1
+
+### Patch Changes
+
+- 69f0733: Agent Studio: the agent modal gets a Runs tab (the agent's runs, each run's timeline, result and attempt inspector) and a `</>` button with the integration snippets. The project header lists the project's App Links: deployed ones, and a dev server a project session started as a local link marked "not deployed". The Preview chip is gone. Escape now closes the modal from a Runs tab that shows a run.
+- 141751d: Assistant chats bind the result marker to the conversation instead of to each message. A model that repeats the marker from an earlier answer no longer has a finished answer read as missing, so it no longer triggers a hidden recovery turn or shows Stopped.
+- d017f36: Add the project map-chat engine: an OpenCode host per project (`map:<projectId>`) whose conversation persists across restarts, Stop and New chat routes, a `handoff` tool the model uses to offer a Claude Code session, and a `neverAsk` config option that denies every permission prompt. The map chat stops after 15 idle minutes. Sessions are no longer bound to an agent automatically when a rescan finds one under their folder.
+- 8cba884: The project map chat no longer edits files: `noShell` now also denies OpenCode's `edit`, `write` and `apply_patch` tools, and the map chat sends every change request to the `handoff` card instead. Studio session Assistants are unchanged. Adding a project to Studio now marks its folder trusted for Claude Code (`projects[<root>].hasTrustDialogAccepted` in Claude Code's global config, written under Claude Code's own config lock, only for that folder), and a Claude Code session started inside an added project makes sure of it before it launches, so hand-off and Open in session sessions start without the "trust this folder?" prompt.
+- adb6f36: The project view floats one card over the map: pick a node to see its name and state, open the agent, or reveal its folder, and type to ask the project's map chat. The map chat is not a session and never joins the rail; it keeps the conversation per project until New chat, offers a hand-off card when the work belongs in a session (Start session makes it without leaving the map), and Open in session carries the transcript into a terminal session. An agent opens in a modal over the map, with its Canvas and Secrets, its verbs in the header, and a small card for a picked step; closing it returns to the map exactly as it was.
+- 668b337: Keep resumable sessions available after account disconnect by restarting them without credentials. Studio sessions and projects no longer depend on the signed-in account: resume uses the session's saved project, and switching or disconnecting accounts no longer invalidates sessions, project setup, Agent Map access, or workspace selections.
+- cb53729: Sessions are terminals with nothing beside them: the agent pane that sat next to a session (Canvas, Steps, Secrets) is gone, and agent detail moves to the project view. Ending a live session from the rail or the session menu no longer asks for confirmation; the row stays as exited, and × hides it. The map's inspector panel is removed. Visualize, Run locally, Run and Deploy act on an agent by its path and never need, start or bind a session; runs are filed under the agent. Ask, fix, debug and Describe with AI start a new terminal session at the project root with a first message naming the job and the agent. Rail tooltips name the action in one to three words. The README documents the project view, the map chat and its limits, the hand-off card, the agent modal, and who has the Assistant.
+- Updated dependencies [d017f36]
+- Updated dependencies [8cba884]
+  - @sapiom/opencode@0.1.1
+
+## 0.19.0
+
+### Minor Changes
+
+- a879a93: The session bar's running-app slot shows the agent's durable App Link beside the
+  localhost Preview chip (SAP-3255). When the agent's cloud definition has a
+  published App Link, an `App Link` chip opens it. The chip shows with or without a
+  detected port, because the link belongs to the definition and stays up after the
+  sandbox ends. The two chips use different words, icons, and ink, so the local
+  preview and the durable link are not read as interchangeable. An agent with no
+  App Link gets the bar it had before.
+
+  The harness server reads the link from core's
+  `GET /v1/workflows/definitions/:id/app-link` through a new
+  `GET /api/workflows/:id/app-link` route. The definition id comes from the agent's
+  own `sapiom.json`, the API key stays server-side, and only an `https:` URL is
+  passed to the page. Any failed read (signed out, unlinked, unreachable, drifted
+  shape) shows no chip.
+
+### Patch Changes
+
+- 5a55a34: Agent Studio navigation is Project › Sessions. The rail lists each project's sessions under it, newest activity first, so one click reaches any session in any project; the session tab strip, the agent tree, the Group axis and drag-to-move are gone. Clicking a project shows its Agent Map at full width in the centre, with no chat beside it, and leaves the selected session alone. Clicking an agent on the map opens a panel with its location (Change moves it, after a confirm), its sessions, Start chat and Open canvas. A project header's `+` starts a new chat in that project; New agent moved to the map view's header. The right pane is the selected session's bound agent and only appears when there is one.
+
+## 0.18.2
+
+### Patch Changes
+
+- 173850f: Agent Studio: the server now issues a project identity for every published workspace scope and every session. `WorkspaceScopeSummary.projectId` is required (`unassignedScopes` is gone; unsafe or unresolvable roots are omitted rather than published project-less), `HarnessSession.agentMapIdentity` is required, and persisted sessions without one are migrated on load to the deepest open root that contains their folder — or dropped when no project can own them. Default session titles ("acme-app", "acme-app 2", …) are assigned once at creation and persisted, so ending a sibling session no longer renames the others.
+
+  Legacy sessions whose persisted identity metadata is malformed, or whose folder is not inside an open project root, are dropped on load; migration never creates a project for them.
+
+- Updated dependencies [173850f]
+- Updated dependencies [772f154]
+  - @sapiom/agent-map@0.2.1
+  - @sapiom/agent-core@0.15.1
+  - @sapiom/agent@0.14.5
+
+## 0.18.1
+
+### Patch Changes
+
+- Updated dependencies [89d91d4]
+- Updated dependencies [c3b6f26]
+- Updated dependencies [5bb66c6]
+- Updated dependencies [06adb78]
+  - @sapiom/agent-core@0.15.0
+  - @sapiom/mcp@0.18.0
+  - @sapiom/agent@0.14.4
+
+## 0.18.0
+
+### Minor Changes
+
+- bf4a404: Expose authenticated Studio project/session context using the existing map
+  capability lifecycle. Context requests recheck generation after scope lookup;
+  existing private map tools and shared-map activation remain unchanged.
+- 79a52f9: Export deterministic MCP command resolution and bounded offline capability
+  preflight for both Studio hosts. Unmarked legacy packages are never executed as
+  probes. Host launch behavior is unchanged until the integration lands.
+- 4bbea8d: Qualify local MCP commands on each Studio create/resume in both CLI and Desktop.
+  CLI selects its built runtime dependency only when verified, retaining the
+  unverified npx @latest fallback. Desktop qualifies its app-managed installation.
+  Forward private host context only to project sessions; preserve the existing
+  private map tools/prompts and keep shared map activation off.
+
+### Patch Changes
+
+- afa4569: Sync the offline fallback system prompt with the backend 1.7 content release (decisions.evaluate guidance, provider-neutral wording).
+- fe5b74d: Agent Studio: the new-agent screen takes a project and takes links and documents. `NewSessionComposer` is mounted only with a project and states it ("New agent in {project}") above the headline and in the session bar chip; New project, a project row's New agent, and an empty project's name all land on it. A paste that is only links is listed as sources and handed to the session by URL; a long paste becomes an attached document instead of a wall of text. An install with no project sees the no-project home, whose one move is New project (flow-creation.md rev 4 §4.3, §4.6 step 1, D36).
+- d80b6c7: Agent Studio: New project and Add project run the folder step first. The rail's top control is one filled `New project` button with no menu: on desktop it opens the OS folder picker directly, on the web a one-field folder dialog on the shared dialog shell; the chosen folder opens as a project and the new-agent screen opens scoped to it. `Add project` (the Projects header's folder-plus) runs the same step and stops. The `Create new agent` CTA and the `Add existing agents` row are gone, and the desktop host no longer sends new agents to `~/.sapiom/harness/projects` (flow-creation.md rev 4 §4.1, §4.5, §4.7, Q8).
+- c71bc50: The command palette no longer opens on top of an open dialog. Pressing its shortcut while a dialog is up used to stack the palette over it, and pressing Tab then walked out of the palette into the dialog behind. The shortcut now does nothing while a dialog is open, and is not handed to the browser (so Ctrl+P over a dialog no longer opens the print preview). It still opens the palette over the Overview, which is unchanged.
+- 969caef: Agent Studio: Past sessions moves to a history glyph in the rail's top bar. The glyph beside back/forward opens the existing Past sessions side card beside the rail; the Projects options menu keeps Group by and Sort by only, and wears the sliders glyph. Search (⌘K) keeps listing past sessions too. An empty project's row tooltip reads "Create this project's first agent" (D36). (flow-creation.md rev 4 §4.7, Q9)
+- 54c6362: Agent Studio: opening or adding a project creates no session. A newly created durable project no longer gets an automatic first session titled "Plan Agents" with a bootstrap prompt typed into it; the project is minted, its agents scan in, and the user's own first session is an ordinary one. Reverses the automatic bootstrap first session from #824 to #826 and #834 (flow-creation.md rev 4 §4.1 step 3, Q5). Sessions that already carry bootstrap metadata still resume as ordinary sessions.
+- c71bc50: A project row's `+` is **New agent**, scoped to that project, and a plain session is no longer a row verb.
+
+  The row's hover `+` (`project-create-agent-{label}`, accessible name "New agent in {project}") creates into the project named on the row. A bare project (sessions, no agent yet) keeps its distinct scaffold verb (`workspace-scaffold-{label}`). `project-start-session-{label}` is removed: a plain session starts from the tab strip, or from the **Start session** on the project's own pane. The empty project still gets no create row of its own; its Agent Map row is the CTA.
+
+  On the Group axis every group row carries the same `+` (`group-create-agent-{label}`), scoped to the project that holds the group's members, since a group has no directory.
+
+  Follows design-eng `IA.md` 219 and D34(a), D34(c); D34(e) and D35 item 6 for sessions belonging to the tab strip.
+
+- c71bc50: A project row's remove verb is a hover action, not an overflow menu. The `⋮` on every project row opened a 248px card to hold a single item — on plan-first projects its create item is suppressed, because the Agent Map owns creation, so the popover existed to carry one `Remove … from the rail`. That verb is now an `X` beside the row's New agent `+`, hover-revealed like every other row action, and it opens the same confirmation as before: the project named, the count of running sessions it will end, and the statement that nothing on disk is touched.
+
+  Row actions state their subject in the accessible name and the tooltip rather than in visible menu text. The `project-remove-{label}` testid is unchanged and now belongs to the button itself; `project-menu-{label}` and `project-menu-card-{label}` are gone, as is the `openProjectMenu` e2e helper.
+
+  Follows design-eng D33: a project row's verbs are hover actions on the header, and a per-row menu would be a new idiom.
+
+- 5f3f25b: Agent Studio: the retired creation surfaces are gone. `CreateAgentDialog`, `TemplateUseDialog`, `StartDialog` with its detect flow, `project-dir` (`slugifyIdea`, `uniqueProjectDir`, `resolveProjectRoot`) and `firstInstructionPrompt` are deleted; the Overview card's "Open folder" runs the folder step; the web fallback for the folder step is the one-field `ProjectFolderDialog` on the shared dialog shell. Every entrance lands on one screen and every create goes through `POST /api/agents/scaffold` (flow-creation.md rev 4 §5, Q4).
+- d9d6b13: Share Agent Map contracts without changing Studio behavior or saved state.
+- 8a77b06: Share project identity, catalog locking, and canonical path matching while Studio retains discovery orchestration.
+
+  Resolve paths asynchronously with briefly cached root probes, isolate unrelated filesystem failures, and preserve ownership errors before Studio registration or session creation.
+
+- 5e9aacd: Share atomic map authoring and persistence, preserving the complete planning aggregate and Studio callbacks.
+- 5b61bac: Share map schemas, graph validation, and immutable version helpers.
+- c87678c: Agent Studio: submit scaffolds first, then one ordinary session that plans first. The new-agent screen calls `POST /api/agents/scaffold` in its project and only then opens an ordinary session bound to the agent; a refusal lands under the field and nothing starts. `CreateSessionRequest` loses `scaffold` (the harness never scaffolds inside a session any more; embedders call the scaffold endpoint, then create the session) and gains `initialSources` (links handed to the first prompt by URL) and `initialSetup` (session setup shown as a collapsed "Planning instructions" disclosure, never as the user's words). Template Use routes through the same screen; `TemplateUseDialog` is unreachable (flow-creation.md rev 4 §4.4, §4.6 steps 2 and 3, D30, D31, D37).
+- Updated dependencies [d532e49]
+- Updated dependencies [0c6e945]
+- Updated dependencies [c8c706e]
+- Updated dependencies [b052979]
+- Updated dependencies [1a3db42]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [85610db]
+  - @sapiom/mcp@0.17.0
+  - @sapiom/agent-core@0.14.3
+  - @sapiom/agent-map@0.2.0
+  - @sapiom/agent@0.14.3
+
+## 0.17.1
+
+### Patch Changes
+
+- 0fd07fa: Sync Agent Studio's offline prompt with the served guidance, including the distinction between direct gateway model discovery and the separate `sapiom_chat` catalog.
+  - @sapiom/agent@0.14.2
+  - @sapiom/agent-core@0.14.2
+
+## 0.17.0
+
+### Minor Changes
+
+- 84f5767: Surface when a running Claude session needs the current Sapiom connection, prevent prepared sessions or tasks from launching after it changes, and expose `MCP_CREDENTIAL_GENERATION_CHANGED` as a retryable conflict.
+- d775192: **Breaking for HTTP clients** (minor while `@sapiom/harness` is pre-1.0): retire
+  the documented project System Graph endpoints. Authenticated requests to all
+  three routes now return the generic JSON API `404` response:
+
+  - `GET /api/workspaces/:workspaceKey/system-graph`
+  - `POST /api/workspaces/:workspaceKey/system-graph/refresh`
+  - `GET /api/workspaces/:workspaceKey/system-graph/navigation`
+
+  The boot token remains required. These requests no longer resolve a scope,
+  read or refresh a legacy graph, or activate graph watchers.
+
+  Migrate to `GET /api/projects/:projectId/agent-map/workspace` for the durable
+  Agent Map and shared proposal, and
+  `GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` for exact
+  implementation navigation. Obtain server-issued project IDs from
+  `GET /api/state`; a workspace key, path or display name is not a project ID.
+  The durable APIs do not use the old process-memory graph snapshots or revision
+  matching protocol.
+
+  This release includes the matching Studio client recovery: an unresolved
+  project shows **Agent Map unavailable** with **Reload projects**, preserves its
+  conversation, and no longer starts or selects a session on a project click.
+  Shared workspace discovery, explicit session creation and ordinary session
+  navigation remain available independently of the retired graph.
+
+- 1a33894: Remove the retired project graph server runtime and HTTP handlers. Authenticated requests to the old graph, refresh, and navigation URLs return the generic JSON API 404; requests without the required boot token still return 401. The JSON 404 fallback applies to all unknown `/api` paths, preventing them from falling through to the Studio HTML shell.
+
+  Use durable project IDs and the Agent Map APIs. Shared agent discovery, ordinary sessions, and per-agent Canvas remain available.
+
+- fc8b07b: Bring Codex into Studio's Sapiom connection lifecycle: report stale credentials, explicitly restart resumable sessions with the current credential, and stop credential-bearing sessions and background tasks on disconnect.
+- fefb4f8: Expose the shared credential-store path to authenticated local integrations and stop affected Studio-managed Claude sessions and background tasks when the current Sapiom connection is removed.
+- cf3e872: Offer an explicit MCP session restart API and UI action when the Sapiom connection changes, and export `McpSessionRestartUnavailableError` for programmatic handling.
+- 2b9f75e: Resolve and refresh internal Assistant access using trusted Studio user credentials.
+- bcd6167: Add a revocable runtime-only credential bridge for the internal Studio Assistant.
+- 981c940: Add the internally gated Terminal/Assistant switch and a Studio-native streaming OpenCode conversation with connection recovery.
+- 1bb065e: Own OpenCode startup, authorized workspace state, access revocation, and shutdown in the shared Studio host.
+- 7df16bd: Associate Studio sessions with distinct OpenCode conversations and expose authenticated, session-scoped actions and incremental events.
+- b460c9a: Resolve linked agents from one tenant-scoped definitions list per poll instead
+  of a by-id lookup per agent: definitions the signed-in account cannot see are
+  never requested and show as unavailable in Studio. `WorkflowInfo` gains an
+  optional, serve-time `definitionAccess` field (never persisted).
+- d7f5c04: Let Studio request and privately retain a delegated signed-in user credential alongside its existing organization connection. Serialize user-token refresh with Studio login/sign-out, persist rotations atomically, and revoke the user-token family on sign-out when the backend is reachable. Existing CLI callers and legacy project ownership remain unchanged.
+
+### Patch Changes
+
+- 758ba40: Shorten the right pane's "Agent Map" tab to "Map" when the pane is narrow, instead of wrapping the label onto two lines.
+- 7776065: Limit archive backfill to 200 conversations per maintenance pass. Keep source events while work remains or archiving fails, and retry at the next scheduled cleanup.
+- c39980b: Route the Assistant through router.sapiom.ai using Luna and the Responses API.
+  Preserve streaming tool use, account-scoped credentials, and bounded retries for
+  empty answers. Throttle repeated failed runtime authentication attempts.
+  Custom Assistant gateways must support /v1/responses.
+- ad9789a: Synchronize Assistant status after the native stream connects, and ignore stale reads after newer activity, disconnects or session-view disposal.
+- b260034: Define a strict shared contract for sanitized Assistant transport failures and their trusted recovery actions.
+- 3a60ca7: Coalesce Assistant catch-up reads, cancel queued work on detach, and preserve visible history when a native response fails validation.
+- 2acd9bb: Attach a per-request completion instruction and support one durable native continuation from saved conversation results after an eligible incomplete turn. Fence prompt admission and uncertain dispatch, retain normal permissions, bound recovery time, and prevent the same continuation from dispatching again after reload. Preserve the exact Studio completion protocol on native compaction continuations so completed answers remain classifiable without replaying prompts or tool calls.
+- 6c96a5b: Fix project selection when a current Studio server cannot resolve the project's identity: show "Agent Map unavailable" with a "Reload projects" retry instead of the legacy project graph, and no longer start or select a session when that project is clicked. Explicit session creation and session-tab navigation remain available. Reloading project identities preserves the selected project and active conversation, and current projects ignore obsolete graph events.
+
+  This patch restores Studio's documented read-only project-selection contract during catalog failures.
+
+- a56328d: Add shared Assistant turn interpretation that distinguishes native activity, explicit completion reports, errors, and unconfirmed stops. Bind completion declarations to the current request and hide their bookkeeping across streamed parts and restored history. The host and chat integration follow in dependent changes.
+- d26b29b: Reconcile Assistant permissions and questions on attachment and reconnect, keeping acknowledged requests settled and showing when the session needs input.
+- 5602d4e: Fence in-memory Assistant drafts by the server-issued authority revision so drafts cannot cross account, tenant, denial, or readmission boundaries.
+- 4da9937: Add an opt-in durable process guard that prevents a replacement Assistant runtime from starting until prior native writer cleanup is positively proven.
+- e28f255: Fence Assistant runtime startup with durable native cleanup ownership and retain the lock whenever cleanup cannot be proven.
+- 768d9e4: Hide internal Assistant completion markers with an incorrect turn ID in streamed responses, confirmed answers, and saved history. Preserve literal prose and invalid marker syntax, and restore incomplete marker candidates when streaming ends. Completion still requires the expected turn ID; an unconfirmed answer remains Stopped.
+
+  Keep the Assistant conversation and unsent draft visible while automatic answer recovery reconnects the event stream and reconciles saved history and execution status.
+
+- d72433a: Preserve actionable Assistant service status codes and validated retry delays while replacing upstream error content with sanitized structured responses. Return oversized local requests as JSON 413 errors through the assembled Studio server.
+- ec252d3: Revoke Assistant bridge credentials when the verified user or tenant changes, even if an identity revision is incorrectly reused.
+- 6b0b11f: Name the two Sapiom MCP servers by role in both offline fallbacks — "the local
+  authoring server" and "the hosted capability server" — instead of by registration
+  alias (SAP-3179).
+
+  The two texts disagreed: the Studio prompt called the servers `sapiom` (hosted) and
+  `sapiom-dev` (local), which is what Studio registers; the authoring primer called them
+  `sapiom` (local) and `sapiom-direct` (hosted), which is what a plain Claude Code user is
+  told to register. A Studio session reads both, so "use the `sapiom` alias to author
+  agents" pointed it at the remote server the prompt had just said not to call while
+  authoring. Aliases now appear only inside the two `claude mcp add` commands, which are
+  unchanged. The Studio prompt also disambiguates the two same-named `sapiom_authenticate`
+  / `sapiom_status` pairs, so a session signs in against the local server.
+
+  Both digest pins move with the bodies. The paired backend content release
+  (sapiom/Sapiom#4884) must adopt the same two bodies for the cross-repo pins to agree.
+
+- ed89616: Preserve native updates and removals across Assistant history reads without overwriting newer activity or completed content.
+- e6e510e: Add a read-only native conversation observer that reconciles activity and pending-request counts across stream gaps for host integration.
+- 4b1ebc5: Keep overlapping Studio sign-in and sign-out transitions ordered while allowing a new sign-in to begin promptly after signing out.
+- 93fa8df: Keep native Assistant observation owned by the authorized Studio runtime, independently of browser attachment, and retire its summaries synchronously with access or runtime changes.
+- 66542da: Retry fully received incomplete Assistant model responses up to twice before exposing output or tool calls. Pass through tool fragments, refusals, errors, uncertain endings, and oversized prefixes without retrying. A completion declaration is the model's report and does not independently verify task success.
+- 4936ce9: Keep the initial creation form open when attachment preparation fails, preserving the request and files so you can retry.
+- df39da5: Deliver bounded Assistant summaries through Studio's existing state and event transports, with socket and account ordering that preserves uncertainty through disconnects.
+- b04ad4d: Preserve MCP replay cursors and optional-stream protocol responses so queued tool results arrive without repeating the original tool call. Use the pinned OpenCode runtime's native Code Mode to retain full MCP discovery without sending every remote tool schema with each model request.
+- 49e82a9: Preserve Assistant output through native stream gaps without joining incomplete text or replaying buffered deltas. Show catch-up until authoritative history or current stream parts repair the conversation. Cancel outstanding catch-up requests when their connection ends.
+- f618e7e: Retain unchanged verified Assistant access through bounded transient outages while revoking principal crossovers and exposing an opaque browser authority barrier for draft isolation.
+- 5602d4e: Retain unsent Assistant drafts across pane routes, session review, reconnects, and live-to-exited remounts while clearing them at authentication, deletion, and reload boundaries.
+- e40920e: Route strictly scoped Assistant runtime, authentication, and missing-history failures as actionable sanitized errors while preserving saved session associations and preventing replay.
+- 0f28c4e: Prevent repeated exit-status broadcasts from deleting configuration regenerated during session resume, including sessions restored after restart or imported from history. Failed resume preparation also cleans up regenerated configuration.
+- d07acd9: Preserve native event scoping, browser backpressure and connection cleanup in a shared Assistant event reader.
+- d2be8aa: Show trusted static recovery actions for typed Assistant transport and final-response failures while keeping incomplete turns blocked and preventing prompt or tool replay.
+- f13cad3: Show independent Assistant activity and pending-input indicators in existing session tabs and retained-session rows, with explicit uncertainty through reconnects.
+- c343fd1: Prepare the first part of the Assistant UI dependency graph for Studio's gated chat integration.
+- b177f49: Prepare the remaining Radix dependency graph required by the pinned Assistant UI integration.
+- 48ab09f: Adopt the pinned Assistant UI OpenCode packages and remove all temporary direct Radix dependency declarations.
+- 9ddb57c: Preserve Assistant drafts across view changes and brief capability-check failures. Reveal Terminal after foreground work is accepted, and show rejected inspector sends without changing the view.
+- 175fe2b: Package a pinned headless OpenCode runtime and configure Sapiom access through Studio's private bridge.
+- 42fcacc: Remove unreachable legacy project graph browser code from Studio's bundled client and server. This internal cleanup preserves durable Agent Map navigation, project-wide conversation tabs, and ordinary sessions' independent Canvas and Steps views.
+
+  Restore each project's map pan and zoom when returning from another project or an agent Canvas. If the saved view would leave every node offscreen, fit the map into view.
+
+- 7776065: Preserve the selected coding agent when launching a template from the new-session composer or template gallery, including bundled starters. Codex selections no longer start Claude Code sessions.
+- 9b957ca: Remove the 720px cap on the Agent Map pane: the resize handle now lets it grow until the terminal hits its own minimum width.
+- c2128f6: Validate native session and message identifiers before creating Assistant continuation records or lock files. Reject malformed identifiers at the storage boundary while preserving the existing record names and protection against dispatching recovery twice.
+- e59da42: Show overall Assistant status separately from completed tools, preserve the answer when completion is unconfirmed, and expose the saved conversation after its Terminal exits. Display bounded continuation progress, reconcile its history, and hide internal completion bookkeeping. Finished reflects the model's explicit report; an unmarked answer remains Stopped and automatic continuation may still produce an unnecessary recap.
+- Updated dependencies [0710301]
+- Updated dependencies [c39980b]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [9633e15]
+- Updated dependencies [98f88fd]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [421439b]
+- Updated dependencies [4c9bafb]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [d516895]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [a2ce646]
+- Updated dependencies [5d18ba3]
+- Updated dependencies [99bd7d3]
+  - @sapiom/mcp@0.16.0
+  - @sapiom/opencode@0.1.0
+  - @sapiom/agent@0.14.0
+  - @sapiom/agent-core@0.14.0
+
 ## 0.16.0
 
 ### Minor Changes

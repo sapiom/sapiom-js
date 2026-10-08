@@ -53,6 +53,26 @@ export type {
   ResolvedVersions,
 } from "./scaffold.js";
 
+// The served platform rules' stamp: what a shipped summary/pointer was written
+// against, and the "differs from the served copy" warning `check` attaches (SAP-3181).
+export {
+  AUTHORING_RULES_URL,
+  AUTHORING_RULES_PATH,
+  AUTHORING_RULES_RELEASE,
+  AUTHORING_RULES_DIGEST,
+  AUTHORING_RULES_SECTIONS,
+  AUTHORING_RULES_STAMP,
+  AUTHORING_RULES_STAMP_PLACEHOLDER,
+  AUTHORING_RULES_RELEASE_PLACEHOLDER,
+  renderAuthoringRulesStamp,
+  parseAuthoringRulesStamp,
+  authoringRulesDriftWarning,
+} from "./authoring-rules.js";
+export type {
+  AuthoringRulesStamp,
+  AuthoringRulesSection,
+} from "./authoring-rules.js";
+
 // Best-effort dependency install + bundle-failure hinting — shared by scaffold,
 // the example seed, and the Canvas/check/run-local bundle paths.
 export { installProjectDependencies } from "./install-deps.js";
@@ -129,9 +149,17 @@ export type {
 export { watchExecution, parseSseFrame, parseSseEvent } from "./watch.js";
 export type { WatchExecutionOptions } from "./watch.js";
 
-// signal (networked)
+// signal (networked) — the RESUME verb: wakes runs already paused on a signal
 export { signal, parseSignalPayload } from "./signal.js";
 export type { SignalOptions, SignalResult } from "./signal.js";
+
+// events (networked) — the START verb: fans out to the tenant's `event` triggers
+export { emitEvent, parseEventPayload, asEventPayload } from "./events.js";
+export type {
+  EmitEventOptions,
+  EmitEventResult,
+  EventOutcome,
+} from "./events.js";
 
 // feedback (networked) — relay a user's product feedback to the Sapiom team
 export { sendFeedback } from "./feedback.js";
@@ -144,12 +172,17 @@ export {
   getSchedule,
   cancelSchedule,
   previewCron,
+  rotateScheduleSecret,
+  completeScheduleSecretRotation,
+  revokeScheduleSecret,
 } from "./schedule.js";
 export type {
   ScheduleKind,
   ScheduleStatus,
   SchedulePolicy,
   CreateScheduleOptions,
+  CreateScheduleResult,
+  WebhookSecretMaterial,
   ListSchedulesOptions,
   CronPreviewOptions,
   CronPreview,

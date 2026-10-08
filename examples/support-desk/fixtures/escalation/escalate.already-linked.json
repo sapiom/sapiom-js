@@ -1,0 +1,19 @@
+{
+  "type": "issue.escalate",
+  "description": "Escalate an issue that is already linked to Linear and On Hold (localSeed seeds it on a local trace). Replies with the existing identifier; creates and emits nothing.",
+  "payload": {
+    "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
+    "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "source": "slack",
+    "causationId": "1790889800.2001",
+    "slack": {
+      "channel": "C0CUSTOMER1",
+      "ts": "1790889355.981329"
+    },
+    "summary": "Inbound events fail after retry; customer blocked.",
+    "requestedBy": "U0TEAMMATE1",
+    "localSeed": {
+      "linearIdentifier": "LOCAL-7"
+    }
+  }
+}

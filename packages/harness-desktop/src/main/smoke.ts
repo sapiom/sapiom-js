@@ -65,7 +65,9 @@ import { resolveWebDir } from "./paths.js";
 import { shimDir } from "./runtime-shims.js";
 import { CHANNEL_ENV_VAR, resolveUpdateChannel } from "./update-policy.js";
 import type { BootResult } from "./boot.js";
-import { checkAgentMap } from "./smoke-agent-map.js";
+import { checkMcpCapabilities } from "./smoke-mcp.js";
+import { checkProjectMap } from "./smoke-project-map.js";
+import { checkOpenCodeRuntime } from "./smoke-opencode.js";
 
 const require = createRequire(import.meta.url);
 
@@ -547,7 +549,6 @@ async function checkUnpackedDeps(): Promise<string> {
 
   const targets: Array<[string, string]> = [
     ["@sapiom/harness", harnessPkg],
-    ["Codex initialization worker", path.join(path.dirname(harnessPkg), "dist", "core", "codex-structured-inference.js")],
     ["web SPA", resolveWebDir()],
     // The ESM entry the Canvas subprocess imports (a stale/absent dist/esm here
     // is exactly the ERR_MODULE_NOT_FOUND crash we hit).
@@ -564,18 +565,6 @@ async function checkUnpackedDeps(): Promise<string> {
     .map(([name, p]) => `${name} (${p})`);
   if (missing.length) throw new Error(`not on disk: ${missing.join(", ")}`);
   return `${targets.length} entry points present on disk (asar-translated)`;
-}
-
-/** Import the inference sidecar in a real Node-mode child, without starting a provider. */
-async function checkInitializationWorker(): Promise<string> {
-  const harnessPkg = unpacked(require.resolve("@sapiom/harness/package.json"));
-  const worker = path.join(path.dirname(harnessPkg), "dist", "core", "codex-structured-inference.js");
-  const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e",
-    `await import(${JSON.stringify(pathToFileURL(worker).href)}); process.stdout.write("initialization-worker-ready");`], {
-    cwd: tmpdir(), env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, timeout: 10_000, maxBuffer: 16 * 1024,
-  });
-  if (stdout !== "initialization-worker-ready") throw new Error("Initialization worker failed to load");
-  return "unpacked initialization worker and dependencies load in a Node-mode child";
 }
 
 type BundleForDeploy = (sourceDir: string) => Promise<{
@@ -881,6 +870,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       " deep: typeof window.sapiomDesktop?.onDeepLink," +
       " updateState: typeof window.sapiomDesktop?.onUpdateState," +
       " pathForFile: typeof window.sapiomDesktop?.pathForFile," +
+      " revealPath: typeof window.sapiomDesktop?.revealPath," +
       " version: window.sapiomDesktop?.appVersion })",
   )) as {
     bridge: string;
@@ -889,6 +879,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
     deep: string;
     updateState: string;
     pathForFile: string;
+    revealPath: string;
     version: unknown;
   };
 
@@ -934,17 +925,25 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       `bridge incomplete — pathForFile missing: ${JSON.stringify(shape)}`,
     );
   }
+  // Shape-only, like chooseDirectory: invoking revealPath would open a real
+  // file-manager window. Its handler is registered beside chooseDirectory's.
+  if (shape.revealPath !== "function") {
+    throw new Error(
+      `bridge incomplete — revealPath missing: ${JSON.stringify(shape)}`,
+    );
+  }
   // The bridge must stay MINIMAL as well as present. Beyond appVersion the only
   // members allowed are checkForUpdates (no destructive counterpart — applying
   // an update is a native dialog, see ipc.ts), chooseDirectory (returns only a
   // user-picked path, opens no file, and is itself gated by isTrustedSender),
   // the two receive-only subscriptions (onDeepLink, onUpdateState), and
   // pathForFile (read-only resolution of a dropped File's path — no IPC, opens
-  // nothing). A restart method, by contrast, would let same-origin
+  // nothing), and revealPath (shows a folder in the file manager, runs nothing,
+  // gated by isTrustedSender). A restart method, by contrast, would let same-origin
   // agent-authored content end every running session — so anything new here has
   // to be a deliberate addition.
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState' && k !== 'pathForFile')",
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState' && k !== 'pathForFile' && k !== 'revealPath')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(
@@ -1000,7 +999,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState + pathForFile (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink + onUpdateState + pathForFile + revealPath (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }
@@ -1122,15 +1121,16 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("session-create", () => checkSessionCreate(base, token)),
     await check("agent-shim", checkAgentShim),
     await check("managed-agent", checkManagedAgent),
+    await check("opencode-runtime", checkOpenCodeRuntime),
     await check("preload-bridge", checkPreloadBridge),
     await check("node-pty", checkNodePty),
     await check("unpacked-deps", checkUnpackedDeps),
-    await check("initialization-worker", checkInitializationWorker),
     await check("runtime-shims", checkRuntimeShims),
     await check("run-local", () => checkRunLocal(base, token)),
     await check("deploy-bundle", checkDeployBundle),
     await check("desktop-bridge", () => checkDesktopBridge(boot)),
-    await check("agent-map", () => checkAgentMap(boot)),
+    await check("mcp-capabilities", checkMcpCapabilities),
+    await check("project-map", () => checkProjectMap(boot)),
     await check("update-config", checkUpdateConfig),
   ];
 }

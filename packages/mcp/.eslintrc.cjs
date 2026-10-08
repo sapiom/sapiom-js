@@ -14,7 +14,7 @@ module.exports = {
   env: {
     node: true,
   },
-  ignorePatterns: ['.eslintrc.js', 'vitest.config.ts', 'dist', 'node_modules'],
+  ignorePatterns: ['.eslintrc.js', 'vitest.config.ts', 'dist', 'node_modules', '__fixtures__'],
   rules: {
     '@typescript-eslint/no-explicit-any': 'off',
     '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],

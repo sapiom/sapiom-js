@@ -15,6 +15,8 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import {
   runDoctor,
+  mcpCommandForEntry,
+  qualifyMcpCommand,
   pickDefaultHarness,
   ensureAuthenticated,
   ensureSpawnHelperExecutable,
@@ -554,28 +556,22 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     machineId,
     webDir: resolveWebDir(),
     launchDir,
-    // NEW projects go one level down, in `projects/`, not directly into
-    // launchDir. On this host launchDir is `~/.sapiom/harness` — the harness's
-    // own state store (sessions.json, settings.json, workflows.json,
-    // machine-id, generated/) — so creating user projects as its direct
-    // children would interleave code with state and make "clear my state" and
-    // "delete my agents" the same gesture. The seeded sample already uses a
-    // containing subfolder (`sample-project/`), and the rail discovers projects
-    // by scanning recursively for the marker, so nesting costs nothing.
+    // NO DEFAULT DESTINATION FOR NEW AGENTS (flow-creation.md Q8). This host
+    // used to pass `projectRoot: <launchDir>/projects`, and every agent created
+    // from the composer landed there, under one parent row the rail showed as
+    // "the default project". New project now starts at the OS picker with no
+    // pre-chosen parent; an existing install keeps `~/.sapiom/harness/projects`
+    // as an ordinary opened project (it is in `recentDirs`) that can be removed.
     //
     // launchDir itself must stay put: it is the scan root, and moving it would
     // orphan the seeded sample from the rail.
-    projectRoot: path.join(launchDir, "projects"),
     // Console-free sapiom-dev MCP launch (see 3c above). ELECTRON_RUN_AS_NODE
     // rides the MCP config's own env block, so it applies to exactly this
     // child and never leaks into the session at large.
     ...(sapiomDevMcpEntry
       ? {
-          sapiomDevMcp: {
-            command: process.execPath,
-            args: [sapiomDevMcpEntry],
-            env: { ELECTRON_RUN_AS_NODE: "1" },
-          },
+          sapiomDevMcp: mcpCommandForEntry(sapiomDevMcpEntry),
+          prepareSapiomDevMcp: () => qualifyMcpCommand(mcpCommandForEntry(sapiomDevMcpEntry!)),
         }
       : {}),
     autoCreateSession: !firstRun,

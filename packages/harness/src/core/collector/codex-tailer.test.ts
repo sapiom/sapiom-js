@@ -83,13 +83,15 @@ describe("tailCodexRollout", () => {
 
   it("translates a user_message into UserPromptSubmit", async () => {
     await writeFile(rolloutPath, sessionMetaLine("agent-1", "/tmp/proj", "2026-01-01T00:00:00.000Z"));
-    start();
-    await sleep(POLL_MS * 4);
+    start({ startFromBeginning: true });
+    await vi.waitFor(() => {
+      expect(onEvent).toHaveBeenCalledWith("SessionStart", expect.anything());
+    });
 
     await appendFile(rolloutPath, userMessageLine("build me a leasing workflow"));
-    await sleep(POLL_MS * 4);
-
-    expect(onEvent).toHaveBeenCalledWith("UserPromptSubmit", { prompt: "build me a leasing workflow" });
+    await vi.waitFor(() => {
+      expect(onEvent).toHaveBeenCalledWith("UserPromptSubmit", { prompt: "build me a leasing workflow" });
+    });
   });
 
   it("pairs function_call + function_call_output into a single PostToolUse", async () => {

@@ -12,9 +12,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { MacroDef, WorkflowInfo } from "@shared/types";
+import { agentVerbRoute } from "./agent-verb-route";
 import { macroDisabledReason } from "./macro-gating";
 import {
   isWorkflowRunnable,
+  prodRunBlockedToast,
   prodRunDisabledReason,
   workflowDeploymentState,
 } from "./workflow-deployment";
@@ -195,34 +197,21 @@ describe("Fix 3 — Prod Run disabled-reason distinguishes deploy-failed from ne
 
 describe("Fix 1 — blocked direct actions produce a specific toast reason", () => {
   /**
-   * Models the App.tsx handleRunMacroForWorkflow direct-action branches.
-   * Returns the toast message that MUST be shown (never a silent return).
+   * The toast `handleRunMacroForWorkflow` shows for a direct action, read
+   * from the route it takes (agent-verb-route.ts). Null = it proceeds.
    */
   function directActionToastReason(
     kind: "deploy" | "prod-run" | "run-local",
     workflow: WorkflowInfo | null,
     lastDeployError: string | null,
   ): string | null {
-    if (kind === "deploy") {
-      return workflow ? null : "Select an agent first.";
-    }
-    if (kind === "prod-run") {
-      if (isWorkflowRunnable(workflow)) return null;
-      const state = workflow
-        ? workflowDeploymentState(workflow, lastDeployError)
-        : "draft";
-      return state === "failed"
-        ? "Last deploy failed — retry Deploy."
-        : state === "building"
-          ? "The cloud build is still in progress."
-          : state === "linked"
-            ? "No ready deployment yet — deploy it first."
-            : "This agent isn't deployed yet — deploy it first.";
-    }
-    if (kind === "run-local") {
-      return workflow ? null : "Select an agent first.";
-    }
-    return null;
+    const id = { deploy: "deploy", "prod-run": "prod_run", "run-local": "run_local" }[kind];
+    const route = agentVerbRoute(
+      { id, label: id, icon: "Play", requiresWorkflow: true, action: { kind: "inject", text: "x" } },
+      workflow,
+      lastDeployError,
+    );
+    return route.kind === "refuse" ? route.reason : null;
   }
 
   it("deploy with no agent toasts 'Select an agent first.'", () => {
@@ -273,6 +262,18 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
     );
   });
 
+  it("prod-run on a definition this account cannot see toasts 'not available', even with a remembered ready build", () => {
+    const wf = makeWorkflow({
+      definitionId: 42,
+      activeBuildRunId: "build-1",
+      activeBuildRunStatus: "ready",
+      definitionAccess: "unavailable",
+    });
+    expect(directActionToastReason("prod-run", wf, null)).toBe(
+      "This agent isn't available on the signed-in account.",
+    );
+  });
+
   it("prod-run with no workflow at all toasts 'not deployed' (null workflow has no definitionId)", () => {
     expect(directActionToastReason("prod-run", null, null)).toBe(
       "This agent isn't deployed yet — deploy it first.",
@@ -311,17 +312,19 @@ describe("macroDisabledReason — existing gating not regressed", () => {
   it("returns null when all conditions met", () => {
     const macro = makeMacro({ requiresWorkflow: true, action: { kind: "inject", text: "x" } });
     const wf = makeWorkflow();
-    expect(macroDisabledReason(macro, wf, "sess-1")).toBeNull();
+    expect(macroDisabledReason(macro, wf)).toBeNull();
   });
 
   it("requiresWorkflow: returns 'Select an agent first' when no agent is selected", () => {
     const macro = makeMacro({ requiresWorkflow: true });
-    expect(macroDisabledReason(macro, null, "sess-1")).toBe("Select an agent first");
+    expect(macroDisabledReason(macro, null)).toBe("Select an agent first");
   });
 
-  it("non-open-url + no session: returns 'Start a session first'", () => {
-    const macro = makeMacro({ requiresWorkflow: false, action: { kind: "inject", text: "x" } });
-    expect(macroDisabledReason(macro, null, null)).toBe("Start a session first");
+  it("inject and render-canvas: never gated on a session (flow 4.4b)", () => {
+    const inject = makeMacro({ requiresWorkflow: true, action: { kind: "inject", text: "x" } });
+    const render = makeMacro({ requiresWorkflow: true, action: { kind: "render-canvas" } });
+    expect(macroDisabledReason(inject, makeWorkflow())).toBeNull();
+    expect(macroDisabledReason(render, makeWorkflow())).toBeNull();
   });
 
   it("open-url: does not require session", () => {
@@ -329,6 +332,6 @@ describe("macroDisabledReason — existing gating not regressed", () => {
       requiresWorkflow: false,
       action: { kind: "open-url", url: "https://example.com" },
     });
-    expect(macroDisabledReason(macro, null, null)).toBeNull();
+    expect(macroDisabledReason(macro, null)).toBeNull();
   });
 });

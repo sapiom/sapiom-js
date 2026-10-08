@@ -36,7 +36,7 @@ function stitchContext(clips, { create } = {}) {
   };
 }
 
-test("normalizes clip duration to the nearest supported Kling value", () => {
+test("normalizes clip duration to 5 or 10 seconds", () => {
   assert.equal(normalizeClipDuration(5), 5);
   assert.equal(normalizeClipDuration(6), 5);
   assert.equal(normalizeClipDuration(7.49), 5);

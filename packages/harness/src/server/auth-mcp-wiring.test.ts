@@ -1,5 +1,5 @@
 /**
- * Lifecycle-level regression coverage for SAP-3114.
+ * Lifecycle-level regression coverage for SAP-3114, SAP-3116, and SAP-3122.
  *
  * These tests boot the real server and exercise the shared launch builder used
  * by interactive create/resume and headless background tasks. OAuth and the
@@ -7,13 +7,15 @@
  * synchronously before launching local throwaway processes. Nothing opens a
  * browser or contacts a Sapiom environment.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 
 const authFixture = vi.hoisted(() => ({
+  credentialsPath: "/tmp/sapiom-test-credentials.json",
   credential: null as null | {
     apiKey: string;
     tenantId: string;
@@ -29,7 +31,10 @@ const authFixture = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@sapiom/mcp/auth", () => {
+// Partial mock: every export not listed below stays real, so a new auth
+// import in the server cannot fail here as a missing mock export.
+vi.mock("@sapiom/mcp/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@sapiom/mcp/auth")>();
   const resolveEnvironment = vi.fn(async (environment?: string) => {
     const requested = environment ?? "production";
     const name =
@@ -56,6 +61,7 @@ vi.mock("@sapiom/mcp/auth", () => {
   });
 
   return {
+    ...actual,
     resolveEnvironment,
     readCredentials: vi.fn(async () => authFixture.credential),
     readCredentialsOrThrow: vi.fn(async () => {
@@ -71,11 +77,14 @@ vi.mock("@sapiom/mcp/auth", () => {
         credential: NonNullable<typeof authFixture.credential>,
       ) => {
         authFixture.credential = { ...credential };
+        await mkdir(dirname(authFixture.credentialsPath), { recursive: true });
+        await writeFile(authFixture.credentialsPath, "studio login signal");
       },
     ),
     clearCredentials: vi.fn(async () => {
       authFixture.credential = null;
     }),
+    credentialsFilePath: vi.fn(() => authFixture.credentialsPath),
   };
 });
 
@@ -87,7 +96,14 @@ import {
   writeCredentials,
 } from "@sapiom/mcp/auth";
 import { startServer, type HarnessServer } from "./index.js";
-import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
+import { resolveStatePaths } from "../core/paths.js";
+import type {
+  HarnessAdapter,
+  HarnessKind,
+  LaunchOpts,
+  SpawnSpec,
+} from "../shared/types.js";
+import { CodexAdapter } from "../core/adapters/codex.js";
 
 type LaunchKind = "create" | "resume" | "background";
 
@@ -98,15 +114,55 @@ interface CapturedLaunch {
     url: string;
     headers?: Record<string, string>;
   };
+  spec?: SpawnSpec;
 }
 
-function capturingClaudeAdapter(captures: CapturedLaunch[]): HarnessAdapter {
+/** Exercise the real Codex conversion, substituting only the final process.
+ * CLI parsing and actual MCP discovery are covered by the opt-in live test. */
+function capturingCodexAdapter(
+  captures: CapturedLaunch[],
+  beforeLaunch?: (opts: LaunchOpts) => void,
+): HarnessAdapter {
+  const adapter = new CodexAdapter();
+  /** Capture the real Codex arguments and config, then launch local Bash. */
+  const interactiveSpec = (kind: "create" | "resume", opts: LaunchOpts, rolloutId?: string): SpawnSpec => {
+    beforeLaunch?.(opts);
+    const spec = kind === "resume" ? adapter.resume(rolloutId!, opts) : adapter.launch(opts);
+    const config = JSON.parse(readFileSync(opts.mcpConfigFile!, "utf8")) as {
+      mcpServers: { sapiom: CapturedLaunch["remote"] };
+    };
+    captures.push({
+      kind,
+      remote: config.mcpServers.sapiom,
+      spec,
+    });
+    return { ...spec, command: "bash", args: [] };
+  };
+  return {
+    id: "codex",
+    eventSource: "transcript-tail",
+    systemPromptDelivery: "launch-flag",
+    doctor: async () => [],
+    launch: (opts) => interactiveSpec("create", opts),
+    resume: (rolloutId, opts) => interactiveSpec("resume", opts, rolloutId),
+    listPastSessions: async () => [],
+    canResume: async () => true,
+  };
+}
+
+function capturingAdapter(
+  harness: HarnessKind,
+  captures: CapturedLaunch[],
+): HarnessAdapter {
   const capture = (kind: LaunchKind, opts: LaunchOpts): void => {
     if (!opts.mcpConfigFile) throw new Error("expected an MCP config file");
     const config = JSON.parse(readFileSync(opts.mcpConfigFile, "utf-8")) as {
       mcpServers: { sapiom: CapturedLaunch["remote"] };
     };
-    captures.push({ kind, remote: config.mcpServers.sapiom });
+    captures.push({
+      kind,
+      remote: config.mcpServers.sapiom,
+    });
   };
   const interactiveSpec = (
     kind: "create" | "resume",
@@ -117,8 +173,8 @@ function capturingClaudeAdapter(captures: CapturedLaunch[]): HarnessAdapter {
   };
 
   return {
-    id: "claude-code",
-    eventSource: "hooks",
+    id: harness,
+    eventSource: harness === "claude-code" ? "hooks" : "transcript-tail",
     doctor: async () => [],
     launch: (opts) => interactiveSpec("create", opts),
     resume: (_agentSessionId, opts) => interactiveSpec("resume", opts),
@@ -151,15 +207,25 @@ function injectedKey(capture: CapturedLaunch): string | undefined {
   return capture.remote.headers?.["x-api-key"];
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("Agent Studio MCP authentication wiring", () => {
   const originalEnvironment = process.env.SAPIOM_ENVIRONMENT;
   let root: string;
   let projectRoot: string;
   let server: HarnessServer | undefined;
   let captures: CapturedLaunch[];
+  let identityWorkspaces: string[];
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "harness-auth-mcp-wiring-"));
+    authFixture.credentialsPath = join(root, "credentials.json");
     projectRoot = join(root, "project");
     await mkdir(projectRoot, { recursive: true });
     await writeFile(
@@ -173,7 +239,14 @@ describe("Agent Studio MCP authentication wiring", () => {
     delete process.env.SAPIOM_ENVIRONMENT;
     authFixture.credential = null;
     authFixture.readError = null;
+    authFixture.browserResult = {
+      apiKey: "browser-key",
+      tenantId: "browser-tenant",
+      organizationName: "Browser Org",
+      apiKeyId: "browser-key-id",
+    };
     captures = [];
+    identityWorkspaces = [];
     vi.clearAllMocks();
   });
 
@@ -182,6 +255,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    for (const cwd of identityWorkspaces) await rm(cwd, { recursive: true, force: true });
     await rm(root, {
       recursive: true,
       force: true,
@@ -195,10 +269,11 @@ describe("Agent Studio MCP authentication wiring", () => {
     }
   });
 
+  /** Start Studio with isolated state and the test's chosen adapters and identity. */
   async function boot(
     options: Pick<
       Parameters<typeof startServer>[0],
-      "identity" | "authMode"
+      "identity" | "authMode" | "adapters" | "codexHomeDir" | "machineId"
     > = {},
   ): Promise<HarnessServer> {
     server = await startServer({
@@ -208,7 +283,10 @@ describe("Agent Studio MCP authentication wiring", () => {
       autoCreateSession: false,
       stateRoot: root,
       launchDir: projectRoot,
-      adapters: { "claude-code": capturingClaudeAdapter(captures) },
+      adapters: {
+        "claude-code": capturingAdapter("claude-code", captures),
+        codex: capturingAdapter("codex", captures),
+      },
       loadSystemPrompt: async () => "test system prompt",
       ...options,
     });
@@ -226,12 +304,41 @@ describe("Agent Studio MCP authentication wiring", () => {
     });
   }
 
+  it("boots with the Assistant off and no access route without user credentials", async () => {
+    const host = await boot({ authMode: "disabled" });
+    const headers = { "X-Harness-Token": "test-token" };
+    const state = (await (
+      await fetch(`http://127.0.0.1:${host.port}/api/state`, { headers })
+    ).json()) as { assistant: { enabled: boolean } };
+    expect(state.assistant.enabled).toBe(false);
+    const removed = await fetch(
+      `http://127.0.0.1:${host.port}/api/assistant/access`,
+      { headers },
+    );
+    expect(removed.status).toBe(404);
+  });
+
+  async function waitForAuthenticated(): Promise<void> {
+    await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalled());
+    await Promise.resolve(
+      vi.mocked(writeCredentials).mock.results.at(-1)?.value,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await vi.waitFor(async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${server!.port}/api/auth/status`,
+        { headers: { "x-harness-token": "test-token" } },
+      );
+      expect(await response.json()).toMatchObject({ authenticated: true });
+    });
+  }
+
   it("injects a credential obtained through Studio login into the next session", async () => {
     await boot();
 
     const login = await post("/api/auth/start");
     expect(login.status).toBe(200);
-    await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalledOnce());
+    await waitForAuthenticated();
 
     await server!.sessionManager.create({
       cwd: projectRoot,
@@ -241,6 +348,571 @@ describe("Agent Studio MCP authentication wiring", () => {
     expect(captures).toHaveLength(1);
     expect(captures[0].kind).toBe("create");
     expect(injectedKey(captures[0])).toBe("browser-key");
+  });
+
+  it("resumes a Studio project session with its persisted identity after switching accounts", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      machineId: "machine-test",
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    await rm(join(projectRoot, "sapiom.json"));
+    const settings = await fetch(
+      `http://127.0.0.1:${server!.port}/api/settings`,
+      {
+        method: "PATCH",
+        headers: {
+          "x-harness-token": "test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ recentDirs: [projectRoot] }),
+      },
+    );
+    expect(settings.status).toBe(200);
+    const createdProject = await post("/api/projects", {
+      displayName: "Resume after reconnect",
+    });
+    expect(createdProject.status).toBe(201);
+    const project = (await createdProject.json()) as { projectId: string };
+    const boundRoot = await post(
+      `/api/projects/${project.projectId}/root-bindings`,
+      { root: projectRoot },
+    );
+    expect(boundRoot.status, await boundRoot.text()).toBe(201);
+
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
+    expect(session.agentMapIdentity).toMatchObject({
+      projectId: project.projectId,
+      userId: "local:machine-test",
+    });
+    // Existing sessions retain their recorded attribution across account
+    // changes, even when it came from the former account-scoped format.
+    session.agentMapIdentity = {
+      ...session.agentMapIdentity!,
+      userId: "test-tenant",
+    };
+    await server!.sessionManager.setAgentSessionId(
+      session.id,
+      "agent-session-reconnect",
+    );
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+    reconcile.mockClear();
+    const initialRuntime = server!.sessionManager.getRuntimeEpoch(session.id)!;
+
+    expect((await post("/api/auth/disconnect")).status).toBe(200);
+    expect(
+      server!.sessionManager.isCurrentRuntimeEpoch(session.id, initialRuntime),
+    ).toBe(false);
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)?.status).toBe("running"),
+    );
+    expect(server!.sessionManager.getRuntimeEpoch(session.id)).not.toBe(
+      initialRuntime,
+    );
+    expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+    expect(injectedKey(captures.at(-1)!)).toBeUndefined();
+    authFixture.browserResult = {
+      apiKey: "key-b",
+      tenantId: "account-b",
+      organizationName: "Account B",
+      apiKeyId: "key-b-id",
+    };
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    expect(authFixture.credential?.tenantId).toBe("account-b");
+    expect(server!.sessionManager.get(session.id)?.agentMapIdentity).toEqual(
+      persistedIdentity,
+    );
+
+    await server!.sessionManager.kill(session.id);
+    const resume = await post(`/api/sessions/${session.id}/resume`);
+    const body = await resume.json();
+    expect(
+      { status: resume.status, body },
+      JSON.stringify({ status: resume.status, body }),
+    ).toMatchObject({
+      status: 200,
+      body: { id: session.id, status: "running" },
+    });
+    expect(server!.sessionManager.get(session.id)?.agentMapIdentity).toEqual(
+      persistedIdentity,
+    );
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a persisted session when a nested project takes ownership of its cwd", async () => {
+    await boot({ machineId: "machine-test" });
+    await rm(join(projectRoot, "sapiom.json"));
+    const settings = await fetch(
+      `http://127.0.0.1:${server!.port}/api/settings`,
+      {
+        method: "PATCH",
+        headers: {
+          "x-harness-token": "test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ recentDirs: [projectRoot] }),
+      },
+    );
+    expect(settings.status).toBe(200);
+    const createdProject = await post("/api/projects", {
+      displayName: "Outer resume project",
+    });
+    expect(createdProject.status).toBe(201);
+    const outerProject = (await createdProject.json()) as {
+      projectId: string;
+    };
+    const outerBinding = await post(
+      `/api/projects/${outerProject.projectId}/root-bindings`,
+      { root: projectRoot },
+    );
+    expect(outerBinding.status).toBe(201);
+
+    const nestedRoot = join(projectRoot, "nested");
+    await mkdir(nestedRoot);
+    const session = await server!.sessionManager.create({
+      cwd: nestedRoot,
+      harness: "claude-code",
+    });
+    expect(session.agentMapIdentity?.projectId).toBe(outerProject.projectId);
+    await server!.sessionManager.setAgentSessionId(
+      session.id,
+      "agent-session-nested-project",
+    );
+    await server!.sessionManager.kill(session.id);
+    await server!.sessionManager.flush();
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+
+    const catalog = new StudioProjectCatalog(
+      resolveStatePaths(root).studioProjects,
+    );
+    const nestedProject = await catalog.create("Nested resume project");
+    await catalog.addRootBinding(nestedProject.projectId, nestedRoot);
+    expect(
+      (await catalog.resolveIdentityForPath(nestedRoot))?.projectId,
+    ).toBe(nestedProject.projectId);
+
+    const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
+    reconcile.mockClear();
+    const resume = await post(`/api/sessions/${session.id}/resume`);
+    const body = (await resume.json()) as { code?: string };
+    expect(resume.status).toBe(409);
+    expect(body.code).toBe("PROJECT_SESSION_SCOPE_UNAVAILABLE");
+    expect(server!.sessionManager.get(session.id)?.agentMapIdentity).toEqual(
+      persistedIdentity,
+    );
+    expect(reconcile).not.toHaveBeenCalled();
+
+    await server!.sessionManager.flush();
+    const persistedSessions = JSON.parse(
+      readFileSync(resolveStatePaths(root).sessions, "utf8"),
+    ) as Array<{
+      id: string;
+      agentMapIdentity?: unknown;
+    }>;
+    expect(
+      persistedSessions.find((candidate) => candidate.id === session.id)
+        ?.agentMapIdentity,
+    ).toEqual(persistedIdentity);
+  });
+
+  it.each(["claude-code", "codex"] as const)(
+    "marks a live signed-out %s session restart-required after login",
+    async (harness) => {
+      await boot();
+      const session = await server!.sessionManager.create({
+        cwd: projectRoot,
+        harness,
+      });
+      expect(session.mcpAuthState).toBe("current");
+
+      expect((await post("/api/auth/start")).status).toBe(200);
+      await vi.waitFor(() =>
+        expect(server!.sessionManager.get(session.id)).toMatchObject({
+          status: "running",
+          mcpAuthState: "restart-required",
+        }),
+      );
+    },
+  );
+
+  it.each(["claude-code", "codex"] as const)(
+    "explicitly restarts a stale %s session with a rotated key",
+    async (harness) => {
+      authFixture.credential = credential("key-a");
+      await boot({
+        identity: {
+          userId: "test-tenant",
+          tenantId: "test-tenant",
+          organizationName: "Test Org",
+          apiKey: "key-a",
+          source: "cached",
+        },
+      });
+      const session = await server!.sessionManager.create({
+        cwd: projectRoot,
+        harness,
+      });
+      await server!.sessionManager.setAgentSessionId(
+        session.id,
+        "agent-session-1",
+      );
+
+      authFixture.credential = credential("key-b");
+      await writeFile(authFixture.credentialsPath, "external rotation signal");
+      await vi.waitFor(() =>
+        expect(server!.sessionManager.get(session.id)?.mcpAuthState).toBe(
+          "restart-required",
+        ),
+      );
+
+      const restart = await post(`/api/sessions/${session.id}/restart-mcp`);
+      const restartBody = (await restart.json()) as Record<string, unknown>;
+      expect(restart.status, JSON.stringify(restartBody)).toBe(200);
+      expect(server!.sessionManager.get(session.id)).toMatchObject({
+        status: "running",
+        mcpAuthState: "current",
+      });
+      expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+      expect(injectedKey(captures.at(-1)!)).toBe("key-b");
+    },
+  );
+
+  it(
+    "relaunches a keyless session after disconnect and restarts with the next key",
+    async () => {
+      authFixture.credential = credential("key-a");
+      await boot({
+        identity: {
+          userId: "test-tenant",
+          tenantId: "test-tenant",
+          organizationName: "Test Org",
+          apiKey: "key-a",
+          source: "cached",
+        },
+      });
+      const session = await server!.sessionManager.create({
+        cwd: projectRoot,
+        harness: "claude-code",
+      });
+      await server!.sessionManager.setAgentSessionId(
+        session.id,
+        "agent-session-key-rotation-after-disconnect",
+      );
+      const initialRuntime = server!.sessionManager.getRuntimeEpoch(session.id)!;
+
+      const disconnect = await post("/api/auth/disconnect");
+      expect(disconnect.status).toBe(200);
+      expect(
+        server!.sessionManager.isCurrentRuntimeEpoch(
+          session.id,
+          initialRuntime,
+        ),
+      ).toBe(false);
+      await vi.waitFor(() =>
+        expect(server!.sessionManager.get(session.id)).toMatchObject({
+          status: "running",
+          mcpAuthState: "current",
+        }),
+      );
+      const keylessRuntime = server!.sessionManager.getRuntimeEpoch(session.id)!;
+      expect(keylessRuntime).not.toBe(initialRuntime);
+      expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+      expect(injectedKey(captures.at(-1)!)).toBeUndefined();
+
+      authFixture.browserResult = {
+        apiKey: "key-b",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKeyId: "key-b-id",
+      };
+      expect((await post("/api/auth/start")).status).toBe(200);
+      await waitForAuthenticated();
+      await vi.waitFor(() =>
+        expect(server!.sessionManager.get(session.id)?.mcpAuthState).toBe(
+          "restart-required",
+        ),
+      );
+
+      const restart = await post(`/api/sessions/${session.id}/restart-mcp`);
+      const restartBody = (await restart.json()) as Record<string, unknown>;
+      expect(restart.status, JSON.stringify(restartBody)).toBe(200);
+      expect(server!.sessionManager.get(session.id)).toMatchObject({
+        status: "running",
+        mcpAuthState: "current",
+      });
+      expect(server!.sessionManager.getRuntimeEpoch(session.id)).not.toBe(
+        keylessRuntime,
+      );
+      expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+      expect(injectedKey(captures.at(-1)!)).toBe("key-b");
+    },
+    20_000,
+  );
+
+  it.each(["claude-code", "codex"] as const)(
+    "kills and keylessly relaunches a credential-bearing %s session before disconnect succeeds",
+    async (harness) => {
+      authFixture.credential = credential("key-a");
+      await boot({
+        identity: {
+          userId: "test-tenant",
+          tenantId: "test-tenant",
+          organizationName: "Test Org",
+          apiKey: "key-a",
+          source: "cached",
+        },
+      });
+      const session = await server!.sessionManager.create({
+        cwd: projectRoot,
+        harness,
+      });
+      await server!.sessionManager.setAgentSessionId(
+        session.id,
+        `agent-session-${harness}`,
+      );
+      const initialRuntime = server!.sessionManager.getRuntimeEpoch(session.id)!;
+
+      const disconnect = await post("/api/auth/disconnect");
+
+      expect(disconnect.status).toBe(200);
+      expect(
+        server!.sessionManager.isCurrentRuntimeEpoch(
+          session.id,
+          initialRuntime,
+        ),
+      ).toBe(false);
+      await vi.waitFor(() =>
+        expect(server!.sessionManager.get(session.id)).toMatchObject({
+          status: "running",
+          mcpAuthState: "current",
+        }),
+      );
+      expect(server!.sessionManager.getRuntimeEpoch(session.id)).not.toBe(
+        initialRuntime,
+      );
+      expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+      expect(injectedKey(captures.at(-1)!)).toBeUndefined();
+    },
+    20_000,
+  );
+
+  it("kills and keylessly relaunches a session when an external logout changes the shared store", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    await server!.sessionManager.setAgentSessionId(
+      session.id,
+      "agent-session-external-logout",
+    );
+    const initialRuntime = server!.sessionManager.getRuntimeEpoch(session.id)!;
+
+    authFixture.credential = null;
+    await writeFile(authFixture.credentialsPath, "external logout signal");
+
+    await vi.waitFor(
+      () => {
+        expect(server!.sessionManager.getRuntimeEpoch(session.id)).not.toBe(
+          initialRuntime,
+        );
+        expect(server!.sessionManager.get(session.id)).toMatchObject({
+          status: "running",
+          mcpAuthState: "current",
+        });
+      },
+      { timeout: 5_000 },
+    );
+    expect(
+      server!.sessionManager.isCurrentRuntimeEpoch(session.id, initialRuntime),
+    ).toBe(false);
+    expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+    expect(injectedKey(captures.at(-1)!)).toBeUndefined();
+  }, 20_000);
+
+  it("keeps a session without an agent session ID exited after first sign-in arms external-logout observation", async () => {
+    authFixture.credentialsPath = join(
+      root,
+      "new-home",
+      ".sapiom",
+      "credentials.json",
+    );
+    await boot();
+
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+
+    authFixture.credential = null;
+    await writeFile(authFixture.credentialsPath, "external logout signal");
+
+    await vi.waitFor(
+      () =>
+        expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
+      { timeout: 5_000 },
+    );
+  }, 20_000);
+
+  it("runs a fresh removal sweep when disconnect follows an older cleanup", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    const firstSession = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    await server!.sessionManager.setAgentSessionId(
+      firstSession.id,
+      "agent-session-first-sweep",
+    );
+    const firstRuntime = server!.sessionManager.getRuntimeEpoch(firstSession.id)!;
+    const firstSweep = deferred();
+    const relaunchCredentialBearingSessions =
+      server!.sessionManager.relaunchCredentialBearingSessions.bind(
+        server!.sessionManager,
+      );
+    const relaunch = vi
+      .spyOn(server!.sessionManager, "relaunchCredentialBearingSessions")
+      .mockImplementationOnce(() => firstSweep.promise)
+      .mockImplementation(relaunchCredentialBearingSessions);
+
+    authFixture.credential = null;
+    await writeFile(authFixture.credentialsPath, "first logout signal");
+    await vi.waitFor(() => expect(relaunch).toHaveBeenCalledOnce());
+
+    authFixture.browserResult = {
+      apiKey: "key-b",
+      tenantId: "test-tenant",
+      organizationName: "Test Org",
+      apiKeyId: "key-b-id",
+    };
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    const newerSession = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+
+    let disconnectSettled = false;
+    const disconnect = post("/api/auth/disconnect").then((response) => {
+      disconnectSettled = true;
+      return response;
+    });
+    await vi.waitFor(() => expect(clearCredentials).toHaveBeenCalledOnce());
+    expect(relaunch).toHaveBeenCalledOnce();
+    expect(disconnectSettled).toBe(false);
+
+    firstSweep.resolve();
+    expect((await disconnect).status).toBe(200);
+    expect(relaunch).toHaveBeenCalledTimes(2);
+    expect(relaunch.mock.calls[1]![0]).toBeGreaterThan(
+      relaunch.mock.calls[0]![0],
+    );
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(firstSession.id)?.status).toBe("running"),
+    );
+    expect(
+      server!.sessionManager.isCurrentRuntimeEpoch(firstSession.id, firstRuntime),
+    ).toBe(false);
+    expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+    expect(injectedKey(captures.at(-1)!)).toBeUndefined();
+    expect(server!.sessionManager.get(newerSession.id)?.status).toBe("exited");
+  }, 20_000);
+
+  it("wires fresh Codex sessions after UI login, refreshes resume/create credentials, and clears auth after logout", async () => {
+    process.env.SAPIOM_ENVIRONMENT = "staging";
+    await boot({ adapters: { codex: capturingCodexAdapter(captures) }, codexHomeDir: root });
+    const create = async (cwd = projectRoot) => {
+      await mkdir(cwd, { recursive: true });
+      const response = await post("/api/sessions", { cwd, harness: "codex" });
+      expect(response.status).toBe(201);
+      return response.json() as Promise<{ id: string; harness: string }>;
+    };
+    const expectWiring = (key?: string) => {
+      const { spec, remote } = captures.at(-1)!;
+      expect(remote.url).toBe("https://api.staging.example.test/v1/mcp");
+      expect(spec!.args.join(" ")).toContain('"url" = "https://api.staging.example.test/v1/mcp"');
+      expect(spec!.args.join(" ")).toMatch(/mcp_servers\.sapiom-dev-[a-f0-9]{12}=/);
+      expect(spec!.env.SAPIOM_ENVIRONMENT).toBeUndefined();
+      expect(spec!.args.join(" ")).toContain('"env" = { "SAPIOM_ENVIRONMENT" = "staging"');
+      expect(spec!.env.SAPIOM_CODEX_MCP_0_HEADER_0).toBe(key);
+      expect(spec!.args.join(" ")).not.toMatch(/browser-key|rotated-key/);
+    };
+
+    await create();
+    expectWiring();
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    // Project bootstrap belongs to the principal that discovered it. Use a
+    // fresh workspace after identity changes, as a new Studio user would.
+    const signedInRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-in-"));
+    identityWorkspaces.push(signedInRoot);
+    const signedIn = await create(signedInRoot);
+    expect(signedIn.harness).toBe("codex");
+    expectWiring("browser-key");
+    const launchArgs = captures.at(-1)!.spec!.args;
+    await server!.sessionManager.setAgentSessionId(signedIn.id, "codex-rollout-fixture");
+
+    authFixture.credential = { ...authFixture.browserResult, apiKey: "rotated-key" };
+    await server!.sessionManager.kill(signedIn.id);
+    expect((await post(`/api/sessions/${signedIn.id}/resume`)).status).toBe(200);
+    expect(captures.at(-1)!.kind).toBe("resume");
+    expectWiring("rotated-key");
+    expect(captures.at(-1)!.spec!.args.filter((arg) => arg.startsWith("mcp_servers.")))
+      .toEqual(launchArgs.filter((arg) => arg.startsWith("mcp_servers.")));
+
+    await create(signedInRoot);
+    expectWiring("rotated-key");
+    expect((await post("/api/auth/disconnect")).status).toBe(200);
+    const signedOutRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-out-"));
+    identityWorkspaces.push(signedOutRoot);
+    await create(signedOutRoot);
+    expectWiring();
+    expect(clearCredentials).toHaveBeenCalled();
+  }, 20_000);
+
+  it("returns a credential-safe error to the UI if Codex's generated MCP file cannot be parsed", async () => {
+    const adapter = capturingCodexAdapter(captures, (opts) => {
+      writeFileSync(opts.mcpConfigFile!, 'private-api-key: "broken JSON"');
+    });
+    await boot({ adapters: { codex: adapter }, codexHomeDir: root });
+    const response = await post("/api/sessions", { cwd: projectRoot, harness: "codex" });
+    expect(response.status).toBe(500);
+    const body = await response.text();
+    expect(body).toContain("Could not load the generated Codex MCP configuration");
+    expect(body).not.toContain("private-api-key");
+    expect(body).not.toContain(root);
+    expect(captures).toHaveLength(0);
   });
 
   it("adopts a credential written externally after boot", async () => {

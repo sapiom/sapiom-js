@@ -24,6 +24,7 @@ import type {
   CanvasEnrichment,
   CanvasLayoutHints,
 } from "./canvas-enrichment.js";
+import { isBorderNode } from "./canvas-map-steps.js";
 
 export const NODE_W = 176;
 export const NODE_H = 64;
@@ -99,6 +100,35 @@ export function layoutGraph(
   graph: CanvasGraph,
   laneOrder?: CanvasLayoutHints["laneOrder"],
 ): GraphLayout {
+  // Other agents sit in a column at the board's border, beside the step they
+  // touch (design.md M6): lay the steps out first, then the column.
+  const border = graph.nodes.filter(isBorderNode);
+  if (border.length > 0) {
+    const borderIds = new Set(border.map((node) => node.id));
+    const steps = layoutGraph(
+      {
+        ...graph,
+        nodes: graph.nodes.filter((node) => !borderIds.has(node.id)),
+        edges: graph.edges.filter((edge) => !borderIds.has(edge.from) && !borderIds.has(edge.to)),
+      },
+      laneOrder,
+    );
+    const columnX = steps.width - MARGIN + COL_GAP * 2;
+    const pos = { ...steps.pos };
+    let nextY = MARGIN;
+    for (const node of border) {
+      const anchor = graph.edges.find((edge) => edge.to === node.id || edge.from === node.id);
+      const anchorId = anchor ? (anchor.to === node.id ? anchor.from : anchor.to) : graph.entry;
+      const y = Math.max(steps.pos[anchorId]?.y ?? MARGIN, nextY);
+      pos[node.id] = { x: columnX, y };
+      nextY = y + NODE_H + COL_GAP / 2;
+    }
+    return {
+      pos,
+      width: columnX + NODE_W + MARGIN,
+      height: Math.max(steps.height, nextY - COL_GAP / 2 + MARGIN),
+    };
+  }
   const layer = computeLayers(graph.nodes, graph.edges);
   const byLayer = new Map<number, string[]>();
   for (const n of graph.nodes) {
@@ -288,6 +318,21 @@ export function renderGraphSvg(
       const from = layout.pos[edge.from];
       const to = layout.pos[edge.to];
       if (!from || !to) return "";
+      const ends = `data-edge-from="${esc(edge.from)}" data-edge-to="${esc(edge.to)}"`;
+      // An edge to or from the border column runs sideways: from the step's
+      // right side to the card's left side, or back to the entry.
+      if (isBorderNode(nodesById.get(edge.to) ?? { id: "", kind: "step" }) ||
+          isBorderNode(nodesById.get(edge.from) ?? { id: "", kind: "step" })) {
+        const outward = isBorderNode(nodesById.get(edge.to)!);
+        const sx = outward ? from.x + NODE_W : from.x;
+        const sy = from.y + NODE_H / 2;
+        const tx = outward ? to.x : to.x + NODE_W;
+        const ty = to.y + NODE_H / 2 + (outward ? 0 : 8);
+        const mid = (sx + tx) / 2;
+        const path = `<path class="canvas-edge canvas-edge--launch" ${ends} d="M${sx},${sy} C ${mid},${sy} ${mid},${ty} ${tx},${ty}" marker-end="url(#canvas-arrow)" />`;
+        if (!edge.label) return path;
+        return path + `<text class="canvas-edge-label" x="${mid}" y="${(sy + ty) / 2 - 6}" text-anchor="middle">${esc(edge.label)}</text>`;
+      }
       const x1 = from.x + NODE_W / 2;
       const y1 = from.y + NODE_H;
       const x2 = to.x + NODE_W / 2;
@@ -347,7 +392,7 @@ export function renderGraphSvg(
       const marker = dashedClass
         ? "url(#canvas-arrow)"
         : arrowMarker(colorSuffix);
-      const path = `<path class="${classes}" d="${d}" marker-end="${marker}" />`;
+      const path = `<path class="${classes}" ${ends} d="${d}" marker-end="${marker}" />`;
       // An enriched label (an intent/condition name the AI read out of the
       // step body) wins over the structural default (e.g. "launch()").
       const labelText =
@@ -377,7 +422,7 @@ export function renderGraphSvg(
         ? `<title>${esc(details.description)}</title>`
         : "";
       return (
-        `<g class="canvas-node node--${node.kind}" filter="url(#canvas-glow)" transform="translate(${p.x},${p.y})" data-step-name="${esc(node.label)}" data-step-id="${esc(node.id)}">` +
+        `<g class="canvas-node node--${node.kind}" filter="url(#canvas-glow)" transform="translate(${p.x},${p.y})" data-node-id="${esc(node.id)}" data-step-name="${esc(node.label)}" data-step-id="${esc(node.id)}">` +
         description +
         `<rect class="canvas-node-rect" width="${NODE_W}" height="${NODE_H}" rx="14" />` +
         `<text class="canvas-node-title" x="${NODE_W / 2}" y="${titleY}">${esc(node.label)}</text>` +

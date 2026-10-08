@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { JSX, RefObject } from "react";
+import { useEffect, useRef } from "react";
+import type { JSX } from "react";
 
-import type { FsListResponse } from "../lib/api";
 import { SAPIOM_QUICKSTART_URL } from "../lib/urls";
 import { Icon } from "./Icon";
-import { StartDialog } from "./StartDialog";
 
 interface OverviewModalProps {
   /** Genuine first run: the greeting welcomes, otherwise it just names the app. */
@@ -13,13 +11,12 @@ interface OverviewModalProps {
    *  desktop bridge reports the app build, the browser host the bundled
    *  harness version. */
   appVersion: string | null;
-  recentDirs: string[];
-  projectRoot: string | null;
-  listDir: (path?: string) => Promise<FsListResponse>;
-  /** Register an existing agent project (the picker's `project` outcome). */
-  onConnect: (cwd: string) => Promise<void>;
-  /** Bulk-register every project under a root (its `multi` outcome). */
-  onScan: (root: string) => Promise<number>;
+  /**
+   * Open a folder as a project: the folder step (flow-creation.md §4.5), the
+   * OS picker on desktop and the one-field dialog on the web. The card closes
+   * first so the step is never asked from behind a scrim.
+   */
+  onAddProject: () => void;
   /** Leaves the card and opens the template catalog. */
   onBrowseTemplates: () => void;
   /** Click-out, Esc, or the close glyph: the card is never a trap. */
@@ -37,39 +34,25 @@ interface OverviewModalProps {
 export function OverviewModal({
   firstRun,
   appVersion,
-  recentDirs,
-  projectRoot,
-  listDir,
-  onConnect,
-  onScan,
+  onAddProject,
   onBrowseTemplates,
   onDismiss,
 }: OverviewModalProps): JSX.Element {
-  const [addOpen, setAddOpen] = useState(false);
-  const openFolderRef = useRef<HTMLButtonElement>(null);
-
-  // Esc dismisses the card, but only while the nested picker is closed, so a
-  // single press closes the picker first (its own handler) rather than both
-  // layers at once.
+  // Esc dismisses the card. Claimed for the card before the shell's pane
+  // shortcut sees it.
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
   useEffect(() => {
-    if (addOpen) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
-      // Claim Escape for the card before the shell's pane shortcut sees it.
       e.preventDefault();
       dismissRef.current();
     };
-    // Attached a tick late: the Esc that closes the nested picker flushes
-    // state mid-dispatch, so listening immediately would catch the SAME
-    // keydown at window and close both layers on one press.
-    const id = window.setTimeout(() => window.addEventListener("keydown", onKey), 0);
+    window.addEventListener("keydown", onKey);
     return () => {
-      window.clearTimeout(id);
       window.removeEventListener("keydown", onKey);
     };
-  }, [addOpen]);
+  }, []);
 
   return (
     <div
@@ -124,11 +107,13 @@ export function OverviewModal({
               </span>
             </span>
             <button
-              ref={openFolderRef}
               type="button"
               className="btn-primary overview-modal-cta"
               data-testid="overview-open-folder"
-              onClick={() => setAddOpen(true)}
+              onClick={() => {
+                onDismiss();
+                onAddProject();
+              }}
             >
               Open folder
             </button>
@@ -165,18 +150,6 @@ export function OverviewModal({
           </a>
         </div>
       </div>
-
-      {addOpen && (
-        <StartDialog
-          recentDirs={recentDirs}
-          projectRoot={projectRoot}
-          listDir={listDir}
-          onClose={() => setAddOpen(false)}
-          onConnect={onConnect}
-          onScan={onScan}
-          triggerRef={openFolderRef as RefObject<HTMLElement | null>}
-        />
-      )}
     </div>
   );
 }

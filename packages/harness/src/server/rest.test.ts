@@ -36,6 +36,8 @@ import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import {
   AdapterNotFoundError,
   ExternalHarnessError,
+  McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -61,6 +63,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     ),
     create: vi.fn(),
     resume: vi.fn(),
+    restartForMcpCredentials: vi.fn(),
     kill: vi.fn(() => true),
     write: vi.fn(() => true),
     submitInput: vi.fn(async () => true),
@@ -82,6 +85,11 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
           harness: input.harness,
           cwd: input.cwd,
           title: input.title,
+          agentMapIdentity: {
+            projectId: "project_00000000-0000-4000-8000-000000000001",
+            userId: "user-test",
+            sessionId: `adopted-${input.agentSessionId}`,
+          },
           status: "exited",
           createdAt: input.lastActiveAt,
           lastActiveAt: input.lastActiveAt,
@@ -106,6 +114,11 @@ function exitedSession(
     harness: "claude-code",
     cwd: "/tmp/proj",
     title: "proj",
+    agentMapIdentity: {
+      projectId: "project_00000000-0000-4000-8000-000000000001",
+      userId: "user-test",
+      sessionId: "sess-1",
+    },
     status: "exited",
     createdAt: "2026-01-01T00:00:00.000Z",
     lastActiveAt: "2026-01-01T01:00:00.000Z",
@@ -184,6 +197,22 @@ describe("createRestRouter", () => {
   });
 
   describe("GET /state", () => {
+    it("reads the Assistant projection after asynchronous inventory finishes", async () => {
+      let release!: () => void;
+      const inventory = new Promise<void>(resolve => { release = resolve; });
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      let revision = 1;
+      const getAssistantState = vi.fn(() => ({ hostInstanceId: "host", authorityRevision: "auth", revision, enabled: false, sessions: [] }));
+      start({ getAssistantState, listWorkflows: async () => { entered(); await inventory; return []; } });
+      const response = fetch(`${baseUrl}/state`);
+      await started;
+      expect(getAssistantState).not.toHaveBeenCalled();
+      revision = 2;
+      release();
+      expect((await (await response).json() as { assistant: unknown }).assistant).toEqual(getAssistantState());
+    });
+
     it("reports unauthenticated with empty workflows/macros/sessions by default", async () => {
       start();
       const res = await fetch(`${baseUrl}/state`);
@@ -213,13 +242,21 @@ describe("createRestRouter", () => {
     it("surfaces opaque workspace identities when the server supplies them", async () => {
       start({
         listWorkspaceScopes: () => [
-          { workspaceKey: "workspace-app", cwd: "/Users/demo/acme-app" },
+          {
+            workspaceKey: "workspace-app",
+            cwd: "/Users/demo/acme-app",
+            projectId: "project_00000000-0000-4000-8000-000000000001",
+          },
         ],
       });
       const res = await fetch(`${baseUrl}/state`);
       const body = (await res.json()) as { workspaceScopes: unknown[] };
       expect(body.workspaceScopes).toEqual([
-        { workspaceKey: "workspace-app", cwd: "/Users/demo/acme-app" },
+        {
+          workspaceKey: "workspace-app",
+          cwd: "/Users/demo/acme-app",
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+        },
       ]);
     });
 
@@ -272,6 +309,11 @@ describe("createRestRouter", () => {
         harness: "claude-code",
         cwd: "/tmp/proj",
         title: "proj",
+        agentMapIdentity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          userId: "user-test",
+          sessionId: "s1",
+        },
         status: "running",
         createdAt: "2026-01-01T00:00:00.000Z",
         lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -542,15 +584,35 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions", () => {
-    it("preserves the initial task and scaffold request without an input-route round trip", async () => {
+    it("409s when the Sapiom connection changes before process admission", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.create).mockRejectedValue(
+        new McpCredentialGenerationChangedError(),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+      });
+    });
+
+    it("preserves the initial task, its sources and its setup without an input-route round trip", async () => {
       const sessionManager = fakeSessionManager();
       vi.mocked(sessionManager.create).mockResolvedValue(exitedSession());
       start({ sessionManager });
       const request = {
         cwd: "/tmp/proj", harness: "claude-code",
         initialPrompt: "Build ticket triage.\nUse my files.",
-        scaffold: { template: "default" },
         initialAttachments: [{ kind: "path", path: "/tmp/brief.pdf" }],
+        initialSources: ["https://example.com/spec"],
+        initialSetup: "Session setup. Plan before you build.",
       };
       const res = await fetch(`${baseUrl}/sessions`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request),
@@ -565,7 +627,12 @@ describe("createRestRouter", () => {
       { initialPrompt: "x".repeat(32_001) },
       { initialAttachments: [{ kind: "path", path: "bad\0path" }] },
       { initialAttachments: [{ kind: "inline", filename: "bad.png", dataUrl: "data:image/png;base64,invalid!" }] },
-      { scaffold: { template: "../../escape" } },
+      { initialSources: ["ftp://not-a-web-link"] },
+      { initialSources: ["javascript:alert(1)"] },
+      { initialSetup: "bad\0setup" },
+      // The session-side scaffold option is gone (flow-creation.md §4.4 step
+      // 4); a request that still sends it is malformed, not a create.
+      { scaffold: { template: "default" } },
     ])("rejects malformed first-turn input before session creation", async (input) => {
       const sessionManager = fakeSessionManager();
       start({ sessionManager });
@@ -964,37 +1031,16 @@ describe("createRestRouter", () => {
     });
 
     it("forwards submitted and editable input through the injected canonical authority exactly once", async () => {
-      const submitSessionInput = vi.fn(
-        async (
-          _sessionId: string,
-          _text: string,
-          _submit: boolean,
-          requestId?: string,
-        ) =>
-          requestId
-            ? {
-                ok: true as const,
-                receipt: {
-                  requestId,
-                  inputId: "input-1",
-                  status: "queued" as const,
-                  acceptedAt: "2026-09-04T00:00:00.000Z",
-                },
-              }
-            : true,
-      );
+      const submitSessionInput = vi.fn(async () => true);
       start({ submitSessionInput });
 
       const [submitted, editable] = await Promise.all([
-        fetch(`${baseUrl}/sessions/bootstrap-owned/input`, {
+        fetch(`${baseUrl}/sessions/sess-1/input`, {
           method: "POST",
           headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "build now",
-            requestId: "request-build-now",
-          }),
+          body: JSON.stringify({ text: "build now" }),
         }),
-        fetch(`${baseUrl}/sessions/bootstrap-owned/input`, {
+        fetch(`${baseUrl}/sessions/sess-1/input`, {
           method: "POST",
           headers: { ...TOKEN_HEADER, "content-type": "application/json" },
           body: JSON.stringify({ text: "draft", submit: false }),
@@ -1003,102 +1049,10 @@ describe("createRestRouter", () => {
 
       expect(submitted.status).toBe(200);
       expect(editable.status).toBe(200);
-      expect(await submitted.json()).toEqual({
-        ok: true,
-        receipt: {
-          requestId: "request-build-now",
-          inputId: "input-1",
-          status: "queued",
-          acceptedAt: "2026-09-04T00:00:00.000Z",
-        },
-      });
+      expect(await submitted.json()).toEqual({ ok: true });
       expect(submitSessionInput).toHaveBeenCalledTimes(2);
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "build now",
-        true,
-        "request-build-now",
-      );
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "draft",
-        false,
-        undefined,
-      );
-    });
-
-    it("returns the durable request-id conflict from the canonical input authority", async () => {
-      const conflict = Object.assign(
-        new Error(
-          "project bootstrap request id was reused with different input",
-        ),
-        { code: "project_bootstrap_request_id_reused" },
-      );
-      const submitSessionInput = vi.fn(async () => {
-        throw conflict;
-      });
-      start({ submitSessionInput });
-
-      const response = await fetch(
-        `${baseUrl}/sessions/bootstrap-owned/input`,
-        {
-          method: "POST",
-          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "changed payload",
-            requestId: "request-reused",
-          }),
-        },
-      );
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({
-        error: conflict.message,
-        code: conflict.code,
-      });
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "changed payload",
-        true,
-        "request-reused",
-      );
-    });
-
-    it("returns bounded durable-input capacity from the canonical input authority", async () => {
-      const capacity = Object.assign(
-        new Error(
-          "project bootstrap input receipt capacity is temporarily full",
-        ),
-        { code: "project_bootstrap_input_capacity" },
-      );
-      const submitSessionInput = vi.fn(async () => {
-        throw capacity;
-      });
-      start({ submitSessionInput });
-
-      const response = await fetch(
-        `${baseUrl}/sessions/bootstrap-owned/input`,
-        {
-          method: "POST",
-          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-          body: JSON.stringify({
-            text: "new logical request",
-            requestId: "request-at-capacity",
-          }),
-        },
-      );
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({
-        error: capacity.message,
-        code: capacity.code,
-      });
-      expect(submitSessionInput).toHaveBeenCalledWith(
-        "bootstrap-owned",
-        "new logical request",
-        true,
-        "request-at-capacity",
-      );
+      expect(submitSessionInput).toHaveBeenCalledWith("sess-1", "build now", true);
+      expect(submitSessionInput).toHaveBeenCalledWith("sess-1", "draft", false);
     });
 
     it("400s a malformed body (missing text)", async () => {
@@ -1226,6 +1180,11 @@ describe("createRestRouter", () => {
       harness: "claude-code",
       cwd: "/tmp/proj",
       title: "proj",
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-test",
+        sessionId: "sess-1",
+      },
       status: "running",
       createdAt: "2026-01-01T00:00:00.000Z",
       lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -1345,6 +1304,56 @@ describe("createRestRouter", () => {
     });
   });
 
+  describe("POST /sessions/:id/restart-mcp", () => {
+    it("returns the replacement session from the credential-scoped restart", async () => {
+      const stale = exitedSession({
+        id: "stale-session",
+        status: "running",
+        mcpAuthState: "restart-required",
+      });
+      const sessionManager = fakeSessionManager([stale]);
+      (
+        sessionManager.restartForMcpCredentials as ReturnType<typeof vi.fn>
+      ).mockResolvedValue({ ...stale, mcpAuthState: "current" });
+      start({ sessionManager });
+
+      const res = await fetch(
+        `${baseUrl}/sessions/stale-session/restart-mcp`,
+        { method: "POST", headers: TOKEN_HEADER },
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        id: "stale-session",
+        status: "running",
+        mcpAuthState: "current",
+      });
+      expect(
+        sessionManager.restartForMcpCredentials,
+      ).toHaveBeenCalledWith("stale-session");
+    });
+
+    it("maps an ineligible restart to a stable 409", async () => {
+      const sessionManager = fakeSessionManager();
+      (
+        sessionManager.restartForMcpCredentials as ReturnType<typeof vi.fn>
+      ).mockRejectedValue(new McpSessionRestartUnavailableError());
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/current/restart-mcp`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error:
+          "This session is not waiting for a Sapiom connection restart",
+        code: "MCP_SESSION_RESTART_UNAVAILABLE",
+      });
+    });
+  });
+
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
     it("resumes a project session through the ordinary endpoint without a role-specific 409", async () => {
       const projectSession = exitedSession({
@@ -1425,6 +1434,24 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("SESSION_ALREADY_LIVE");
+    });
+
+    it("409s when the Sapiom connection changes before resumed process admission", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.resume).mockRejectedValue(
+        new McpCredentialGenerationChangedError(),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-stale/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+      });
     });
 
     it("409s when resume() throws SessionNotResumeableError (no agentSessionId to resume from)", async () => {
@@ -2110,6 +2137,10 @@ describe("createRestRouter", () => {
         adapters: { "claude-code": makeMinimalAdapter() },
         ingestUrl: "http://127.0.0.1:4100",
         ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
+        resolveAgentMapIdentity: async (sessionId, _cwd, persisted) =>
+          persisted ?? { projectId: "project-test", userId: "user-test", sessionId },
+        migrateAgentMapIdentity: async (sessionId) =>
+          ({ projectId: "project-test", userId: "user-test", sessionId }),
         sessionsPath: path.join(smDir, "sessions.json"),
         // spawnPty not provided — tests only call resume/submitInput which
         // throw before reaching spawn for external-harness sessions.
@@ -2259,6 +2290,11 @@ describe("createRestRouter", () => {
         harness: "claude-code",
         cwd: "/repo",
         title: "repo",
+        agentMapIdentity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          userId: "user-test",
+          sessionId: "sess-1",
+        },
         status: "exited",
         createdAt: "2026-07-01T10:00:00.000Z",
         lastActiveAt: "2026-07-01T10:00:05.000Z",
@@ -2289,6 +2325,11 @@ describe("createRestRouter", () => {
         harness: "claude-code",
         cwd: "/repo",
         title: "repo",
+        agentMapIdentity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          userId: "user-test",
+          sessionId: "sess-1",
+        },
         status: "exited",
         createdAt: "2026-07-01T10:00:00.000Z",
         lastActiveAt: "2026-07-01T10:00:05.000Z",

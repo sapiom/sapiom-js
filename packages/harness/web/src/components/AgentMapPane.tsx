@@ -1,242 +1,138 @@
-import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-} from "react";
-import type {
-  AgentMapImplementationsResponse,
-  AgentMapWorkspaceResponse,
-  PlanNodeId,
-} from "@shared/agent-map";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
-import type { HarnessApi } from "../lib/api";
+import type { GraphViewportStore } from "../lib/graph-viewport";
 import {
-  agentMapDeployments,
-  type AgentMapDeployments,
-} from "../lib/agent-map-deployment";
-import { DEPLOYMENT_UNAVAILABLE } from "../lib/workflow-deployment";
-import {
-  agentMapNavigationError,
-  agentMapTargetWorkflow,
-  type AgentMapNodeTarget,
-} from "../lib/agent-map-navigation";
-
-import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
+  drawnRef,
+  agentFolder,
+  workflowForAgent,
+  type MapAgent,
+  type ProjectMapResponse,
+} from "../lib/project-map";
+import type { ProjectMapEntry } from "../lib/use-project-map";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { AgentMapCanvas } from "./AgentMapCanvas";
-import { AgentMapInspector } from "./AgentMapInspector";
-import { Icon } from "./Icon";
+
+/** A picked map agent that Studio cannot open: its folder is not in the
+ *  agent list. The card names it and offers no verbs (flow 4.2.3). */
+export interface MapNodePick {
+  id: string;
+  name: string;
+  kind: string;
+}
 
 interface AgentMapPaneProps {
-  visible: boolean;
-  api: Pick<
-    HarnessApi,
-    "getAgentMapNodeImplementation" | "getAgentMapImplementations"
-  >;
+  viewportStore: GraphViewportStore;
   workflows: readonly WorkflowInfo[];
   refreshWorkflows: () => Promise<WorkflowInfo[]>;
-  onOpenAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
-  state: AgentMapWorkspacePaneState;
-  initialization?: AgentMapInitializationStatus | null;
-  onRetryGeneration?: () => void;
-  unavailable: string | null;
-  onRetry: () => void;
-  expanded: boolean;
-  onToggleExpanded: () => void;
+  /** Add an agent folder to Studio's agent list (its registry only; nothing
+   *  is written to the folder). A map agent the list does not hold yet, such
+   *  as a `defineAgent` folder with no `sapiom.json`, is added on first open. */
+  connectAgent: (path: string) => Promise<WorkflowInfo>;
+  /** Single click on an agent: the card names it (flow-map-chat-overlay.md 4.2). */
+  onPickAgent: (workflow: WorkflowInfo) => void;
+  /** Double click on an agent: its modal over this map (4.2.4). */
+  onEnterAgent: (workflow: WorkflowInfo) => void;
+  /** The agent the shell holds as picked, by folder; it rings its node. */
+  pickedPath: string | null;
+  /** The picked agent Studio cannot open, held by the project view so the
+   *  card can name it and Escape can clear it. */
+  nodePick: MapNodePick | null;
+  onNodePick: (node: MapNodePick | null) => void;
+  /** A click on the empty map: the card returns to the project (4.2.5). */
+  onClearPick: () => void;
+  /** The card's map chat is open: Escape closes it first (4.3.3), so the
+   *  map does not take Escape to clear its pick. */
+  chatOpen?: boolean;
+  /** The floating card, over the board's bottom-right. It is out of flow, so
+   *  nothing it shows changes the board's width (I1). */
+  card: JSX.Element | null;
+  entry: ProjectMapEntry;
 }
 
 export function AgentMapPane({
-  visible,
-  api,
+  viewportStore,
   workflows,
   refreshWorkflows,
-  onOpenAgent,
-  state,
-  initialization,
-  onRetryGeneration,
-  unavailable,
-  onRetry,
-  expanded,
-  onToggleExpanded,
+  connectAgent,
+  onPickAgent,
+  onEnterAgent,
+  pickedPath,
+  nodePick,
+  onNodePick,
+  onClearPick,
+  chatOpen = false,
+  card,
+  entry,
 }: AgentMapPaneProps): JSX.Element {
+  const { state } = entry;
   const value = state.status === "ready" ? state.value : null;
-  const proposal = value?.proposal ?? null;
-  const [selected, setSelected] = useState<PlanNodeId | null>(null);
-  const [pending, setPending] = useState<PlanNodeId | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const returnFocus = useRef<HTMLButtonElement | null>(null);
   const generation = useRef(0);
-  const current = useRef({ value, workflows, onOpenAgent, visible });
-  current.current = { value, workflows, onOpenAgent, visible };
+  const current = useRef({ value, workflows });
+  current.current = { value, workflows };
 
-  // Deployment refreshes must not cancel an in-flight node navigation.
-  const bindingGeneration = useRef(0);
-  const [retryStatus, setRetryStatus] = useState(0);
-  const [bindingState, setBindingState] = useState<{
-    value: AgentMapWorkspaceResponse | null;
-    response: AgentMapImplementationsResponse | null;
-    phase: "loading" | "available" | "unavailable";
-  }>({ value: null, response: null, phase: "loading" });
-  const previousDeployments = useRef<AgentMapDeployments>(new Map());
-  const projectId = value?.project.projectId;
-  // Discovery/moves can change binding resolution; cloud status alone cannot.
-  const inventoryKey = JSON.stringify(
-    workflows.flatMap((workflow) =>
-      (workflow.studioBindings ?? [])
-        .filter((binding) => binding.projectId === projectId)
-        .map((binding) => JSON.stringify([binding.agentId, workflow.path])),
-    ).sort(),
-  );
+  // A pick that no longer names an agent on the map (it was removed, or the
+  // ref changed) is released.
   useEffect(() => {
-    if (visible && projectId) void refreshWorkflows().catch(() => undefined);
-  }, [visible, projectId, refreshWorkflows, retryStatus]);
-  useEffect(() => {
-    const request = ++bindingGeneration.current;
-    if (
-      !visible ||
-      !value?.proposal?.nodes.some(
-        (node) => node.kind === "agent" || node.kind === "subagent",
-      )
-    )
-      return;
-    setBindingState((old) => ({
-      value,
-      response: old.response,
-      phase: "loading",
-    }));
-    void api.getAgentMapImplementations(value.project.projectId).then(
-      (response) => {
-        if (request === bindingGeneration.current)
-          setBindingState({ value, response, phase: "available" });
-      },
-      () => {
-        if (request === bindingGeneration.current)
-          setBindingState((old) => ({
-            value,
-            response: old.response,
-            phase: "unavailable",
-          }));
-      },
-    );
-    return () => {
-      bindingGeneration.current += 1;
-    };
-  }, [api, visible, value, inventoryKey, retryStatus]);
-  const deployments = useMemo(
-    () =>
-      value
-        ? agentMapDeployments(
-            value,
-            bindingState.response,
-            workflows,
-            previousDeployments.current,
-            bindingState.value === value ? bindingState.phase : "loading",
-          )
-        : new Map(),
-    [value, bindingState, workflows],
-  );
-  useEffect(() => {
-    previousDeployments.current = deployments;
-  }, [deployments]);
+    if (nodePick && value && !value.map.agents.some((agent) => agent.slug === nodePick.id))
+      onNodePick(null);
+  }, [nodePick, onNodePick, value]);
 
-  useEffect(() => {
-    generation.current += 1;
-    setPending(null);
-    setOpenError(null);
-    return () => {
-      generation.current += 1;
-    };
-  }, [value, visible]);
-
-  const inspect = (nodeId: PlanNodeId, control: HTMLButtonElement): void => {
-    generation.current += 1;
-    returnFocus.current = control;
-    setPending(null);
-    setOpenError(null);
-    setSelected(nodeId);
-  };
-
-  const activate = async (
-    nodeId: PlanNodeId,
+  /** Match a map agent to its registry row by folder, then hand it to `open`. */
+  const resolveAgent = async (
+    slug: string,
     control: HTMLButtonElement,
+    open: (workflow: WorkflowInfo) => void,
   ): Promise<void> => {
-    const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
-    if (!visible || !value || !node) return;
-    if (node.kind !== "agent" && node.kind !== "subagent")
-      return inspect(nodeId, control);
+    const snapshot = current.current.value;
+    const agent = snapshot?.map.agents.find((candidate) => candidate.slug === slug);
+    if (!snapshot || !agent) return;
     const request = ++generation.current;
-    const isCurrent = () =>
-      generation.current === request &&
-      current.current.value === value &&
-      current.current.visible;
     returnFocus.current = control;
-    setSelected(null);
     setOpenError(null);
-    setPending(nodeId);
-    try {
-      const target = await api.getAgentMapNodeImplementation(
-        value.project.projectId,
-        nodeId,
-      );
-      if (!isCurrent()) return;
-      let workflow = agentMapTargetWorkflow(target, current.current.workflows);
-      if (!workflow) {
-        const refreshed = await refreshWorkflows();
-        if (!isCurrent()) return;
-        workflow = agentMapTargetWorkflow(target, refreshed);
-      }
-      if (!workflow)
-        throw Object.assign(new Error(), { code: "target_not_found" });
-      generation.current += 1;
-      setPending(null);
-      current.current.onOpenAgent(workflow, target);
-    } catch (error) {
-      if (!isCurrent()) return;
-      setPending(null);
-      setOpenError(agentMapNavigationError(error));
-      setSelected(nodeId);
+    let workflow = workflowForAgent(snapshot.map, agent, current.current.workflows);
+    if (!workflow) {
+      // A folder made since the last scan: one refresh finds it.
+      const refreshed = await refreshWorkflows().catch(() => [] as WorkflowInfo[]);
+      if (generation.current !== request) return;
+      workflow = workflowForAgent(snapshot.map, agent, refreshed);
     }
+    const folder = agentFolder(snapshot.map, agent);
+    // At a git ref the folder is the ref's, not necessarily the working copy's:
+    // never add it to the agent list from there.
+    if (!workflow && folder && drawnRef(snapshot.map) === null) {
+      workflow = await connectAgent(folder).catch(() => null);
+      if (generation.current !== request) return;
+    }
+    if (workflow) {
+      onNodePick(null);
+      open(workflow);
+      return;
+    }
+    onNodePick({ id: agent.slug, name: agent.slug, kind: "agent" });
+    setOpenError(`Studio couldn't open ${agent.slug} as an agent.`);
   };
 
-  useEffect(() => {
-    if (
-      selected &&
-      (!proposal || !proposal.nodes.some((node) => node.id === selected))
-    ) {
-      setSelected(null);
-    }
-  }, [proposal, selected]);
+  const pickedSlug = (snapshot: ProjectMapResponse): string | null => {
+    if (nodePick) return nodePick.id;
+    if (!pickedPath) return null;
+    const match = snapshot.map.agents.find(
+      (agent) => workflowForAgent(snapshot.map, agent, [{ path: pickedPath }]) !== null,
+    );
+    return match?.slug ?? null;
+  };
 
-  const closeInspector = useCallback((): void => {
+  const clearSelection = useCallback((): void => {
     generation.current += 1;
-    setSelected(null);
-    setPending(null);
     setOpenError(null);
+    onNodePick(null);
     returnFocus.current?.focus();
-  }, []);
-
-  // Match the per-agent graph's full-view contract: Escape unwinds one layer
-  // at a time, closing node detail before it lowers the map overlay.
-  useEffect(() => {
-    if (!expanded) return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (selected !== null) closeInspector();
-      else if (expanded) onToggleExpanded();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [closeInspector, expanded, onToggleExpanded, selected]);
+  }, [onNodePick]);
 
   let content: JSX.Element;
-  if (state.status === "error" && unavailable) {
+  if (state.status === "error" && state.unavailable) {
     content = (
       <EmptyState
         className="canvas-empty"
@@ -255,16 +151,14 @@ export function AgentMapPane({
         title="Agent Map couldn't load"
         body={state.message}
         cta={
-          state.canRetry !== false ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              data-testid="agent-map-retry"
-              onClick={onRetry}
-            >
-              Reload map
-            </button>
-          ) : undefined
+          <button
+            type="button"
+            className="btn-secondary"
+            data-testid="agent-map-retry"
+            onClick={entry.refresh}
+          >
+            Reload map
+          </button>
         }
       />
     );
@@ -277,173 +171,141 @@ export function AgentMapPane({
         title="Loading Agent Map…"
       />
     );
-  } else if (proposal && proposal.nodes.length > 0) {
-    content = (
-      <PopulatedAgentMap
-        value={value}
-        selected={selected}
-        deployments={deployments}
-        onRetryStatus={() => setRetryStatus((revision) => revision + 1)}
-        onSelectNode={activate}
-        onInspectNode={inspect}
-        pending={pending}
-        openError={openError}
-        onCloseInspector={closeInspector}
-      />
-    );
-  } else if (
-    !proposal &&
-    (initialization?.status === "queued" ||
-      initialization?.status === "running")
-  ) {
-    content = (
-      <EmptyState
-        className="canvas-empty"
-        testId="agent-map-generating"
-        icon="Workflow"
-        title="Generating Agent Map…"
-      />
-    );
-  } else if (!proposal && initialization?.status === "failed") {
-    content = (
-      <EmptyState
-        className="canvas-empty"
-        testId="agent-map-generation-error"
-        icon="TriangleAlert"
-        title="Agent Map couldn't be generated"
-        cta={
-          initialization.retryable ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              data-testid="agent-map-generation-retry"
-              onClick={onRetryGeneration}
-            >
-              Retry generation
-            </button>
-          ) : undefined
-        }
-      />
-    );
   } else {
     content = (
-      <EmptyState
-        className="canvas-empty"
-        testId="agent-map-empty"
-        icon="Workflow"
-        title="Nothing generated yet"
+      <PopulatedAgentMap
+        viewportStore={viewportStore}
+        value={value}
+        entry={entry}
+        selected={pickedSlug(value)}
+        hasPick={nodePick != null || pickedPath != null}
+        onSelectNode={(slug, control) => void resolveAgent(slug, control, onPickAgent)}
+        onEnterNode={(slug, control) => void resolveAgent(slug, control, onEnterAgent)}
+        card={card}
+        openError={openError}
+        onClearSelection={clearSelection}
+        chatOpen={chatOpen}
+        onClearPick={() => {
+          clearSelection();
+          onClearPick();
+        }}
       />
     );
   }
 
   return (
-    <div
-      className={`canvas-frame-wrap${expanded ? " is-expanded" : ""}`}
-      data-testid="agent-map-frame"
-    >
+    <div className="canvas-frame-wrap" data-testid="agent-map-frame">
       {content}
-      {expanded && (
-        <button
-          type="button"
-          className="macro-icon-btn canvas-expand-exit"
-          data-testid="canvas-expand-exit"
-          aria-label="Exit expanded Agent Map"
-          title="Exit expanded Agent Map (Esc)"
-          onClick={onToggleExpanded}
-        >
-          <Icon name="Minimize2" size={14} />
-        </button>
-      )}
     </div>
   );
 }
 
 function PopulatedAgentMap({
+  viewportStore,
   value,
-  deployments,
-  onRetryStatus,
+  entry,
   selected,
+  hasPick,
   onSelectNode,
-  onInspectNode,
-  pending,
+  onEnterNode,
+  card,
   openError,
-  onCloseInspector,
+  onClearSelection,
+  onClearPick,
+  chatOpen,
 }: {
-  value: AgentMapWorkspaceResponse;
-  deployments: AgentMapDeployments;
-  onRetryStatus: () => void;
-  selected: PlanNodeId | null;
-  onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
-  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
-  pending: PlanNodeId | null;
+  viewportStore: GraphViewportStore;
+  value: ProjectMapResponse;
+  entry: ProjectMapEntry;
+  selected: string | null;
+  hasPick: boolean;
+  onSelectNode: (slug: string, control: HTMLButtonElement) => void;
+  onEnterNode: (slug: string, control: HTMLButtonElement) => void;
+  card: JSX.Element | null;
   openError: string | null;
-  onCloseInspector: () => void;
+  onClearSelection: () => void;
+  onClearPick: () => void;
+  chatOpen: boolean;
 }): JSX.Element {
-  const proposal = value.proposal!;
-  const failed = [...deployments.values()].filter(
-    (status) => status.unavailable && !status.loading,
-  );
+  // A click on the empty board clears the pick, a drag pans it: only a press
+  // that did not move counts as a click (4.2.5).
+  const press = useRef<{ x: number; y: number } | null>(null);
+  const selectedAgent: MapAgent | undefined = selected
+    ? value.map.agents.find((agent) => agent.slug === selected)
+    : undefined;
   return (
     <div
       className="agent-map-live"
       data-testid="agent-map-live"
-      data-project-id={value.project.projectId}
+      data-project-id={value.projectId}
+      data-ref={entry.mapRef ?? undefined}
       {...trackingAttrs({ surface: "agent_map" })}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || !selected) return;
+        if (event.key !== "Escape" || !selected || chatOpen) return;
         event.preventDefault();
         event.stopPropagation();
-        onCloseInspector();
+        onClearSelection();
       }}
     >
       <div className="agent-map-live-header">
-        <span className="system-graph-node-meta">
-          Version {proposal.version}
+        <span className="agent-map-project-name" data-testid="agent-map-project-name">
+          {value.displayName}
         </span>
-        {failed.length > 0 && (
-          <div
+        {/* Why a picked agent could not be opened. The header row, not a
+            panel beside the board, so the board's width never changes. */}
+        {openError && (
+          <span
             className="agent-map-deployment-message"
-            role="status"
-            data-testid="agent-map-deployment-error"
+            role="alert"
+            data-testid="agent-map-open-error"
           >
-            {failed.some((status) => status.indicator === null) && (
-              <span>{DEPLOYMENT_UNAVAILABLE}</span>
-            )}
-            <button
-              type="button"
-              className="status-tag status-tag-action"
-              onClick={onRetryStatus}
-            >
-              Retry status
-            </button>
-          </div>
+            {openError}
+          </span>
         )}
+        <span className="agent-map-node-meta agent-map-count" data-testid="agent-map-count">
+          {value.map.agents.length === 1 ? "1 agent" : `${value.map.agents.length} agents`}
+        </span>
       </div>
-      <div className="agent-map-live-body">
-        <AgentMapCanvas
-          proposal={proposal}
-          deployments={deployments}
-          selectedNodeId={selected}
-          onSelectNode={onSelectNode}
-          onInspectNode={onInspectNode}
-          pendingNodeId={pending}
-        />
-        {selected && (
-          <AgentMapInspector
-            snapshot={value}
-            nodeId={selected}
-            deployment={deployments.get(selected)}
-            onClose={onCloseInspector}
-            openError={openError}
+      <div
+        className="agent-map-live-body"
+        onPointerDownCapture={(event) => {
+          press.current = { x: event.clientX, y: event.clientY };
+        }}
+        onClick={(event) => {
+          const start = press.current;
+          press.current = null;
+          const target = event.target as Element;
+          if (
+            !start ||
+            Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4 ||
+            !target.closest(".agent-map-viewport") ||
+            target.closest("button")
+          )
+            return;
+          if (hasPick) onClearPick();
+        }}
+      >
+        {value.map.agents.length > 0 ? (
+          <AgentMapCanvas
+            viewportStore={viewportStore}
+            projectId={value.projectId}
+            map={value.map}
+            selectedSlug={selected}
+            onSelectNode={onSelectNode}
+            onEnterNode={onEnterNode}
+          />
+        ) : (
+          <EmptyState
+            className="canvas-empty"
+            testId="agent-map-empty"
+            icon="Workflow"
+            title={entry.mapRef ? `No agents at ${entry.mapRef}` : "No agents in this project"}
           />
         )}
+        {card}
       </div>
-      <p className="sr-only" aria-live="polite">
-        {pending
-          ? "Opening agent…"
-          : selected
-            ? `Selected ${proposal.nodes.find((node) => node.id === selected)?.name ?? "node"}`
-            : ""}
+      <p className="visually-hidden" aria-live="polite">
+        {selectedAgent ? `Selected ${selectedAgent.slug}` : ""}
       </p>
     </div>
   );

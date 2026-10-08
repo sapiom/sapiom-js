@@ -10,6 +10,7 @@
  * fails one of the two.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openAgentModal } from "./mock-navigation";
 
 test.use({ viewport: { width: 900, height: 600 } });
 
@@ -56,7 +57,7 @@ async function expectUncropped(page: Page, popover: Locator): Promise<void> {
 
 test("history menu opens uncropped off the rail header", async ({ page }) => {
   await page.getByTestId("history-trigger").click();
-  await expectUncropped(page, page.getByTestId("history-menu"));
+  await expectUncropped(page, page.getByTestId("rail-options-menu"));
 });
 
 test("profile menu opens uncropped off the rail footer", async ({ page }) => {
@@ -75,16 +76,13 @@ test("session bar menu opens uncropped at the header's right cluster", async ({ 
   await expectUncropped(page, page.getByTestId("session-menu-popover"));
 });
 
-test("canvas run picker and step detail menu open uncropped at the right pane's edge", async ({ page }) => {
-  // Load the workflow graph, then observe two runs so the chip becomes the
-  // run picker (same events the agent's MCP calls emit).
-  await page.evaluate(() => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
+test("canvas run picker opens uncropped at the agent modal's board header", async ({ page }) => {
+  // leasing's board in its modal; sess-boot is bound to leasing, so the runs
+  // it announces are the agent's (the modal shows the agent's runs).
+  await openAgentModal(page, "acme-app", "leasing");
+  await expect(
+    page.getByTestId("agent-modal").locator(".canvas-frame-wrap"),
+  ).toHaveAttribute("data-view", "board");
   const publishRun = (executionId: string): Promise<void> =>
     page.evaluate((id) => {
       (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
@@ -97,7 +95,6 @@ test("canvas run picker and step detail menu open uncropped at the right pane's 
   await publishRun("exec-crop-1");
   await publishRun("exec-crop-2");
 
-  await page.getByTestId("right-tab-steps").click();
   await page.getByTestId("canvas-run-chip").click();
   await expectUncropped(page, page.getByTestId("canvas-run-menu"));
   await page.keyboard.press("Escape");

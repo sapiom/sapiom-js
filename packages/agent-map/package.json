@@ -1,0 +1,95 @@
+{
+  "name": "@sapiom/agent-map",
+  "version": "0.4.0",
+  "description": "Studio project identity, root bindings and local persistence.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sapiom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/agent-map"
+  },
+  "main": "./dist/shared/agent-map.js",
+  "types": "./dist/shared/agent-map.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/shared/agent-map.d.ts",
+      "import": "./dist/shared/agent-map.js"
+    },
+    "./project-id": {
+      "types": "./dist/shared/project-id.d.ts",
+      "import": "./dist/shared/project-id.js"
+    },
+    "./canonical": {
+      "types": "./dist/shared/agent-map-canonical-pure.d.ts",
+      "import": "./dist/shared/agent-map-canonical-pure.js"
+    },
+    "./node/canonical": {
+      "types": "./dist/shared/agent-map-canonical.d.ts",
+      "import": "./dist/shared/agent-map-canonical.js"
+    },
+    "./node/durable-file-lock": {
+      "types": "./dist/core/durable-file-lock.d.ts",
+      "import": "./dist/core/durable-file-lock.js"
+    },
+    "./workspace-scope": {
+      "types": "./dist/shared/workspace-scope.d.ts",
+      "import": "./dist/shared/workspace-scope.js"
+    },
+    "./project-roots": {
+      "types": "./dist/shared/project-roots.d.ts",
+      "import": "./dist/shared/project-roots.js"
+    },
+    "./paths": {
+      "types": "./dist/shared/paths.d.ts",
+      "import": "./dist/shared/paths.js"
+    },
+    "./node/canonical-graph-path": {
+      "types": "./dist/core/canonical-graph-path.d.ts",
+      "import": "./dist/core/canonical-graph-path.js"
+    },
+    "./node/studio-project-catalog": {
+      "types": "./dist/core/studio-project-catalog.d.ts",
+      "import": "./dist/core/studio-project-catalog.js"
+    },
+    "./node/state-paths": {
+      "types": "./dist/core/state-paths.d.ts",
+      "import": "./dist/core/state-paths.js"
+    },
+    "./host-protocol": {
+      "types": "./dist/shared/host-protocol.d.ts",
+      "import": "./dist/shared/host-protocol.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm build",
+    "test:package": "node --test scripts/package-boundaries.test.mjs && pnpm build && node scripts/check-package.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "~5.9.3",
+    "vitest": "^3.0.0",
+    "@types/uuid": "^10.0.0",
+    "esbuild": "^0.28.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "zod": "^3.25.0",
+    "uuid": "^10.0.0"
+  }
+}

@@ -1,72 +1,50 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { prepareFirstRequest } from "./first-request.js";
-import type { AgentScaffoldDeps } from "./scaffold.js";
 
 let root: string;
-let deps: AgentScaffoldDeps;
+let cwd: string;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "harness-first-request-"));
-  deps = {
-    listProjectDirs: () => [root],
-    resolveAgent: () => null,
-    scaffoldAgent: vi.fn(async ({ targetDir }) => {
-      await writeFile(join(targetDir, "AGENTS.md"), "Project instructions");
-      return { dependenciesInstalled: true };
-    }),
-    onScaffolded: vi.fn(async () => {}),
-  };
+  cwd = join(root, "ticket-triage");
+  await mkdir(cwd);
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-it("scaffolds with the existing server guards, then returns only the user's first task", async () => {
-  const cwd = join(root, "ticket-triage");
+it("returns the user's first task verbatim, with nothing added", async () => {
   const prompt = "--help\nBuild a local support-ticket triage project.";
   expect(
-    await prepareFirstRequest(
-      {
-        cwd,
-        harness: "claude-code",
-        scaffold: { template: "default" },
-        initialPrompt: prompt,
-      },
-      deps,
-    ),
+    await prepareFirstRequest({
+      cwd,
+      harness: "claude-code",
+      initialPrompt: prompt,
+    }),
   ).toBe(prompt);
-  expect(deps.scaffoldAgent).toHaveBeenCalledExactlyOnceWith({
-    targetDir: cwd,
-    template: "default",
-  });
-  expect(deps.onScaffolded).toHaveBeenCalledExactlyOnceWith(cwd);
-  expect(await readFile(join(cwd, "AGENTS.md"), "utf8")).toBe(
-    "Project instructions",
-  );
+  // No session-side scaffold any more: the harness created the agent through
+  // POST /api/agents/scaffold before this session was requested, so preparing
+  // the first turn writes nothing but the uploads it was handed.
+  expect(await readdir(cwd)).toEqual([]);
 });
 
 it("materializes clipboard bytes and preserves mixed attachment order before launch", async () => {
-  const cwd = join(root, "ticket-triage");
-  const prompt = await prepareFirstRequest(
-    {
-      cwd,
-      harness: "codex",
-      scaffold: { template: "default" },
-      initialPrompt: "Use my files.",
-      initialAttachments: [
-        { kind: "path", path: "/native/first brief.pdf" },
-        {
-          kind: "inline",
-          filename: "../../screenshot.PNG",
-          dataUrl: "data:image/png;base64,cGl4ZWxz",
-        },
-        { kind: "path", path: "/native/last.txt" },
-      ],
-    },
-    deps,
-  );
+  const prompt = await prepareFirstRequest({
+    cwd,
+    harness: "codex",
+    initialPrompt: "Use my files.",
+    initialAttachments: [
+      { kind: "path", path: "/native/first brief.pdf" },
+      {
+        kind: "inline",
+        filename: "../../screenshot.PNG",
+        dataUrl: "data:image/png;base64,cGl4ZWxz",
+      },
+      { kind: "path", path: "/native/last.txt" },
+    ],
+  });
   const [upload] = await readdir(join(cwd, ".sapiom/uploads"));
   const uploadedPath = join(cwd, ".sapiom/uploads", upload!);
   expect(upload).toMatch(/^[a-f0-9-]+\.png$/);
@@ -76,61 +54,56 @@ it("materializes clipboard bytes and preserves mixed attachment order before lau
   );
 });
 
-it("rejects invalid attachments before creating the project or starting a session", async () => {
-  await expect(
-    prepareFirstRequest(
-      {
-        cwd: join(root, "invalid"),
-        harness: "claude-code",
-        scaffold: { template: "default" },
-        initialAttachments: [
-          {
-            kind: "inline",
-            filename: "bad.txt",
-            dataUrl: "data:text/plain;base64,not base64",
-          },
-        ],
-      },
-      deps,
-    ),
-  ).rejects.toMatchObject({ status: 400 });
-  expect(deps.scaffoldAgent).not.toHaveBeenCalled();
-  expect(await readdir(root)).toEqual([]);
-});
-
-it("refuses an unregistered parent and never overwrites an existing project", async () => {
-  await expect(
-    prepareFirstRequest(
-      {
-        cwd: join(root, "unregistered", "agent"),
-        harness: "claude-code",
-        scaffold: { template: "default" },
-      },
-      deps,
-    ),
-  ).rejects.toMatchObject({ status: 409 });
-  const request = {
-    cwd: join(root, "agent"),
-    harness: "claude-code" as const,
-    scaffold: { template: "default" },
-  };
-  await prepareFirstRequest(request, deps);
-  await expect(prepareFirstRequest(request, deps)).rejects.toMatchObject({
-    status: 409,
+it("composes the first turn in one order: idea, files, linked sources, session setup", async () => {
+  // flow-creation.md §4.4 step 3: the idea, the resources, then the planning
+  // instructions as setup. The user's words lead; the harness's follow.
+  const prompt = await prepareFirstRequest({
+    cwd,
+    harness: "claude-code",
+    initialPrompt: "Diff our competitors' pricing pages weekly.",
+    initialAttachments: [{ kind: "path", path: "/native/brief.txt" }],
+    initialSources: ["https://example.com/pricing", "https://docs.example.com/"],
+    initialSetup: "Session setup. Plan before you build.",
   });
-  expect(deps.scaffoldAgent).toHaveBeenCalledOnce();
+  expect(prompt).toBe(
+    [
+      "Diff our competitors' pricing pages weekly.",
+      "Attached files (read each as context):\n/native/brief.txt",
+      "Linked sources (read each as context):\nhttps://example.com/pricing\nhttps://docs.example.com/",
+      "Session setup. Plan before you build.",
+    ].join("\n\n"),
+  );
 });
 
-it("an attachment-only request supplies context without a synthetic scaffold instruction", async () => {
+it("rejects invalid attachments before starting a session", async () => {
+  await expect(
+    prepareFirstRequest({
+      cwd,
+      harness: "claude-code",
+      initialAttachments: [
+        {
+          kind: "inline",
+          filename: "bad.txt",
+          dataUrl: "data:text/plain;base64,not base64",
+        },
+      ],
+    }),
+  ).rejects.toMatchObject({ status: 400 });
+  expect(await readdir(cwd)).toEqual([]);
+});
+
+it("an attachment-only request supplies context without a synthetic instruction", async () => {
   expect(
-    await prepareFirstRequest(
-      {
-        cwd: root,
-        harness: "claude-code",
-        initialAttachments: [{ kind: "path", path: "/native/brief.txt" }],
-      },
-      deps,
-    ),
+    await prepareFirstRequest({
+      cwd,
+      harness: "claude-code",
+      initialAttachments: [{ kind: "path", path: "/native/brief.txt" }],
+    }),
   ).toBe("Attached files (read each as context):\n/native/brief.txt");
-  expect(deps.scaffoldAgent).not.toHaveBeenCalled();
+});
+
+it("an empty request has no first turn at all", async () => {
+  expect(
+    await prepareFirstRequest({ cwd, harness: "claude-code" }),
+  ).toBeUndefined();
 });
