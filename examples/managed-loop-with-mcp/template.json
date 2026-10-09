@@ -1,0 +1,73 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Answer a question by letting a model call the tools of a remote MCP server until it has what it needs. It hands your question and the server to the managed loop (`models.run`), waits for the run to finish, and returns the answer with how many turns it took.",
+  "longDescription": "Give it a question and the URL of an MCP server, and a model answers the question using that server's tools. The loop runs on Sapiom: the model asks for a tool, Sapiom calls the server, and the result goes back to the model until it answers. With no input it asks DeepWiki's public MCP server about a public GitHub repository. The run pauses while the loop works and resumes when the answer is ready.",
+  "useCases": [
+    "Ask your docs server",
+    "Query an internal MCP tool",
+    "Repository Q&A"
+  ],
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no input it uses DeepWiki's public MCP server (`https://mcp.deepwiki.com/mcp`), which needs no credentials. To use your own server, pass `{ \"mcpUrl\": \"https://your-server.example.com/mcp\", \"question\": \"...\" }`. The server must speak Streamable HTTP and be reachable from the internet. The template sends the server no credentials; to use one that needs auth, fix its URL in the code and add the header there. The run fails, and says why, if the model run fails or returns no answer.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow with no Sapiom capability spend; stub `models.launch` in the `ask` step to choose what the paused step resumes with.",
+  "examples": [
+    {
+      "title": "Default question",
+      "input": {},
+      "output": {
+        "question": "In the modelcontextprotocol/typescript-sdk repository, how does the Streamable HTTP server transport handle a request? Answer in at most five bullets.",
+        "mcpUrl": "https://mcp.deepwiki.com/mcp",
+        "answer": "- A POST carries one or more JSON-RPC messages...",
+        "runId": "run_123",
+        "turns": 3,
+        "servedClass": "medium",
+        "warnings": []
+      }
+    },
+    {
+      "title": "Unusable server URL",
+      "input": {
+        "mcpUrl": "http://localhost:8080/mcp"
+      },
+      "output": {
+        "rejected": true,
+        "reason": "`mcpUrl` must be an absolute https URL.",
+        "mcpUrl": "http://localhost:8080/mcp"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "path": "question",
+      "label": "Question",
+      "type": "string",
+      "description": "What to ask. The model may call the MCP server's tools to answer it.",
+      "default": "In the modelcontextprotocol/typescript-sdk repository, how does the Streamable HTTP server transport handle a request? Answer in at most five bullets."
+    },
+    {
+      "path": "mcpUrl",
+      "label": "MCP server URL",
+      "type": "string",
+      "description": "A Streamable HTTP MCP server reachable from the internet.",
+      "default": "https://mcp.deepwiki.com/mcp"
+    }
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      {
+        "path": "answer",
+        "assert": "nonEmptyString"
+      },
+      {
+        "path": "mcpUrl",
+        "assert": "equals",
+        "value": "https://mcp.deepwiki.com/mcp"
+      }
+    ],
+    "narrative": "Asks DeepWiki's public MCP server about a public GitHub repository and returns the model's answer."
+  }
+}

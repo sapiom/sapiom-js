@@ -3,7 +3,8 @@
 # Serves @sapiom/* from your LOCAL publishes (`pnpm publish:local`) and proxies
 # everything else from npmjs. This is the supported way to develop the public
 # SDKs against a local Sapiom stack and a customer-like MCP session without a real
-# npm publish on every change. See docs/guides/workflows-authoring-quickstart.md §4.
+# npm publish on every change. See the Sapiom repo's
+# .claude/skills/sapiom-workflow-local-dev/SKILL.md, "Local SDK loop (Verdaccio)".
 #
 # NOT for production: anonymous publish, no auth. Local machine only.
 

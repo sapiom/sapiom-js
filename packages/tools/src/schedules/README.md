@@ -1,6 +1,6 @@
 # schedules
 
-Create and manage schedules for a deployed orchestration: a recurring **cron** schedule, or a **one-off** delayed run. A schedule is attached to an orchestration by its **slug**, and each time it fires it starts a run of that orchestration with the input you set.
+Create and manage schedules for a deployed agent: a recurring **cron** schedule, or a **one-off** delayed run. A schedule is attached to an agent by its **slug**, and each time it fires it starts a run of that agent with the input you set.
 
 ```ts
 import { schedules } from "@sapiom/tools";
@@ -24,7 +24,7 @@ await schedules.create({
 ```
 
 ```ts
-// List an orchestration's schedules, inspect one, or cancel it.
+// List an agent's schedules, inspect one, or cancel it.
 const all = await schedules.list("enrich-lead");
 const one = await schedules.get(all[0].id); // includes nextFireAt + recent fires
 await schedules.cancel(one.id);
