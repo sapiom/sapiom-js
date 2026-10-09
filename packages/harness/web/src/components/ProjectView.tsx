@@ -236,8 +236,8 @@ export function ProjectView({
     onClosePanel();
   }, [onClosePanel]);
 
-  // Escape unwinds the card one layer per press: the map chat closes back to
-  // the card, then the pick returns the card to the project (4.2.5, 4.3.3).
+  // Escape unwinds the card one layer per press: the map chat minimizes, then
+  // the pick returns the card to the project (4.2.5, 4.3.3).
   // Not while the modal or any other dialog is up: Escape is theirs.
   const picked = nodePick != null || pickedAgent != null;
   useEffect(() => {
@@ -409,8 +409,13 @@ export function ProjectView({
                 });
               },
               onOpenInSession: () => void openInSession(),
-              onClose: () => mapChat.setOpen(projectId, false),
+              onMinimize: () => mapChat.setOpen(projectId, false),
             }
+          : null
+      }
+      onRestoreChat={
+        !chatOpen && mapChat.isMinimized(projectId)
+          ? () => mapChat.setOpen(projectId, true)
           : null
       }
     />

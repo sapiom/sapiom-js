@@ -285,3 +285,49 @@
     animation: none;
   }
 }
+
+/* The minimized map chat: one row that brings the conversation back. With
+   no pick the card is only this row, sized to it, beside the zoom controls. */
+.map-card--pill {
+  width: auto;
+}
+
+.map-card-restore {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex: 0 0 auto;
+  width: 100%;
+  height: var(--pane-header-h);
+  padding: 0 var(--sp2) 0 var(--pane-pad-x);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-label);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.map-card-restore > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+/* The chevron sits at the row's end when the row spans a full card. */
+.map-card-restore > svg:last-child {
+  margin-left: auto;
+}
+
+.map-card-head + .map-card-restore {
+  border-top: 1px solid var(--ui-line);
+}
+
+.map-card-restore:hover {
+  background: var(--surface-raised);
+}
+
+.map-card-restore:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}

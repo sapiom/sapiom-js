@@ -15,13 +15,17 @@
  * per session (npx re-resolves `@latest` on each launch), and sessions work
  * offline once installed.
  *
- * Freshness: cached installs are refreshed at most weekly, awaited at boot
- * before sessions exist. Per-session capability preflight never installs.
+ * Freshness: each boot asks the npm registry for @sapiom/mcp's `latest`
+ * (one small request, short timeout) and reinstalls, awaited before sessions
+ * exist, only when the install is behind it. A new @sapiom/mcp therefore
+ * reaches sessions on the next launch without a Studio release. The app's
+ * bundled copy is the floor: an install older than it is never launched.
+ * Per-session capability preflight never installs.
  *
  * No `electron` import (the caller passes the prefix + installer) — the
  * vitest tier covers the resolution and decision logic from POSIX.
  */
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 
 /**
@@ -87,20 +91,67 @@ function removeTornInstall(prefixDir: string, onLine: (line: string) => void): v
 }
 
 /**
- * How old an install may get before a boot re-fetches it. A week keeps the
- * app-managed server current without putting an npm round-trip (and a tree
- * rewrite) in front of every launch — see ensureSapiomMcp on why the refresh
- * cannot simply be backgrounded.
+ * The version in the package.json that owns an @sapiom/mcp entry script, or
+ * null. Walks up from the entry, so it works for a prefix install and for the
+ * copy bundled inside the app alike.
  */
-export const REFRESH_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+export function sapiomMcpVersionAt(entry: string): string | null {
+  let dir = path.dirname(entry);
+  for (;;) {
+    const pkgJsonPath = path.join(dir, "package.json");
+    if (existsSync(pkgJsonPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
+          name?: string;
+          version?: string;
+        };
+        if (pkg.name === "@sapiom/mcp") return pkg.version ?? null;
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
 
-/** Whether the resolved entry file is older than {@link REFRESH_AFTER_MS}. */
-function isStale(entry: string, now: number): boolean {
+/**
+ * Whether release version `a` is older than `b`, comparing major.minor.patch.
+ * Anything unparseable compares as not older, so a malformed version never
+ * triggers a reinstall loop.
+ */
+export function isOlderVersion(a: string | null, b: string | null): boolean {
+  const parse = (v: string | null) => {
+    const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  if (!pa || !pb) return false;
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] < pb[i];
+  }
+  return false;
+}
+
+/** How long a boot waits on the registry before keeping the install it has. */
+export const LATEST_LOOKUP_TIMEOUT_MS = 2000;
+
+/**
+ * @sapiom/mcp's `latest` dist-tag from the public registry, or null when the
+ * registry is unreachable or slow (offline boots keep the current install).
+ */
+export async function fetchLatestSapiomMcpVersion(): Promise<string | null> {
   try {
-    return now - statSync(entry).mtimeMs > REFRESH_AFTER_MS;
+    const response = await fetch("https://registry.npmjs.org/@sapiom/mcp/latest", {
+      signal: AbortSignal.timeout(LATEST_LOOKUP_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { version?: unknown };
+    return typeof body.version === "string" ? body.version : null;
   } catch {
-    // Unstattable: treat as fresh rather than reinstalling on every boot.
-    return false;
+    return null;
   }
 }
 
@@ -111,9 +162,15 @@ export interface EnsureSapiomMcpOptions {
   devMode: boolean;
   /** Runs `npm install -g @sapiom/mcp@latest` into the prefix (agent-install). */
   install: (onLine: (line: string) => void) => Promise<{ ok: boolean }>;
+  /** The registry's `latest` version, or null when unknown. */
+  latestVersion: () => Promise<string | null>;
+  /**
+   * The @sapiom/mcp entry bundled inside the app. The harness's own prompts
+   * are written against this version, so a prefix install older than it is
+   * passed over in its favour.
+   */
+  bundledEntry?: string | null;
   onLine?: (line: string) => void;
-  /** Injectable clock for the staleness gate (tests). */
-  now?: () => number;
 }
 
 /**
@@ -124,8 +181,11 @@ export interface EnsureSapiomMcpOptions {
  * - smoke: never touches the network; uses an existing install when present.
  * - dev: never installs (mirrors the sapiom-CLI policy — dev machines run
  *   the workspace copy via npx); still uses an install a packaged run left.
- * - existing install: used as-is, and refreshed only when {@link REFRESH_AFTER_MS}
- *   has elapsed — AWAITED, never in the background.
+ * - existing install: refreshed only when it is older than the registry's
+ *   `latest` — AWAITED, never in the background. An unreachable registry
+ *   keeps the install as it is.
+ * - floor (packaged runs): the bundled copy wins when it is newer than what
+ *   resolved, including when nothing installed at all.
  *
  * The refresh must not be backgrounded: boot bakes the resolved entry path
  * into every session's MCP config for the whole run, and npm refreshes by
@@ -134,10 +194,41 @@ export interface EnsureSapiomMcpOptions {
  * (MODULE_NOT_FOUND, dead sapiom-dev for the rest of the run) and, on
  * Windows, can tear the tree against files a running MCP server holds open.
  * Awaiting it here — before any session can exist — makes the sequence
- * deterministic; the staleness gate keeps the common boot off the registry.
+ * deterministic; the version gate keeps the common boot to one small
+ * registry read and rewrites the tree only on a real release.
  */
 export async function ensureSapiomMcp(options: EnsureSapiomMcpOptions): Promise<string | null> {
   const onLine = options.onLine ?? (() => {});
+  const chosen = await resolveFromPrefix(options, onLine);
+  // Smoke and dev keep their own policies (see resolveFromPrefix).
+  if (options.smoke || options.devMode) return chosen;
+  return atLeastBundled(chosen, options.bundledEntry ?? null, onLine);
+}
+
+/**
+ * The bundled entry when it is newer than `chosen` (or `chosen` is null),
+ * else `chosen`. Sessions launch both the same way (`<app binary> <entry>`).
+ */
+function atLeastBundled(
+  chosen: string | null,
+  bundled: string | null,
+  onLine: (line: string) => void,
+): string | null {
+  if (!bundled || !existsSync(bundled)) return chosen;
+  const bundledVersion = sapiomMcpVersionAt(bundled);
+  if (chosen && !isOlderVersion(sapiomMcpVersionAt(chosen), bundledVersion)) return chosen;
+  onLine(
+    chosen
+      ? `installed @sapiom/mcp ${sapiomMcpVersionAt(chosen) ?? "?"} is older than the bundled ${bundledVersion ?? "?"} — using the bundled copy.`
+      : `no installed @sapiom/mcp — using the bundled ${bundledVersion ?? "?"}.`,
+  );
+  return bundled;
+}
+
+async function resolveFromPrefix(
+  options: EnsureSapiomMcpOptions,
+  onLine: (line: string) => void,
+): Promise<string | null> {
   try {
     const existing = resolveSapiomMcpEntry(options.prefix);
     if (options.smoke) return existing;
@@ -146,8 +237,10 @@ export async function ensureSapiomMcp(options: EnsureSapiomMcpOptions): Promise<
     // clobber a locally-built test copy (mirrors the sapiom-CLI policy).
     if (options.devMode) return existing;
     if (existing) {
-      if (!isStale(existing, options.now?.() ?? Date.now())) return existing;
-      onLine("refreshing @sapiom/mcp (weekly check)…");
+      const installed = sapiomMcpVersionAt(existing);
+      const latest = await options.latestVersion().catch(() => null);
+      if (!isOlderVersion(installed, latest)) return existing;
+      onLine(`refreshing @sapiom/mcp ${installed ?? "?"} → ${latest}…`);
       await options.install(onLine).catch(() => ({ ok: false }));
       // Re-resolve: the refresh rewrote the tree, and a failed one can leave
       // nothing behind — fall through to the repair path when it did.
