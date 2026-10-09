@@ -6,8 +6,11 @@
  * `map:<projectId>`, whose `association.json` keeps it across reloads (design
  * Q2). What the client holds is only what the server cannot know:
  *
- *  - whether the card shows the chat or the composer, per project, so leaving
- *    the project and coming back shows what was left there;
+ *  - whether the card shows the chat, the chat minimized, or the composer,
+ *    per project, so leaving the project and coming back shows what was left
+ *    there. Minimized is a project whose chat was opened and then put away:
+ *    the card shows a "Map chat" row to bring it back rather than an empty
+ *    composer that reads as a fresh conversation;
  *  - a question asked from the card's composer, waiting for the chat to mount
  *    and send it;
  *  - which hand-off cards already started their session, so the card says
@@ -24,6 +27,8 @@ import { mapChatHostKey } from "./map-chat-host";
 
 export interface MapChatState {
   isOpen: (projectId: string) => boolean;
+  /** Opened this session and then minimized: the conversation is waiting. */
+  isMinimized: (projectId: string) => boolean;
   setOpen: (projectId: string, open: boolean) => void;
   /** Bumped by New chat: the chat remounts and attaches the fresh one. */
   revision: (projectId: string) => number;
@@ -158,6 +163,7 @@ export function useMapChat({
   return useMemo(
     () => ({
       isOpen: (projectId: string) => open[projectId] === true,
+      isMinimized: (projectId: string) => open[projectId] === false,
       setOpen,
       revision: (projectId: string) => revisions[projectId] ?? 0,
       reset,

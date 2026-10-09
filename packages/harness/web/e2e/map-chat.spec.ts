@@ -94,6 +94,8 @@ async function settled(page: Page): Promise<void> {
 /** Ask from the card, or from the map chat when it is open, and wait for the
  *  answer to land. */
 async function ask(page: Page, question: string): Promise<void> {
+  if ((await card(page).getAttribute("data-state")) === "minimized")
+    await page.getByTestId("map-chat-restore").click();
   const open = (await page.getByTestId("map-chat-overlay").count()) > 0;
   const input = open ? chatInput(page) : cardInput(page);
   await expect(input).toBeEditable();
@@ -122,7 +124,7 @@ const createCalls = (page: Page) =>
       }>,
   );
 
-test("the board's width never changes: at rest, a pick, another pick, the map chat, close (I1)", async ({ page }) => {
+test("the board's width never changes: at rest, a pick, another pick, the map chat, minimized (I1)", async ({ page }) => {
   const atRest = await boardBox(page);
   const centre = (await page.locator(".center-pane").boundingBox())!;
   expect(Math.round(atRest.width)).toBe(Math.round(centre.width));
@@ -138,8 +140,8 @@ test("the board's width never changes: at rest, a pick, another pick, the map ch
   await ask(page, "What reads from it?");
   expect(await boardBox(page)).toEqual(atRest);
 
-  await page.getByTestId("map-chat-close").click();
-  await expect(card(page)).toHaveAttribute("data-state", "node");
+  await page.getByTestId("map-chat-minimize").click();
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
   expect(await boardBox(page)).toEqual(atRest);
 });
 
@@ -227,25 +229,46 @@ test("the map chat is not a session: nothing joins the rail, and every Enter ext
     "Asking about screening · agent",
   ]);
 
-  // × closes it and keeps it; the next Enter from the card extends it.
-  await page.getByTestId("map-chat-close").click();
-  await expect(card(page)).toHaveAttribute("data-state", "node");
+  // Minimize keeps it: the pick's header row stays, the composer becomes one
+  // "Map chat" row, and that row brings the same conversation back.
+  await page.getByTestId("map-chat-minimize").click();
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
+  await expect(page.getByTestId("map-card-name")).toHaveText("screening");
+  await expect(page.getByTestId("map-card-composer")).toHaveCount(0);
+  await page.getByTestId("map-chat-restore").click();
+  await expect(card(page)).toHaveAttribute("data-state", "chat");
+  await expect(questions(page)).toHaveCount(2);
   await ask(page, "And what does it read?");
   await expect(questions(page)).toHaveCount(3);
 
-  // Escape closes it too, back to the card; the conversation stays.
+  // Escape minimizes it too; the conversation stays.
   await page.keyboard.press("Escape");
-  await expect(card(page)).toHaveAttribute("data-state", "node");
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
 
   // Leaving the project and coming back shows the card as it was left.
   await page.getByTestId("project-select-rfq-agent").click();
   await expect(page.getByTestId("agent-map-live")).toHaveCount(0);
   await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
   await ask(page, "Still there?");
   await expect(questions(page)).toHaveCount(4);
   expect(await railRows(page)).toEqual(before);
   expect(chat.prompts(projectId!)).toHaveLength(4);
+});
+
+test("minimized with no pick, the card is only the Map chat row; it restores the same conversation", async ({ page }) => {
+  await ask(page, "What runs here?");
+  await page.getByTestId("map-chat-minimize").click();
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
+  await expect(card(page)).toHaveClass(/map-card--pill/);
+  await expect(page.getByTestId("map-card-composer")).toHaveCount(0);
+  await expect(page.getByTestId("map-card-name")).toHaveCount(0);
+  const pill = (await card(page).boundingBox())!;
+  expect(pill.width).toBeLessThan(200);
+  await page.getByTestId("map-chat-restore").click();
+  await expect(card(page)).toHaveAttribute("data-state", "chat");
+  await expect(questions(page)).toHaveCount(1);
 });
 
 test("New chat starts an empty map chat, with an empty composer", async ({ page }) => {
@@ -293,16 +316,20 @@ test("a question asked while the chat connects keeps the pick it was asked about
   );
 });
 
-test("Escape with an unopenable agent picked closes the map chat first and keeps the pick", async ({ page }) => {
+test("Escape with an unopenable agent picked minimizes the map chat first and keeps the pick", async ({ page }) => {
   await pick(page, RESEARCH_DB, "screening");
   await ask(page, "Who writes to it?");
   // Focus on the map, where its own Escape would clear the pick.
   await node(page, RESEARCH_DB).focus();
   await page.keyboard.press("Escape");
-  await expect(card(page)).toHaveAttribute("data-state", "node");
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
   await expect(card(page)).toHaveAttribute("data-subject", "screening");
+  await expect(page.getByTestId("map-card-name")).toHaveText("screening");
+  // The second clears the pick; the chat stays minimized, as the row alone.
   await page.keyboard.press("Escape");
-  await expect(card(page)).toHaveAttribute("data-state", "project");
+  await expect(card(page)).toHaveAttribute("data-kind", "project");
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
+  await expect(card(page)).toHaveClass(/map-card--pill/);
 });
 
 test("Stop interrupts a reply that is still streaming", async ({ page }) => {
@@ -401,7 +428,7 @@ test("Open in session makes a session with the transcript and goes to it, on the
 test("Open agent opens a modal over the map; closing restores the pick and the map chat exactly (I9)", async ({ page }) => {
   await pick(page, STOCK_RESEARCH, "leasing");
   await ask(page, "What does it check?");
-  await page.getByTestId("map-chat-close").click();
+  await page.getByTestId("map-chat-minimize").click();
   const atRest = await boardBox(page);
   await page.getByTestId("map-card-open-agent").click();
 
@@ -431,7 +458,7 @@ test("Open agent opens a modal over the map; closing restores the pick and the m
   // Escape returns to the map with the pick and the map chat intact.
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
-  await expect(card(page)).toHaveAttribute("data-state", "node");
+  await expect(card(page)).toHaveAttribute("data-state", "minimized");
   await expect(card(page)).toHaveAttribute("data-subject", "leasing");
   await expect(node(page, STOCK_RESEARCH)).toHaveAttribute("aria-pressed", "true");
   await ask(page, "Back again");
@@ -447,7 +474,7 @@ test("Open agent opens a modal over the map; closing restores the pick and the m
   await expect(questions(page)).toHaveCount(2);
 
   // The scrim closes it as well.
-  await page.getByTestId("map-card").getByTestId("map-chat-close").click();
+  await page.getByTestId("map-card").getByTestId("map-chat-minimize").click();
   await page.getByTestId("map-card-open-agent").click();
   await expect(modal).toBeVisible();
   await page.mouse.click(box.x + 4, 10);

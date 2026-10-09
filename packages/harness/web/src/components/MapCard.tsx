@@ -25,8 +25,13 @@ const NODE_ICON: Record<string, IconName> = {
  *    the OS); then the composer, "Ask about <name>" (4.2.1). A resource or a
  *    step gets the header row without the buttons (4.2.3);
  *  - chat: the project's map chat (4.3.3), with New chat, Open in session and
- *    × (back to the card, keeping the conversation). Stop is the chat
- *    composer's own send button while a reply streams.
+ *    Minimize. Stop is the chat composer's own send button while a reply
+ *    streams;
+ *  - minimized: the chat put away. The node header row stays when there is a
+ *    pick; the composer is replaced by one "Map chat" row that brings the
+ *    conversation back. An empty composer here read as "the chat was
+ *    deleted", and New chat already covers starting over, so there is no
+ *    close.
  *
  * Typing is asking: no Start chat, no `⋯`, no Sessions list (the rail has
  * them) and no Change location (4.2.2).
@@ -37,6 +42,7 @@ export function MapCard({
   nodeKind,
   agent,
   chat,
+  onRestoreChat,
   canAsk,
   revealLabel,
   onAsk,
@@ -55,8 +61,10 @@ export function MapCard({
     pane: ReactNode;
     onNewChat: () => void;
     onOpenInSession: () => void;
-    onClose: () => void;
+    onMinimize: () => void;
   } | null;
+  /** The map chat is minimized: bring it back. Null when it is not. */
+  onRestoreChat: (() => void) | null;
   /** The Assistant is available to this account; without it the card names
    *  the pick and offers no composer. */
   canAsk: boolean;
@@ -67,13 +75,25 @@ export function MapCard({
   onReveal: (agent: WorkflowInfo) => void;
 }): JSX.Element | null {
   const picked = subject.kind !== "project";
-  const state = chat ? "chat" : picked ? "node" : "project";
+  const minimized = !chat && onRestoreChat != null;
+  const state = chat
+    ? "chat"
+    : minimized
+      ? "minimized"
+      : picked
+        ? "node"
+        : "project";
   // Nothing to show at rest without a composer: the map is the whole view.
   if (!chat && !picked && !canAsk) return null;
 
   return (
     <div
-      className={"map-card" + (chat ? " map-card--chat" : "")}
+      className={
+        "map-card" +
+        (chat ? " map-card--chat" : "") +
+        // Nothing above the restore row: the card shrinks to it.
+        (minimized && !picked ? " map-card--pill" : "")
+      }
       data-testid="map-card"
       data-state={state}
       data-subject={subject.name}
@@ -115,12 +135,12 @@ export function MapCard({
               <button
                 type="button"
                 className="theme-toggle"
-                data-testid="map-chat-close"
-                aria-label="Close chat"
-                data-tooltip="Close"
-                onClick={chat.onClose}
+                data-testid="map-chat-minimize"
+                aria-label="Minimize chat"
+                data-tooltip="Minimize"
+                onClick={chat.onMinimize}
               >
-                <Icon name="X" size={14} />
+                <Icon name="Minus" size={14} />
               </button>
             </span>
           </div>
@@ -175,7 +195,19 @@ export function MapCard({
               )}
             </div>
           )}
-          {canAsk && (
+          {onRestoreChat ? (
+            <button
+              type="button"
+              className="map-card-restore"
+              data-testid="map-chat-restore"
+              aria-label="Show map chat"
+              onClick={onRestoreChat}
+            >
+              <Icon name="MessageSquare" size={14} />
+              <span className="map-card-title">Map chat</span>
+              <Icon name="ChevronUp" size={14} />
+            </button>
+          ) : canAsk && (
             <MapAskComposer
               key={`ask:${subject.path}`}
               placeholder={askPlaceholder(subject)}

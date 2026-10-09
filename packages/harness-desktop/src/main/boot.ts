@@ -31,6 +31,7 @@ import {
   resolveSpawnTarget,
   CLAUDE_INSTALL_COMMAND,
   CODEX_INSTALL_COMMAND,
+  bundledMcpCommand,
   type HarnessServer,
   type HarnessIdentity,
   type DoctorReport,
@@ -45,7 +46,7 @@ import { ensureAgentUpdates } from "./agent-updates.js";
 import { runUpdateCommand } from "./agent-update-process.js";
 import { agentRepairDecision } from "./agent-repair.js";
 import { ensureMinGit } from "./git-provision.js";
-import { ensureSapiomMcp } from "./mcp-install.js";
+import { ensureSapiomMcp, fetchLatestSapiomMcpVersion } from "./mcp-install.js";
 import { installRuntimeShims } from "./runtime-shims.js";
 import {
   BOOT_PROGRESS,
@@ -475,6 +476,8 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
       smoke,
       devMode,
       install: installSapiomMcp,
+      latestVersion: fetchLatestSapiomMcpVersion,
+      bundledEntry: bundledMcpCommand()?.args[0] ?? null,
       onLine: (line) => console.log(`[boot] sapiom-mcp: ${line}`),
     });
     console.log(
