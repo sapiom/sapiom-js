@@ -452,6 +452,42 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(events[0]!.data.method).toBe("POST");
   });
 
+  it("a redirected call is counted once, under the URL the caller asked for", async () => {
+    enableTelemetry();
+    const { transport, calls } = makeTransport(({ url }) =>
+      url.endsWith("/start")
+        ? new Response(null, {
+            status: 302,
+            headers: { location: "https://cdn.test/object" },
+          })
+        : jsonResponse({ ok: true }),
+    );
+
+    const res = await transport.fetch("https://files.test/v1/start");
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+
+    const events = await flushedEvents(transport);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.url).toBe("https://files.test/v1/start");
+    expect(events[0]!.data.status).toBe(200);
+  });
+
+  it("a call refused before sending (plaintext to a non-loopback host) is counted as failed", async () => {
+    enableTelemetry();
+    const { transport, calls } = makeTransport(() => jsonResponse({}));
+
+    await expect(
+      transport.fetch("http://files.internal/v1/start"),
+    ).rejects.toThrow(/refusing plaintext HTTP/);
+    expect(calls).toHaveLength(0);
+
+    const events = await flushedEvents(transport);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.ok).toBe(false);
+    expect(events[0]!.data.error).toBe("TypeError");
+  });
+
   it("never records query strings — a direct transport.fetch with a secret query stores a query-free url", async () => {
     enableTelemetry();
     const { transport } = makeTransport(() => jsonResponse({ ok: true }));
