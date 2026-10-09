@@ -144,6 +144,76 @@ describe('validateGraph', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('treats a pause timeoutStep as a forward edge (no unreachable warning)', () => {
+    const def = defineAgent({
+      name: 'wait-or-escalate',
+      entry: 'await',
+      steps: {
+        await: defineStep({
+          name: 'await',
+          next: ['proceed'],
+          pause: { signal: 'thing.done', resumeStep: 'proceed', timeoutStep: 'escalate' },
+          async run() {
+            return pauseUntilSignal({
+              signal: 'thing.done',
+              resumeStep: 'proceed',
+              timeoutMs: 5000,
+              timeoutStep: 'escalate',
+            });
+          },
+        }),
+        proceed: defineStep({
+          name: 'proceed',
+          next: [],
+          terminal: true,
+          async run() {
+            return terminate(null);
+          },
+        }),
+        escalate: defineStep({
+          name: 'escalate',
+          next: [],
+          terminal: true,
+          async run() {
+            return terminate(null);
+          },
+        }),
+      },
+    });
+    const manifest = manifestOf(def);
+    // The pause transition carries the timeoutStep…
+    const awaitStep = manifest.steps.await;
+    expect(awaitStep.transitions).toContainEqual({
+      kind: 'pause',
+      signal: 'thing.done',
+      resumeStep: 'proceed',
+      timeoutStep: 'escalate',
+    });
+    // …and `escalate` is reachable through it (no unreachable warning).
+    const { errors, warnings } = validateGraph(manifest);
+    expect(errors).toEqual([]);
+    expect(warnings.some((w) => w.includes("'escalate'"))).toBe(false);
+  });
+
+  it('errors on a pause timeoutStep that does not exist', () => {
+    const manifest = {
+      protocol: 1 as const,
+      name: 'bad-timeout',
+      entry: 'a',
+      sdkVersion: '0.1.0',
+      artifact: ARTIFACT,
+      steps: {
+        a: {
+          timeoutMs: null,
+          inputSchema: null,
+          transitions: [{ kind: 'pause' as const, signal: 's', resumeStep: 'a', timeoutStep: 'ghost' }],
+        },
+      },
+    };
+    const { errors } = validateGraph(manifest);
+    expect(errors.some((e) => e.includes('timeoutStep') && e.includes("'ghost'"))).toBe(true);
+  });
+
   it('assertValidGraph throws on errors and returns warnings otherwise', () => {
     const bad = {
       protocol: 1 as const,

@@ -12,6 +12,7 @@ import {
   CtxSharedSizeLimitExceededError,
   CtxSharedSerializationError,
   DIRECTIVE_KIND,
+  isPauseTimeout,
   MAX_SHARED_SNAPSHOT_BYTES,
   StepInputValidationError,
 } from '@sapiom/agent';
@@ -22,6 +23,7 @@ import { EXECUTION_STATUS } from './execution-state.js';
 import { RetryLimitExceededError } from './errors.js';
 import { InMemoryExecutionStore, SyncInProcessDispatcher, resetIdCounter } from './in-memory-store.js';
 import { AgentRunnerCore, DEFAULT_MAX_ATTEMPTS_PER_STEP } from './runner-core.js';
+import { NOOP_OBSERVER } from './stores.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -613,6 +615,180 @@ describe('AgentRunnerCore', () => {
     it('resetForResume on a non-existent execution throws', async () => {
       const { core } = setupCore();
       await expect(core.resetForResume('does-not-exist')).rejects.toThrow('Execution not found');
+    });
+  });
+
+  // ── pause timeout: resume at timeoutStep vs. fail ──────────────────────────
+
+  describe('pause timeout', () => {
+    /** A pause manifest whose `wait` step optionally declares a `timeoutStep`. */
+    function timeoutManifest(withTimeoutStep: boolean): AgentManifest {
+      return makeManifest({
+        entry: 'wait',
+        steps: {
+          wait: {
+            timeoutMs: null,
+            inputSchema: null,
+            transitions: [
+              {
+                kind: 'pause',
+                signal: 'thing.done',
+                resumeStep: 'proceed',
+                ...(withTimeoutStep ? { timeoutStep: 'escalate' } : {}),
+              },
+            ],
+          },
+          proceed: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+          escalate: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+        } as unknown as AgentManifest['steps'],
+      });
+    }
+
+    /** Advance `wait` to a PAUSED state whose deadline has already elapsed. */
+    async function pauseThenElapse(
+      core: AgentRunnerCore,
+      store: InMemoryExecutionStore,
+      dispatcher: SyncInProcessDispatcher,
+      manifest: AgentManifest,
+      timeoutStep?: string,
+    ): Promise<string> {
+      dispatcher.setSyncBody('wait', async () => ({
+        output: {},
+        directive: {
+          kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
+          signal: { name: 'thing.done', correlationId: 'c-1' },
+          resumeStep: 'proceed',
+          timeoutMs: 1,
+          ...(timeoutStep ? { timeoutStep } : {}),
+        },
+      }));
+      const executionId = await core.createExecution('test-workflow', 'wait', {}, { manifest });
+      await core.advance(executionId);
+      expect(store.getExecution(executionId)?.status).toBe(EXECUTION_STATUS.PAUSED);
+      // Let the 1ms deadline pass.
+      await new Promise((r) => setTimeout(r, 5));
+      return executionId;
+    }
+
+    it('resumes at timeoutStep with a branded timeout payload instead of failing', async () => {
+      const manifest = timeoutManifest(true);
+      const { store, dispatcher, core } = setupCore();
+      let received: unknown;
+      dispatcher.setSyncBody('escalate', async (input) => {
+        received = input;
+        return { output: { escalated: true }, directive: { kind: DIRECTIVE_KIND.TERMINATE } };
+      });
+
+      const executionId = await pauseThenElapse(core, store, dispatcher, manifest, 'escalate');
+      const result = await core.expirePausedExecution(executionId);
+
+      // Resumed (RUNNING), not failed.
+      expect(result?.kind).toBe(ADVANCE_RESULT_KIND.RUNNING);
+      const resumed = store.getExecution(executionId);
+      expect(resumed?.status).toBe(EXECUTION_STATUS.RUNNING);
+      expect(resumed?.currentStep).toBe('escalate');
+      expect(resumed?.pausedTimeoutStep).toBeNull();
+      // The timeoutStep gets a branded, distinguishable payload as its input.
+      expect(isPauseTimeout(resumed?.currentStepInput)).toBe(true);
+
+      // And it advances to completion, seeing the timeout payload.
+      await core.advance(executionId);
+      expect(store.getExecution(executionId)?.status).toBe(EXECUTION_STATUS.COMPLETED);
+      expect(isPauseTimeout(received)).toBe(true);
+      if (isPauseTimeout(received)) {
+        expect(received.signal).toBe('thing.done');
+      }
+    });
+
+    it('fails with PauseTimeoutError when no timeoutStep is declared', async () => {
+      const manifest = timeoutManifest(false);
+      const { store, dispatcher, core } = setupCore();
+      const executionId = await pauseThenElapse(core, store, dispatcher, manifest);
+
+      const result = await core.expirePausedExecution(executionId);
+      expect(result?.kind).toBe(ADVANCE_RESULT_KIND.FAILED);
+      if (result?.kind === ADVANCE_RESULT_KIND.FAILED) {
+        expect((result.error as Error).name).toBe('PauseTimeoutError');
+      }
+      expect(store.getExecution(executionId)?.status).toBe(EXECUTION_STATUS.FAILED);
+    });
+
+    it('loses to a signal resume that lands between its load and its CAS', async () => {
+      // The sweep reads the row while it is still paused; a signal then resumes it
+      // through resetForResume, which does not bump the version. A version-only CAS
+      // let the sweep overwrite that resume with the timeout branch (Codex review on #889).
+      const manifest = timeoutManifest(true);
+      const { store, dispatcher, core } = setupCore();
+      const executionId = await pauseThenElapse(core, store, dispatcher, manifest, 'escalate');
+
+      const load = store.loadExecution.bind(store);
+      store.loadExecution = async (id: string) => {
+        const stale = await load(id);
+        store.loadExecution = load;
+        await core.resetForResume(id, { fromStepName: 'proceed', fromStepInput: { ok: true } });
+        return stale;
+      };
+      const result = await core.expirePausedExecution(executionId);
+
+      expect(result).toBeNull();
+      const row = store.getExecution(executionId);
+      expect(row?.status).toBe(EXECUTION_STATUS.RUNNING);
+      expect(row?.currentStep).toBe('proceed');
+      expect(row?.currentStepInput).toEqual({ ok: true });
+    });
+
+    it('loses its CAS when the row is no longer paused, even at the same version', async () => {
+      const manifest = timeoutManifest(true);
+      const { store, dispatcher, core } = setupCore();
+      const executionId = await pauseThenElapse(core, store, dispatcher, manifest, 'escalate');
+      const before = store.getExecution(executionId);
+      await store.prepareResume({ executionId, fromStepName: 'proceed', fromStepInput: {} });
+
+      const won = await store.resumeAtTimeoutStep({
+        executionId,
+        expectedVersion: before!.version,
+        timeoutStep: 'escalate',
+        timeoutStepInput: {},
+        sharedState: {},
+      });
+      expect(won).toBe(false);
+      expect(store.getExecution(executionId)?.currentStep).toBe('proceed');
+    });
+
+    it('counts a declared timeout route the store cannot take', async () => {
+      const store = new InMemoryExecutionStore();
+      (store as { resumeAtTimeoutStep?: unknown }).resumeAtTimeoutStep = undefined;
+      const dispatcher = new SyncInProcessDispatcher();
+      const counted: string[] = [];
+      const observer = {
+        ...NOOP_OBSERVER,
+        count: (m: { name: string }) => {
+          counted.push(m.name);
+        },
+      };
+      const core = new AgentRunnerCore({ store, dispatcher, observer });
+      dispatcher.setCore(core);
+
+      const executionId = await pauseThenElapse(core, store, dispatcher, timeoutManifest(true), 'escalate');
+      await core.expirePausedExecution(executionId);
+      expect(counted).toContain('workflow.pause.timeout_resume_unavailable');
+    });
+
+    it('falls back to failing when the store lacks the resume capability', async () => {
+      // A store without resumeAtTimeoutStep — an external store on an older
+      // minor version. A declared timeoutStep must still degrade to the fail path.
+      const store = new InMemoryExecutionStore();
+      (store as { resumeAtTimeoutStep?: unknown }).resumeAtTimeoutStep = undefined;
+      const dispatcher = new SyncInProcessDispatcher();
+      const core = new AgentRunnerCore({ store, dispatcher });
+      dispatcher.setCore(core);
+
+      const manifest = timeoutManifest(true);
+      const executionId = await pauseThenElapse(core, store, dispatcher, manifest, 'escalate');
+
+      const result = await core.expirePausedExecution(executionId);
+      expect(result?.kind).toBe(ADVANCE_RESULT_KIND.FAILED);
+      expect(store.getExecution(executionId)?.status).toBe(EXECUTION_STATUS.FAILED);
     });
   });
 

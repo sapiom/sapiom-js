@@ -19,7 +19,14 @@ export type ManifestTransition =
   | { readonly kind: 'continue'; readonly target: string }
   | { readonly kind: 'terminate' }
   | { readonly kind: 'fail' }
-  | { readonly kind: 'pause'; readonly signal: string; readonly resumeStep: string };
+  | {
+      readonly kind: 'pause';
+      readonly signal: string;
+      readonly resumeStep: string;
+      /** Step routed to if the pause's `timeoutMs` elapses with no signal; a
+       *  forward edge. Optional for back-compat with manifests built before it. */
+      readonly timeoutStep?: string;
+    };
 
 /**
  * Per-step metadata emitted by the build phase and consumed by the engine.
@@ -87,7 +94,12 @@ const manifestTransitionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('continue'), target: z.string().min(1) }),
   z.object({ kind: z.literal('terminate') }),
   z.object({ kind: z.literal('fail') }),
-  z.object({ kind: z.literal('pause'), signal: z.string().min(1), resumeStep: z.string().min(1) }),
+  z.object({
+    kind: z.literal('pause'),
+    signal: z.string().min(1),
+    resumeStep: z.string().min(1),
+    timeoutStep: z.string().min(1).optional(),
+  }),
 ]);
 
 const workflowStepManifestSchema = z.object({

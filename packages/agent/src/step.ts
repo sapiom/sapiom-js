@@ -77,8 +77,12 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
   readonly terminal: boolean;
   /** May `fail`. */
   readonly canFail: boolean;
-  /** Declared pause edge, if any. */
-  readonly pause?: { readonly signal: string; readonly resumeStep: string };
+  /**
+   * Declared pause edge, if any. `timeoutStep`, when present, is the step the
+   * engine routes to if the pause's `timeoutMs` elapses with no signal (instead
+   * of failing the run); it receives a branded `PauseTimeoutPayload`.
+   */
+  readonly pause?: { readonly signal: string; readonly resumeStep: string; readonly timeoutStep?: string };
   readonly inputSchema?: ZodType<unknown>;
   readonly timeoutMs?: number;
   /** Human-authored one-liner for the canvas step inspector (Option A —
@@ -110,7 +114,7 @@ export function defineStep<
   // Capture the whole pause object as a `const` type param (not a nested
   // property of a fixed-shape param) so its `resumeStep` literal is preserved —
   // a nested `resumeStep: PauseTo` widens to `string` and defeats enforcement.
-  const PauseDecl extends { signal: string; resumeStep: string } | undefined = undefined,
+  const PauseDecl extends { signal: string; resumeStep: string; timeoutStep?: string } | undefined = undefined,
 >(def: {
   name: string;
   next?: Next;

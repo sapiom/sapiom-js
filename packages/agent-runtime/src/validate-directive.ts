@@ -58,10 +58,18 @@ export function validateDirective(
   if (isPause(directive)) {
     const signalName = directive.signal.name;
     const resume = directive.resumeStep;
+    const timeout = directive.timeoutStep;
+    const timed = directive.timeoutMs !== undefined;
     const declared = transitions.some(
-      (t) => t.kind === 'pause' && t.signal === signalName && (resume === undefined || t.resumeStep === resume),
+      (t) =>
+        t.kind === 'pause' &&
+        t.signal === signalName &&
+        (resume === undefined || t.resumeStep === resume) &&
+        // A pause declared with a timeout branch has to name it whenever it sets a deadline.
+        // Otherwise the deadline fails the run instead of taking the branch the step declared.
+        (timeout === undefined ? !(timed && t.timeoutStep !== undefined) : t.timeoutStep === timeout),
     );
-    return declared ? null : new DisallowedTransitionError(stepName, 'pause', resume);
+    return declared ? null : new DisallowedTransitionError(stepName, 'pause', resume ?? timeout);
   }
   return null;
 }

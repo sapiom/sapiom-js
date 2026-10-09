@@ -142,7 +142,7 @@ Export exactly one `defineAgent(...)` from `index.ts`.
 | `next`            | `readonly string[]`      | yes      | Step names this step may `goto`. Empty array if terminal                                                                                                                        |
 | `terminal`        | `boolean`                | no       | `true` if this step ends the agent's execution                                                                                                                                  |
 | `canFail`         | `boolean`                | no       | Must be `true` to return `fail()`                                                                                                                                               |
-| `pause`           | `{ signal, resumeStep }` | no       | Required when returning `pauseUntilSignal(...)`                                                                                                                                 |
+| `pause`           | `{ signal, resumeStep, timeoutStep? }` | no       | Required when returning `pauseUntilSignal(...)`. Optional `timeoutStep` routes a timed-out pause to a step instead of failing — see [Timing out a pause](#timing-out-a-pause)                                             |
 | `inputSchema`     | `ZodType`                | no       | Zod schema validating this step's input. On the **entry** step it is the agent's public API (see [The Entry Input Contract](#the-entry-input-contract--your-agents-public-api)) |
 | `timeoutMs`       | `number`                 | no       | Per-attempt step timeout; the engine separately caps attempts (three by default)                                                                                                |
 | `run(input, ctx)` | `async function`         | yes      | Returns a directive                                                                                                                                                             |
@@ -574,6 +574,61 @@ Under `run_local`, a dispatch pause auto-resumes with the stub result; a manual 
 auto-resumes with `{}`. There is no manual-signal payload override in the local runner, so
 type the resumed step's input with optional fields accordingly.
 
+### Timing out a pause
+
+Add `timeoutMs` to bound the wait. What happens when it elapses depends on whether you also
+declare a `timeoutStep`:
+
+- **`timeoutMs` alone → the run fails** with `PauseTimeoutError`. Use this only when a missed
+  deadline is genuinely terminal.
+- **`timeoutMs` + `timeoutStep` → the run resumes at `timeoutStep`** instead of failing, so the
+  agent can branch on the timeout — the "wait for the event, otherwise proceed / escalate
+  after N" pattern (close bidding after 48h _or_ 3 bids; advance to the next vendor if no confirm
+  within 2h; escalate an unanswered request after 3 days).
+
+`timeoutStep` must be declared on the step's `pause: { …, timeoutStep }` (a graph edge, like
+`resumeStep`), and it is a **separate step with its own `inputSchema`**. It receives a branded
+`PauseTimeoutPayload` — narrow it with `isPauseTimeout` — distinct from the signal payload a
+normal resume delivers, so the two never have to share one schema.
+
+```typescript
+import { defineStep, goto, pauseUntilSignal, isPauseTimeout } from "@sapiom/agent";
+
+const wait = defineStep({
+  name: "wait",
+  next: [],
+  pause: { signal: "vendor.confirmed", resumeStep: "ship", timeoutStep: "next_vendor" },
+  async run(_input, ctx) {
+    return pauseUntilSignal({
+      signal: "vendor.confirmed",
+      resumeStep: "ship",
+      timeoutMs: 2 * 60 * 60 * 1000, // 2h
+      timeoutStep: "next_vendor",
+      correlationId: ctx.executionId,
+    });
+  },
+});
+
+const nextVendor = defineStep({
+  name: "next_vendor",
+  next: ["ship"],
+  async run(input) {
+    if (isPauseTimeout(input)) {
+      // no confirmation within 2h — fall through to the next vendor
+    }
+    return goto("ship");
+  },
+});
+```
+
+Note: `run_local` auto-resumes pauses, so a `timeoutStep` does not fire under the local runner —
+exercise the timeout branch with a direct unit test of the step body instead.
+
+Deployed runs also need platform support for `timeoutStep`. Until the hosted engine ships it, do not
+rely on the branch in a deployed agent: a deployed pause that times out can still fail with
+`PauseTimeoutError`. When a step declares a `timeoutStep`, every `pauseUntilSignal` it returns with a
+`timeoutMs` must pass that same `timeoutStep`, or the directive is rejected.
+
 ### Waiting on a user-named signal
 
 The signal name in the object form is yours to choose — `pauseUntilSignal` takes any
@@ -588,10 +643,11 @@ the `correlationId`:
 
 Deliver it with `sapiom_dev_agents_signal` (or `sapiom agents signal`). Give any gate a human
 might never answer an explicit `timeoutMs`: when the deadline lapses the run ends as a pause
-timeout instead of resuming, so the failure is recorded rather than sat on. Delivery is
-matched on `(name, correlationId)`, never on the execution id the tool addresses, and the
-result's `matched` counts the runs that ACTUALLY resumed — read its `message` whenever
-present, because a `0` does not prove nothing was waiting.
+timeout instead of resuming (unless the pause declares a `timeoutStep`, see
+[Timing out a pause](#timing-out-a-pause)), so the failure is recorded rather than sat on.
+Delivery is matched on `(name, correlationId)`, never on the execution id the tool
+addresses, and the result's `matched` counts the runs that ACTUALLY resumed — read its
+`message` whenever present, because a `0` does not prove nothing was waiting.
 
 <!-- section: trigger-kinds -->
 
