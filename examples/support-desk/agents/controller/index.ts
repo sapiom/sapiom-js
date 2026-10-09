@@ -153,11 +153,11 @@ async function expectsReply(
       expects_reply: {
         type: "noul",
         instructions:
-          "Does the customer's last message (`lastMessage`) expect a reply from the support team? `thread` is the conversation so far, oldest first.",
+          "Does the customer's last message (`lastMessage`) expect a reply from the support team? `thread` is the conversation so far, oldest first; a team line like `(reacted :+1:)` is a teammate's emoji reaction.",
         criteria: {
-          true: "It asks a question, reports a problem, or requests something, so silence would leave the customer waiting.",
+          true: "It asks the team a question, reports a problem, or requests something the team has not done yet, so silence would leave the customer waiting.",
           false:
-            "It thanks the team, confirms the problem is solved, or otherwise closes the conversation.",
+            "It thanks the team, confirms the problem is solved, agrees to or confirms a plan or a time, says the customer will do the next step themselves, shares information without asking for anything, or only offers more help ('let us know if...', 'don't hesitate to ask').",
         },
       },
     },

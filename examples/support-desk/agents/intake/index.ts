@@ -149,6 +149,8 @@ const plain = (text: string) => escapeMrkdwn(slackToPlain(text));
 /** A customer-channel message or 🎫 reaction, normalized. `eventId` is the causation id. */
 const Incoming = z.object({
   eventId: z.string(),
+  /** The installing workspace, from the event envelope: who counts as the team when unconfigured. */
+  teamId: z.string().optional(),
   trigger: z.enum(["message", "reaction"]),
   channel: z.string(),
   ts: z.string(),
@@ -261,6 +263,7 @@ const guard = defineStep({
         });
       return goto("ack", {
         eventId: r.data.eventId,
+        teamId: r.data.teamId,
         trigger: "reaction",
         channel: e.item.channel,
         ts: e.item.ts,
@@ -312,6 +315,7 @@ const guard = defineStep({
         });
       return goto("ack", {
         eventId: m.data.eventId,
+        teamId: m.data.teamId,
         trigger: "message",
         channel: e.channel,
         ts: e.ts,
@@ -363,6 +367,34 @@ const internal = defineStep({
 });
 
 // --- our team's messages in a customer channel -----------------------------------------------
+
+/** How soon after the customer's latest message a teammate's top-level post still answers it. */
+export const TOP_LEVEL_ANSWER_SECONDS = 60 * 60;
+
+/**
+ * The issue a teammate's top-level message in a customer channel answers, when that is unambiguous:
+ * exactly one issue in the channel is waiting on the team (New or On You) and its latest customer
+ * message came less than an hour before. Teams often answer in the channel instead of the thread;
+ * with two waiting issues, or an old one, the message could be about anything, so it answers none.
+ */
+async function topLevelAnswerTarget(
+  db: Db,
+  channel: string,
+  ts: string,
+): Promise<string | null> {
+  const rows = await db.query<{ id: string }>(
+    "select id from issues where customer_channel = $1 and status in ('new', 'on_you')",
+    [channel],
+  );
+  const recent: string[] = [];
+  for (const { id } of rows) {
+    const customerTs = await latestCustomerTs(db, String(id));
+    if (!customerTs || compareSlackTs(ts, customerTs) < 0) continue;
+    if (Number(ts) - Number(customerTs) <= TOP_LEVEL_ANSWER_SECONDS)
+      recent.push(String(id));
+  }
+  return rows.length === 1 && recent.length === 1 ? recent[0] : null;
+}
 
 /**
  * A teammate answered issue `issueId`: a reply in its customer thread, a reaction on the customer's
@@ -456,7 +488,9 @@ const team = defineStep({
     });
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
-      const issueId = root ? await threadIssueFor(db, e.channel, root) : null;
+      const issueId = root
+        ? await threadIssueFor(db, e.channel, root)
+        : await topLevelAnswerTarget(db, e.channel, e.ts);
       if (!issueId) {
         const { message, duplicate } = await linkMessage(db, {
           source: "slack",
@@ -946,6 +980,7 @@ const persist = defineStep({
           customer: slack,
         });
         await recordRun(db, ctx, AGENT, issue.id);
+        await assignMentioned(ctx, db, issue.id, input.text, input.teamId);
         return goto("announce", {
           ...base,
           decision: "open",
@@ -957,6 +992,7 @@ const persist = defineStep({
 
       const current = await followUp(db, decision.issueId);
       await recordRun(db, ctx, AGENT, current.id);
+      await assignMentioned(ctx, db, current.id, input.text, input.teamId);
       return goto("announce", {
         ...base,
         decision: "link",
@@ -967,6 +1003,52 @@ const persist = defineStep({
     });
   },
 });
+
+/** `<@U123>` or `<@U123|name>` in Slack message text. */
+const MENTION = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g;
+
+/**
+ * The customer addressed a teammate by name (`@Ilan where are we on...`): on an issue with no owner,
+ * that teammate becomes the owner, so the card and any nudge go to them rather than to the whole
+ * triage channel. The first mention that is a person on our team wins; bots and customers are skipped.
+ */
+async function assignMentioned(
+  ctx: SlackCtx,
+  db: Db,
+  issueId: string,
+  text: string,
+  envelopeTeamId: string | undefined,
+): Promise<void> {
+  const ids = [...new Set([...text.matchAll(MENTION)].map((m) => m[1]))];
+  if (ids.length === 0) return;
+  const issue = await getIssue(db, issueId);
+  if (issue.ownerSlackId || issue.status === "closed") return;
+  const teamSlackTeamIds = await getConfigOr(
+    db,
+    "team.slack_team_ids",
+    undefined,
+  );
+  const testUserIds = await getConfigOr(db, "customers.test_user_ids", []);
+  for (const id of ids) {
+    const person = await userInfo(ctx, id).catch(() => null);
+    if (!person || person.isBot) continue;
+    const side = classifyPoster({
+      user: id,
+      userTeam: person.teamId,
+      envelopeTeamId: envelopeTeamId ?? "",
+      teamSlackTeamIds,
+      testUserIds,
+    });
+    if (side !== "team") continue;
+    // Under the row lock: a Take landing at the same moment keeps its owner.
+    await db.transaction(async (tx) => {
+      const locked = await lockIssue(tx, issueId);
+      if (!locked.ownerSlackId && locked.status !== "closed")
+        await assign(tx, issueId, id);
+    });
+    return;
+  }
+}
 
 /** A follow-up puts the ball back with the team; On Hold stays On Hold until engineering is done. */
 async function followUp(db: Db, issueId: string): Promise<Issue> {

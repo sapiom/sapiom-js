@@ -14,8 +14,10 @@ channels you share with them; your team works the issues from one triage channel
 - The triage thread stays quiet: the first customer message goes under the card, later messages
   only redraw the card, and each issue keeps one draft card that a newer draft replaces in place.
 - A teammate answers by replying in the customer thread, by reacting to the customer's latest
-  message (any emoji), or with **Handled** on the card when the answer happened elsewhere or none is
-  needed. ✅ on the customer message or on the card closes the issue.
+  message (any emoji), with a top-level message in the channel when exactly one issue there waits on
+  the team and its customer wrote within the hour, or with **Handled** on the card when the answer
+  happened elsewhere or none is needed. ✅ on the customer message or on the card closes the issue.
+- A customer who @mentions a teammate makes that teammate the owner of an unowned issue.
 - An escalated issue comes back to the team when its Linear issue is Done, or when someone clicks
   **Resolved**.
 - A **daily digest** lists open issues per desk, and a **watchdog** posts any failed agent run.
@@ -396,6 +398,10 @@ time go out as one message. Both settings are on the Console's Settings tab.
 
 Copilot drafts nothing for a customer message within 15 minutes of a teammate's reply in the
 thread: the teammate is in the conversation.
+
+Before a "customer is waiting" nudge, Jev reads the thread and decides whether the customer's last
+message expects a reply. Thanks, confirmations, agreeing to a plan or a time, the customer taking the
+next step themselves, information with no ask, and offers of more help ("let us know if...") do not.
 
 When an issue stays unowned, or its customer keeps waiting for a reply, past a level, the
 controller also DMs on-call and mentions a Slack user group in the issue's triage thread. It is

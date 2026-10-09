@@ -671,6 +671,48 @@ describe("intake agent", () => {
       }
     });
 
+    it("a top-level team message answers the one issue waiting on the team in that channel", async () => {
+      const issueId = await openBug();
+      const top = structuredClone(teamReply()) as {
+        event: { thread_ts?: string };
+      };
+      delete top.event.thread_ts;
+      const t = makeCtx("exec-team-top-answer");
+      expect((await run(top, t.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        issueId,
+        status: "on_customer",
+      });
+      expect(t.slack("chat.postMessage")).toEqual([]);
+    });
+
+    it("a top-level team message answers nothing when the customer's message is over an hour old", async () => {
+      const issueId = await openBug();
+      const late = structuredClone(teamReply()) as {
+        event: { thread_ts?: string; ts: string; event_ts: string };
+      };
+      delete late.event.thread_ts;
+      late.event.ts = late.event.event_ts = "1790893700.000100";
+      expect(
+        (await run(late, makeCtx("exec-team-late").ctx)).output,
+      ).toMatchObject({ outcome: "team_message", issueId: null });
+      expect((await getIssue(db, issueId)).status).toBe("new");
+    });
+
+    it("a customer's @mention of a teammate makes them the owner of a new issue", async () => {
+      await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER2"], "test");
+      const msg = structuredClone(
+        intakeFixture("message-created.bug.json").payload,
+      ) as { event: { text: string } };
+      msg.event.text = `<@U0CUSTOMER2> <@U0TEAMMATE1|Ilan> ${msg.event.text}`;
+      const { output } = await run(msg, makeCtx("exec-mention", JEV.bug).ctx);
+      expect(output).toMatchObject({ outcome: "opened" });
+      // The customer's own colleague is skipped; the first teammate mentioned owns it.
+      expect((await getIssue(db, output.issueId as string)).ownerSlackId).toBe(
+        "U0TEAMMATE1",
+      );
+    });
+
     it("a team message with no issue is stored and does nothing else", async () => {
       const top = structuredClone(teamReply()) as {
         event: { thread_ts?: string };
