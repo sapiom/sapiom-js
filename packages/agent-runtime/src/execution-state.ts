@@ -53,7 +53,7 @@ export interface ExecutionState {
    * the pause directive's `timeoutStep`. Null when the pause declared none, in
    * which case a timeout fails the execution with `PauseTimeoutError`.
    */
-  readonly pausedTimeoutStep: string | null;
+  readonly pausedTimeoutStep?: string | null;
   /** Non-null exactly while a step body is dispatched and in flight. */
   readonly dispatchedStepRowId: string | null;
   readonly dispatchDeadlineAt: Date | null;
