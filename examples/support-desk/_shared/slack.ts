@@ -302,7 +302,7 @@ export async function replies(
 export async function userInfo(
   ctx: SlackCtx,
   user: string,
-): Promise<{ id: string; name: string; email?: string }> {
+): Promise<{ id: string; name: string; email?: string; teamId?: string }> {
   const out = await call<Awaited<ReturnType<SlackApi["userInfo"]>>>(
     ctx,
     "users.info",
@@ -318,7 +318,15 @@ export async function userInfo(
     u.real_name ||
     u.name ||
     user;
-  return { id: u.id, name, email: u.profile?.email };
+  // Slack's own field, passed through by the connector: the person's home workspace, which for a
+  // Slack Connect guest is theirs, not ours.
+  const teamId = (u as { team_id?: unknown }).team_id;
+  return {
+    id: u.id,
+    name,
+    email: u.profile?.email,
+    ...(typeof teamId === "string" && { teamId }),
+  };
 }
 
 /** A link to a message. Slack redirects `slack.com/archives` to the viewer's workspace. */

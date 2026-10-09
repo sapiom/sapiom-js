@@ -355,48 +355,77 @@ const send = defineStep({
       const nudged: { issueId: string; key: string; ts: string }[] = [];
       const notSent: string[] = [];
       const resolved: string[] = [];
-      for (const n of input.nudges) {
-        const sent = await db.transaction(async (tx) => {
+      // One message per issue: every reason due on it at once, each still recorded under its own key.
+      const byIssue = new Map<string, typeof input.nudges>();
+      for (const n of input.nudges)
+        byIssue.set(n.issueId, [...(byIssue.get(n.issueId) ?? []), n]);
+      for (const [issueId, group] of byIssue) {
+        const sent = await db.transaction<{
+          resolved: typeof group;
+          posted: typeof group;
+          ts: string | null;
+        }>(async (tx) => {
           // Recheck live conditions because scan may be stale, while keeping scan's Jev decision.
-          // Exclude this round's key so an otherwise-due retry reaches recordNudge's duplicate check.
-          const fresh = await snapshot(tx, n.issueId, { lock: true });
-          const stillDue = dueNudges({
+          // Exclude this round's keys so an otherwise-due retry reaches recordNudge's duplicate check.
+          const fresh = await snapshot(tx, issueId, { lock: true });
+          const keys = new Set(group.map((n) => n.key));
+          const due = dueNudges({
             ...fresh,
-            sent: fresh.sent.filter((s) => s.kind !== n.key),
+            sent: fresh.sent.filter((s) => !keys.has(s.kind)),
             ...limits,
             jevCheck: false,
-          }).some((d) => d.key === n.key);
-          const issue = await getIssue(tx, n.issueId);
-          if (!stillDue || !issue.triageRootTs) return "resolved" as const;
+          });
+          const issue = await getIssue(tx, issueId);
+          const stillDue = group.filter((n) =>
+            due.some((d) => d.key === n.key),
+          );
+          if (stillDue.length === 0 || !issue.triageRootTs)
+            return { resolved: group, posted: [], ts: null };
           const desk = desks.find((d) => d.id === issue.deskId) ?? fallbackDesk;
-          if (!desk) return "resolved" as const;
+          if (!desk) return { resolved: group, posted: [], ts: null };
           // The nudge threads under the card, wherever it was posted.
           const triage = issue.triageChannel ?? desk.triageChannel;
-          if (!(await recordNudge(tx, n.issueId, n.key))) return null;
+          const recorded: typeof group = [];
+          for (const n of stillDue)
+            if (await recordNudge(tx, issueId, n.key)) recorded.push(n);
+          if (recorded.length === 0)
+            return { resolved: [], posted: [], ts: null };
+          const kinds = recorded.map((n) => n.kind);
+          const marker = recorded
+            .map((n) => n.key)
+            .sort()
+            .join("+");
           const card = await post(ctx, {
             channel: triage,
             threadTs: issue.triageRootTs,
-            text: `Follow-up on #${issue.number}: ${n.kind.replace(/_/g, " ")}`,
-            blocks: nudge(issue, n.kind),
-            key: `nudge:${issue.id}:${n.key}`,
+            text: `Follow-up on #${issue.number}: ${kinds.map((k) => k.replace(/_/g, " ")).join(", ")}`,
+            blocks: nudge(issue, kinds),
+            key: `nudge:${issue.id}:${marker}`,
           });
-          await emit(ctx, tx, "issue.nudged", {
-            issueId: issue.id,
-            accountId: issue.accountId,
-            source: "slack",
-            causationId: `nudge:${issue.id}:${n.key}`,
-            slack: {
-              channel: issue.customerChannel ?? triage,
-              ts: issue.customerRootTs ?? issue.triageRootTs,
-            },
-            kind: n.kind,
-          });
-          return card.ts;
+          for (const n of recorded)
+            await emit(ctx, tx, "issue.nudged", {
+              issueId: issue.id,
+              accountId: issue.accountId,
+              source: "slack",
+              causationId: `nudge:${issue.id}:${n.key}`,
+              slack: {
+                channel: issue.customerChannel ?? triage,
+                ts: issue.customerRootTs ?? issue.triageRootTs,
+              },
+              kind: n.kind,
+            });
+          return {
+            resolved: group.filter((n) => !stillDue.includes(n)),
+            posted: recorded,
+            ts: card.ts,
+          };
         });
-        if (sent === "resolved") resolved.push(n.key);
-        else if (sent)
-          nudged.push({ issueId: n.issueId, key: n.key, ts: sent });
-        else notSent.push(n.key);
+        for (const n of sent.resolved) resolved.push(n.key);
+        for (const n of sent.posted)
+          nudged.push({ issueId, key: n.key, ts: sent.ts! });
+        for (const n of group)
+          if (!sent.resolved.includes(n) && !sent.posted.includes(n))
+            notSent.push(n.key);
       }
 
       const esc = await escalationConfig(db, desks);

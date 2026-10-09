@@ -198,8 +198,8 @@ describe("controller", () => {
         `no_owner:${held.id}:1`,
       ].sort(),
     );
-    // Every nudge is a reply in its issue's triage thread.
-    expect(first.posts).toHaveLength(6);
+    // One reply per issue in its triage thread, naming every reason due on it.
+    expect(first.posts).toHaveLength(3);
     for (const p of first.posts) {
       expect(p.channel).toBe("C0TRIAGE001");
       expect(p.threadTs).toMatch(/^1790100/);
@@ -211,9 +211,24 @@ describe("controller", () => {
         .map((p) => (p.blocks as { block_id: string }[])[0].block_id)
         .sort(),
     ).toEqual(
-      (first.done.output!.nudged as { issueId: string; key: string }[])
-        .map((n) => `sylon:nudge:${n.issueId}:${n.key}`)
+      [waiting.id, thanked.id, held.id]
+        .map((id) => {
+          const keys = (
+            first.done.output!.nudged as { issueId: string; key: string }[]
+          )
+            .filter((n) => n.issueId === id)
+            .map((n) => n.key)
+            .sort()
+            .join("+");
+          return `sylon:nudge:${id}:${keys}`;
+        })
         .sort(),
+    );
+    const waitingPost = first.posts.find((p) =>
+      JSON.stringify(p.blocks).includes(waiting.id),
+    )!;
+    expect(JSON.stringify(waitingPost.blocks)).toContain(
+      "Customer is waiting for a reply · No owner yet · Draft waiting for a decision",
     );
     expect(first.emitted.map((e) => e.type)).toEqual(
       Array(6).fill("issue.nudged"),
@@ -310,7 +325,21 @@ describe("controller", () => {
     expect(retry.emitted).toHaveLength(0);
   });
 
+  it("sends each nudge once by default and never repeats it", async () => {
+    const issue = await seedIssue(db, { title: "once" });
+    await backdate(db);
+    const first = await runController("exec-1");
+    expect(first.posts).toHaveLength(1);
+    await db.query(
+      "update nudges set sent_at = now() - interval '2 days' where issue_id = $1",
+      [issue.id],
+    );
+    const later = await runController("exec-2");
+    expect(later.posts).toHaveLength(0);
+  });
+
   it("repeats each held nudge after the gap, without asking Jev again", async () => {
+    await setConfig(db, "nudge.repeat_minutes", [60, 240], "test");
     const waiting = await seedIssue(db, {
       title: "still waiting",
       customerText: "it is still broken",
@@ -342,7 +371,7 @@ describe("controller", () => {
       firstKeys.map((k) => k.replace(/:1$/, ":2")).sort(),
     );
     expect(second.asked).toEqual([]);
-    expect(second.posts).toHaveLength(3);
+    expect(second.posts).toHaveLength(1);
     for (const p of second.posts) expect(p.threadTs).toBe(waiting.triageRootTs);
     expect(second.emitted.map((e) => e.type)).toEqual(
       Array(3).fill("issue.nudged"),
@@ -366,6 +395,7 @@ describe("controller", () => {
   });
 
   it("a Jev failure on round 1 does not stop a later no-reply verdict from silencing the repeats", async () => {
+    await setConfig(db, "nudge.repeat_minutes", [60, 240], "test");
     const issue = await seedIssue(db, {
       title: "thanked while Jev was down",
       customerText: "thanks, that fixed it!",
@@ -801,6 +831,7 @@ describe("controller", () => {
     };
 
     it("sends what is due, then sets the timer for the next round", async () => {
+      await setConfig(db, "nudge.repeat_minutes", [60, 240], "test");
       const issue = await seedIssue(db, { title: "late" });
       await backdate(db);
       const r = await tick(issue.id);

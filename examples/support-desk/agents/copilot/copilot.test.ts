@@ -160,6 +160,16 @@ async function runAgent(input: unknown, ctx: unknown): Promise<Directive[]> {
 }
 const last = (ds: Directive[]) => ds[ds.length - 1];
 
+/**
+ * Decide the fixture's pending draft, so the issue has no live draft card and a new draft posts its
+ * own (otherwise it takes the fixture's card over in place).
+ */
+const noLiveCard = () =>
+  db.query(
+    "update drafts set status = 'dismissed', decided_by = 'U0TEAMMATE2', decided_at = now() where id = $1",
+    [FIXTURE_DRAFT],
+  );
+
 let db: Db;
 beforeEach(async () => {
   db = await localFleetDb();
@@ -194,7 +204,7 @@ describe("receive", () => {
 });
 
 describe("draft path", () => {
-  it("issue.created supersedes the pending draft, drafts once, and posts a card in the triage thread", async () => {
+  it("issue.created supersedes the pending draft, drafts once, and takes its card over in place", async () => {
     const t = ctxFor("exec-draft");
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
     expect(ds.map((d) => d.kind)).toEqual(["terminate"]);
@@ -216,12 +226,6 @@ describe("draft path", () => {
 
     const old = await getDraft(db, FIXTURE_DRAFT);
     expect(old).toMatchObject({ status: "superseded", decidedBy: "copilot" });
-    const [updated] = t.slack("chat.update");
-    expect(updated).toMatchObject({ ts: "1790889450.000250" });
-    expect(JSON.stringify(updated.blocks)).toContain(
-      "Superseded by a newer draft",
-    );
-    expect(JSON.stringify(updated.blocks)).not.toContain("<@copilot>");
 
     const out = last(ds).output!;
     const draft = await getDraft(db, out.draftId as string);
@@ -229,25 +233,24 @@ describe("draft path", () => {
       status: "pending",
       text: DRAFTED.reply,
       cardChannel: "C0TRIAGE001",
+      cardTs: "1790889450.000250",
       citations: [DEPLOY_PAGE],
       causationId: "Ev0EXAMPLE01",
       confidence: 0.8,
       summary: DRAFTED.summary,
     });
-    const [posted] = t.slack("chat.postMessage");
-    expect(posted).toMatchObject({
-      channel: "C0TRIAGE001",
-      threadTs: "1790889400.000200",
-    });
-    const [header, ...rest] = copilotCard(
-      draft,
-      await getIssue(db, FIXTURE_ISSUE),
-      new Map(),
+    // One draft card per issue: the new draft is drawn into the old card, and nothing is posted.
+    expect(t.slack("chat.postMessage")).toHaveLength(0);
+    const drawn = t
+      .slack("chat.update")
+      .filter((u) => u.ts === "1790889450.000250");
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].blocks).toEqual(
+      copilotCard(draft, await getIssue(db, FIXTURE_ISSUE), new Map()),
     );
-    expect(posted.blocks).toEqual([
-      { ...header, block_id: `sylon:draft-card:${draft.id}` },
-      ...rest,
-    ]);
+    expect(JSON.stringify(drawn[0].blocks)).not.toContain(
+      "Superseded by a newer draft",
+    );
     expect((await getIssue(db, FIXTURE_ISSUE)).summary).toBe(DRAFTED.summary);
   });
 
@@ -266,6 +269,7 @@ describe("draft path", () => {
   });
 
   it("a retry after the draft was stored but before its card was posted posts the card without redrafting", async () => {
+    await noLiveCard();
     const stored = await createDraft(db, {
       issueId: FIXTURE_ISSUE,
       text: "Stored by an earlier attempt.",
@@ -312,6 +316,33 @@ describe("draft path", () => {
     expect(spec.request.messages[0].content).toContain(
       "Following up: it still fails after a retry.",
     );
+  });
+
+  it("drafts nothing for a customer message within 15 minutes of a teammate's reply", async () => {
+    await linkMessage(db, {
+      issueId: FIXTURE_ISSUE,
+      source: "slack",
+      sourceEventId: "Ev0TEAMNOW01",
+      direction: "agent",
+      slack: {
+        channel: "C0CUSTOMER1",
+        ts: "1790890400.000100",
+        threadTs: "1790889355.981329",
+      },
+      userId: "U0TEAMMATE1",
+      text: "Looking at it now.",
+    });
+    const t = ctxFor("e");
+    const ds = await runAgent(
+      fixture("issue/message-added.json").payload,
+      t.ctx,
+    );
+    expect(last(ds).output).toMatchObject({
+      skipped: "a teammate is in the thread",
+    });
+    expect(t.llmCalls).toHaveLength(0);
+    expect(t.slack("chat.postMessage")).toHaveLength(0);
+    expect(t.slack("chat.update")).toHaveLength(0);
   });
 
   it("an empty reply stores the summary, posts no card, and leaves the old draft actionable", async () => {
@@ -367,6 +398,7 @@ describe("draft path", () => {
     (spec.request as { system: string }).system;
 
   it("a response without the tool call is logged and retried once with a reminder", async () => {
+    await noLiveCard();
     const t = ctxFor("e");
     skipToolCall(t, 1);
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
@@ -427,6 +459,7 @@ describe("draft path", () => {
   });
 
   it("publishes, without a note, the draft a concurrent delivery stored while ours missed", async () => {
+    await noLiveCard();
     const t = ctxFor("e");
     skipToolCall(t, 2);
     const llm = (
@@ -462,6 +495,7 @@ describe("draft path", () => {
   });
 
   it("concurrent deliveries of one event post exactly one card", async () => {
+    await noLiveCard();
     const payload = fixture("issue/created.json").payload;
     const a = ctxFor("exec-a");
     const b = ctxFor("exec-b");
@@ -483,6 +517,7 @@ describe("draft path", () => {
   });
 
   it("overlapping deliveries that both find the stored draft without a card post one card", async () => {
+    await noLiveCard();
     const stored = await createDraftOnce(db, {
       issueId: FIXTURE_ISSUE,
       text: "Stored by an earlier attempt.",
@@ -524,7 +559,7 @@ describe("draft path", () => {
       direction: "customer",
       slack: {
         channel: "C0CUSTOMER1",
-        ts: "1790889500.000300",
+        ts: "1790890500.000300",
         threadTs: "1790889355.981329",
       },
       userId: "U0CUSTOMER1",
@@ -581,6 +616,7 @@ describe("draft path", () => {
   });
 
   it("an older event still publishes when the newer draft's card never got posted", async () => {
+    await noLiveCard();
     await linkMessage(db, {
       issueId: FIXTURE_ISSUE,
       source: "slack",
@@ -626,7 +662,8 @@ describe("draft path", () => {
       retry.ctx,
     );
     expect(retry.llmCalls).toHaveLength(0);
-    const [card] = retry.slack("chat.postMessage");
+    // The newer draft takes the older one's card over in place.
+    const card = retry.slack("chat.update").find((u) => u.ts === out.cardTs)!;
     expect(JSON.stringify(card.blocks)).toContain(
       "The newer follow-up's summary.",
     );
@@ -1155,6 +1192,7 @@ describe("desks", () => {
   }
 
   it("posts the draft card and redraws the issue card in the issue's desk triage channel", async () => {
+    await noLiveCard();
     await moveToTestDesk();
     const t = ctxFor("exec-desk-card");
     const out = last(await run(t)).output!;
@@ -1206,6 +1244,7 @@ describe("desks", () => {
     }
 
     it("posts the draft card under the card, in its channel", async () => {
+      await noLiveCard();
       await cardedThenMoved();
       const t = ctxFor("exec-moved-card");
       const out = last(await run(t)).output!;
@@ -1481,6 +1520,7 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
   });
 
   it("receive finds the draft card it already posted instead of posting it again", async () => {
+    await noLiveCard();
     const live = liveCtx();
     const created = fixture("issue/created.json").payload;
     failOnce.setDraftCard = true;

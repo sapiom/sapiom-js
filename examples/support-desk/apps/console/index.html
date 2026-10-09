@@ -925,6 +925,11 @@
                 ><input id="set-notify" type="checkbox" /> Tell the customer
                 when Linear marks the fix Done</label
               >
+              <label class="check"
+                ><input id="set-listed" type="checkbox" /> Open tickets only in
+                the channels listed in <code>channels.customer</code>, not in
+                every channel an outsider posts in</label
+              >
               <div class="row">
                 <button id="set-fleet-save" class="mut primary">Save</button>
                 <span id="set-fleet-state" class="hint"
@@ -1743,14 +1748,16 @@
             ? repeat.join(", ")
             : "0"
           : "";
-        $("set-repeat").placeholder =
-          `default ${s.defaults["nudge.repeat_minutes"].join(", ")}`;
+        $("set-repeat").placeholder = s.defaults["nudge.repeat_minutes"].length
+          ? `default ${s.defaults["nudge.repeat_minutes"].join(", ")}`
+          : "default: once, no repeats";
         for (const k of SLA) {
           $(`sla-${k}`).value = f["digest.sla_hours"]?.[k] ?? "";
           $(`sla-${k}`).placeholder = s.defaults["digest.sla_hours"][k];
         }
         $("set-digest").textContent = cronText(s.digest);
         $("set-notify").checked = f["linear_sync.notify_customer"];
+        $("set-listed").checked = f["intake.listed_channels_only"];
       }
       /** Prefilled when `sla` is unset: the README example. */
       const SLA_EXAMPLE = {
@@ -1917,6 +1924,7 @@
               repeat === "" ? null : repeat === "0" ? [] : minutesList(repeat),
             "digest.sla_hours": Object.keys(sla).length ? sla : null,
             "linear_sync.notify_customer": $("set-notify").checked,
+            "intake.listed_channels_only": $("set-listed").checked,
           },
           "set-fleet-state",
         );

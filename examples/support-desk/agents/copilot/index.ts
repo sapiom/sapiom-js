@@ -49,12 +49,14 @@ import {
   getAccount,
   getDraft,
   getIssue,
+  latestTeamTs,
   linkMessage,
   lockIssue,
   messageBySourceEventId,
   messagesForIssue,
   pendingDrafts,
   recordRun,
+  reusableDraftCard,
   setDraftCard,
   setStatus,
   updateIssue,
@@ -97,6 +99,11 @@ import {
 import { seedLocalFixtures } from "./local";
 
 export const AGENT = agentSlug("copilot");
+/**
+ * A customer message this soon after a teammate's reply in the thread gets no draft: the teammate
+ * is in the conversation, and a draft card per message only adds notifications they did not need.
+ */
+export const TEAM_ACTIVE_SECONDS = 15 * 60;
 
 /** `issue.created` or `issue.message_added` (which adds `messageId` and `text`). */
 const DraftTrigger = Envelope.extend({
@@ -321,6 +328,17 @@ async function draftReply(
     // A retried step or a redelivered event finds the draft it already produced, so it never
     // pays for a second LLM call.
     let draft = await draftForCausation(db, issue.id, trigger.causationId);
+    if (!draft) {
+      const teamTs = await latestTeamTs(db, issue.id, trigger.slack.ts);
+      if (
+        teamTs &&
+        Number(trigger.slack.ts) - Number(teamTs) < TEAM_ACTIVE_SECONDS
+      )
+        return terminate({
+          issueId: issue.id,
+          skipped: "a teammate is in the thread",
+        });
+    }
     let confidence: number | null = null;
     if (!draft) {
       // A late event must not replace the posted draft for a newer customer message. A newer
@@ -428,14 +446,27 @@ async function draftReply(
       }
       let posted = false;
       if (!own.cardTs && own.status === "pending") {
-        const card = await post(ctx, {
-          channel: triage,
-          threadTs: triageRootTs,
-          text: cardText(current),
-          blocks: copilotCard(own, current, titles),
-          key: `draft-card:${own.id}`,
-        });
-        own = await setDraftCard(tx, own.id, card);
+        // One draft card per issue: a new draft takes over the last live card in place (an edit
+        // notifies nobody) and posts only when there is none to take over.
+        const reuse = await reusableDraftCard(tx, current.id, own.id);
+        if (reuse) {
+          await update(ctx, {
+            channel: reuse.channel,
+            ts: reuse.ts,
+            text: cardText(current),
+            blocks: copilotCard(own, current, titles),
+          });
+          own = await setDraftCard(tx, own.id, reuse);
+        } else {
+          const card = await post(ctx, {
+            channel: triage,
+            threadTs: triageRootTs,
+            text: cardText(current),
+            blocks: copilotCard(own, current, titles),
+            key: `draft-card:${own.id}`,
+          });
+          own = await setDraftCard(tx, own.id, card);
+        }
         posted = true;
       }
       // Retire the older pending drafts only now that ours is posted. Also runs on a retry, so a
@@ -453,7 +484,10 @@ async function draftReply(
         }
       return { own, retired, stale: false, posted };
     });
-    for (const old of published.retired) await updateCard(ctx, db, old, issue);
+    // A retired draft whose card the new one took over must not redraw it as "Superseded".
+    for (const old of published.retired)
+      if (old.cardTs !== published.own.cardTs)
+        await updateCard(ctx, db, old, issue);
     if (published.stale)
       return terminate({
         issueId: issue.id,

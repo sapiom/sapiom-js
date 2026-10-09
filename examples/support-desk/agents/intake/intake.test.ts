@@ -281,9 +281,8 @@ describe("intake agent", () => {
     expect(linked.output).toMatchObject({ outcome: "linked", issueId });
     expect(fup.calls).toHaveLength(0);
     expect((await getIssue(db, issueId)).status).toBe("on_you");
-    expect(fup.slack("chat.postMessage")).toEqual([
-      expect.objectContaining({ threadTs: issue.triageRootTs }),
-    ]);
+    // A follow-up redraws the card and posts nothing: no copy of the message in the triage thread.
+    expect(fup.slack("chat.postMessage")).toEqual([]);
     expect(fup.slack("chat.update")).toEqual([
       expect.objectContaining({ ts: issue.triageRootTs }),
     ]);
@@ -476,7 +475,7 @@ describe("intake agent", () => {
       return output.issueId as string;
     }
 
-    it("a team reply in an issue thread is stored as agent, hands the ball to the customer, mirrors once", async () => {
+    it("a team reply in an issue thread is stored as agent, hands the ball to the customer, posts nothing", async () => {
       const issueId = await openBug();
       const issue = await getIssue(db, issueId);
       const draft = await createDraft(db, { issueId, text: "hi" });
@@ -504,19 +503,12 @@ describe("intake agent", () => {
         userId: "U0TEAMENG01",
         userName: "U0TEAMENG01",
       });
-      expect(t.slack("chat.postMessage")).toEqual([
-        expect.objectContaining({
-          threadTs: issue.triageRootTs,
-          text: expect.stringMatching(
-            /^\*U0TEAMENG01\* \(team\): Looking into it/,
-          ),
-        }),
-      ]);
+      expect(t.slack("chat.postMessage")).toEqual([]);
       expect(t.slack("chat.update")).toEqual([
         expect.objectContaining({ ts: issue.triageRootTs }),
       ]);
 
-      // Redelivery: stored once, not mirrored twice.
+      // Redelivery: stored once.
       const again = makeCtx("exec-team-2");
       expect((await run(teamReply(), again.ctx)).output).toMatchObject({
         outcome: "team_reply",
@@ -564,7 +556,7 @@ describe("intake agent", () => {
         status: "on_customer",
         ownerSlackId: "U0TEAMENG01",
       });
-      expect(retry.slack("chat.postMessage")).toHaveLength(1);
+      expect(retry.slack("chat.update")).toHaveLength(1);
       setLocalDb(db);
     });
 
@@ -596,11 +588,7 @@ describe("intake agent", () => {
         direction: "agent",
         text: "(attached image.png)",
       });
-      expect(t.slack("chat.postMessage")).toEqual([
-        expect.objectContaining({
-          text: expect.stringContaining("(team): (attached image.png)"),
-        }),
-      ]);
+      expect(t.slack("chat.postMessage")).toEqual([]);
     });
 
     it("an edit, a delete or a thread broadcast is still skipped", async () => {
@@ -739,6 +727,34 @@ describe("intake agent", () => {
       });
     });
 
+    it("with intake.listed_channels_only, an outsider in an unlisted channel opens nothing, even where an account exists", async () => {
+      const msg = structuredClone(
+        intakeFixture("message-created.bug.json").payload,
+      ) as { eventId: string; event: { channel: string; ts: string } };
+      msg.event.channel = "C0UNLISTED1";
+      // Before the switch: the channel gets an account, as any channel with an outsider did.
+      await run(msg, makeCtx("exec-before", JEV.bug).ctx);
+      expect(await accountByChannel(db, "C0UNLISTED1")).not.toBeNull();
+
+      await setConfig(db, "intake.listed_channels_only", true, "test");
+      msg.eventId = "Ev0UNLISTED2";
+      msg.event.ts = "1790890700.000700";
+      const t = makeCtx("exec-after", JEV.bug);
+      expect((await run(msg, t.ctx)).output).toEqual({
+        skipped: "channel C0UNLISTED1 is not in channels.customer",
+      });
+      expect(t.slack("reactions.add")).toHaveLength(0);
+      // A listed channel still works.
+      expect(
+        (
+          await run(
+            intakeFixture("message-created.bug.json").payload,
+            makeCtx("exec-listed", JEV.bug).ctx,
+          )
+        ).output,
+      ).toMatchObject({ outcome: "opened" });
+    });
+
     it("a team message in a channel with no account is skipped and stores nothing", async () => {
       const msg = structuredClone(teamReply()) as {
         event: { channel: string; thread_ts?: string };
@@ -808,6 +824,163 @@ describe("intake agent", () => {
     });
   });
 
+  describe("a teammate's reaction", () => {
+    const reactTo = (
+      ts: string,
+      emoji: string,
+      over: { channel?: string; user?: string; eventId?: string } = {},
+    ) => {
+      const r = structuredClone(
+        intakeFixture("reaction-added.ticket.json").payload,
+      ) as {
+        eventId: string;
+        event: {
+          user: string;
+          reaction: string;
+          item: { channel: string; ts: string };
+          event_ts: string;
+        };
+      };
+      r.eventId = over.eventId ?? `Ev0REACT${emoji}`;
+      r.event.user = over.user ?? "U0TEAMMATE1";
+      r.event.reaction = emoji;
+      r.event.item.ts = ts;
+      r.event.item.channel = over.channel ?? "C0CUSTOMER1";
+      r.event.event_ts = "1790890900.000900";
+      return r;
+    };
+    async function openBug() {
+      const { output } = await run(
+        intakeFixture("message-created.bug.json").payload,
+        makeCtx("exec-bug", JEV.bug).ctx,
+      );
+      return output.issueId as string;
+    }
+    const BUG_TS = "1790890000.000100";
+
+    it("on the customer's latest message, answers for the team: On Customer, owner, drafts retired, nothing posted", async () => {
+      const issueId = await openBug();
+      const draft = await createDraft(db, { issueId, text: "hi" });
+      const t = makeCtx("exec-react");
+      expect((await run(reactTo(BUG_TS, "+1"), t.ctx)).output).toMatchObject({
+        outcome: "acknowledged",
+        issueId,
+      });
+      expect(await getIssue(db, issueId)).toMatchObject({
+        status: "on_customer",
+        ownerSlackId: "U0TEAMMATE1",
+      });
+      expect((await getDraft(db, draft.id)).status).toBe("superseded");
+      expect(await messageBySourceEventId(db, "Ev0REACT+1")).toMatchObject({
+        direction: "agent",
+        text: "(reacted :+1:)",
+      });
+      expect(t.slack("chat.postMessage")).toEqual([]);
+      expect(t.slack("chat.update")).toHaveLength(1);
+    });
+
+    it("by the customer, or on an older message, changes nothing", async () => {
+      const issueId = await openBug();
+      await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER1"], "test");
+      expect(
+        (
+          await run(
+            reactTo(BUG_TS, "+1", { user: "U0CUSTOMER1" }),
+            makeCtx("c").ctx,
+          )
+        ).output,
+      ).toMatchObject({ skipped: "the customer's reaction" });
+      await run(
+        intakeFixture("message-created.follow-up.json").payload,
+        makeCtx("exec-fup").ctx,
+      );
+      expect(
+        (
+          await run(
+            reactTo(BUG_TS, "eyes", { eventId: "Ev0OLD" }),
+            makeCtx("o").ctx,
+          )
+        ).output,
+      ).toMatchObject({ skipped: "not the latest customer message" });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+    });
+
+    it("Handled on the card answers for the clicker without a reply", async () => {
+      const issueId = await openBug();
+      const issue = await getIssue(db, issueId);
+      const click = structuredClone(
+        fixture("slack/block-actions.issue-close.json").payload,
+      ) as {
+        trigger_id: string;
+        actions: { action_id: string; value: string; action_ts?: string }[];
+        container: { channel_id: string; message_ts: string };
+        channel: { id: string };
+        user: { id: string };
+      };
+      click.trigger_id = "trg-handled-1";
+      click.actions[0].action_id = "issue.handled";
+      click.actions[0].value = issueId;
+      click.actions[0].action_ts = "1790890950.000100";
+      click.container.channel_id = "C0TRIAGE001";
+      click.container.message_ts = issue.triageRootTs!;
+      click.channel.id = "C0TRIAGE001";
+      const t = makeCtx("exec-handled");
+      expect((await run(click, t.ctx)).output).toMatchObject({
+        outcome: "handled",
+        changed: true,
+        status: "on_customer",
+        owner: click.user.id,
+      });
+      expect(
+        await messageBySourceEventId(db, "handled:trg-handled-1"),
+      ).toMatchObject({ direction: "agent", text: "(marked handled)" });
+      expect(t.slack("chat.postMessage")).toEqual([]);
+    });
+
+    it("✅ on the customer message or on the card closes the issue and says who closed it", async () => {
+      const issueId = await openBug();
+      const t = makeCtx("exec-check");
+      expect(
+        (await run(reactTo(BUG_TS, "white_check_mark"), t.ctx)).output,
+      ).toMatchObject({ outcome: "close", changed: true, issueId });
+      expect((await getIssue(db, issueId)).status).toBe("closed");
+      expect(t.slack("chat.postMessage")).toEqual([
+        expect.objectContaining({
+          text: "Closed by <@U0TEAMMATE1> with :white_check_mark:",
+        }),
+      ]);
+
+      const other = await run(
+        intakeFixture("message-created.thank-you.json").payload,
+        makeCtx("exec-ty", JEV.bug).ctx,
+      );
+      const card = await getIssue(db, other.output.issueId as string);
+      expect(
+        (
+          await run(
+            reactTo(card.triageRootTs!, "smile", {
+              channel: "C0TRIAGE001",
+              eventId: "Ev0CARDSMILE",
+            }),
+            makeCtx("s").ctx,
+          )
+        ).output,
+      ).toMatchObject({ skipped: "reaction smile on the card" });
+      expect(
+        (
+          await run(
+            reactTo(card.triageRootTs!, "heavy_check_mark", {
+              channel: "C0TRIAGE001",
+              eventId: "Ev0CARDCHECK",
+            }),
+            makeCtx("k").ctx,
+          )
+        ).output,
+      ).toMatchObject({ outcome: "close", changed: true });
+      expect((await getIssue(db, card.id)).status).toBe("closed");
+    });
+  });
+
   it("exits early on draft.* clicks, other reactions, and non-customer channels", async () => {
     const ctx = makeCtx("exec-skip").ctx;
     const draft = await run(
@@ -823,7 +996,7 @@ describe("intake agent", () => {
     ) as { event: { reaction: string } };
     reaction.event.reaction = "thumbsup";
     expect((await run(reaction, ctx)).output).toEqual({
-      skipped: "reaction thumbsup",
+      skipped: "not an issue message",
     });
     const ticket = structuredClone(
       intakeFixture("reaction-added.ticket.json").payload,
@@ -1386,7 +1559,7 @@ describe("intake agent", () => {
         return close;
       };
 
-      it("a follow-up refreshes the card and mirrors in the card's channel", async () => {
+      it("a follow-up refreshes the card in the card's channel", async () => {
         const issue = await cardedThenMoved();
         const fup = makeCtx("exec-fup-moved");
         expect(
@@ -1400,11 +1573,11 @@ describe("intake agent", () => {
         expect(fup.slack("chat.update")).toEqual([
           expect.objectContaining({ ts: issue.triageRootTs }),
         ]);
-        expect(fup.slack("chat.postMessage")).toHaveLength(1);
-        expect(channels(fup)).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+        expect(fup.slack("chat.postMessage")).toHaveLength(0);
+        expect(channels(fup)).toEqual(["C0TRIAGE001"]);
       });
 
-      it("a team reply refreshes the card and mirrors in the card's channel", async () => {
+      it("a team reply refreshes the card in the card's channel", async () => {
         const issue = await cardedThenMoved();
         const t = makeCtx("exec-team-moved");
         expect(
@@ -1415,8 +1588,8 @@ describe("intake agent", () => {
             )
           ).output,
         ).toMatchObject({ outcome: "team_reply", issueId: issue.id });
-        expect(t.slack("chat.postMessage")).toHaveLength(1);
-        expect(channels(t)).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+        expect(t.slack("chat.postMessage")).toHaveLength(0);
+        expect(channels(t)).toEqual(["C0TRIAGE001"]);
       });
 
       it("Close clicked on the card closes the issue and posts Closed by under it", async () => {

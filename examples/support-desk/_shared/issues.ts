@@ -675,6 +675,50 @@ export async function latestCustomerTs(
   return latest;
 }
 
+/**
+ * The newest team message in an issue's customer thread at or before `atOrBefore` (a Slack ts), or
+ * overall when it is omitted; null when the team has not posted by then.
+ */
+export async function latestTeamTs(
+  db: Db,
+  issueId: string,
+  atOrBefore?: string,
+): Promise<string | null> {
+  const rows = await db.query(
+    "select ts from messages where issue_id = $1 and direction = 'agent' and ts is not null",
+    [issueId],
+  );
+  let latest: string | null = null;
+  for (const r of rows) {
+    const ts = String(r.ts);
+    if (atOrBefore && compareSlackTs(ts, atOrBefore) > 0) continue;
+    if (latest === null || compareSlackTs(ts, latest) > 0) latest = ts;
+  }
+  return latest;
+}
+
+/**
+ * The issue's newest draft card that a new draft may take over: a pending or superseded draft's,
+ * so the thread keeps one live draft card and no teammate's Approve, Dismiss or Escalate is
+ * overwritten. Null when the issue has none (the new draft posts its own).
+ */
+export async function reusableDraftCard(
+  db: Db,
+  issueId: string,
+  exceptDraftId: string,
+): Promise<{ channel: string; ts: string } | null> {
+  const rows = await db.query(
+    `select card_channel, card_ts from drafts
+     where issue_id = $1 and id <> $2 and card_ts is not null and card_channel is not null
+       and status in ('pending', 'superseded')
+     order by created_at desc limit 1`,
+    [issueId, exceptDraftId],
+  );
+  return rows[0]
+    ? { channel: String(rows[0].card_channel), ts: String(rows[0].card_ts) }
+    : null;
+}
+
 /** Numeric order of two Slack timestamps ("seconds.micros"); exact, since a double cannot hold 16 digits safely. */
 export function compareSlackTs(a: string, b: string): number {
   const norm = (ts: string) => {

@@ -139,8 +139,9 @@ describe("fleet settings", () => {
       "nudge.repeat_minutes": null,
       "digest.sla_hours": null,
       "linear_sync.notify_customer": false,
+      "intake.listed_channels_only": false,
     });
-    expect(body.defaults["nudge.repeat_minutes"]).toEqual([60, 240]);
+    expect(body.defaults["nudge.repeat_minutes"]).toEqual([]);
     expect(body.digest).toEqual(digestSchedule());
     expect(digestSchedule()).toEqual({
       cron: "0 9 * * *",

@@ -109,10 +109,24 @@ describe("action codec", () => {
 });
 
 describe("issueCard", () => {
-  it("shows Take and Close on an unowned open issue, value = issue id", () => {
+  it("shows Take, Handled and Close on an unowned open issue, value = issue id", () => {
     expect(buttons(issueCard(issue, account))).toMatchObject([
       { action_id: "issue.take", value: "iss-1" },
+      { action_id: "issue.handled", value: "iss-1" },
       { action_id: "issue.close", value: "iss-1" },
+    ]);
+  });
+
+  it("offers Handled only while the ball is with the team", () => {
+    const has = (status: string) =>
+      buttons(issueCard({ ...issue, status } as typeof issue, account)).some(
+        (b) => b.action_id === "issue.handled",
+      );
+    expect(["new", "on_you"].map(has)).toEqual([true, true]);
+    expect(["on_customer", "on_hold", "closed"].map(has)).toEqual([
+      false,
+      false,
+      false,
     ]);
   });
 
@@ -121,7 +135,7 @@ describe("issueCard", () => {
       buttons(issueCard({ ...issue, ownerSlackId: "U1" }, account)).map(
         (b) => b.action_id,
       ),
-    ).toEqual(["issue.close"]);
+    ).toEqual(["issue.handled", "issue.close"]);
     expect(buttons(issueCard({ ...issue, status: "closed" }, account))).toEqual(
       [],
     );

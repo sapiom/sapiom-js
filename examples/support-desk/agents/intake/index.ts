@@ -216,7 +216,7 @@ const refOf = (i: Incoming): SlackRef =>
 
 const guard = defineStep({
   name: "guard",
-  next: ["button", "internal", "team", "ack"],
+  next: ["button", "internal", "team", "ack", "react"],
   terminal: true,
   // The three trigger types arrive here; each branch parses its own schema.
   inputSchema: z.looseObject({}),
@@ -239,10 +239,10 @@ const guard = defineStep({
       const r = SlackReactionAdded.safeParse(input);
       if (!r.success) return terminate({ skipped: "malformed reaction" });
       const e = r.data.event;
-      if (e.reaction !== TICKET)
-        return terminate({ skipped: `reaction ${e.reaction}` });
       if (e.item.type !== "message")
         return terminate({ skipped: `reaction on ${e.item.type}` });
+      // Any other emoji may be a teammate acknowledging the customer, or ✅ closing the issue.
+      if (e.reaction !== TICKET) return goto("react", r.data);
       const target = await withDb(ctx, async (db) =>
         (await knownChannel(db, e.item.channel))
           ? { stored: await messageBySlackTs(db, e.item.channel, e.item.ts) }
@@ -291,7 +291,11 @@ const guard = defineStep({
           ),
           testUserIds: await getConfigOr(db, "customers.test_user_ids", []),
         });
-        if (poster === "customer") return "customer";
+        if (poster === "customer")
+          return (await listedOnly(db)) &&
+            !(await customerChannel(db, e.channel))
+            ? "unlisted"
+            : "customer";
         // Our own engineers post in customer channels too, but in internal channels the bot is in
         // their chatter is not ours to keep: only a channel with an account gets the team step.
         return (await knownChannel(db, e.channel)) ? "team" : "ignore";
@@ -301,6 +305,10 @@ const guard = defineStep({
       if (route === "ignore")
         return terminate({
           skipped: "team message outside a customer channel",
+        });
+      if (route === "unlisted")
+        return terminate({
+          skipped: `channel ${e.channel} is not in channels.customer`,
         });
       return goto("ack", {
         eventId: m.data.eventId,
@@ -357,6 +365,73 @@ const internal = defineStep({
 // --- our team's messages in a customer channel -----------------------------------------------
 
 /**
+ * A teammate answered issue `issueId`: a reply in its customer thread, a reaction on the customer's
+ * latest message, or Handled on the card. Stored as the team's message, it hands the ball to the
+ * customer, makes the teammate the owner of an unowned issue, retires the pending drafts and
+ * redraws the card. The caller reschedules the issue's timer.
+ *
+ * The message is stored in the same transaction as the move, so a run that fails before the commit
+ * leaves no stored row behind and its retry applies the move instead of skipping it as a duplicate.
+ * A redelivery, or an answer older than the customer's latest message, must not undo what that later
+ * message did: it would hand the ball back and supersede the follow-up's draft.
+ */
+async function recordTeamAnswer(
+  ctx: SlackCtx,
+  db: Db,
+  a: {
+    issueId: string;
+    eventId: string;
+    user: string;
+    userName: string;
+    slack: SlackRef;
+    text: string;
+  },
+) {
+  const { message, duplicate, ...moved } = await db.transaction(async (tx) => {
+    const locked = await lockIssue(tx, a.issueId);
+    const { message, duplicate } = await linkMessage(tx, {
+      issueId: a.issueId,
+      source: "slack",
+      sourceEventId: a.eventId,
+      direction: "agent",
+      slack: a.slack,
+      userId: a.user,
+      userName: a.userName,
+      text: a.text,
+    });
+    const skip = { message, duplicate, issue: locked, applied: false };
+    if (duplicate) return skip;
+    const customerTs = await latestCustomerTs(tx, a.issueId);
+    if (customerTs && compareSlackTs(a.slack.ts, customerTs) < 0) return skip;
+    // Under the row lock, so a customer message landing now keeps its On You: the later write wins
+    // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
+    let issue = canTransition(locked.status, "on_customer")
+      ? await setStatus(tx, locked.id, "on_customer")
+      : locked;
+    // Whoever answers an unowned issue owns it, as if they had clicked Take; no_owner stops.
+    if (!issue.ownerSlackId && issue.status !== "closed")
+      issue = await assign(tx, issue.id, a.user);
+    return { message, duplicate, issue, applied: true };
+  });
+  const issue = moved.issue;
+  // The answer covers what the drafts were for; an Approve now would answer twice.
+  if (moved.applied)
+    for (const draft of await pendingDrafts(db, issue.id))
+      await decideDraft(db, draft.id, "superseded", SUPERSEDED_BY);
+  await recordRun(db, ctx as DbCtx, AGENT, issue.id);
+  // Nothing is copied into the triage thread: the card's status shows the team answered.
+  if (issue.triageRootTs)
+    await refreshCard(
+      ctx,
+      db,
+      await cardChannel(db, issue),
+      issue,
+      await getAccount(db, issue.accountId),
+    );
+  return { message, duplicate, issue, applied: moved.applied };
+}
+
+/**
  * A teammate's message in a customer channel. It is never the customer waiting: no reaction, no
  * Jev call, no issue, no event (so copilot does not draft and the controller does not nudge). A
  * reply in an issue's thread is recorded as the team's answer, hands the ball to the customer, and
@@ -400,66 +475,14 @@ const team = defineStep({
       }
 
       const poster = await userInfo(ctx, e.user);
-      // The message is stored in the same transaction as the move, so a run that fails before the
-      // commit leaves no stored row behind and its retry applies the move instead of skipping it as
-      // a duplicate. A redelivery, or a team message older than the customer's latest, must not
-      // undo what that later message did: it would hand the ball back and supersede the
-      // follow-up's draft.
-      const { message, duplicate, ...moved } = await db.transaction(
-        async (tx) => {
-          const locked = await lockIssue(tx, issueId);
-          const { message, duplicate } = await linkMessage(tx, {
-            issueId,
-            source: "slack",
-            sourceEventId: input.eventId,
-            direction: "agent",
-            slack,
-            userId: e.user,
-            userName: poster.name,
-            text: messageText(e),
-          });
-          const skip = { message, duplicate, issue: locked, applied: false };
-          if (duplicate) return skip;
-          const customerTs = await latestCustomerTs(tx, issueId);
-          if (customerTs && compareSlackTs(e.ts, customerTs) < 0) return skip;
-          // Under the row lock, so a customer message landing now keeps its On You: the later write wins
-          // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
-          let issue = canTransition(locked.status, "on_customer")
-            ? await setStatus(tx, locked.id, "on_customer")
-            : locked;
-          // Whoever answers an unowned issue owns it, as if they had clicked Take; no_owner stops.
-          if (!issue.ownerSlackId && issue.status !== "closed")
-            issue = await assign(tx, issue.id, e.user);
-          return { message, duplicate, issue, applied: true };
-        },
-      );
-      const issue = moved.issue;
-      // Their reply answers what the drafts were for; an Approve now would answer twice.
-      if (moved.applied)
-        for (const draft of await pendingDrafts(db, issue.id))
-          await decideDraft(db, draft.id, "superseded", SUPERSEDED_BY);
-      await recordRun(db, ctx, AGENT, issue.id);
-
-      if (issue.triageRootTs) {
-        const triageChannel = await cardChannel(db, issue);
-        await refreshCard(
-          ctx,
-          db,
-          triageChannel,
-          issue,
-          await getAccount(db, issue.accountId),
-        );
-        // A redelivery or retry finds the row already stored and mirrors nothing.
-        if (!duplicate)
-          await post(ctx, {
-            channel: triageChannel,
-            threadTs: issue.triageRootTs,
-            text: `*${escapeMrkdwn(poster.name)}* (team): ${plain(stripClientFooter(messageText(e)))} ${mrkdwnLink(
-              permalink(e.channel, e.ts, root ?? undefined),
-              "view",
-            )}`,
-          });
-      }
+      const { message, duplicate, issue } = await recordTeamAnswer(ctx, db, {
+        issueId,
+        eventId: input.eventId,
+        user: e.user,
+        userName: poster.name,
+        slack,
+        text: messageText(e),
+      });
       // The team answered: the customer_waiting and draft_pending clocks stop.
       await rescheduleIssue(db, ctx, issue.id);
       return terminate({
@@ -469,6 +492,114 @@ const team = defineStep({
         status: issue.status,
         duplicate,
       });
+    });
+  },
+});
+
+// --- a teammate's reaction ----------------------------------------------------------------
+
+/** A teammate's ✅ on a customer message or on the issue card closes the issue. */
+const CLOSE_REACTIONS = new Set(["white_check_mark", "heavy_check_mark"]);
+
+/**
+ * A reaction other than 🎫. From a teammate, on the customer's latest message in an issue, it is the
+ * team's answer (as a reply would be), so the issue stops waiting on us; ✅ there or on the card
+ * closes the issue. Reactions by the customer, on older messages or on anything else change nothing.
+ */
+const reaction = defineStep({
+  name: "react",
+  terminal: true,
+  inputSchema: SlackReactionAdded,
+  async run(input, ctx) {
+    const e = input.event;
+    const close = CLOSE_REACTIONS.has(e.reaction);
+    return withDb(ctx, async (db) => {
+      const stored = await messageBySlackTs(db, e.item.channel, e.item.ts);
+      const card = stored
+        ? null
+        : await issueByTriageRoot(db, e.item.ts).then((i) =>
+            i && i.triageChannel === e.item.channel ? i : null,
+          );
+      const issueId = stored?.issueId ?? card?.id;
+      if (!issueId) return terminate({ skipped: "not an issue message" });
+      if (card && !close)
+        return terminate({ skipped: `reaction ${e.reaction} on the card` });
+      if (stored && stored.direction !== "customer")
+        return terminate({ skipped: "not a customer message" });
+
+      const person = await userInfo(ctx, e.user);
+      const poster = classifyPoster({
+        user: e.user,
+        userTeam: person.teamId,
+        envelopeTeamId: input.teamId,
+        teamSlackTeamIds: await getConfigOr(
+          db,
+          "team.slack_team_ids",
+          undefined,
+        ),
+        testUserIds: await getConfigOr(db, "customers.test_user_ids", []),
+      });
+      if (poster === "customer")
+        return terminate({ skipped: "the customer's reaction", issueId });
+      await recordRun(db, ctx, AGENT, issueId);
+
+      if (close) {
+        const { issue, changed } = await db.transaction(async (tx) => {
+          const locked = await lockIssue(tx, issueId);
+          if (locked.status === "closed")
+            return { issue: locked, changed: false };
+          return {
+            issue: await setStatus(tx, locked.id, "closed"),
+            changed: true,
+          };
+        });
+        if (changed && issue.triageRootTs) {
+          const triageChannel = await cardChannel(db, issue);
+          try {
+            await refreshCard(
+              ctx,
+              db,
+              triageChannel,
+              issue,
+              await getAccount(db, issue.accountId),
+            );
+            await post(ctx, {
+              channel: triageChannel,
+              threadTs: issue.triageRootTs,
+              text: `Closed by <@${e.user}> with :${e.reaction}:`,
+            });
+          } finally {
+            await noteOpenLinear(ctx, triageChannel, issue);
+          }
+          await rescheduleIssue(db, ctx, issue.id);
+        }
+        return terminate({ outcome: "close", changed, issueId });
+      }
+
+      // Only the latest customer message: a reaction on an older one says nothing about the newest.
+      if (stored!.ts !== (await latestCustomerTs(db, issueId)))
+        return terminate({
+          skipped: "not the latest customer message",
+          issueId,
+        });
+      const issue = await getIssue(db, issueId);
+      const eventTs =
+        e.event_ts ??
+        `${input.eventTime ?? Math.floor(Date.now() / 1000)}.000000`;
+      const { duplicate } = await recordTeamAnswer(ctx, db, {
+        issueId,
+        eventId: input.eventId,
+        user: e.user,
+        userName: person.name,
+        slack: {
+          channel: e.item.channel,
+          ts: eventTs,
+          threadTs: issue.customerRootTs ?? e.item.ts,
+        },
+        text: `(reacted :${e.reaction}:)`,
+      });
+      await rescheduleIssue(db, ctx, issueId);
+      return terminate({ outcome: "acknowledged", issueId, duplicate });
     });
   },
 });
@@ -494,12 +625,17 @@ const ack = defineStep({
   },
 });
 
-/** A channel with an account (an outsider has posted there) or listed in `channels.customer`. */
+/** `intake.listed_channels_only`: only `channels.customer` entries are customer channels. */
+const listedOnly = (db: Db) =>
+  getConfigOr(db, "intake.listed_channels_only", false);
+
+/**
+ * A channel listed in `channels.customer`, or one with an account (an outsider has posted there)
+ * unless `intake.listed_channels_only` is on.
+ */
 async function knownChannel(db: Db, channel: string): Promise<boolean> {
-  return !!(
-    (await accountByChannel(db, channel)) ??
-    (await customerChannel(db, channel))
-  );
+  if (await customerChannel(db, channel)) return true;
+  return !(await listedOnly(db)) && !!(await accountByChannel(db, channel));
 }
 
 /**
@@ -898,14 +1034,10 @@ const announce = defineStep({
           text: mirror,
         });
       } else if (input.decision === "link") {
-        // The card shows the status the follow-up set; a replay refreshes it but mirrors nothing.
+        // A follow-up only redraws the card with the status it set. Copying each message into the
+        // triage thread duplicated the whole conversation and notified everyone following it; the
+        // card links to the customer thread instead.
         await refreshCard(ctx, db, cardIn, issue, account);
-        if (!input.duplicate)
-          await post(ctx, {
-            channel: cardIn,
-            threadTs: issue.triageRootTs!,
-            text: mirror,
-          });
       }
       return goto("notify", input);
     });
@@ -1072,7 +1204,11 @@ const button = defineStep({
     if (!issueId.success)
       return terminate({ skipped: `no issue id in ${action.action_id}` });
     const clicker = input.user.id;
-    const known = verb === "take" || verb === "close" || verb === "resolve";
+    const known =
+      verb === "take" ||
+      verb === "close" ||
+      verb === "resolve" ||
+      verb === "handled";
     // Before any database work, so the click shows at once; every path below redraws the card.
     if (known) await showWorking(ctx, input, verb, workingCard);
 
@@ -1129,6 +1265,38 @@ const button = defineStep({
         return terminate({
           skipped: `unknown issue action ${action.action_id}`,
         });
+
+      if (verb === "handled") {
+        const current = await getIssue(db, issueId.data);
+        const { issue, applied } = await recordTeamAnswer(ctx, db, {
+          issueId: current.id,
+          eventId: `handled:${input.trigger_id}`,
+          user: clicker,
+          userName: input.user.name ?? input.user.username ?? clicker,
+          slack: {
+            channel: current.customerChannel ?? triageChannel,
+            ts: action.action_ts ?? `${Math.floor(Date.now() / 1000)}.000000`,
+            ...(current.customerRootTs && {
+              threadTs: current.customerRootTs,
+            }),
+          },
+          text: "(marked handled)",
+        });
+        if (input.container?.message_ts !== issue.triageRootTs)
+          await settleClicked(
+            ctx,
+            input,
+            applied ? `Handled by <@${clicker}>` : "Already handled",
+          );
+        await rescheduleIssue(db, ctx, issue.id);
+        return terminate({
+          outcome: verb,
+          changed: applied,
+          issueId: issue.id,
+          status: issue.status,
+          owner: issue.ownerSlackId,
+        });
+      }
 
       if (verb === "resolve") {
         const current = await getIssue(db, issueId.data);
@@ -1230,12 +1398,13 @@ const button = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close, Resolved and the ticket reaction, and resets each changed issue's controller timer.",
+    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close, Resolved, Handled, the ticket reaction and teammates' reactions, and resets each changed issue's controller timer.",
   entry: "guard",
   steps: {
     guard,
     internal,
     team,
+    react: reaction,
     ack,
     context,
     classify,

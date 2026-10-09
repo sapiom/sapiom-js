@@ -3,7 +3,7 @@
   "description": "A customer reply in the thread of the channel message (same shape, with thread_ts).",
   "payload": {
     "event": {
-      "ts": "1790889500.000300",
+      "ts": "1790890500.000300",
       "team": "T0EXAMPLE01",
       "text": "Following up: it still fails after a retry.",
       "type": "message",
@@ -26,13 +26,13 @@
         }
       ],
       "channel": "C0CUSTOMER1",
-      "event_ts": "1790889500.000300",
+      "event_ts": "1790890500.000300",
       "channel_type": "channel",
       "thread_ts": "1790889355.981329"
     },
     "teamId": "T0EXAMPLE01",
     "eventId": "Ev0DESKREPLY1",
     "apiAppId": "A0DESKAPP1",
-    "eventTime": 1790889500
+    "eventTime": 1790890500
   }
 }
