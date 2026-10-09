@@ -82,14 +82,16 @@ Assistant conversation (OpenCode on `gpt-luna`, see [Assistant](#assistant))
 that belongs to the project:
 
 - It is not a session and never appears on the rail.
-- Every question extends the same conversation, across node picks and after
-  the card closes, until you press **New chat**. It survives a restart. Each
+- Every question extends the same conversation, across node picks and while
+  it is minimized, until you press **New chat**. It survives a restart. Each
   project has its own.
 - Each message carries a chip naming the selection it was asked about
   ("Asking about …"); the node's name, kind and path go into the prompt.
 - The chat opens in the card, over the map. **Stop** (the send button while a
-  reply streams) interrupts the answer. **×** closes the chat back to the card
-  and keeps the conversation.
+  reply streams) interrupts the answer. **Minimize** (the minus icon, or
+  Escape) shrinks the chat to a **Map chat** row beside the zoom controls, below
+  the picked node's header when there is one; that row brings the same
+  conversation back. There is no close: **New chat** starts over.
 - **Open in session** (the terminal-square icon) starts a new terminal session
   at the project root whose first message points at an attached `map-chat.md`
   holding the transcript and the selection, then shows that session.

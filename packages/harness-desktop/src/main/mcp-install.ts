@@ -117,22 +117,43 @@ export function sapiomMcpVersionAt(entry: string): string | null {
 }
 
 /**
- * Whether release version `a` is older than `b`, comparing major.minor.patch.
- * Anything unparseable compares as not older, so a malformed version never
- * triggers a reinstall loop.
+ * Whether `installed` is behind `target` in SemVer precedence, prerelease
+ * included (`0.19.2-beta.1` is behind `0.19.2`).
+ *
+ * An unparseable `target` is never something to move to, so a malformed
+ * registry answer cannot cause a reinstall loop. An unparseable or missing
+ * `installed` IS behind a known target: an install whose version cannot be
+ * read cannot be shown to carry the tools the harness's prompts name.
  */
-export function isOlderVersion(a: string | null, b: string | null): boolean {
+export function isBehind(installed: string | null, target: string | null): boolean {
   const parse = (v: string | null) => {
-    const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
-    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+    const m = v ? /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(v) : null;
+    return m
+      ? { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4]?.split(".") ?? [] }
+      : null;
   };
-  const pa = parse(a);
-  const pb = parse(b);
-  if (!pa || !pb) return false;
+  const b = parse(target);
+  if (!b) return false;
+  const a = parse(installed);
+  if (!a) return true;
   for (let i = 0; i < 3; i++) {
-    if (pa[i] !== pb[i]) return pa[i] < pb[i];
+    if (a.core[i] !== b.core[i]) return a.core[i] < b.core[i];
   }
-  return false;
+  // Same core: a prerelease is behind its release; two prereleases compare
+  // identifier by identifier (numeric below alphanumeric, shorter first).
+  if (a.pre.length === 0) return false;
+  if (b.pre.length === 0) return true;
+  for (let i = 0; i < Math.min(a.pre.length, b.pre.length); i++) {
+    const x = a.pre[i];
+    const y = b.pre[i];
+    if (x === y) continue;
+    const xn = /^\d+$/.test(x);
+    const yn = /^\d+$/.test(y);
+    if (xn && yn) return Number(x) < Number(y);
+    if (xn !== yn) return xn;
+    return x < y;
+  }
+  return a.pre.length < b.pre.length;
 }
 
 /** How long a boot waits on the registry before keeping the install it has. */
@@ -206,7 +227,8 @@ export async function ensureSapiomMcp(options: EnsureSapiomMcpOptions): Promise<
 }
 
 /**
- * The bundled entry when it is newer than `chosen` (or `chosen` is null),
+ * The bundled entry when `chosen` is behind it, has no readable version, or
+ * is null,
  * else `chosen`. Sessions launch both the same way (`<app binary> <entry>`).
  */
 function atLeastBundled(
@@ -216,10 +238,10 @@ function atLeastBundled(
 ): string | null {
   if (!bundled || !existsSync(bundled)) return chosen;
   const bundledVersion = sapiomMcpVersionAt(bundled);
-  if (chosen && !isOlderVersion(sapiomMcpVersionAt(chosen), bundledVersion)) return chosen;
+  if (chosen && !isBehind(sapiomMcpVersionAt(chosen), bundledVersion)) return chosen;
   onLine(
     chosen
-      ? `installed @sapiom/mcp ${sapiomMcpVersionAt(chosen) ?? "?"} is older than the bundled ${bundledVersion ?? "?"} — using the bundled copy.`
+      ? `installed @sapiom/mcp ${sapiomMcpVersionAt(chosen) ?? "(no version)"} is behind the bundled ${bundledVersion ?? "?"} — using the bundled copy.`
       : `no installed @sapiom/mcp — using the bundled ${bundledVersion ?? "?"}.`,
   );
   return bundled;
@@ -239,8 +261,8 @@ async function resolveFromPrefix(
     if (existing) {
       const installed = sapiomMcpVersionAt(existing);
       const latest = await options.latestVersion().catch(() => null);
-      if (!isOlderVersion(installed, latest)) return existing;
-      onLine(`refreshing @sapiom/mcp ${installed ?? "?"} → ${latest}…`);
+      if (!isBehind(installed, latest)) return existing;
+      onLine(`refreshing @sapiom/mcp ${installed ?? "(no version)"} → ${latest}…`);
       await options.install(onLine).catch(() => ({ ok: false }));
       // Re-resolve: the refresh rewrote the tree, and a failed one can leave
       // nothing behind — fall through to the repair path when it did.

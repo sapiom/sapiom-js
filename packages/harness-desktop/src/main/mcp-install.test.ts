@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureSapiomMcp,
-  isOlderVersion,
+  isBehind,
   resolveSapiomMcpEntry,
   sapiomMcpVersionAt,
 } from "./mcp-install.js";
@@ -145,7 +145,7 @@ describe("ensureSapiomMcp", () => {
       onLine: (line) => lines.push(line),
     });
     expect(entry).toBe(bundled);
-    expect(lines.join("\n")).toContain("older than the bundled 0.19.2");
+    expect(lines.join("\n")).toContain("behind the bundled 0.19.2");
   });
 
   it("prefers the install when it is as new as the bundled copy or newer", async () => {
@@ -160,6 +160,39 @@ describe("ensureSapiomMcp", () => {
       bundledEntry: bundled,
     });
     expect(entry).toBe(resolveSapiomMcpEntry(prefix));
+  });
+
+  it("refreshes a stable over an installed prerelease of the same version", async () => {
+    const prefix = makePrefix("windows", undefined, "0.19.2-beta.1");
+    const install = vi.fn(async () => ({ ok: true }));
+    await ensureSapiomMcp({
+      prefix,
+      smoke: false,
+      devMode: false,
+      install,
+      latestVersion: latest("0.19.2"),
+    });
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes an install with no readable version, and falls back to the bundled copy when that fails", async () => {
+    root = mkdtempSync(path.join(tmpdir(), "sapiom-mcp-install-"));
+    const pkgDir = path.join(root, "node_modules", "@sapiom", "mcp");
+    mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({ name: "@sapiom/mcp", bin: "./dist/index.js" }));
+    writeFileSync(path.join(pkgDir, "dist", "index.js"), "");
+    const bundled = writePackage(path.join(root, "app", "@sapiom", "mcp"), "0.19.2");
+    const install = vi.fn(async () => ({ ok: false }));
+    const entry = await ensureSapiomMcp({
+      prefix: root,
+      smoke: false,
+      devMode: false,
+      install,
+      latestVersion: latest("0.19.2"),
+      bundledEntry: bundled,
+    });
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(entry).toBe(bundled);
   });
 
   it("launches the bundled copy when nothing could be installed", async () => {
@@ -290,13 +323,23 @@ describe("ensureSapiomMcp", () => {
 });
 
 describe("version helpers", () => {
-  it("compares release versions numerically", () => {
-    expect(isOlderVersion("0.18.0", "0.19.2")).toBe(true);
-    expect(isOlderVersion("0.9.0", "0.10.0")).toBe(true);
-    expect(isOlderVersion("0.19.2", "0.19.2")).toBe(false);
-    expect(isOlderVersion("1.0.0", "0.19.2")).toBe(false);
-    expect(isOlderVersion(null, "0.19.2")).toBe(false);
-    expect(isOlderVersion("0.18.0", "garbage")).toBe(false);
+  it("compares versions in SemVer precedence, prerelease included", () => {
+    expect(isBehind("0.18.0", "0.19.2")).toBe(true);
+    expect(isBehind("0.9.0", "0.10.0")).toBe(true);
+    expect(isBehind("0.19.2", "0.19.2")).toBe(false);
+    expect(isBehind("1.0.0", "0.19.2")).toBe(false);
+    expect(isBehind("0.19.2-beta.1", "0.19.2")).toBe(true);
+    expect(isBehind("0.19.2", "0.19.2-beta.1")).toBe(false);
+    expect(isBehind("0.19.2-beta.2", "0.19.2-beta.10")).toBe(true);
+    expect(isBehind("0.19.2-alpha", "0.19.2-beta")).toBe(true);
+    expect(isBehind("0.19.2-beta", "0.19.2-beta.1")).toBe(true);
+  });
+
+  it("treats an unreadable installed version as behind, and never moves to an unreadable target", () => {
+    expect(isBehind(null, "0.19.2")).toBe(true);
+    expect(isBehind("garbage", "0.19.2")).toBe(true);
+    expect(isBehind("0.18.0", "garbage")).toBe(false);
+    expect(isBehind("0.18.0", null)).toBe(false);
   });
 
   it("reads the version from the package that owns an entry", () => {
