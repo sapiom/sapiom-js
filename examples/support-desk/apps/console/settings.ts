@@ -50,12 +50,13 @@ export const FleetSettingsSchema = z
     "nudge.repeat_minutes": ConfigSchemas["nudge.repeat_minutes"].nullable(),
     "digest.sla_hours": ConfigSchemas["digest.sla_hours"].nullable(),
     "linear_sync.notify_customer": ConfigSchemas["linear_sync.notify_customer"],
+    "intake.listed_channels_only": ConfigSchemas["intake.listed_channels_only"],
   })
   .partial()
   .strict();
 
-/** The controller's gaps when `nudge.repeat_minutes` is unset (agents/controller). */
-export const DEFAULT_REPEAT_MINUTES = [60, 240];
+/** The controller's gaps when `nudge.repeat_minutes` is unset (`_shared/timers.ts`): each nudge once. */
+export const DEFAULT_REPEAT_MINUTES: number[] = [];
 
 type Result = { status: number; body: unknown };
 
@@ -103,6 +104,11 @@ export async function getSettings(db: Db, desk: Desk): Promise<Result> {
         "linear_sync.notify_customer": await getConfigOr(
           db,
           "linear_sync.notify_customer",
+          false,
+        ),
+        "intake.listed_channels_only": await getConfigOr(
+          db,
+          "intake.listed_channels_only",
           false,
         ),
       },
@@ -216,6 +222,13 @@ export async function putFleetSettings(
     await deleteConfig(db, "digest.sla_hours");
   else if (v["digest.sla_hours"])
     await setConfig(db, "digest.sla_hours", v["digest.sla_hours"], EDITOR);
+  if (v["intake.listed_channels_only"] !== undefined)
+    await setConfig(
+      db,
+      "intake.listed_channels_only",
+      v["intake.listed_channels_only"],
+      EDITOR,
+    );
   if (v["linear_sync.notify_customer"] !== undefined)
     await setConfig(
       db,

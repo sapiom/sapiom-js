@@ -169,6 +169,10 @@ export function issueCard(
   const buttons: Block[] = [];
   if (!issue.ownerSlackId && issue.status !== "closed")
     buttons.push(button("issue", "take", "Take", issue.id, "primary"));
+  // The team answered somewhere the desk cannot see (a call, a DM, another channel), or nothing needs
+  // saying: hand the ball to the customer without a reply.
+  if (issue.status === "new" || issue.status === "on_you")
+    buttons.push(button("issue", "handled", "Handled", issue.id));
   // Engineering is done with an escalated issue: back to On You without waiting for Linear.
   if (issue.status === "on_hold")
     buttons.push(button("issue", "resolve", "Resolved", issue.id));
@@ -298,6 +302,7 @@ const WORKING: Record<string, string> = {
   dismiss: "Dismissing",
   take: "Taking",
   close: "Closing",
+  handled: "Marking handled",
   resolve: "Resolving",
 };
 

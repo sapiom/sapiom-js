@@ -115,6 +115,12 @@ export const ConfigSchemas = {
   "customers.test_user_ids": z.array(z.string().min(1)),
   /** Whether intake adds 👀 / 🎫 to customer messages. Off for a shadow pilot that must leave no footprint. */
   "intake.reactions": z.boolean(),
+  /**
+   * Only channels listed in `channels.customer` are customer channels. Off (the default): any channel
+   * the bot is in where an outsider posts becomes one, which also picks up partner and vendor
+   * channels whose messages are not support requests.
+   */
+  "intake.listed_channels_only": z.boolean(),
   /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
   "linear_sync.notify_customer": z.boolean(),
   /** Per desk slug; a desk without an entry never escalates to a person. */
@@ -160,6 +166,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "sla",
   "knowledge.docs_url",
   "controller.paused",
+  "intake.listed_channels_only",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
