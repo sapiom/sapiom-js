@@ -435,6 +435,14 @@ export class AgentRunnerCore {
     // store implements the capability and the target step exists) rather than
     // failing the run.
     const timeoutStep = row.pausedTimeoutStep;
+    if (timeoutStep && !(this.deps.store.resumeAtTimeoutStep && row.manifest.steps[timeoutStep])) {
+      // Declared, but this store cannot take it (or the step is gone): the run fails below
+      // with PauseTimeoutError, and the terminal metric alone would not say why.
+      this.obs.count({
+        name: 'workflow.pause.timeout_resume_unavailable',
+        attributes: { 'workflow.name': row.name },
+      });
+    }
     if (timeoutStep && this.deps.store.resumeAtTimeoutStep && row.manifest.steps[timeoutStep]) {
       const payload: PauseTimeoutPayload = {
         __sapiomPauseTimeout: true,

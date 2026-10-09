@@ -624,6 +624,11 @@ const nextVendor = defineStep({
 Note: `run_local` auto-resumes pauses, so a `timeoutStep` does not fire under the local runner —
 exercise the timeout branch with a direct unit test of the step body instead.
 
+Deployed runs also need platform support for `timeoutStep`. Until the hosted engine ships it, do not
+rely on the branch in a deployed agent: a deployed pause that times out can still fail with
+`PauseTimeoutError`. When a step declares a `timeoutStep`, every `pauseUntilSignal` it returns with a
+`timeoutMs` must pass that same `timeoutStep`, or the directive is rejected.
+
 ### Waiting on a user-named signal
 
 The signal name in the object form is yours to choose — `pauseUntilSignal` takes any

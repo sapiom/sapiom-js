@@ -386,7 +386,9 @@ export class InMemoryExecutionStore implements ExecutionStore {
     sharedState: Record<string, unknown>;
   }): Promise<boolean> {
     const e = this.executions.get(args.executionId);
-    if (!e || e.version !== args.expectedVersion) return false;
+    // Status as well as version: a signal resume (`prepareResume`) moves the row to RUNNING
+    // without bumping the version, so a version-only check would let the sweep overwrite it.
+    if (!e || e.version !== args.expectedVersion || e.status !== EXECUTION_STATUS.PAUSED) return false;
     e.status = EXECUTION_STATUS.RUNNING;
     e.currentStep = args.timeoutStep;
     e.currentStepInput = args.timeoutStepInput;
