@@ -53,6 +53,9 @@ export class TransportHttpError extends Error {
  * returns `null` for a missing or unparseable value. A date in the past is a
  * delay of zero, not `null`: the platform did answer, and "now" is its answer.
  */
+/** Past a day, a `Retry-After` is a parse accident, not a hint. */
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
+
 export function parseRetryAfterMs(
   header: string | null | undefined,
   now: number = Date.now(),
@@ -60,13 +63,17 @@ export function parseRetryAfterMs(
   if (header == null) return null;
   const value = header.trim();
   if (value === "") return null;
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  if (/^\d+$/.test(value)) {
+    const ms = Number(value) * 1000;
+    return Number.isSafeInteger(ms) ? ms : null;
+  }
   // Any other bare number (negative, fractional) is malformed, not a date —
   // `Date.parse("-5")` would otherwise read it as a year.
   if (/^[-+]?\d*\.?\d+$/.test(value)) return null;
   const at = Date.parse(value);
   if (Number.isNaN(at)) return null;
-  return Math.max(0, at - now);
+  const ms = Math.max(0, at - now);
+  return ms <= MAX_RETRY_AFTER_MS ? ms : null;
 }
 
 /**
@@ -82,4 +89,43 @@ export async function readErrorBody(
   } catch {
     return { text, body: text };
   }
+}
+
+/** What a non-2xx response carried, for a capability to build its own error from. */
+export interface HttpFailure {
+  /** `${errorPrefix}: ${status} ${text}`. */
+  readonly message: string;
+  readonly status: number;
+  /** Parsed JSON, or the raw text. */
+  readonly body: unknown;
+  readonly text: string;
+  readonly retryAfterMs: number | undefined;
+  readonly errorPrefix: string;
+}
+
+export type HttpErrorFactory = (failure: HttpFailure) => Error;
+
+/**
+ * Return a 2xx response, otherwise throw the error `makeError` builds from it.
+ * The one non-2xx path every capability namespace goes through, so each keeps
+ * its own error class while the body and `Retry-After` are read in one place.
+ */
+export async function ensureOk(
+  response: Response,
+  errorPrefix: string,
+  makeError: HttpErrorFactory,
+): Promise<Response> {
+  if (response.ok) return response;
+  const { text, body } = await readErrorBody(response);
+  // A test double may have no `headers`.
+  const retryAfterMs =
+    parseRetryAfterMs(response.headers?.get?.("Retry-After")) ?? undefined;
+  throw makeError({
+    message: `${errorPrefix}: ${response.status} ${text}`,
+    status: response.status,
+    body,
+    text,
+    retryAfterMs,
+    errorPrefix,
+  });
 }
