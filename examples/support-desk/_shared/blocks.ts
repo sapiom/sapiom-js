@@ -234,6 +234,13 @@ export function draftCard(draft: Draft, issue: Issue): Block[] {
   return blocks;
 }
 
+const NUDGE_ORDER = [
+  "customer_waiting",
+  "no_owner",
+  "draft_pending",
+  "no_draft",
+];
+
 const NUDGE_TEXT: Record<string, string> = {
   no_draft: "No draft yet",
   draft_pending: "Draft waiting for a decision",
@@ -242,22 +249,32 @@ const NUDGE_TEXT: Record<string, string> = {
 };
 
 /**
- * A controller ping in the triage thread. Mentions the owner if set; offers Take when unowned.
- * `#n` stays plain text: the nudge already sits in the card's thread, and a link to the card made
- * Slack attach a preview of it, a frozen copy whose status never updated and whose buttons did nothing.
+ * A controller ping in the triage thread: every reason due on the issue in one message, so a ticket
+ * that is unowned, unanswered and has a pending draft notifies once, not three times. Mentions the
+ * owner if set; offers Take when unowned. `#n` stays plain text: the nudge already sits in the card's
+ * thread, and a link to the card made Slack attach a preview of it, a frozen copy whose status never
+ * updated and whose buttons did nothing.
  */
 export function nudge(
   issue: Issue,
-  kind: string,
+  kinds: string | readonly string[],
   ownerSlackId?: string | null,
 ): Block[] {
+  // Most urgent first, whatever order the rules produced them in.
+  const rank = (k: string) => {
+    const i = NUDGE_ORDER.indexOf(k);
+    return i === -1 ? NUDGE_ORDER.length : i;
+  };
+  const list = (typeof kinds === "string" ? [kinds] : [...kinds]).sort(
+    (a, b) => rank(a) - rank(b),
+  );
   const owner = ownerSlackId ?? issue.ownerSlackId;
-  const label = NUDGE_TEXT[kind] ?? kind;
+  const label = list.map((k) => NUDGE_TEXT[k] ?? k).join(" · ");
   const ref = `#${issue.number}`;
   const blocks: Block[] = [
     {
       type: "section",
-      block_id: `nudge.${kind}`,
+      block_id: `nudge.${list.join("+")}`,
       text: {
         type: "mrkdwn",
         text: `${owner ? `${mention(owner)} ` : ""}*${label}* on ${ref}`,

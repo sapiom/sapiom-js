@@ -449,16 +449,7 @@ const team = defineStep({
           issue,
           await getAccount(db, issue.accountId),
         );
-        // A redelivery or retry finds the row already stored and mirrors nothing.
-        if (!duplicate)
-          await post(ctx, {
-            channel: triageChannel,
-            threadTs: issue.triageRootTs,
-            text: `*${escapeMrkdwn(poster.name)}* (team): ${plain(stripClientFooter(messageText(e)))} ${mrkdwnLink(
-              permalink(e.channel, e.ts, root ?? undefined),
-              "view",
-            )}`,
-          });
+        // The reply is not copied into the triage thread: the card's status shows the team answered.
       }
       // The team answered: the customer_waiting and draft_pending clocks stop.
       await rescheduleIssue(db, ctx, issue.id);
@@ -898,14 +889,10 @@ const announce = defineStep({
           text: mirror,
         });
       } else if (input.decision === "link") {
-        // The card shows the status the follow-up set; a replay refreshes it but mirrors nothing.
+        // A follow-up only redraws the card with the status it set. Copying each message into the
+        // triage thread duplicated the whole conversation and notified everyone following it; the
+        // card links to the customer thread instead.
         await refreshCard(ctx, db, cardIn, issue, account);
-        if (!input.duplicate)
-          await post(ctx, {
-            channel: cardIn,
-            threadTs: issue.triageRootTs!,
-            text: mirror,
-          });
       }
       return goto("notify", input);
     });

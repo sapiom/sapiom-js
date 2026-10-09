@@ -194,7 +194,7 @@ export async function thresholds(db: Db) {
   return {
     sla: await getConfigFresh(db, "sla", null),
     minutes: await getConfigFresh(db, "nudge.minutes", 30),
-    repeatMinutes: await getConfigFresh(db, "nudge.repeat_minutes", [60, 240]),
+    repeatMinutes: await getConfigFresh(db, "nudge.repeat_minutes", []),
     deskMinutes: Object.fromEntries(
       (await listDesks(db)).map((d) => [d.id, d.nudgeMinutes]),
     ),

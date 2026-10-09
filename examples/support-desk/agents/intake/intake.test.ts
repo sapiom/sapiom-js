@@ -281,9 +281,8 @@ describe("intake agent", () => {
     expect(linked.output).toMatchObject({ outcome: "linked", issueId });
     expect(fup.calls).toHaveLength(0);
     expect((await getIssue(db, issueId)).status).toBe("on_you");
-    expect(fup.slack("chat.postMessage")).toEqual([
-      expect.objectContaining({ threadTs: issue.triageRootTs }),
-    ]);
+    // A follow-up redraws the card and posts nothing: no copy of the message in the triage thread.
+    expect(fup.slack("chat.postMessage")).toEqual([]);
     expect(fup.slack("chat.update")).toEqual([
       expect.objectContaining({ ts: issue.triageRootTs }),
     ]);
@@ -476,7 +475,7 @@ describe("intake agent", () => {
       return output.issueId as string;
     }
 
-    it("a team reply in an issue thread is stored as agent, hands the ball to the customer, mirrors once", async () => {
+    it("a team reply in an issue thread is stored as agent, hands the ball to the customer, posts nothing", async () => {
       const issueId = await openBug();
       const issue = await getIssue(db, issueId);
       const draft = await createDraft(db, { issueId, text: "hi" });
@@ -504,19 +503,12 @@ describe("intake agent", () => {
         userId: "U0TEAMENG01",
         userName: "U0TEAMENG01",
       });
-      expect(t.slack("chat.postMessage")).toEqual([
-        expect.objectContaining({
-          threadTs: issue.triageRootTs,
-          text: expect.stringMatching(
-            /^\*U0TEAMENG01\* \(team\): Looking into it/,
-          ),
-        }),
-      ]);
+      expect(t.slack("chat.postMessage")).toEqual([]);
       expect(t.slack("chat.update")).toEqual([
         expect.objectContaining({ ts: issue.triageRootTs }),
       ]);
 
-      // Redelivery: stored once, not mirrored twice.
+      // Redelivery: stored once.
       const again = makeCtx("exec-team-2");
       expect((await run(teamReply(), again.ctx)).output).toMatchObject({
         outcome: "team_reply",
@@ -564,7 +556,7 @@ describe("intake agent", () => {
         status: "on_customer",
         ownerSlackId: "U0TEAMENG01",
       });
-      expect(retry.slack("chat.postMessage")).toHaveLength(1);
+      expect(retry.slack("chat.update")).toHaveLength(1);
       setLocalDb(db);
     });
 
@@ -596,11 +588,7 @@ describe("intake agent", () => {
         direction: "agent",
         text: "(attached image.png)",
       });
-      expect(t.slack("chat.postMessage")).toEqual([
-        expect.objectContaining({
-          text: expect.stringContaining("(team): (attached image.png)"),
-        }),
-      ]);
+      expect(t.slack("chat.postMessage")).toEqual([]);
     });
 
     it("an edit, a delete or a thread broadcast is still skipped", async () => {
@@ -1386,7 +1374,7 @@ describe("intake agent", () => {
         return close;
       };
 
-      it("a follow-up refreshes the card and mirrors in the card's channel", async () => {
+      it("a follow-up refreshes the card in the card's channel", async () => {
         const issue = await cardedThenMoved();
         const fup = makeCtx("exec-fup-moved");
         expect(
@@ -1400,11 +1388,11 @@ describe("intake agent", () => {
         expect(fup.slack("chat.update")).toEqual([
           expect.objectContaining({ ts: issue.triageRootTs }),
         ]);
-        expect(fup.slack("chat.postMessage")).toHaveLength(1);
-        expect(channels(fup)).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+        expect(fup.slack("chat.postMessage")).toHaveLength(0);
+        expect(channels(fup)).toEqual(["C0TRIAGE001"]);
       });
 
-      it("a team reply refreshes the card and mirrors in the card's channel", async () => {
+      it("a team reply refreshes the card in the card's channel", async () => {
         const issue = await cardedThenMoved();
         const t = makeCtx("exec-team-moved");
         expect(
@@ -1415,8 +1403,8 @@ describe("intake agent", () => {
             )
           ).output,
         ).toMatchObject({ outcome: "team_reply", issueId: issue.id });
-        expect(t.slack("chat.postMessage")).toHaveLength(1);
-        expect(channels(t)).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+        expect(t.slack("chat.postMessage")).toHaveLength(0);
+        expect(channels(t)).toEqual(["C0TRIAGE001"]);
       });
 
       it("Close clicked on the card closes the issue and posts Closed by under it", async () => {
