@@ -116,10 +116,18 @@ describe("planAction", () => {
   });
 
   it("refuses what the Slack card would not offer", () => {
-    expect(planAction("reopen", target(), ACTOR)).toMatchObject({
+    expect(planAction("bogus", target(), ACTOR)).toMatchObject({
       ok: false,
       status: 400,
     });
+    // Reopen only on a closed ticket, Handled only while the ball is with the team.
+    expect(planAction("reopen", target(), ACTOR)).toMatchObject({
+      ok: false,
+      status: 409,
+    });
+    expect(
+      planAction("handled", target({ status: "on_customer" }), ACTOR),
+    ).toMatchObject({ ok: false, status: 409 });
     expect(
       planAction("close", target({ status: "closed" }), ACTOR),
     ).toMatchObject({

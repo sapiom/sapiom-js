@@ -59,6 +59,7 @@ const ownerOf = (verb: string): ActionOwner | null =>
 /**
  * The click to emit for `verb` on the target, or why the Slack card would not offer that button:
  * Take only on an open, unowned issue; Resolved only on an On Hold one; Close only on an open one;
+ * Handled only on a New or On You one; Reopen only on a closed one;
  * the draft verbs only while a draft is pending and its card is posted.
  */
 export function planAction(
@@ -72,8 +73,16 @@ export function planAction(
   if (!owner)
     return { ok: false, status: 400, reason: `unknown action '${verb}'` };
   const { issue } = target;
-  if (issue.status === "closed")
+  if (verb === "reopen" && issue.status !== "closed")
+    return { ok: false, status: 409, reason: "the ticket is not closed" };
+  if (issue.status === "closed" && verb !== "reopen")
     return { ok: false, status: 409, reason: "the ticket is closed" };
+  if (verb === "handled" && issue.status !== "new" && issue.status !== "on_you")
+    return {
+      ok: false,
+      status: 409,
+      reason: "the ticket is not waiting on the team",
+    };
 
   let value: string;
   let channel: string;

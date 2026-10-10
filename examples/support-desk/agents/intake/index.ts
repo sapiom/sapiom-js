@@ -69,14 +69,26 @@ import {
   type Account,
   type Issue,
 } from "../../_shared/issues";
-import { commentIssue, getIssue as getLinearIssue } from "../../_shared/linear";
 import {
   checkLinear,
+  noteOpenLinear,
   redrawCard,
-  resolution,
   resolveByHand,
 } from "../../_shared/linear-check";
+
+export { noteOpenLinear };
 import { rescheduleIssue } from "../../_shared/timers";
+import { autoAssign } from "../../_shared/assign";
+import {
+  closeOnOwn,
+  issueThread,
+  judgeResolved,
+  resolveSettings,
+  suggestClose,
+  verdictFor,
+  verdictReason,
+  type Verdict,
+} from "../../_shared/resolve";
 import {
   type SlackCtx,
   permalink,
@@ -181,7 +193,13 @@ const Context = Incoming.extend({
 });
 type Context = z.infer<typeof Context>;
 
-const Classified = Context.extend({ jev: z.unknown().nullable() });
+const VerdictSchema = z.enum(["close", "suggest", "open"]);
+
+const Classified = Context.extend({
+  jev: z.unknown().nullable(),
+  /** Jev's probability that the linked issue is resolved with this message; null when not asked. */
+  resolved: z.number().nullable().optional(),
+});
 type Classified = z.infer<typeof Classified>;
 
 const Persisted = z.object({
@@ -196,6 +214,9 @@ const Persisted = z.object({
   created: z.boolean(),
   /** This event was already stored by an earlier run: do not mirror it twice. */
   duplicate: z.boolean(),
+  /** For a follow-up: what the resolve check decided (`_shared/resolve.ts`). */
+  verdict: VerdictSchema.optional(),
+  resolved: z.number().nullable().optional(),
 });
 type Persisted = z.infer<typeof Persisted>;
 
@@ -839,14 +860,54 @@ const context = defineStep({
   },
 });
 
+/**
+ * Jev's probability that issue `issueId` is resolved once the customer has said `text`, or null when
+ * the check is off or fails (a failure keeps today's behaviour: the follow-up hands the ball back).
+ */
+async function judgeFollowUp(
+  ctx: DbCtx & Parameters<typeof judgeResolved>[0],
+  issueId: string,
+  text: string,
+): Promise<number | null> {
+  const found = await withDb(ctx, async (db) => {
+    if (!(await resolveSettings(db)).enabled) return null;
+    return {
+      issue: await getIssue(db, issueId),
+      thread: await issueThread(db, issueId),
+    };
+  });
+  if (!found) return null;
+  try {
+    return await judgeResolved(ctx, {
+      title: found.issue.title,
+      status: found.issue.status,
+      thread: [
+        ...found.thread,
+        { from: "customer", text: slackToPlain(stripClientFooter(text)) },
+      ],
+    });
+  } catch (err) {
+    ctx.logger.warn("resolve check failed; treating the follow-up as open", {
+      issueId,
+      err: String(err),
+    });
+    return null;
+  }
+}
+
 const classify = defineStep({
   name: "classify",
   next: ["persist"],
   inputSchema: Context,
   async run(input, ctx) {
-    // A reply in an issue's customer thread links regardless of what Jev says; skip the call.
+    // A reply in an issue's customer thread links regardless of what Jev says; skip the link call
+    // and ask only whether this reply resolves the issue.
     if (input.threadIssueId)
-      return goto("persist", { ...input, jev: null } satisfies Classified);
+      return goto("persist", {
+        ...input,
+        jev: null,
+        resolved: await judgeFollowUp(ctx, input.threadIssueId, input.text),
+      } satisfies Classified);
     const account = await withDb(ctx, (db) => getAccount(db, input.accountId));
     let jev: IntakeJev | null = null;
     try {
@@ -871,7 +932,21 @@ const classify = defineStep({
         err: String(err),
       });
     }
-    return goto("persist", { ...input, jev } satisfies Classified);
+    // A message Jev linked to an open issue gets the same resolve check as a thread reply.
+    const linked =
+      input.trigger === "message"
+        ? decide({
+            threadIssueId: null,
+            forced: false,
+            jev,
+            candidates: input.candidates,
+          })
+        : null;
+    const resolved =
+      linked?.kind === "link"
+        ? await judgeFollowUp(ctx, linked.issueId, input.text)
+        : null;
+    return goto("persist", { ...input, jev, resolved } satisfies Classified);
   },
 });
 
@@ -881,6 +956,7 @@ const persist = defineStep({
   inputSchema: Classified,
   async run(input, ctx) {
     const jev = (input.jev ?? null) as IntakeJev | null;
+    const resolved = input.resolved ?? null;
     const decision: Decision = decide({
       threadIssueId: input.threadIssueId,
       forced: input.trigger === "reaction",
@@ -899,6 +975,7 @@ const persist = defineStep({
     const slack = refOf(incoming);
 
     return withDb(ctx, async (db) => {
+      const verdict: Verdict = verdictFor(resolved, await resolveSettings(db));
       // The message row first: keyed on the Slack event id, it makes a retry or a redelivery a no-op.
       let messageId = input.storedMessageId;
       let duplicate = false;
@@ -917,7 +994,7 @@ const persist = defineStep({
           first?.id !== replay.id &&
           !(await eventLogged(db, "issue.message_added", input.eventId))
         )
-          await followUp(db, issue.id);
+          await followUp(db, issue.id, verdict);
         return goto("announce", {
           incoming,
           userName: input.userName,
@@ -929,6 +1006,8 @@ const persist = defineStep({
           reason: "replay",
           issueId: issue.id,
           created: false,
+          verdict: first?.id === replay.id ? undefined : verdict,
+          resolved,
         } satisfies Persisted);
       }
       if (!messageId) {
@@ -976,11 +1055,13 @@ const persist = defineStep({
           source: "slack",
           category: categoryOf(jev),
           priority: priorityOf(jev),
-          title: titleOf(input.text),
+          title: titleOf(await nameMentions(ctx, input.text)),
           customer: slack,
         });
         await recordRun(db, ctx, AGENT, issue.id);
         await assignMentioned(ctx, db, issue.id, input.text, input.teamId);
+        // Nobody claimed it by name: route it to a teammate when `assign.auto` is on.
+        await autoAssign(db, issue.id);
         return goto("announce", {
           ...base,
           decision: "open",
@@ -990,7 +1071,7 @@ const persist = defineStep({
         } satisfies Persisted);
       }
 
-      const current = await followUp(db, decision.issueId);
+      const current = await followUp(db, decision.issueId, verdict);
       await recordRun(db, ctx, AGENT, current.id);
       await assignMentioned(ctx, db, current.id, input.text, input.teamId);
       return goto("announce", {
@@ -999,6 +1080,8 @@ const persist = defineStep({
         reason: decision.reason,
         issueId: current.id,
         created: false,
+        verdict,
+        resolved,
       } satisfies Persisted);
     });
   },
@@ -1050,12 +1133,45 @@ async function assignMentioned(
   }
 }
 
-/** A follow-up puts the ball back with the team; On Hold stays On Hold until engineering is done. */
-async function followUp(db: Db, issueId: string): Promise<Issue> {
+/**
+ * A follow-up puts the ball back with the team; On Hold stays On Hold until engineering is done.
+ * Unless Jev judged that it resolves the issue (`verdict` close or suggest): then the status stays
+ * as it was, so a thank-you neither reopens a closed issue nor hands an answered one back to the
+ * team. `announce` closes it or suggests closing it once the card exists.
+ */
+async function followUp(
+  db: Db,
+  issueId: string,
+  verdict: Verdict = "open",
+): Promise<Issue> {
   const current = await getIssue(db, issueId);
+  if (verdict !== "open") return current;
   return current.status === "on_hold"
     ? current
     : setStatus(db, current.id, "on_you");
+}
+
+/** `<@U123>` with no label: a mention whose name {@link nameMentions} can fill in. */
+const BARE_MENTION = /<@([UW][A-Z0-9]+)>/g;
+
+/**
+ * `text` with each bare `<@U…>` given its display name (`<@U…|Ilan>`), so a title made from it reads
+ * `@Ilan` rather than `@U096M2LJEM7`. A name that cannot be read leaves the mention as it was.
+ */
+export async function nameMentions(
+  ctx: SlackCtx,
+  text: string,
+): Promise<string> {
+  const ids = [...new Set([...text.matchAll(BARE_MENTION)].map((m) => m[1]))];
+  if (ids.length === 0) return text;
+  const names = new Map<string, string>();
+  for (const id of ids) {
+    const person = await userInfo(ctx, id).catch(() => null);
+    if (person?.name && person.name !== id) names.set(id, person.name);
+  }
+  return text.replace(BARE_MENTION, (whole, id: string) =>
+    names.has(id) ? `<@${id}|${names.get(id)}>` : whole,
+  );
 }
 
 async function refreshCard(
@@ -1121,6 +1237,23 @@ const announce = defineStep({
         // card links to the customer thread instead.
         await refreshCard(ctx, db, cardIn, issue, account);
       }
+      if (
+        input.decision === "link" &&
+        input.resolved != null &&
+        input.verdict &&
+        input.verdict !== "open"
+      ) {
+        const why = verdictReason(input.resolved, input.text);
+        if (input.verdict === "close") await closeOnOwn(ctx, db, issue.id, why);
+        else
+          await suggestClose(
+            ctx,
+            db,
+            await getIssue(db, issue.id),
+            input.messageId,
+            why,
+          );
+      }
       return goto("notify", input);
     });
   },
@@ -1147,6 +1280,22 @@ const notify = defineStep({
         slack: refOf(input.incoming),
       };
       // The emit id is `<type>:<causationId>`, so a redelivered event's emit dedups.
+      // A message that resolves the issue gets no draft: copilot would only answer a thank-you.
+      if (
+        input.decision === "link" &&
+        input.verdict &&
+        input.verdict !== "open"
+      ) {
+        await rescheduleIssue(db, ctx, issue.id);
+        return goto("settle", {
+          incoming: input.incoming,
+          outcome: input.verdict === "close" ? "resolved" : "looks_resolved",
+          issueId: issue.id,
+          number: issue.number,
+          opened: false,
+          receiptId: null,
+        } satisfies Settle);
+      }
       const receipt =
         input.decision === "open"
           ? await emit(ctx, db, "issue.created", {
@@ -1221,60 +1370,6 @@ async function settleClicked(
   }
 }
 
-/**
- * A closed issue's Linear issue is never read again, so an unresolved Linear ticket is flagged here.
- * Never throws: the close is already committed and a retried step would see it as already closed.
- */
-export async function noteOpenLinear(
-  ctx: SlackCtx,
-  triageChannel: string,
-  issue: Issue,
-): Promise<void> {
-  const identifier = issue.linearIdentifier;
-  if (!identifier) return;
-  let linear;
-  try {
-    linear = await getLinearIssue(ctx, issue.linearIssueId ?? identifier);
-  } catch (err) {
-    ctx.logger.warn("linear state not read on close", {
-      issueId: issue.id,
-      linear: identifier,
-      err: String(err),
-    });
-    return;
-  }
-  if (resolution(linear)) return;
-  const url = issue.linearUrl ?? linear.url;
-  const name = escapeMrkdwn(identifier);
-  if (issue.triageRootTs) {
-    try {
-      await post(ctx, {
-        channel: triageChannel,
-        threadTs: issue.triageRootTs,
-        text: `${url ? mrkdwnLink(url, name) : name} is still open in Linear. Cancel it there if it no longer needs work.`,
-      });
-    } catch (err) {
-      ctx.logger.warn("open Linear note not posted", {
-        issueId: issue.id,
-        err: String(err),
-      });
-    }
-  }
-  try {
-    await commentIssue(
-      ctx,
-      linear.id,
-      `Support desk ticket ${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
-    );
-  } catch (err) {
-    ctx.logger.warn("open Linear comment not added", {
-      issueId: issue.id,
-      linear: identifier,
-      err: String(err),
-    });
-  }
-}
-
 const button = defineStep({
   name: "button",
   terminal: true,
@@ -1290,7 +1385,8 @@ const button = defineStep({
       verb === "take" ||
       verb === "close" ||
       verb === "resolve" ||
-      verb === "handled";
+      verb === "handled" ||
+      verb === "reopen";
     // Before any database work, so the click shows at once; every path below redraws the card.
     if (known) await showWorking(ctx, input, verb, workingCard);
 
@@ -1374,6 +1470,46 @@ const button = defineStep({
         return terminate({
           outcome: verb,
           changed: applied,
+          issueId: issue.id,
+          status: issue.status,
+          owner: issue.ownerSlackId,
+        });
+      }
+
+      if (verb === "reopen") {
+        // Closed by mistake, or by the resolve check: back to On You, where nudges start again.
+        const { issue, changed } = await db.transaction(async (tx) => {
+          const locked = await lockIssue(tx, issueId.data);
+          if (locked.status !== "closed")
+            return { issue: locked, changed: false };
+          return {
+            issue: await setStatus(tx, locked.id, "on_you"),
+            changed: true,
+          };
+        });
+        await refreshCard(
+          ctx,
+          db,
+          triageChannel,
+          issue,
+          await getAccount(db, issue.accountId),
+        );
+        if (input.container?.message_ts !== issue.triageRootTs)
+          await settleClicked(
+            ctx,
+            input,
+            changed ? `Reopened by <@${clicker}>` : "Already open",
+          );
+        if (changed && issue.triageRootTs)
+          await post(ctx, {
+            channel: triageChannel,
+            threadTs: issue.triageRootTs,
+            text: `Reopened by <@${clicker}>`,
+          });
+        await rescheduleIssue(db, ctx, issue.id);
+        return terminate({
+          outcome: verb,
+          changed,
           issueId: issue.id,
           status: issue.status,
           owner: issue.ownerSlackId,
@@ -1480,7 +1616,7 @@ const button = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close, Resolved, Handled, the ticket reaction and teammates' reactions, and resets each changed issue's controller timer.",
+    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Asks Jev whether a follow-up resolves its issue and closes it or suggests closing it. Handles Take, Close, Reopen, Resolved, Handled, the ticket reaction and teammates' reactions, and resets each changed issue's controller timer.",
   entry: "guard",
   steps: {
     guard,

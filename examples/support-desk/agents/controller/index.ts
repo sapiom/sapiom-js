@@ -4,13 +4,16 @@
  *
  * Trigger: the per-ticket `schedule_once` that `rescheduleIssue` keeps, input `{ issueId }`. Run
  * with no `issueId` (the Console's Run now, or by hand after install) it sends nothing and resets
- * every open ticket's timer.
+ * every open ticket's timer. Run with `review` (by hand, or the Console's Review open tickets) it
+ * asks Jev whether each open ticket is resolved and closes or suggests closing it
+ * (`_shared/resolve.ts`): the backfill for tickets that predate the resolve check.
  *
  * A tick:
  * 1. arms a retry timer ({@link TICK_RETRY_MINUTES}), so a run that fails partway still comes back;
  * 2. redraws the triage card if an earlier redraw failed;
  * 3. on an On Hold ticket whose Linear check is due, reads Linear (`_shared/linear-check.ts`), which
- *    moves it On You when the Linear issue is Done or Canceled;
+ *    moves it On You when the Linear issue is Done or Canceled; closes an On Customer ticket the
+ *    customer left unanswered past `resolve.idleCloseHours`;
  * 4. sends the due nudges (SAP-3787 repeat rounds; first-response and next-response targets when
  *    `sla` is set) and escalation levels (SAP-3788), each rechecked under the issue row lock and
  *    deduped through `nudges`, so a duplicate or late tick never sends twice;
@@ -32,6 +35,14 @@ import { withDb } from "../../_shared/db";
 import { listDesks, oncallFor } from "../../_shared/desks";
 import { emit } from "../../_shared/emit";
 import { getIssue, recordNudge, recordRun } from "../../_shared/issues";
+import { autoAssign } from "../../_shared/assign";
+import {
+  closeOnOwn,
+  idleCloseAt,
+  idleReason,
+  resolveSettings,
+  reviewIssue,
+} from "../../_shared/resolve";
 import {
   checkLinear,
   linearCheckDue,
@@ -80,9 +91,24 @@ const replyKey = (kind: Nudge["kind"], refId: string): string =>
  * `issueId`: the ticket whose timer fired; without it the run resets every open ticket's timer.
  * `jevCheck: false` nudges without asking Jev whether the customer expects a reply.
  */
+const Review = z.object({
+  /** Only this desk's tickets (a desk slug); all desks when unset. */
+  desk: z.string().min(1).optional(),
+  /** Ask Jev and report, but close, suggest, clear and assign nothing. */
+  dryRun: z.boolean().optional(),
+  /**
+   * Forget the stored "expects a reply" verdicts on the open tickets, so the next tick asks Jev
+   * again under the current criteria. Default true.
+   */
+  clearVerdicts: z.boolean().optional(),
+  /** Give each unowned open ticket an owner per `assign.auto` (`_shared/assign.ts`). Default true. */
+  assignUnowned: z.boolean().optional(),
+});
+
 const Input = z.object({
   issueId: z.string().uuid().optional(),
   jevCheck: z.boolean().optional(),
+  review: Review.optional(),
 });
 
 const NudgeSchema = z.object({
@@ -123,6 +149,65 @@ const reasonsText = (e: Escalation) =>
     .join(", ");
 
 // --- steps -----------------------------------------------------------------------------------
+
+/**
+ * The backfill: judge every open ticket (of `opts.desk`, when set) now, closing or suggesting
+ * closing it as intake would on a customer message; forget stale "expects a reply" verdicts; and
+ * give unowned tickets an owner. One ticket's failure is reported and the rest go on.
+ */
+async function review(
+  ctx: Parameters<typeof reviewIssue>[0],
+  db: Parameters<typeof reviewIssue>[1],
+  opts: z.infer<typeof Review>,
+) {
+  const desks = await listDesks(db);
+  const desk = opts.desk ? desks.find((d) => d.slug === opts.desk) : null;
+  if (opts.desk && !desk) throw new Error(`no desk with slug '${opts.desk}'`);
+  const rows = await db.query<{ id: string }>(
+    desk
+      ? `select id from issues where status <> 'closed' and (desk_id = $1${desk.isDefault ? " or desk_id is null" : ""}) order by number`
+      : "select id from issues where status <> 'closed' order by number",
+    desk ? [desk.id] : [],
+  );
+  const settings = await resolveSettings(db);
+  const dryRun = opts.dryRun ?? false;
+  const results = [];
+  for (const { id } of rows) {
+    try {
+      const judged = await reviewIssue(ctx, db, String(id), {
+        dryRun,
+        settings: { ...settings, enabled: true },
+      });
+      let cleared = 0;
+      let assigned: string | null = null;
+      if (!dryRun && judged.verdict !== "close") {
+        if (opts.clearVerdicts ?? true)
+          cleared = (
+            await db.query(
+              "delete from nudges where issue_id = $1 and (kind like 'reply:customer_waiting:%' or kind like 'skip:customer_waiting:%') returning kind",
+              [String(id)],
+            )
+          ).length;
+        if (opts.assignUnowned ?? true)
+          assigned = await autoAssign(db, String(id));
+      }
+      if (!dryRun) await rescheduleIssue(db, ctx, String(id));
+      results.push({ ...judged, cleared, assigned });
+    } catch (err) {
+      ctx.logger.error("review failed for a ticket", {
+        issueId: id,
+        err: String(err),
+      });
+      results.push({ issueId: String(id), error: String(err) });
+    }
+  }
+  ctx.logger.info("controller review", {
+    desk: opts.desk ?? null,
+    dryRun,
+    reviewed: results.length,
+  });
+  return { desk: opts.desk ?? null, dryRun, reviewed: results.length, results };
+}
 
 /** The timer as a run's output shows it. */
 const timerOut = (t: Reschedule) => ({
@@ -173,6 +258,10 @@ const scan = defineStep({
   async run(input, ctx) {
     const jevCheck = input.jevCheck ?? true;
     return withDb(ctx, async (db) => {
+      if (!input.issueId && input.review) {
+        await recordRun(db, ctx, AGENT);
+        return terminate({ review: await review(ctx, db, input.review) });
+      }
       if (!input.issueId) {
         await recordRun(db, ctx, AGENT);
         const rearmed = await rescheduleOpen(db, ctx);
@@ -213,6 +302,28 @@ const scan = defineStep({
       if (check && check.getTime() <= nowMs) {
         linear = await checkLinear(ctx, db, issue, AGENT);
         issue = await getIssue(db, issueId);
+      }
+
+      // The customer never answered: close it rather than keep it in the digest forever.
+      const { idleCloseHours } = await resolveSettings(db);
+      const idleSnap = await snapshot(db, issueId);
+      const idle = idleSnap.issues[0]
+        ? idleCloseAt(idleSnap.issues[0], idleSnap.messages, idleCloseHours)
+        : null;
+      if (idle && idleCloseHours !== null && idle.getTime() <= nowMs) {
+        const closed = await closeOnOwn(
+          ctx,
+          db,
+          issueId,
+          idleReason(idleCloseHours),
+        );
+        const timer = await rescheduleIssue(db, ctx, issueId, { tick: true });
+        return terminate({
+          issueId,
+          idleClosed: closed.changed,
+          linear,
+          timer: timerOut(timer),
+        });
       }
 
       const snap = await snapshot(db, issueId);
@@ -521,7 +632,7 @@ const send = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk controller: runs for one ticket when its timer fires, pings the triage thread while a condition stays stale (no owner, no draft, draft pending, customer waiting), escalates to on-call and a support group past a desk's escalation levels, reads Linear for On Hold tickets, and sets the ticket's next timer.",
+    "Support desk controller: runs for one ticket when its timer fires, pings the triage thread while a condition stays stale (no owner, no draft, draft pending, customer waiting), escalates to on-call and a support group past a desk's escalation levels, reads Linear for On Hold tickets, closes On Customer tickets the customer left unanswered, and sets the ticket's next timer. Run with `review` it asks Jev whether every open ticket is resolved and closes or suggests closing it.",
   entry: "scan",
   steps: { scan, send },
 });

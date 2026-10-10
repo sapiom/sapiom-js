@@ -38,7 +38,11 @@ import {
   type Direction,
   type Issue,
 } from "./issues";
-import { getIssue as getLinearIssue, type LinearIssue } from "./linear";
+import {
+  commentIssue,
+  getIssue as getLinearIssue,
+  type LinearIssue,
+} from "./linear";
 import { issueSla } from "./sla";
 import { post, update } from "./slack";
 
@@ -397,4 +401,58 @@ export async function resolveByHand(
     resolution: "resolved",
     by: clicker,
   });
+}
+
+/**
+ * A closed issue's Linear issue is never read again, so an unresolved Linear ticket is flagged here.
+ * Never throws: the close is already committed and a retried step would see it as already closed.
+ */
+export async function noteOpenLinear(
+  ctx: Ctx,
+  triageChannel: string,
+  issue: Issue,
+): Promise<void> {
+  const identifier = issue.linearIdentifier;
+  if (!identifier) return;
+  let linear;
+  try {
+    linear = await getLinearIssue(ctx, issue.linearIssueId ?? identifier);
+  } catch (err) {
+    ctx.logger.warn("linear state not read on close", {
+      issueId: issue.id,
+      linear: identifier,
+      err: String(err),
+    });
+    return;
+  }
+  if (resolution(linear)) return;
+  const url = issue.linearUrl ?? linear.url;
+  const name = escapeMrkdwn(identifier);
+  if (issue.triageRootTs) {
+    try {
+      await post(ctx, {
+        channel: triageChannel,
+        threadTs: issue.triageRootTs,
+        text: `${url ? mrkdwnLink(url, name) : name} is still open in Linear. Cancel it there if it no longer needs work.`,
+      });
+    } catch (err) {
+      ctx.logger.warn("open Linear note not posted", {
+        issueId: issue.id,
+        err: String(err),
+      });
+    }
+  }
+  try {
+    await commentIssue(
+      ctx,
+      linear.id,
+      `Support desk ticket ${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
+    );
+  } catch (err) {
+    ctx.logger.warn("open Linear comment not added", {
+      issueId: issue.id,
+      linear: identifier,
+      err: String(err),
+    });
+  }
 }

@@ -277,6 +277,30 @@ async function rearmTimers() {
   };
 }
 
+/**
+ * Start the controller's review of the selected desk's open tickets: Jev judges each one and the
+ * resolved ones close or get a "Looks resolved" line (`_shared/resolve.ts`). `dryRun` only reports.
+ */
+async function reviewTickets(desk: string, dryRun: boolean) {
+  const slug = agentByKey(CONTROLLER)!.slug;
+  const definitionId = (await definitionIds()).get(slug);
+  if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
+  const started = await sapiom<{
+    executionId?: string;
+    id?: string;
+    status?: string;
+  }>("POST", "/v1/workflows/executions", {
+    definitionId,
+    input: { review: { desk, dryRun } },
+  });
+  return {
+    desk,
+    dryRun,
+    executionId: started.executionId ?? started.id ?? null,
+    status: started.status ?? null,
+  };
+}
+
 /** Turn one agent on or off; returns the trigger ids it created, resumed and deleted. */
 async function setAgent(key: string, on: boolean) {
   const agent = agentByKey(key);
@@ -1042,6 +1066,13 @@ const POST: [RegExp, Handler][] = [
   // Run now: one controller run that resets every open ticket's timer; anything overdue fires
   // within a minute.
   [/^\/api\/controller\/run$/, () => rearmTimers()],
+  [
+    /^\/api\/controller\/review$/,
+    (_, body, url) =>
+      withConsoleDb(async (d) =>
+        reviewTickets((await deskOf(d, url)).slug, body.dryRun === true),
+      ),
+  ],
   [
     /^\/api\/board\/reset$/,
     async (_, body, url) => {

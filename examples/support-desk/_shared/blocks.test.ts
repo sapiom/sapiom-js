@@ -70,7 +70,8 @@ type Btn = { action_id: string; value: string };
 /** The mrkdwn text of the block with this `block_id` (a section's text, or a context's first element). */
 const textOf = (blocks: Record<string, unknown>[], id: string): string => {
   const b = blocks.find((x) => x.block_id === id) as
-    { text?: { text: string }; elements?: { text: string }[] } | undefined;
+    | { text?: { text: string }; elements?: { text: string }[] }
+    | undefined;
   return b?.text?.text ?? b?.elements?.[0]?.text ?? "";
 };
 const buttons = (blocks: Record<string, unknown>[]): Btn[] =>
@@ -130,15 +131,18 @@ describe("issueCard", () => {
     ]);
   });
 
-  it("drops Take once owned and all buttons once closed", () => {
+  it("drops Take once owned and every button but Reopen once closed", () => {
     expect(
       buttons(issueCard({ ...issue, ownerSlackId: "U1" }, account)).map(
         (b) => b.action_id,
       ),
     ).toEqual(["issue.handled", "issue.close"]);
-    expect(buttons(issueCard({ ...issue, status: "closed" }, account))).toEqual(
-      [],
-    );
+    // A closed card offers only Reopen.
+    expect(
+      buttons(issueCard({ ...issue, status: "closed" }, account)).map(
+        (b) => b.action_id,
+      ),
+    ).toEqual(["issue.reopen"]);
   });
 
   it("offers Resolved only while the issue is On Hold", () => {

@@ -14,11 +14,12 @@ import {
   recordRun,
   type IssueStatus,
 } from "../../_shared/issues";
-import { post, userInfo, type SlackCtx } from "../../_shared/slack";
+import { permalink, post, userInfo, type SlackCtx } from "../../_shared/slack";
 
 import {
   DEFAULT_SLA_HOURS,
   digestMessage,
+  idsIn,
   localDay,
   type DigestIssue,
 } from "./logic";
@@ -36,7 +37,9 @@ type Ctx = SlackCtx & { executionId: string };
 /** A desk's open issues; an issue with no desk belongs to the default desk, as `deskForIssue` says. */
 async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
   const rows = await db.query(
-    `select i.number, i.status, i.priority, i.title, i.owner_slack_id, i.created_at, a.name as account_name
+    `select i.number, i.status, i.priority, i.title, i.owner_slack_id, i.created_at,
+            i.customer_channel, i.customer_root_ts, i.triage_channel, i.triage_root_ts,
+            a.name as account_name, a.slack_channel_id as account_channel
      from issues i join accounts a on a.id = i.account_id
      where i.status <> 'closed' and (i.desk_id = $1${desk.isDefault ? " or i.desk_id is null" : ""})`,
     [desk.id],
@@ -47,9 +50,23 @@ async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
     priority: (r.priority as string | null) ?? null,
     title: (r.title as string | null) ?? null,
     accountName: r.account_name as string,
+    accountChannel: (r.account_channel as string | null) ?? null,
     ownerSlackId: (r.owner_slack_id as string | null) ?? null,
     createdAt: new Date(r.created_at as Date),
+    url: linkFor(r, desk),
   }));
+}
+
+/** The customer's message, else the triage card. */
+function linkFor(r: Row, desk: Desk): string | null {
+  if (r.customer_channel && r.customer_root_ts)
+    return permalink(String(r.customer_channel), String(r.customer_root_ts));
+  if (r.triage_root_ts)
+    return permalink(
+      String(r.triage_channel ?? desk.triageChannel),
+      String(r.triage_root_ts),
+    );
+  return null;
 }
 
 /**
@@ -88,9 +105,13 @@ export async function digest(ctx: Ctx, db: Db, now?: Date) {
       const sent = await db.transaction(async (tx) => {
         if (!(await recordDigest(tx, desk.id, day))) return false;
         const issues = await openIssues(tx, desk);
+        // Owners, and the people titles mention, by name.
         const owners = new Map<string, string>();
-        for (const id of new Set(issues.map((i) => i.ownerSlackId)))
-          if (id) owners.set(id, await ownerName(id));
+        const people = new Set([
+          ...issues.map((i) => i.ownerSlackId),
+          ...issues.flatMap((i) => idsIn(i.title)),
+        ]);
+        for (const id of people) if (id) owners.set(id, await ownerName(id));
         await post(ctx, {
           channel: desk.triageChannel,
           ...digestMessage({ desk, issues, owners, now: clock, day, sla }),

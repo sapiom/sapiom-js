@@ -939,6 +939,74 @@
             </div>
           </section>
 
+          <section class="card" id="team">
+            <h2>
+              Team and resolved tickets
+              <span class="note muted">every desk</span>
+            </h2>
+            <div class="form">
+              <label
+                >Teammates<textarea
+                  id="team-members"
+                  spellcheck="false"
+                  rows="4"
+                  placeholder="U0123ABCD | Ilan | support"
+                ></textarea
+                ><span class="hint"
+                  >One per line: Slack user id, then optionally
+                  <code>| name</code> and <code>| desk slugs</code> (comma
+                  separated; none = every desk).</span
+                ></label
+              >
+              <label class="check"
+                ><input id="team-auto" type="checkbox" /> Assign each new
+                ticket: the channel's owner, else the teammate with the fewest
+                open tickets</label
+              >
+              <label class="check"
+                ><input id="res-enabled" type="checkbox" /> Ask Jev whether a
+                customer's reply resolves the ticket</label
+              >
+              <div class="sla-grid">
+                <label class="hint"
+                  >close at (%)<input
+                    id="res-close"
+                    type="number"
+                    min="1"
+                    max="100"
+                /></label>
+                <label class="hint"
+                  >suggest at (%)<input
+                    id="res-suggest"
+                    type="number"
+                    min="1"
+                    max="100"
+                /></label>
+                <label class="hint"
+                  >close On Customer after (hours)<input
+                    id="res-idle"
+                    type="number"
+                    min="1"
+                    placeholder="never"
+                /></label>
+              </div>
+              <div class="row">
+                <button id="team-save" class="mut primary">Save</button>
+                <span id="team-state" class="hint"
+                  >Applies on the next run. No redeploy.</span
+                >
+              </div>
+              <div class="row">
+                <button id="review-dry" class="mut">Preview review</button>
+                <button id="review-run" class="mut">Review open tickets</button>
+                <span id="review-state" class="hint"
+                  >Jev judges this desk's open tickets; resolved ones close
+                  (with Reopen) or get a Close suggestion.</span
+                >
+              </div>
+            </div>
+          </section>
+
           <section class="card" id="sla">
             <h2>SLA <span class="note muted">every desk</span></h2>
             <p class="hint">
@@ -1758,6 +1826,39 @@
         $("set-digest").textContent = cronText(s.digest);
         $("set-notify").checked = f["linear_sync.notify_customer"];
         $("set-listed").checked = f["intake.listed_channels_only"];
+        $("team-members").value = (f["team.members"] || [])
+          .map((m) =>
+            [m.slackId, m.name || "", (m.desks || []).join(", ")]
+              .join(" | ")
+              .replace(/( \| )+$/, ""),
+          )
+          .join("\n");
+        $("team-auto").checked = !!f["assign.auto"];
+        const r = { ...s.defaults.resolve, ...(f.resolve || {}) };
+        $("res-enabled").checked = r.enabled;
+        $("res-close").value = Math.round(r.closeMin * 100);
+        $("res-suggest").value = Math.round(r.suggestMin * 100);
+        $("res-idle").value = r.idleCloseHours ?? "";
+      }
+      /** `U… | name | desk, desk` lines as `team.members` entries; throws on a bad id. */
+      function teamMembers(text) {
+        return text
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .map((l) => {
+            const [id, name, desks] = l.split("|").map((p) => p.trim());
+            if (!/^[UW][A-Z0-9]{2,}$/.test(id))
+              throw new Error(`not a Slack user id: ${id}`);
+            const m = { slackId: id };
+            if (name) m.name = name;
+            const list = (desks || "")
+              .split(",")
+              .map((d) => d.trim())
+              .filter(Boolean);
+            if (list.length) m.desks = list;
+            return m;
+          });
       }
       /** Prefilled when `sla` is unset: the README example. */
       const SLA_EXAMPLE = {
@@ -1929,6 +2030,64 @@
           "set-fleet-state",
         );
       };
+
+      $("team-save").onclick = (e) => {
+        let members;
+        try {
+          members = teamMembers($("team-members").value);
+        } catch (err) {
+          $("team-state").className = "hint bad";
+          $("team-state").textContent = err.message;
+          return;
+        }
+        const pct = (id) => Number($(id).value) / 100;
+        const resolve = {
+          enabled: $("res-enabled").checked,
+          closeMin: pct("res-close"),
+          suggestMin: pct("res-suggest"),
+        };
+        if ($("res-idle").value !== "")
+          resolve.idleCloseHours = Number($("res-idle").value);
+        saveSettings(
+          e.target,
+          "/api/settings/fleet",
+          {
+            "team.members": members.length ? members : null,
+            "assign.auto": $("team-auto").checked,
+            resolve,
+          },
+          "team-state",
+        );
+      };
+      for (const [id, dryRun] of [
+        ["review-dry", true],
+        ["review-run", false],
+      ])
+        $(id).onclick = async (e) => {
+          if (
+            !dryRun &&
+            !confirm(
+              "Ask Jev about every open ticket on this desk, and close the ones it judges resolved?",
+            )
+          )
+            return;
+          const btn = e.target;
+          btn.dataset.busy = "1";
+          syncButtons();
+          try {
+            const r = await post(scoped("/api/controller/review"), { dryRun });
+            $("review-state").className = "hint";
+            $("review-state").innerHTML =
+              `Started ${dryRun ? "a preview" : "the review"}: <a href="https://app.sapiom.ai/agents/runs/${esc(r.executionId || "")}" target="_blank" rel="noopener">run ${esc(r.executionId || "")}</a>. Its output lists each ticket's verdict.`;
+            log(`review${dryRun ? " (preview)" : ""}: ${summarize(r)}`);
+          } catch (err) {
+            $("review-state").className = "hint bad";
+            $("review-state").textContent = err.message;
+          } finally {
+            btn.dataset.busy = "0";
+            syncButtons();
+          }
+        };
 
       function showEscalation({ entry, oncallFallback }) {
         $("esc-levels").value = entry ? entry.levels.join(", ") : "";

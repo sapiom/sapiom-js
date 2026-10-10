@@ -140,13 +140,56 @@ describe("fleet settings", () => {
       "digest.sla_hours": null,
       "linear_sync.notify_customer": false,
       "intake.listed_channels_only": false,
+      "team.members": [],
+      "assign.auto": false,
+      resolve: null,
     });
     expect(body.defaults["nudge.repeat_minutes"]).toEqual([]);
+    expect(body.defaults.resolve).toMatchObject({
+      closeMin: 0.85,
+      suggestMin: 0.6,
+    });
     expect(body.digest).toEqual(digestSchedule());
     expect(digestSchedule()).toEqual({
       cron: "0 9 * * *",
       timezone: "America/Los_Angeles",
     });
+  });
+});
+
+describe("team and resolve settings", () => {
+  it("saves teammates, auto-assign and the resolve thresholds, and refuses a bad threshold", async () => {
+    const saved = await putFleetSettings(db, support, {
+      "team.members": [{ slackId: "U0ILAN", name: "Ilan", desks: ["support"] }],
+      "assign.auto": true,
+      resolve: {
+        enabled: true,
+        closeMin: 0.9,
+        suggestMin: 0.6,
+        idleCloseHours: 72,
+      },
+    });
+    expect(saved.status).toBe(200);
+    expect(await getConfigOr(db, "team.members", null)).toEqual([
+      { slackId: "U0ILAN", name: "Ilan", desks: ["support"] },
+    ]);
+    expect(await getConfigOr(db, "assign.auto", null)).toBe(true);
+    expect(await getConfigOr(db, "resolve", null)).toMatchObject({
+      idleCloseHours: 72,
+    });
+    expect(
+      (
+        await putFleetSettings(db, support, {
+          resolve: { closeMin: 0.5, suggestMin: 0.7 },
+        })
+      ).status,
+    ).toBe(400);
+    await putFleetSettings(db, support, {
+      "team.members": null,
+      resolve: null,
+    });
+    expect(await getConfigOr(db, "team.members", null)).toBeNull();
+    expect(await getConfigOr(db, "resolve", null)).toBeNull();
   });
 });
 

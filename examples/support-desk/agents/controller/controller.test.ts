@@ -1012,3 +1012,158 @@ describe("controller", () => {
     });
   });
 });
+
+describe("controller review and idle close", () => {
+  beforeEach(async () => {
+    db = await localFleetDb();
+    setLocalDb(db);
+  });
+
+  /** Jev answers the resolve check from the last customer line: "thanks" resolves, else not. */
+  function reviewCtx(executionId: string, p = { thanks: 0.92, other: 0.1 }) {
+    const fake = fakeCtx({ isLocalTrace: true, executionId });
+    const ctx = {
+      ...fake.ctx,
+      sapiom: {
+        ...(fake.ctx.sapiom as object),
+        decisions: {
+          async evaluate(spec: {
+            state: { lastMessage: { text: string } | string | null };
+          }) {
+            const last = spec.state.lastMessage;
+            const text = typeof last === "string" ? last : (last?.text ?? "");
+            const noul = /thanks/i.test(text) ? p.thanks : p.other;
+            return {
+              answers: {
+                resolved: { type: "noul", noul },
+                expects_reply: { type: "noul", noul: 1 - noul },
+              },
+            };
+          },
+        },
+      },
+    };
+    return { ...fake, ctx };
+  }
+
+  const posts = (logs: { msg: string; data?: unknown }[]) =>
+    logs
+      .filter((l) => l.msg.startsWith("slack chat.postMessage "))
+      .map((l) => (l.data as { args: { text?: string } }).args.text ?? "");
+
+  it("review closes resolved tickets, suggests middling ones, and reports without acting on a dry run", async () => {
+    const thanked = await seedIssue(db, {
+      title: "thanked",
+      customerText: "thanks, that fixed it!",
+    });
+    const broken = await seedIssue(db, {
+      title: "broken",
+      customerText: "it is still broken",
+    });
+
+    const dry = reviewCtx("exec-review-dry");
+    const dryOut = await step("scan").run(
+      { review: { dryRun: true } },
+      dry.ctx,
+    );
+    const dryReview = dryOut.output!.review as {
+      results: { issueId: string; verdict: string; acted: boolean }[];
+    };
+    expect(
+      dryReview.results.map((r) => [r.issueId, r.verdict, r.acted]),
+    ).toEqual([
+      [thanked.id, "close", false],
+      [broken.id, "open", false],
+    ]);
+    expect((await getIssue(db, thanked.id)).status).toBe("new");
+
+    const c = reviewCtx("exec-review");
+    await step("scan").run({ review: {} }, c.ctx);
+    expect((await getIssue(db, thanked.id)).status).toBe("closed");
+    expect((await getIssue(db, broken.id)).status).toBe("new");
+    expect(posts(c.logs)).toEqual([
+      expect.stringMatching(/^Closed #1: Jev judged it resolved \(92%\)/),
+    ]);
+
+    // Middling confidence: a suggestion, once.
+    const meh = await seedIssue(db, {
+      title: "meh",
+      customerText: "thanks, I think",
+    });
+    const s = reviewCtx("exec-review-2", { thanks: 0.7, other: 0.1 });
+    await step("scan").run({ review: {} }, s.ctx);
+    expect((await getIssue(db, meh.id)).status).toBe("new");
+    expect(posts(s.logs)).toEqual([
+      expect.stringMatching(/^Looks resolved: #3\./),
+    ]);
+    const s2 = reviewCtx("exec-review-3", { thanks: 0.7, other: 0.1 });
+    await step("scan").run({ review: {} }, s2.ctx);
+    expect(posts(s2.logs)).toEqual([]);
+  });
+
+  it("review forgets stored reply verdicts and assigns unowned tickets when assign.auto is on", async () => {
+    const broken = await seedIssue(db, {
+      title: "broken",
+      customerText: "it is still broken",
+    });
+    await db.query(
+      "insert into nudges (issue_id, kind) values ($1, 'reply:customer_waiting:m1'), ($1, 'no_owner:x:1')",
+      [broken.id],
+    );
+    await setConfig(db, "assign.auto", true, "test");
+    await setConfig(
+      db,
+      "team.members",
+      [{ slackId: "U0BUSY" }, { slackId: "U0FREE" }],
+      "test",
+    );
+    const other = await seedIssue(db, { title: "other" });
+    await assign(db, other.id, "U0BUSY");
+
+    const c = reviewCtx("exec-review-assign");
+    const out = await step("scan").run({ review: {} }, c.ctx);
+    const results = (
+      out.output!.review as {
+        results: {
+          issueId: string;
+          cleared: number;
+          assigned: string | null;
+        }[];
+      }
+    ).results;
+    expect(results.find((r) => r.issueId === broken.id)).toMatchObject({
+      cleared: 1,
+      assigned: "U0FREE",
+    });
+    const kinds = await db.query<{ kind: string }>(
+      "select kind from nudges where issue_id = $1",
+      [broken.id],
+    );
+    expect(kinds.map((k) => k.kind)).toEqual(["no_owner:x:1"]);
+  });
+
+  it("closes an On Customer ticket the customer left unanswered past resolve.idleCloseHours", async () => {
+    const issue = await seedIssue(db, {
+      title: "answered",
+      customerText: "how do I export?",
+    });
+    await setStatus(db, issue.id, "on_customer");
+    await setConfig(db, "resolve", { idleCloseHours: 48 }, "test");
+
+    const early = reviewCtx("exec-idle-early");
+    await step("scan").run({ issueId: issue.id }, early.ctx);
+    expect((await getIssue(db, issue.id)).status).toBe("on_customer");
+
+    await db.query(
+      "update messages set created_at = now() - interval '3 days'",
+    );
+    await db.query("update issues set created_at = now() - interval '3 days'");
+    const late = reviewCtx("exec-idle-late");
+    const out = await step("scan").run({ issueId: issue.id }, late.ctx);
+    expect(out.output).toMatchObject({ idleClosed: true });
+    expect((await getIssue(db, issue.id)).status).toBe("closed");
+    expect(posts(late.logs)).toEqual([
+      expect.stringMatching(/no reply from the customer in 2 days/),
+    ]);
+  });
+});

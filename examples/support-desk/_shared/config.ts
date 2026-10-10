@@ -71,6 +71,39 @@ export const SlaSchema = z.object({
   }),
 });
 
+export const TeamMemberSchema = z.object({
+  slackId: z.string().min(1),
+  /** Shown in the Console; Slack's display name is used when unset. */
+  name: z.string().min(1).optional(),
+  /** Desk slugs this person takes issues for. Unset: every desk. */
+  desks: z.array(z.string().min(1)).optional(),
+});
+export type TeamMember = z.infer<typeof TeamMemberSchema>;
+
+const Probability = z.number().min(0).max(1);
+
+export const ResolveSchema = z
+  .object({
+    /** Ask Jev whether an issue is resolved when the customer writes. */
+    enabled: z.boolean(),
+    /** At or above this, the issue closes on its own (with a Reopen button). */
+    closeMin: Probability,
+    /** At or above this (and below `closeMin`), the triage thread gets a "Close?" suggestion. */
+    suggestMin: Probability,
+    /** Close an On Customer issue after this many hours without a customer reply; unset never does. */
+    idleCloseHours: z.number().positive(),
+  })
+  .partial()
+  .strict()
+  .refine(
+    (r) =>
+      r.closeMin === undefined ||
+      r.suggestMin === undefined ||
+      r.suggestMin <= r.closeMin,
+    { message: "suggestMin must not exceed closeMin", path: ["suggestMin"] },
+  );
+export type ResolveConfig = z.infer<typeof ResolveSchema>;
+
 /** A docs site's origin or its `llms.txt`, as {@link parseDocsSource} accepts it. */
 export const DocsUrlSchema = z
   .string()
@@ -101,6 +134,8 @@ export const ConfigSchemas = {
       channelId: z.string().min(1),
       accountName: z.string().min(1),
       desk: z.string().min(1).optional(),
+      /** The teammate who owns this account: a new issue from the channel is assigned to them. */
+      ownerSlackId: z.string().min(1).optional(),
     }),
   ),
   /** Superseded by `desks.oncall_slack_id`. */
@@ -111,6 +146,15 @@ export const ConfigSchemas = {
   "nudge.repeat_minutes": z.array(z.number().int().positive()),
   /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
   "team.slack_team_ids": z.array(z.string().min(1)),
+  /**
+   * The people who work the desks. With `assign.auto` on, a new issue nobody owns goes to the member
+   * (of its desk, when `desks` is set) with the fewest open issues, so nudges and cards mention them.
+   */
+  "team.members": z.array(TeamMemberSchema),
+  /** Assign each new issue to a teammate: the channel's `ownerSlackId`, else the least-loaded member. */
+  "assign.auto": z.boolean(),
+  /** How Jev judges whether an issue is resolved; see `_shared/resolve.ts` for the defaults. */
+  resolve: ResolveSchema,
   /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
   "customers.test_user_ids": z.array(z.string().min(1)),
   /** Whether intake adds 👀 / 🎫 to customer messages. Off for a shadow pilot that must leave no footprint. */
@@ -167,6 +211,9 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "knowledge.docs_url",
   "controller.paused",
   "intake.listed_channels_only",
+  "team.members",
+  "assign.auto",
+  "resolve",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
@@ -305,7 +352,7 @@ export async function setDeskEscalation(
 export async function customerChannel(
   db: Db,
   channelId: string,
-): Promise<{ channelId: string; accountName: string; desk?: string } | null> {
+): Promise<ConfigValue<"channels.customer">[number] | null> {
   const channels = await getConfigOr(db, "channels.customer", []);
   return channels.find((c) => c.channelId === channelId) ?? null;
 }
