@@ -87,6 +87,20 @@ export function mrkdwnLink(url: string, text: string): string {
   return `<${url}|${text}>`;
 }
 
+/**
+ * An account's name as mrkdwn. An account named after its channel id (one created from a channel
+ * not listed in `channels.customer`) shows as Slack's channel link, which renders the channel's
+ * name and notifies nobody.
+ */
+export function accountLabel(account: {
+  name: string;
+  slackChannelId?: string | null;
+}): string {
+  return account.slackChannelId && account.name === account.slackChannelId
+    ? `<#${account.slackChannelId}>`
+    : escapeMrkdwn(account.name);
+}
+
 /** The customer message that opened the issue, when the row knows it. */
 export function customerLink(issue: Issue): string | null {
   return issue.customerChannel && issue.customerRootTs
@@ -157,7 +171,7 @@ export function issueCard(
       block_id: "issue.header",
       text: {
         type: "mrkdwn",
-        text: `*#${issue.number} · ${escapeMrkdwn(account.name)}*\n${customer ? mrkdwnLink(customer, title) : title}`,
+        text: `*#${issue.number} · ${accountLabel(account)}*\n${customer ? mrkdwnLink(customer, title) : title}`,
       },
     },
     {

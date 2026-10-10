@@ -2,7 +2,7 @@
  * The pure half of the digest: SLA per priority, issue age, and the Slack message for one desk.
  * No I/O, so the grouping, ordering and size limits are unit-tested (`digest.test.ts`).
  */
-import { escapeMrkdwn, statusLabel } from "../../_shared/blocks";
+import { accountLabel, escapeMrkdwn, statusLabel } from "../../_shared/blocks";
 import { OPEN_STATUSES, type IssueStatus } from "../../_shared/issues";
 import type { Block } from "../../_shared/slack";
 
@@ -54,9 +54,9 @@ export function idsIn(text: string | null): string[] {
  * An account named after its channel id (an unlisted channel's account) shows as Slack's channel
  * link, which renders the channel's name and notifies nobody.
  */
-function accountLabel(i: DigestIssue): string {
+function accountOf(i: DigestIssue): string {
   return i.accountChannel && i.accountName === i.accountChannel
-    ? `<#${i.accountChannel}>`
+    ? accountLabel({ name: i.accountName, slackChannelId: i.accountChannel })
     : field(i.accountName);
 }
 
@@ -143,7 +143,7 @@ export function digestMessage(input: {
       ? field(owners.get(i.ownerSlackId) ?? i.ownerSlackId)
       : "unassigned";
     const parts = [
-      `${ref} ${accountLabel(i)}: ${title}`,
+      `${ref} ${accountOf(i)}: ${title}`,
       formatAge(now.getTime() - i.createdAt.getTime()),
       owner,
     ];

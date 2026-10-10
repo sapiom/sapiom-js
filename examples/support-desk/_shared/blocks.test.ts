@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACTIONS,
+  accountLabel,
   decodeAction,
   draftCard,
   encodeAction,
@@ -317,5 +318,16 @@ describe("workingCard", () => {
     expect(workingCard(undefined, "draft.actions", "approve", "U1")).toBeNull();
     expect(workingCard([card[0]], "draft.actions", "approve", "U1")).toBeNull();
     expect(workingCard(card, "issue.actions", "close", "U1")).toBeNull();
+  });
+});
+
+describe("accountLabel", () => {
+  it("shows an account named after its channel as the channel, others escaped", () => {
+    expect(accountLabel({ name: "C0ABC123", slackChannelId: "C0ABC123" })).toBe(
+      "<#C0ABC123>",
+    );
+    expect(accountLabel({ name: "A & B", slackChannelId: "C0ABC123" })).toBe(
+      "A &amp; B",
+    );
   });
 });
