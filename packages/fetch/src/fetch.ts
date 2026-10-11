@@ -122,6 +122,18 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
   ): Promise<Response> => {
     let request = new Request(input, init);
 
+    // The Request constructor does not copy custom own properties from an
+    // input Request, so a user-set `__sapiom` (e.g. { enabled: false }) would
+    // be silently dropped. Re-attach it to the constructed request.
+    if (
+      (request as any).__sapiom === undefined &&
+      typeof input === "object" &&
+      input !== null &&
+      (input as any).__sapiom !== undefined
+    ) {
+      (request as any).__sapiom = (input as any).__sapiom;
+    }
+
     const requestMetadata = (request as any).__sapiom || {};
     const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
@@ -137,7 +149,12 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       if (identityHeaders["Sapiom-Identity"]) {
         const headers = new Headers(request.headers);
         headers.set("Sapiom-Identity", identityHeaders["Sapiom-Identity"]);
-        request = new Request(request, { headers });
+        const identifiedRequest = new Request(request, { headers });
+        // Preserve per-request __sapiom metadata across the Request copy.
+        if ((request as any).__sapiom !== undefined) {
+          (identifiedRequest as any).__sapiom = (request as any).__sapiom;
+        }
+        request = identifiedRequest;
       }
     }
 
