@@ -5,8 +5,10 @@
  * thread moved the issue back to On You, and the controller's "expects a reply" check only kept it
  * from nudging. The issue then sat open in the digest for days.
  *
- * Now Jev judges the conversation whenever the customer writes on an issue (intake), and on demand
- * for every open issue (the controller's `review` run). Its probability that nothing is left for the
+ * Now Jev judges the conversation after every move on an issue: a customer message, and a team
+ * answer (a reply in the thread, a reaction on the customer's latest message, Handled), since
+ * support usually has the last word (intake); and on demand for every open issue (the controller's
+ * `review` run). Its probability that nothing is left for the
  * team to do picks one of three outcomes ({@link verdictFor}):
  * - `close`: the desk closes the issue and says so in the triage thread, with a Reopen button;
  * - `suggest`: the issue keeps its status (a thank-you does not hand the ball back to the team) and
@@ -91,11 +93,34 @@ export async function issueThread(
 
 type JevCtx = Pick<AgentExecutionContext<Record<string, unknown>>, "sapiom">;
 
-/** Jev's probability that the issue needs nothing more from the support team. */
-export async function judgeResolved(
+/**
+ * Who has the next move on an issue, as Jev's options. Support usually has the last word, so a
+ * complete team answer is `done` without the customer replying.
+ */
+export const NEXT_MOVES = {
+  done: "Nothing is left: the team's latest message delivered what was asked (a fix, an answer, a link, the data, a scheduled time), or the customer's latest message only thanks, acknowledges, confirms, or settles a plan or a meeting, or says they will take it from here.",
+  team_answer:
+    "The customer asked a question, reported a problem, or reported that a fix does not work, and the team has not answered it yet.",
+  team_work:
+    "The team said it will do or check something ('will follow up', 'working on it', 'will fix') or is waiting on an outside party, and has not reported it done.",
+  customer:
+    "The team asked the customer something or needs something from them (an answer, a test, a file, a confirmation) and the customer has not replied yet.",
+} as const;
+export type NextMove = keyof typeof NEXT_MOVES;
+
+export interface Judgement {
+  /** Jev's probability of `done`: what the close and suggest thresholds read. */
+  done: number;
+  /** Jev's single pick. */
+  next: NextMove;
+  probabilities: Partial<Record<NextMove, number>>;
+}
+
+/** Who has the next move on the issue, read from its whole conversation. */
+export async function judgeNextMove(
   ctx: JevCtx,
   input: { title: string | null; status: string; thread: ThreadLine[] },
-): Promise<number> {
+): Promise<Judgement> {
   const recent = input.thread.slice(-RESOLVE_CONTEXT_MESSAGES);
   const res = await ctx.sapiom.decisions.evaluate({
     state: {
@@ -105,20 +130,39 @@ export async function judgeResolved(
       thread: recent,
     },
     questions: {
-      resolved: {
-        type: "noul",
+      next_move: {
+        type: "choice",
         instructions:
-          "Is this support request resolved, so the support team has nothing left to do unless the customer writes again? `thread` is the conversation, oldest first; `lastMessage` is its latest line. A support-team line `(reacted :emoji:)` is a teammate's reaction and `(marked handled)` means a teammate answered elsewhere.",
-        criteria: {
-          true: "The customer confirms it works or that their question is answered, thanks the team without asking anything new, says they no longer need help or will take it from here, or agreed to a plan whose remaining steps are the customer's own. A team answer the customer acknowledged counts.",
-          false:
-            "The latest customer message asks something, says the problem still happens, raises a new problem, or waits on something the team said it would do; or the request itself is not done yet, whoever spoke last.",
-        },
+          "Who has the next move in this support conversation? `thread` is the whole conversation, oldest first; `lastMessage` is its latest line, from either side. Support usually has the last word: a team answer that delivers what was asked finishes the request without the customer replying. A support-team line `(reacted :emoji:)` is a teammate's reaction and `(marked handled)` means a teammate answered elsewhere.",
+        criteria: { ...NEXT_MOVES },
       },
     },
   });
-  return res.answers.resolved.noul;
+  const a = res.answers.next_move as {
+    choice: string;
+    probabilities?: Record<string, number>;
+  };
+  const probabilities = (a.probabilities ?? {}) as Partial<
+    Record<NextMove, number>
+  >;
+  const next = (a.choice in NEXT_MOVES ? a.choice : "team_answer") as NextMove;
+  return {
+    done: probabilities.done ?? (next === "done" ? 1 : 0),
+    next,
+    probabilities,
+  };
 }
+
+/** Jev's probability that nothing is left for the team to do, whoever spoke last. */
+export async function judgeResolved(
+  ctx: JevCtx,
+  input: { title: string | null; status: string; thread: ThreadLine[] },
+): Promise<number> {
+  return (await judgeNextMove(ctx, input)).done;
+}
+
+/** At or above this, a `customer` pick moves a New or On You issue to On Customer. */
+export const CUSTOMER_MOVE_MIN = 0.6;
 
 type Ctx = DbCtx & EmitCtx;
 
@@ -211,11 +255,47 @@ export function idleReason(hours: number): string {
 const pct = (p: number) => `${Math.round(p * 100)}%`;
 
 /** The reason line posted with an automatic close or a suggestion. */
-export function verdictReason(p: number, lastCustomer: string | null): string {
-  const quote = lastCustomer
-    ? ` The customer said: “${slackToPlain(lastCustomer).replace(/\s+/g, " ").slice(0, 140)}”`
+export function verdictReason(
+  p: number,
+  last: { from: "customer" | "support team"; text: string } | string | null,
+): string {
+  const line =
+    typeof last === "string" ? { from: "customer" as const, text: last } : last;
+  const who =
+    line?.from === "support team" ? "The team said" : "The customer said";
+  const quote = line
+    ? ` ${who}: “${slackToPlain(line.text).replace(/\s+/g, " ").slice(0, 140)}”`
     : "";
-  return `Jev judged it resolved (${pct(p)}).${quote}`;
+  return `Jev judged nothing is left to do (${pct(p)}).${quote}`;
+}
+
+/**
+ * Jev says the customer owes the next move on an issue still waiting on the team (New or On You):
+ * move it On Customer, so it leaves the team's queue and the idle close can apply. True when moved.
+ */
+async function ballToCustomer(
+  ctx: Ctx,
+  db: Db,
+  issueId: string,
+  judged: Judgement,
+): Promise<boolean> {
+  if (
+    judged.next !== "customer" ||
+    (judged.probabilities.customer ?? 0) < CUSTOMER_MOVE_MIN
+  )
+    return false;
+  const moved = await db.transaction(async (tx) => {
+    const locked = await lockIssue(tx, issueId);
+    if (locked.status !== "new" && locked.status !== "on_you") return null;
+    return setStatus(tx, locked.id, "on_customer");
+  });
+  if (!moved) return false;
+  if (moved.triageRootTs)
+    await redrawCard(ctx, db, await cardChannel(db, moved), moved).catch(
+      (err: unknown) =>
+        ctx.logger.warn("card redraw failed", { issueId, err: String(err) }),
+    );
+  return true;
 }
 
 /**
@@ -234,6 +314,10 @@ export async function reviewIssue(
   verdict: Verdict;
   acted: boolean;
   error?: string;
+  /** Who Jev said has the next move. */
+  next?: NextMove;
+  /** On a dry run: the conversation Jev read, so a verdict can be checked against it. */
+  thread?: ThreadLine[];
 }> {
   const settings = opts.settings ?? (await resolveSettings(db));
   const issue = await getIssue(db, issueId);
@@ -243,12 +327,14 @@ export async function reviewIssue(
   if (issue.status === "closed" || thread.length === 0)
     return { ...base, resolved: null, verdict: "open", acted: false };
   let p: number;
+  let judged: Judgement;
   try {
-    p = await judgeResolved(ctx, {
+    judged = await judgeNextMove(ctx, {
       title: issue.title,
       status: issue.status,
       thread,
     });
+    p = judged.done;
   } catch (err) {
     return {
       ...base,
@@ -259,14 +345,75 @@ export async function reviewIssue(
     };
   }
   const verdict = verdictFor(p, settings);
-  if (opts.dryRun || verdict === "open")
-    return { ...base, resolved: p, verdict, acted: false };
-  const lastCustomer =
-    messages.filter((m) => m.direction === "customer").at(-1) ?? null;
-  const why = verdictReason(p, lastCustomer?.text ?? null);
+  if (opts.dryRun)
+    return {
+      ...base,
+      resolved: p,
+      verdict,
+      next: judged.next,
+      acted: false,
+      thread: thread.slice(-RESOLVE_CONTEXT_MESSAGES),
+    };
+  if (verdict === "open")
+    return {
+      ...base,
+      resolved: p,
+      verdict,
+      next: judged.next,
+      acted: await ballToCustomer(ctx, db, issueId, judged),
+    };
+  const lastMessage =
+    messages.filter((m) => m.direction !== "internal").at(-1) ?? null;
+  const why = verdictReason(p, thread.at(-1) ?? null);
   const acted =
     verdict === "close"
       ? (await closeOnOwn(ctx, db, issueId, why)).changed
-      : await suggestClose(ctx, db, issue, lastCustomer?.id ?? issueId, why);
+      : await suggestClose(ctx, db, issue, lastMessage?.id ?? issueId, why);
   return { ...base, resolved: p, verdict, acted };
+}
+
+/**
+ * After a team answer (intake): judge issue `issueId` with its stored conversation and close it or
+ * suggest closing it. `refId` (the answering message or event) keys the suggestion, so a redelivered
+ * answer suggests once. Never throws: the answer is already recorded, and a failed check only
+ * leaves the issue as the answer put it.
+ */
+export async function judgeAfterAnswer(
+  ctx: Ctx & JevCtx,
+  db: Db,
+  issueId: string,
+  refId: string,
+): Promise<{ resolved: number | null; verdict: Verdict; acted: boolean }> {
+  const none = { resolved: null, verdict: "open" as Verdict, acted: false };
+  try {
+    const settings = await resolveSettings(db);
+    if (!settings.enabled) return none;
+    const issue = await getIssue(db, issueId);
+    if (issue.status === "closed") return none;
+    const thread = threadOf(await messagesForIssue(db, issueId));
+    if (thread.length === 0) return none;
+    const judged = await judgeNextMove(ctx, {
+      title: issue.title,
+      status: issue.status,
+      thread,
+    });
+    const p = judged.done;
+    const verdict = verdictFor(p, settings);
+    if (verdict === "open") {
+      await ballToCustomer(ctx, db, issueId, judged);
+      return { resolved: p, verdict, acted: false };
+    }
+    const why = verdictReason(p, thread.at(-1) ?? null);
+    const acted =
+      verdict === "close"
+        ? (await closeOnOwn(ctx, db, issueId, why)).changed
+        : await suggestClose(ctx, db, issue, refId, why);
+    return { resolved: p, verdict, acted };
+  } catch (err) {
+    ctx.logger.warn("resolve check after a team answer failed", {
+      issueId,
+      err: String(err),
+    });
+    return none;
+  }
 }

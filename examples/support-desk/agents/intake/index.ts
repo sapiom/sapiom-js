@@ -82,6 +82,7 @@ import { autoAssign } from "../../_shared/assign";
 import {
   closeOnOwn,
   issueThread,
+  judgeAfterAnswer,
   judgeResolved,
   resolveSettings,
   suggestClose,
@@ -538,14 +539,19 @@ const team = defineStep({
         slack,
         text: messageText(e),
       });
+      // Support usually has the last word: an answer that finishes the request closes it.
+      const judged = duplicate
+        ? null
+        : await judgeAfterAnswer(ctx, db, issue.id, message.id);
       // The team answered: the customer_waiting and draft_pending clocks stop.
       await rescheduleIssue(db, ctx, issue.id);
       return terminate({
         outcome: "team_reply",
         messageId: message.id,
         issueId: issue.id,
-        status: issue.status,
+        status: (await getIssue(db, issue.id)).status,
         duplicate,
+        ...(judged ? { resolve: judged } : {}),
       });
     });
   },
@@ -641,7 +647,7 @@ const reaction = defineStep({
       const eventTs =
         e.event_ts ??
         `${input.eventTime ?? Math.floor(Date.now() / 1000)}.000000`;
-      const { duplicate } = await recordTeamAnswer(ctx, db, {
+      const { duplicate, message } = await recordTeamAnswer(ctx, db, {
         issueId,
         eventId: input.eventId,
         user: e.user,
@@ -653,8 +659,17 @@ const reaction = defineStep({
         },
         text: `(reacted :${e.reaction}:)`,
       });
+      // A 👍 on "invite sent, see you Tuesday" ends the request as surely as a reply would.
+      const judged = duplicate
+        ? null
+        : await judgeAfterAnswer(ctx, db, issueId, message.id);
       await rescheduleIssue(db, ctx, issueId);
-      return terminate({ outcome: "acknowledged", issueId, duplicate });
+      return terminate({
+        outcome: "acknowledged",
+        issueId,
+        duplicate,
+        ...(judged ? { resolve: judged } : {}),
+      });
     });
   },
 });
@@ -1465,6 +1480,13 @@ const button = defineStep({
             ctx,
             input,
             applied ? `Handled by <@${clicker}>` : "Already handled",
+          );
+        if (applied)
+          await judgeAfterAnswer(
+            ctx,
+            db,
+            issue.id,
+            `handled:${input.trigger_id}`,
           );
         await rescheduleIssue(db, ctx, issue.id);
         return terminate({

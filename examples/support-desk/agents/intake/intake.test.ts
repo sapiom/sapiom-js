@@ -98,6 +98,14 @@ function makeCtx(executionId: string, jev?: IntakeJev | Error) {
   return { ...made, calls, slack };
 }
 
+const nextMoveAt = (p: number, next = p >= 0.5 ? "done" : "team_work") =>
+  ({
+    next_move: {
+      choice: next,
+      probabilities: { done: p, [next]: next === "done" ? p : 1 - p },
+    },
+  }) as unknown as IntakeJev;
+
 const questionsOf = (spec: unknown) =>
   Object.keys((spec as { questions: Record<string, unknown> }).questions);
 
@@ -283,7 +291,7 @@ describe("intake agent", () => {
     );
     expect(linked.output).toMatchObject({ outcome: "linked", issueId });
     // No link call; one resolve check, which fails here, so the follow-up hands the ball back.
-    expect(fup.calls.map(questionsOf)).toEqual([["resolved"]]);
+    expect(fup.calls.map(questionsOf)).toEqual([["next_move"]]);
     expect((await getIssue(db, issueId)).status).toBe("on_you");
     // A follow-up redraws the card and posts nothing: no copy of the message in the triage thread.
     expect(fup.slack("chat.postMessage")).toEqual([]);
@@ -486,6 +494,28 @@ describe("intake agent", () => {
       return output.issueId as string;
     }
 
+    it("a team reply that finishes the request closes the issue; one that promises more leaves it On Customer", async () => {
+      const issueId = await openBug();
+      const done = makeCtx("exec-team-done", nextMoveAt(0.94));
+      expect((await run(teamReply(), done.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        status: "closed",
+        resolve: { verdict: "close", acted: true },
+      });
+      const note = done.slack("chat.postMessage");
+      expect(String(note[0].text)).toMatch(
+        /^Closed #1: Jev judged nothing is left to do \(94%\)\. The team said:/,
+      );
+
+      const other = await openBug();
+      await db.query("update issues set status = 'new' where id = $1", [other]);
+      const later = structuredClone(teamReply()) as { eventId: string };
+      later.eventId = "Ev0TEAMLATER";
+      const promised = makeCtx("exec-team-promised", nextMoveAt(0.05));
+      await run(later, promised.ctx);
+      expect(promised.slack("chat.postMessage")).toEqual([]);
+    });
+
     it("a team reply in an issue thread is stored as agent, hands the ball to the customer, posts nothing", async () => {
       const issueId = await openBug();
       const issue = await getIssue(db, issueId);
@@ -499,7 +529,8 @@ describe("intake agent", () => {
         issueId,
         status: "on_customer",
       });
-      expect(t.calls).toHaveLength(0);
+      // One resolve check after the answer; it fails here, so the answer's move stands.
+      expect(t.calls.map(questionsOf)).toEqual([["next_move"]]);
       expect(t.emitted).toHaveLength(0);
       expect(t.slack("reactions.add")).toHaveLength(0);
       expect(t.slack("reactions.remove")).toHaveLength(0);
@@ -932,6 +963,17 @@ describe("intake agent", () => {
       expect(t.slack("chat.update")).toHaveLength(1);
     });
 
+    it("a teammate's 👍 on a message that settles the request closes the issue", async () => {
+      const issueId = await openBug();
+      const t = makeCtx("exec-react-done", nextMoveAt(0.9));
+      expect((await run(reactTo(BUG_TS, "+1"), t.ctx)).output).toMatchObject({
+        outcome: "acknowledged",
+        issueId,
+        resolve: { verdict: "close" },
+      });
+      expect((await getIssue(db, issueId)).status).toBe("closed");
+    });
+
     it("by the customer, or on an older message, changes nothing", async () => {
       const issueId = await openBug();
       await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER1"], "test");
@@ -1121,7 +1163,7 @@ describe("intake agent", () => {
       outcome: "linked",
       issueId,
     });
-    expect(r.calls.map(questionsOf)).toEqual([["resolved"]]);
+    expect(r.calls.map(questionsOf)).toEqual([["next_move"]]);
     expect(await messagesForIssue(db, issueId)).toHaveLength(3);
   });
 
@@ -1910,7 +1952,12 @@ describe("intake resolve check", () => {
 
   /** A fake Jev whose only answer is the resolve check's. */
   const resolvedAt = (p: number) =>
-    ({ resolved: { noul: p } }) as unknown as IntakeJev;
+    ({
+      next_move: {
+        choice: p >= 0.5 ? "done" : "team_answer",
+        probabilities: { done: p, team_answer: 1 - p },
+      },
+    }) as unknown as IntakeJev;
 
   async function openBug() {
     const bug = makeCtx("exec-bug", JEV.bug);
@@ -1951,7 +1998,7 @@ describe("intake resolve check", () => {
     const note = fup.slack("chat.postMessage");
     expect(note).toHaveLength(1);
     expect(String(note[0].text)).toMatch(
-      /^Closed #1: Jev judged it resolved \(95%\)/,
+      /^Closed #1: Jev judged nothing is left to do \(95%\)/,
     );
     expect(actionIds(note[0])).toEqual(["issue.reopen"]);
     // No issue.message_added: copilot would only draft a reply to a thank-you.

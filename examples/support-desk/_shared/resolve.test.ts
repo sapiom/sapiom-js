@@ -71,9 +71,14 @@ describe("threadOf", () => {
 });
 
 describe("verdictReason", () => {
-  it("quotes the customer's words, cut short, as plain text", () => {
+  it("quotes the last line and who said it, as plain text", () => {
     expect(verdictReason(0.913, "<@U1|Ilan> thanks!\n works now")).toBe(
-      "Jev judged it resolved (91%). The customer said: “@Ilan thanks! works now”",
+      "Jev judged nothing is left to do (91%). The customer said: “@Ilan thanks! works now”",
+    );
+    expect(
+      verdictReason(0.94, { from: "support team", text: "Fixed in hex" }),
+    ).toBe(
+      "Jev judged nothing is left to do (94%). The team said: “Fixed in hex”",
     );
   });
 });

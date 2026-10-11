@@ -1035,7 +1035,10 @@ describe("controller review and idle close", () => {
             const noul = /thanks/i.test(text) ? p.thanks : p.other;
             return {
               answers: {
-                resolved: { type: "noul", noul },
+                next_move: {
+                  choice: noul >= 0.5 ? "done" : "team_answer",
+                  probabilities: { done: noul, team_answer: 1 - noul },
+                },
                 expects_reply: { type: "noul", noul: 1 - noul },
               },
             };
@@ -1082,7 +1085,9 @@ describe("controller review and idle close", () => {
     expect((await getIssue(db, thanked.id)).status).toBe("closed");
     expect((await getIssue(db, broken.id)).status).toBe("new");
     expect(posts(c.logs)).toEqual([
-      expect.stringMatching(/^Closed #1: Jev judged it resolved \(92%\)/),
+      expect.stringMatching(
+        /^Closed #1: Jev judged nothing is left to do \(92%\)/,
+      ),
     ]);
 
     // Middling confidence: a suggestion, once.
