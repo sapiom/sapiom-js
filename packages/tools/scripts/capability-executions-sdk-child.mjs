@@ -27,7 +27,9 @@ process.once("message", async (message) => {
     client = createClient({
       apiKey: message.apiKey,
       coreBaseUrl: message.baseUrl,
+      capabilityDelivery: message.capabilityDelivery ?? "legacy",
       fetch: async (url, init) => {
+        loopback(new URL(String(url)).origin);
         const entry = {
           method: init?.method ?? "GET",
           path: new URL(String(url)).pathname,
@@ -68,6 +70,37 @@ process.once("message", async (message) => {
               handle,
               result: await client.executions.wait(handle, message.waitOptions),
             };
+    } else if (message.operation === "capability") {
+      const methods = {
+        "web.search": client.search.webSearch,
+        "web.scrape": client.search.scrape,
+        "email.find": client.search.emailSearch.findEmail,
+        "email.verify": client.search.emailSearch.verifyEmail,
+        "email.domain.search": client.search.emailSearch.domainSearch,
+        "content.generation.images":
+          message.verb === "launch"
+            ? client.contentGeneration.images.launch
+            : client.contentGeneration.images.create,
+        "content.generation.video":
+          message.verb === "launch"
+            ? client.contentGeneration.video.launch
+            : client.contentGeneration.video.create,
+        "memory.append": client.memory.append,
+        "memory.recall": client.memory.recall,
+        "memory.forget": client.memory.forget,
+        "memory.drop": (input) => client.memory.drop(input.namespace),
+        "database.create": client.database.create,
+        "domains.purchase": client.domains.register,
+        "storage.put": client.fileStorage.upload,
+      };
+      if (!Object.hasOwn(methods, message.capabilityKey))
+        throw new Error("Unsupported adoption fixture capability");
+      result = await methods[message.capabilityKey](message.request ?? {});
+      if (message.waitForNative) {
+        if (typeof result?.wait !== "function")
+          throw new Error("Native handle lost its wait method");
+        result = await result.wait();
+      }
     } else if (message.operation === "wait") {
       result = await client.executions.wait(
         message.handle ?? message.executionId,
