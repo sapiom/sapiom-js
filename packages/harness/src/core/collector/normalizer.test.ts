@@ -150,10 +150,22 @@ describe("truncateForPayload", () => {
     expect(truncateForPayload({ a: 1 })).toBe(JSON.stringify({ a: 1 }));
   });
 
-  it("truncates long strings with a marker", () => {
-    const long = "y".repeat(20);
-    const result = truncateForPayload(long, 10);
-    expect(result.startsWith("y".repeat(10))).toBe(true);
-    expect(result).toContain("[truncated 10 chars]");
+  it("truncates long strings with a marker, bounding the total length", () => {
+    const long = "y".repeat(200);
+    const result = truncateForPayload(long, 50);
+    // The marker's own length has to come out of the 50-char budget too, so
+    // less than 50 chars of content survive -- the total (content + marker)
+    // is what's bounded, not the content alone.
+    expect(result).toBe(`${"y".repeat(28)}…[truncated 172 chars]`);
+    expect(result.length).toBe(50);
+  });
+
+  it("still respects the bound when maxLength is smaller than the marker itself", () => {
+    // Degenerate case: production budgets (MAX_FIELD_LENGTH, MAX_TOOL_RESPONSE_LENGTH)
+    // are always far larger than a marker, but the bound has to hold even
+    // here -- there's no content left to keep, so the marker itself gets
+    // clipped too, rather than the output exceeding maxLength.
+    const result = truncateForPayload("y".repeat(20), 10);
+    expect(result.length).toBe(10);
   });
 });

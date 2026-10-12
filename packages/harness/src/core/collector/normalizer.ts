@@ -50,11 +50,31 @@ const MAX_FIELD_LENGTH = 4000;
 /** Tool output can be much larger than other fields; cap it separately. */
 const MAX_TOOL_RESPONSE_LENGTH = 16 * 1024;
 
-/** Stringify + truncate a value so a giant tool payload can't blow up storage. */
+/**
+ * Stringify + truncate a value so a giant tool payload can't blow up storage.
+ * Bounds the TOTAL output (content + marker) to `maxLength`: the marker's own
+ * length depends on the dropped-char count, which depends on where we slice,
+ * which depends on the marker's length, so this converges over a few passes
+ * the same way {@link clip} in record-archive.ts does (kept in sync with it
+ * intentionally — both write the same {@link PAYLOAD_TRUNCATION_MARKER}
+ * format and both need the same fix for the same reason).
+ */
 export function truncateForPayload(value: unknown, maxLength = MAX_FIELD_LENGTH): string {
   const str = typeof value === "string" ? value : JSON.stringify(value ?? null);
   if (str.length <= maxLength) return str;
-  return `${str.slice(0, maxLength)}…[truncated ${str.length - maxLength} chars]`;
+  let sliceLen = maxLength;
+  for (let i = 0; i < 5; i++) {
+    const dropped = str.length - sliceLen;
+    const marker = `…[truncated ${dropped} chars]`;
+    const nextSliceLen = Math.max(0, maxLength - marker.length);
+    if (nextSliceLen === sliceLen) {
+      return `${str.slice(0, sliceLen)}${marker}`.slice(0, maxLength);
+    }
+    sliceLen = nextSliceLen;
+  }
+  const dropped = str.length - sliceLen;
+  const marker = `…[truncated ${dropped} chars]`;
+  return `${str.slice(0, sliceLen)}${marker}`.slice(0, maxLength);
 }
 
 /**
