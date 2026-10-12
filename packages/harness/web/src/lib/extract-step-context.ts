@@ -103,7 +103,9 @@ export function formatLatency(ms: number): string {
  * strings pass through verbatim; anything JSON can't represent (a cycle, a
  * bigint) falls back to `String(value)` so the builder never throws. When the
  * result exceeds the cap it is head-kept (the shape and leading content matter
- * most for a value) with an explicit truncation marker.
+ * most for a value) with an explicit truncation marker, and the TOTAL output
+ * (content + marker) is what respects the cap — not the content alone, or the
+ * marker itself would push the result past VALUE_CAP.
  */
 function formatValue(value: unknown): string {
   let text: string;
@@ -117,10 +119,14 @@ function formatValue(value: unknown): string {
       text = String(value);
     }
   }
-  if (text.length > VALUE_CAP) {
-    return `${text.slice(0, VALUE_CAP)}\n… (truncated, ${text.length} chars total)`;
-  }
-  return text;
+  if (text.length <= VALUE_CAP) return text;
+  // Unlike a "chars dropped" marker, this one reports the original total
+  // length, which doesn't change with where we slice -- so the marker's
+  // length is fixed and a single subtraction (no converging loop needed)
+  // correctly reserves room for it within VALUE_CAP.
+  const marker = `\n… (truncated, ${text.length} chars total)`;
+  const sliceLen = Math.max(0, VALUE_CAP - marker.length);
+  return `${text.slice(0, sliceLen)}${marker}`.slice(0, VALUE_CAP);
 }
 
 /**
