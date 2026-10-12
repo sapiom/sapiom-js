@@ -32,9 +32,7 @@ import {
 import type { SapiomModelConfig } from "../internal/types.js";
 import { generateSDKTraceId } from "../internal/utils.js";
 import type { LangChainLLMRequestFacts } from "../schemas/langchain-llm-v1.js";
-
-// SDK version for facts
-const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
+import { VERSION as SDK_VERSION } from "../_generated/version.js";
 
 /**
  * Extended ChatAnthropic with built-in Sapiom transaction tracking and authorization

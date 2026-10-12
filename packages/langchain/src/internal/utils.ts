@@ -3,6 +3,8 @@
  */
 import { randomUUID } from "crypto";
 
+import { VERSION } from "../_generated/version.js";
+
 /**
  * Generate SDK-prefixed trace ID
  *
@@ -69,12 +71,11 @@ export function isAuthorizationDenied(
 }
 
 /**
- * SDK version constant. Keep in sync with package.json on release.
- * TODO: Read from package.json at build time (a plain resolveJsonModule
- * import is not viable here: package.json sits outside rootDir and would
- * reshape the dist/ layout).
+ * SDK version constant, generated from package.json at build/test time by
+ * `scripts/generate-version.mjs` (wired in as the `gen:version` script) so
+ * it can never drift from the published version.
  */
-export const SDK_VERSION = "0.4.1";
+export const SDK_VERSION = VERSION;
 
 /**
  * SDK package name

@@ -28,9 +28,7 @@ import {
 import type { SapiomToolConfig } from "./internal/types.js";
 import { isAuthorizationDenied } from "./internal/utils.js";
 import type { LangChainToolRequestFacts } from "./schemas/langchain-tool-v1.js";
-
-// SDK version for facts
-const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
+import { VERSION as SDK_VERSION } from "./_generated/version.js";
 
 /**
  * Wraps an existing tool by mutating its func property.
