@@ -620,9 +620,19 @@ export class SapiomSandbox {
         (await statusResponse.json()) as ProcessStatusResponse;
 
       // If the process hasn't finished yet (e.g. stream disconnected
-      // before the process finished), poll until it does.
+      // before the process finished), poll until it does — bounded by the same
+      // exec timeout `_pollProcess` applies, so a process that never reports a
+      // terminal status fails loudly instead of polling forever.
+      const deadline = Date.now() + DEFAULT_EXEC_TIMEOUT;
       while (!isProcessTerminal(status.status)) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Process ${proc.pid} timed out after ${DEFAULT_EXEC_TIMEOUT}ms`,
+          );
+        }
+        await new Promise((resolve) =>
+          setTimeout(resolve, DEFAULT_POLL_INTERVAL),
+        );
         const retry = await fetchFn(
           `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/process/${proc.pid}`,
           { signal },
