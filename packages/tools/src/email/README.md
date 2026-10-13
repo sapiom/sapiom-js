@@ -102,12 +102,13 @@ function verified(
   signature: string | undefined,
   secret: string,
 ): boolean {
-  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
-  return (
-    signature !== undefined &&
-    signature.length === expected.length &&
-    timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  if (signature === undefined) return false;
+  const expected = Buffer.from(
+    createHmac("sha256", secret).update(rawBody).digest("hex"),
   );
+  const given = Buffer.from(signature);
+  // Compare byte lengths: timingSafeEqual throws when they differ.
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
 // rawBody: the request body exactly as received (not re-serialized JSON).
