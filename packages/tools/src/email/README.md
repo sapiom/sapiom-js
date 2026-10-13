@@ -88,13 +88,33 @@ returns one. Neither includes the `secret`.
 
 ### Event payloads
 
-Each delivery is a JSON body signed with the webhook's secret (HMAC-SHA256 of the
-raw body, lowercase hex, in `X-Sapiom-Signature`). Type it as `EmailEvent` and
+Each delivery is a JSON body signed with the webhook's secret: HMAC-SHA256 of the
+raw request body, lowercase hex, in the `X-Sapiom-Signature` header. Verify it
+against the raw bytes before parsing, then type the body as `EmailEvent` and
 narrow on `eventType`:
 
 ```typescript
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { email } from "@sapiom/tools";
 
+function verified(
+  rawBody: string,
+  signature: string | undefined,
+  secret: string,
+): boolean {
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  return (
+    signature !== undefined &&
+    signature.length === expected.length &&
+    timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  );
+}
+
+// rawBody: the request body exactly as received (not re-serialized JSON).
+const signature = req.headers["x-sapiom-signature"] as string | undefined;
+if (!verified(rawBody, signature, WEBHOOK_SECRET)) {
+  return res.status(401).end();
+}
 const event = JSON.parse(rawBody) as email.EmailEvent;
 if (event.eventType === "message.bounced" && event.bounceType === "Permanent") {
   // A hard bounce: stop sending to these addresses.
