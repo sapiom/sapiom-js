@@ -101,13 +101,6 @@ export interface TransactionResponse {
   costs?: TransactionCostResponse[]; // Optional for backward compatibility
 }
 
-export interface ListTransactionsParams {
-  status?: TransactionStatus;
-  service?: string;
-  limit?: number;
-  offset?: number;
-}
-
 // ============================================================================
 // x402 V1 Types (Legacy)
 // ============================================================================

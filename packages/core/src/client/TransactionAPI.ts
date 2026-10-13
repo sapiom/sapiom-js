@@ -2,7 +2,6 @@ import {
   CompleteTransactionRequest,
   CompleteTransactionResult,
   CreateTransactionRequest,
-  ListTransactionsParams,
   PaymentProtocolData,
   TransactionResponse,
   TransactionStatus,

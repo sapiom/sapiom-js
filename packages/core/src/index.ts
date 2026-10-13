@@ -75,7 +75,6 @@ export type {
   CreateTransactionRequest,
   TransactionResponse,
   PaymentTransactionResponse,
-  ListTransactionsParams,
   PaymentProtocolData,
   // x402 union types (backward compatible)
   X402Response,
