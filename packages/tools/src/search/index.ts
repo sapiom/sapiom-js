@@ -57,11 +57,7 @@ export interface ScrapeInput {
   onlyMainContent?: boolean;
   /** Milliseconds to wait before reading (for content rendered by JavaScript). */
   waitFor?: number;
-  /**
-   * Oldest cached copy to accept, in milliseconds. `0` reads the page fresh.
-   * Omit to accept a cached copy up to 2 days old. A fresh read is slower, and
-   * setting it disables fallback to other read paths.
-   */
+  /** Oldest cached copy to accept, in ms (`0` reads fresh): lets a caller see a page it just changed. */
   maxAge?: number;
 }
 
