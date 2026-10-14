@@ -57,7 +57,10 @@ export interface ScrapeInput {
   onlyMainContent?: boolean;
   /** Milliseconds to wait before reading (for content rendered by JavaScript). */
   waitFor?: number;
-  /** Oldest cached copy to accept, in ms (`0` reads fresh): lets a caller see a page it just changed. */
+  /**
+   * Oldest cached copy to accept, in ms (`0` reads fresh): lets a caller see a page it just changed.
+   * Slower, and the call fails instead of falling back to other read paths.
+   */
   maxAge?: number;
 }
 
