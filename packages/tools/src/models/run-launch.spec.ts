@@ -97,6 +97,35 @@ describe("agent.launch — deadlineMinutes", () => {
   });
 });
 
+describe("agent.launch — connectors", () => {
+  it("sends the selected connection slugs as `connectors`", async () => {
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK", connectors: ["linear", "notion"] });
+
+    expect(capture.body).toMatchObject({ connectors: ["linear", "notion"] });
+  });
+
+  it("sends an empty selection as [] — an ask for no connections", async () => {
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK", connectors: [] });
+
+    expect(capture.body).toMatchObject({ connectors: [] });
+  });
+
+  it("omits the key when no selection is given, so every connection attaches", async () => {
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK" });
+
+    expect(capture.body).not.toHaveProperty("connectors");
+  });
+});
+
 describe("agent.run — awaiting_capacity is not terminal here either", () => {
   /** Parks the run for one poll, jumping the clock past the 10-minute default. */
   function deferredPastDefault(): typeof globalThis.fetch {

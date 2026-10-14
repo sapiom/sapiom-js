@@ -95,6 +95,18 @@ export interface CodingRunSpec {
    * `wait()`'s default poll budget widens to cover the deadline you asked for.
    */
   deadlineMinutes?: number;
+  /**
+   * The connections this run may use, by slug (each connection's slug is shown
+   * on its card on the Sapiom dashboard's Connectors page). This is how you
+   * decide which agent gets which connection: fewer connections means fewer
+   * tools, so a cheaper and more focused run.
+   *
+   * Omit it (the default) to attach every ready connection, as before. `[]`
+   * attaches none. Otherwise each slug must be a ready connection, or the
+   * platform refuses the run (HTTP 400 `connectors_unavailable`, listing the
+   * slugs it can't attach).
+   */
+  connectors?: readonly string[];
 }
 
 /**
@@ -444,6 +456,9 @@ function buildBody(spec: CodingRunSpec): Record<string, unknown> {
     // Left `undefined` when unset, so `JSON.stringify` drops the key entirely —
     // the server must be able to tell "no deadline" from a `0` or a `null`.
     deadline_minutes: spec.deadlineMinutes,
+    // Same encoding: unset ⇒ absent on the wire ⇒ every connection; `[]` is
+    // sent as-is and means none.
+    connectors: spec.connectors,
   };
 }
 
@@ -627,6 +642,18 @@ export interface ModelRunSpec {
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
   mcps?: ModelMcp[];
+  /**
+   * The connections this run may use, by slug (each connection's slug is shown
+   * on its card on the Sapiom dashboard's Connectors page). This is how you
+   * decide which agent gets which connection: fewer connections means fewer
+   * tools, so a cheaper and more focused run.
+   *
+   * Omit it (the default) to attach every ready connection, as before. `[]`
+   * attaches none. Otherwise each slug must be a ready connection, or the
+   * platform refuses the run (HTTP 400 `connectors_unavailable`, listing the
+   * slugs it can't attach).
+   */
+  connectors?: readonly string[];
 }
 
 export interface ModelRunOutcome {
@@ -825,6 +852,9 @@ function buildModelBody(spec: ModelRunSpec): Record<string, unknown> {
     deadline_minutes: spec.deadlineMinutes,
     max_tokens: spec.maxTokens,
     mcps: spec.mcps,
+    // Unset ⇒ absent on the wire ⇒ every connection; `[]` is sent as-is and
+    // means none.
+    connectors: spec.connectors,
   };
 }
 

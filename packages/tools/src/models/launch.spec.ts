@@ -108,6 +108,44 @@ describe("agent.coding.launch — deadlineMinutes", () => {
   });
 });
 
+describe("agent.coding.launch — connectors", () => {
+  it("sends the selected connection slugs as `connectors`", async () => {
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing", connectors: ["linear"] });
+
+    expect(capture.body).toMatchObject({ connectors: ["linear"] });
+  });
+
+  it("sends an empty selection as [] — an ask for no connections", async () => {
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing", connectors: [] });
+
+    expect(capture.body).toMatchObject({ connectors: [] });
+  });
+
+  it("omits the key when no selection is given, so every connection attaches", async () => {
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing" });
+
+    expect(capture.body).not.toHaveProperty("connectors");
+  });
+});
+
 describe("agent.coding — awaiting_capacity is not terminal", () => {
   it("keeps polling a deferred run instead of resolving it", async () => {
     // A run parked on a deadline reports awaiting_capacity for as long as it
