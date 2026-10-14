@@ -134,6 +134,45 @@ describe("search.scrape()", () => {
     });
   });
 
+  it("forwards maxAge alongside the other optionals", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ url: "https://example.com", metadata: {} }),
+    ]);
+
+    await scrape(
+      {
+        url: "https://example.com",
+        formats: ["markdown"],
+        onlyMainContent: true,
+        waitFor: 1500,
+        maxAge: 60000,
+      },
+      transport,
+      BASE,
+    );
+
+    expect(bodyOf(calls[0]!)).toEqual({
+      url: "https://example.com",
+      formats: ["markdown"],
+      onlyMainContent: true,
+      waitFor: 1500,
+      maxAge: 60000,
+    });
+  });
+
+  it("forwards maxAge: 0 (a fresh read, not dropped)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ url: "https://example.com", metadata: {} }),
+    ]);
+
+    await scrape({ url: "https://example.com", maxAge: 0 }, transport, BASE);
+
+    expect(bodyOf(calls[0]!)).toEqual({
+      url: "https://example.com",
+      maxAge: 0,
+    });
+  });
+
   it("forwards onlyMainContent: false (a meaningful value, not dropped)", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ url: "https://example.com", metadata: {} }),
@@ -162,6 +201,7 @@ describe("search.scrape()", () => {
         formats: null as unknown as undefined,
         onlyMainContent: null as unknown as undefined,
         waitFor: null as unknown as undefined,
+        maxAge: null as unknown as undefined,
       },
       transport,
       BASE,
@@ -314,6 +354,31 @@ describe("search.scrape()", () => {
     await expect(
       scrape({ url: "https://example.com" }, transport, BASE),
     ).rejects.toBeInstanceOf(SearchHttpError);
+  });
+
+  it("surfaces the router's 400 on an invalid maxAge as SearchHttpError (no local validation)", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ message: "maxAge must be >= 0" }), {
+          status: 400,
+        }),
+    ]);
+
+    const err = await scrape(
+      { url: "https://example.com", maxAge: -1 },
+      transport,
+      BASE,
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SearchHttpError);
+    expect(err).toMatchObject({
+      status: 400,
+      body: { message: "maxAge must be >= 0" },
+    });
+    expect(bodyOf(calls[0]!)).toEqual({
+      url: "https://example.com",
+      maxAge: -1,
+    });
   });
 });
 

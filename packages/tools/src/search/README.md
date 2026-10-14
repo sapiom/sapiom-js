@@ -87,6 +87,18 @@ page.links; // string[] of links found on the page
 Each requested format is returned as its own field; a field is present only when
 that format was requested.
 
+### Fresh reads
+
+By default `scrape` may return a cached copy of the page up to 2 days old. Pass
+`maxAge` (milliseconds) to cap how old that copy can be; `0` reads the page fresh:
+
+```typescript
+const page = await sapiom.search.scrape({
+  url: "https://example.com",
+  maxAge: 0,
+});
+```
+
 ### Input
 
 - `url` (required) — the page to read.
@@ -96,6 +108,10 @@ that format was requested.
   navigation, headers, footers, and ads.
 - `waitFor` (optional) — milliseconds to wait before reading, for content
   rendered by JavaScript.
+- `maxAge` (optional): oldest cached copy to accept, in milliseconds. `0` reads
+  the page fresh. Omit to accept a copy up to 2 days old. A fresh read is slower,
+  and with `maxAge` set there is no fallback to other read paths, so a call can
+  fail where one without it would succeed.
 
 ### Result
 
