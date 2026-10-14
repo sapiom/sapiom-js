@@ -30,7 +30,7 @@
     "@electron/notarize": "^2.5.0",
     "@electron/rebuild": "^3.7.0",
     "@types/node": "^20.11.30",
-    "electron": "^33.0.0",
+    "electron": "^39.8.10",
     "electron-builder": "^25.1.8",
     "typescript": "^5.4.2",
     "vitest": "^3.0.0"
