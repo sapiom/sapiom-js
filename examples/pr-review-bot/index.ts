@@ -363,7 +363,7 @@ const watch = defineStep({
 
     if (dryRun) {
       // No webhook source registered, so no PR event will ever arrive and the
-      // pause below would suspend the run forever. Review the sample PR instead —
+      // pause below would only burn the deadline. Review the sample PR instead —
       // a real model review of a real diff — and say whose PR it was.
       ctx.shared.set(
         "note",
@@ -383,6 +383,9 @@ const watch = defineStep({
     }
 
     // Suspend at $0 until the webhook fires SIGNAL for this correlationId.
+    // No `timeoutMs` on purpose: the engine's 7-day default is the right ceiling
+    // here. A PR event that has not arrived in a week is not coming, and a
+    // terminal pause-timeout failure beats a run parked on a dead webhook.
     return pauseUntilSignal({
       signal: SIGNAL,
       resumeStep: "review",
