@@ -137,6 +137,7 @@ test("address checks reject malformed input without a backtracking regex", () =>
     "ana@acme.",
     "a@b@c.com",
     "a na@acme.com",
+    "ana@.acme.com",
   ]) {
     assert.equal(looksLikeEmail(bad), false, bad);
   }
