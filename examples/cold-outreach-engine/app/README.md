@@ -1,9 +1,10 @@
 # Outreach campaign dashboard
 
-The page this template ships beside its agent: every prospect the run worked,
+The page this template ships beside its agent: every contact the run worked,
 the opener the model wrote for each and the first-touch email it went out in,
-the drip sequence with which touches were sent, and how long each step took.
-Every name, opener, and count on the page came out of a run of the agent.
+the follow-up sequence with how many contacts have had each touch, and how
+long each step took. Every name, opener, and count on the page came out of a
+run of the agent.
 
 ```
 node server.mjs          # http://localhost:4175
@@ -14,18 +15,18 @@ page (`index.html`) and one JSON route (`/api/run`).
 
 ## Where the data comes from
 
-| Environment                                         | The page shows                                                                                                                                               |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SAPIOM_API_KEY` **and** `SAPIOM_DEFINITION_ID` set | **Live**: the latest completed run of that deployed agent, read over the Sapiom API (`SAPIOM_API_URL` optional, defaults to production) and cached for 30 s. |
-| Either missing, or the live read fails              | **Captured**: `sample-run.json`, a real zero-setup run of this template (agent run 156426), in the same shape `/api/run` returns for a live run.             |
+| Environment                                         | The page shows                                                                                                                                                       |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SAPIOM_API_KEY` **and** `SAPIOM_DEFINITION_ID` set | **Live**: the latest completed run of that deployed agent, read over the Sapiom API (`SAPIOM_API_URL` optional, defaults to production) and cached for 30 s.         |
+| Either missing, or the live read fails              | **Captured**: `sample-run.json`, a real zero-setup run of this template (agent run 156426, captured before the opt-in rework), in the same shape `/api/run` returns. |
 
 The footer of the page names the source and the run id either way.
 
 The openers come from the run's shared state rather than its terminal output:
-`done` returns each contact's address and status, not the line the model wrote.
+`send` returns each contact's address and status, not the line the model wrote.
 The server passes through only the fields the page reads (the output's
-counts and note, the contacts, the sequence, the sender name, the drip
-interval, and each step's name and timing), never the run's whole input,
+counts and note, the contacts, the sequence, the sender name, the interval
+between touches, and each step's name and timing), never the run's whole input,
 output, or shared state.
 
 When Sapiom publishes this dashboard as an App Link on clone, the publish step

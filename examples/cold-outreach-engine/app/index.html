@@ -359,7 +359,7 @@
     <div class="page">
       <header class="top">
         <div>
-          <p class="eyebrow">Cold Outreach Engine</p>
+          <p class="eyebrow">Opt-in Lead Follow-up</p>
           <h1>Outreach campaign dashboard</h1>
         </div>
         <div class="facts" id="facts"></div>
@@ -367,12 +367,12 @@
       <section class="kpis" id="kpis" aria-label="Key figures"></section>
       <div class="grid">
         <section class="card prospects" aria-labelledby="prospects-h">
-          <h2 id="prospects-h">Prospects, and the first touch each one got</h2>
+          <h2 id="prospects-h">Contacts, and the first touch each one got</h2>
           <div id="prospects"></div>
         </section>
         <div class="stack">
           <section class="card" aria-labelledby="drip-h">
-            <h2 id="drip-h">Drip sequence</h2>
+            <h2 id="drip-h">Follow-up sequence</h2>
             <ol class="touches" id="touches"></ol>
           </section>
           <section class="card" aria-labelledby="trail-h">
@@ -454,24 +454,29 @@
             ? "No opener written"
             : "Would bounce";
         }
-        if (c.verifyStatus === "demo-stand-in") return "Demo lead";
+        if (c.verifyStatus === "demo-stand-in") return "Demo contact";
         // `verify` keeps a contact sendable when the check itself errors, and
         // says so here; that is not a verified address.
         if (c.verifyStatus === "unverified") return "Unverified";
-        return demo ? "Demo lead" : "Verified";
+        return demo ? "Demo contact" : "Verified";
       }
 
       /**
-       * Where a contact ended up. The page only ever shows a completed run, so
-       * a contact still `active` is one whose drip ended with the run: the
-       * agent leaves the status alone when the sequence runs out or a demo
-       * stops after its first touch.
+       * Where a contact stands after this run. A live contact stays `active`
+       * between scheduled runs and turns `done` after its last touch; a demo
+       * contact stops after its first touch.
        */
       function dripState(c, run) {
         if (!c.deliverable) return "Not contacted";
         if (run.dryRun) return "Planned, not contacted";
-        if (c.status === "replied") return "Replied, drip ended";
-        return run.demo ? "Demo ended after touch 1" : "Sequence finished";
+        if (c.status === "replied") return "Replied, sequence ended";
+        if (run.demo) return "Demo ended after touch 1";
+        if (c.status === "done") return "Sequence finished";
+        // A live contact stays `active` between scheduled runs.
+        if (Number.isInteger(c.touchesSent) && run.touches) {
+          return `Touch ${c.touchesSent} of ${run.touches} sent`;
+        }
+        return "Sequence finished";
       }
 
       function renderProspects(campaign, sender, run) {
@@ -515,29 +520,39 @@
       }
 
       /**
-       * One row per touch in the sequence the run sent from. A touch counts as
-       * sent when the run's trail has a succeeded `send` step for it: `send`
-       * runs once per touch, and the terminal `touchesSent` counter is a
-       * position in the sequence, not a count, so it reads 0 after a first
-       * touch went out. A `send` step also succeeds when every recipient's
-       * send failed, so nothing is marked sent unless the run sent something.
-       * `sent` is the run-wide total, so it is printed as touch 1's count only
-       * when touch 1 was the only one.
+       * One row per touch in the sequence, with how many contacts have had it
+       * so far across every run of the campaign.
        */
       function renderTouches(campaign, output, steps) {
         const seq = campaign.sequence ?? [];
         if (seq.length === 0) {
           return `<li class="muted">This run's shared state carries no sequence.</li>`;
         }
+        // How many contacts have had touch i. Read from each contact's
+        // `touchesSent`; a capture from before that field existed falls back
+        // to the old rule, which counted one succeeded `send` step per touch.
+        const contacts = campaign.contacts ?? [];
+        const perContact = contacts.some((c) =>
+          Number.isInteger(c.touchesSent),
+        );
         const sendSteps = steps.filter(
           (s) => s.stepName === "send" && s.status === "succeeded",
         ).length;
-        const touchesSent =
+        const legacySent =
           output.dryRun || !(output.sent > 0)
             ? 0
             : steps.length
               ? sendSteps
               : 1;
+        const reached = (i) =>
+          perContact
+            ? contacts.filter((c) => (c.touchesSent ?? 0) > i).length
+            : i < legacySent
+              ? output.sent
+              : 0;
+        const touchesSent = perContact
+          ? seq.filter((_, i) => reached(i) > 0).length
+          : legacySent;
         const days = Number.isFinite(campaign.dripMs)
           ? campaign.dripMs / DAY_MS
           : null;
@@ -553,9 +568,10 @@
                 : days != null
                   ? `day ${+(i * days).toFixed(1)}`
                   : "later";
+            const n = reached(i);
             const state = on
-              ? i === 0 && touchesSent === 1
-                ? `Sent to ${output.sent} ${output.sent === 1 ? "prospect" : "prospects"}${
+              ? perContact || (i === 0 && touchesSent === 1)
+                ? `Sent to ${n} ${n === 1 ? "contact" : "contacts"}${
                     campaign.demo
                       ? ", delivered to this agent's demo inbox"
                       : ""
@@ -565,7 +581,7 @@
                 ? "Not sent: a dry run stops before sending"
                 : campaign.demo
                   ? "Not sent: a demo run stops after the first touch"
-                  : "Not sent";
+                  : "Not sent yet: follow-ups go out on the schedule";
             return `<li>
               <span class="dot${on ? " on" : ""}">${i + 1}</span>
               <div>
@@ -615,7 +631,7 @@
         const took = Date.parse(src.finishedAt) - Date.parse(src.startedAt);
         document.getElementById("facts").innerHTML = [
           `<span class="chip">Campaign <b>${esc(o.campaign ?? "—")}</b></span>`,
-          `<span class="chip">Leads <b>${demo ? "built-in demo batch" : "your list"}</b></span>`,
+          `<span class="chip">Contacts <b>${demo ? "built-in demo batch" : "your opt-ins"}</b></span>`,
           `<span class="chip">Finished <b>${fmtWhen(src.finishedAt)}</b>${
             Number.isFinite(took) ? ` in ${Math.round(took / 1000)} s` : ""
           }</span>`,
@@ -623,18 +639,18 @@
 
         document.getElementById("kpis").innerHTML = [
           kpi(
-            "Contacts found",
-            count(o.enriched),
-            demo ? "one per demo company" : "enriched from your leads",
+            "Contacts enrolled",
+            count(o.enrolled ?? o.enriched),
+            demo ? "one per demo company" : "who asked to hear from you",
           ),
           kpi(
             "Deliverable",
             count(o.deliverable),
             demo
-              ? "verification simulated for demo leads"
+              ? "verification simulated for demo contacts"
               : "sendable after verification",
           ),
-          // A dry run ends at `launch`, before `sent` and `replied` exist; it
+          // A dry run ends at `enroll`, before `sent` and `replied` exist; it
           // sent nothing and so heard nothing back, which is 0, not unknown.
           kpi(
             "Emails sent",
@@ -643,19 +659,25 @@
               ? "a dry run sends nothing"
               : demo
                 ? "to this agent's own demo inbox"
-                : "across every touch",
+                : o.failed > 0
+                  ? `${count(o.failed)} failed, listed in the run output`
+                  : "on this run",
           ),
           kpi(
             "Replies",
             count(o.dryRun ? 0 : o.replied),
-            "a reply ends that prospect's drip",
+            "a reply ends that contact's sequence",
           ),
         ].join("");
 
-        const run = { demo, dryRun: o.dryRun === true };
+        const run = {
+          demo,
+          dryRun: o.dryRun === true,
+          touches: (camp.sequence ?? []).length,
+        };
         if (run.dryRun) {
           document.getElementById("prospects-h").textContent =
-            "Prospects, and the first touch drafted for each";
+            "Contacts, and the first touch drafted for each";
         }
         document.getElementById("prospects").innerHTML = renderProspects(
           camp,

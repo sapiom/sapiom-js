@@ -1,8 +1,8 @@
 import {
   defineAgent,
   defineStep,
+  fail,
   goto,
-  pauseUntilSignal,
   resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
@@ -12,67 +12,64 @@ import postgres from "postgres";
 import { z } from "zod/v4";
 
 /**
- * Cold Outreach Personalization Engine — turn a raw lead list into a
- * personalized, deliverability-checked drip sequence that runs itself.
+ * Opt-in Lead Follow-up — write a personalized first email to every person who
+ * asked to hear from you (a demo request, a waitlist sign-up, a contact form),
+ * then send a short follow-up sequence on a schedule that stops for anyone who
+ * replies.
  *
- * On each run it enriches your leads, researches each company, writes a
- * specific opener for every prospect, drops the addresses that would bounce,
- * and then sends the sequence one touch at a time — pausing at $0 between
- * touches and stopping the moment someone replies.
+ *   intake ─▶ scrape (web) ─▶ personalize (llm.run) ─▶ verify (email) ─▶ enroll (database)
+ *      └──────────────────────────────────────────────────────────────────────┴─▶ send (email)
  *
- *   enrich (email search) ─▶ scrape (web) ─▶ personalize (llm.run) ─▶ verify (email)
- *      └─▶ launch (database) ─▶ send (email) ⇄ advance ─▶ done
+ *   - **intake** takes the contacts you collected. Every contact must carry an
+ *     `optInSource` — where they asked to hear from you. A contact without one
+ *     is rejected and listed in the output; this template does not find or
+ *     write to strangers.
+ *   - **scrape** reads each contact's company site (`web.scrape`) for a few
+ *     lines of context. The bodies are bounded and die at the next step.
+ *   - **personalize** hands those snippets to the live model (`llm.run`) for one
+ *     concrete first line per contact. A contact the model wrote nothing for is
+ *     not emailed.
+ *   - **verify** checks each address for deliverability (`verifyEmail`) and
+ *     drops the ones that would bounce — sign-up forms collect typos.
+ *   - **enroll** adds the deliverable contacts to the campaign roster in a
+ *     Postgres store the agent owns. A `dryRun` stops here and returns the plan.
+ *   - **send** works the whole roster once: it sends the first touch to anyone
+ *     newly enrolled and, for everyone else, checks their thread for a reply and
+ *     sends the next touch when it is due. Every send failure is in the output.
  *
- *   - **enrich** takes a lead list — a company domain, optionally a person —
- *     and resolves a real contact through email search: `findEmail` when you
- *     name the person, `domainSearch` to surface a decision-maker when you only
- *     have the company. Per-lead failures are skipped, never fatal. Pass no `leads` at
- *     all and it works the built-in demo batch instead (see below).
- *   - **scrape** reads each company's site (`web.scrape`) for a few lines of
- *     context. The bodies are bounded and die here — they never enter shared
- *     state or cross the drip edges.
- *   - **personalize** hands those snippets to the live model (`llm.run`) and
- *     gets back one concrete first line per prospect, falling back to a safe
- *     generic opener when the model returns nothing usable.
- *   - **verify** checks each address for deliverability (`verifyEmail`)
- *     and drops the ones that would bounce before a single email goes out.
- *   - **launch** persists the campaign and its contacts to a Postgres store the
- *     engine owns, then hands off to the drip. A `dryRun` stops here and returns
- *     the full plan — openers and all — without sending or persisting anything.
- *   - **send** delivers the current touch to everyone still active and logs it,
- *     then pauses until either the drip interval elapses or a prospect replies.
- *   - **advance** wakes on that reply-or-timeout, marks anyone who replied as
- *     done, and either loops back for the next touch or ends the run.
+ * Follow-ups come from a schedule, not a pause. Attach a cron trigger that runs
+ * this agent with `{ "campaign": "<name>" }`; each run is one pass over the
+ * roster and ends. There is no paused run waiting out the interval: a pause
+ * timeout fails the run on Sapiom rather than resuming it, so a wait-then-send
+ * loop built on one would stop after the first touch.
  *
- * Durability: the wait between touches is a `pauseUntilSignal` with a timeout —
- * it costs nothing while idle, resumes on its own when the interval passes, and
- * short-circuits the instant a `reply.received` signal arrives. Determinism:
- * each step body runs once on the happy path (again only on retry), and every
- * timestamp is captured server-side via Postgres `now()`.
+ * Replies: before each follow-up, `send` reads the contact's thread
+ * (`email.threads.get`). Any message in it from someone other than the sending
+ * inbox ends that contact's sequence. Later touches go out as replies in the
+ * first touch's thread, so the reply check sees every answer.
  *
- * Zero-setup demo: with no `leads`, the run works `DEMO_LEADS` — three
- * fabricated companies and contacts — instead of stopping with nobody to write
- * to. Email search has no real person to find at a company that doesn't exist,
- * so `enrich` and `verify` simulate the capability response deterministically
- * rather than calling it. Everything else is real: `personalize` still calls
- * the live model, `launch` still persists the campaign, and `send` still
- * delivers the first touch — to this agent's own Sapiom-hosted demo inbox
- * (`resolveSenderInbox`), never to the fabricated address, so the send is real
- * and inspectable. The run stops right there rather than entering the
- * multi-touch drip or the durable reply-wait, which have no real prospect to
- * wait on; pass your own `leads` to unlock both.
+ * Zero-setup demo: with no `contacts` and no `campaign`, the run works
+ * `DEMO_CONTACTS` — three fabricated opt-ins — instead of stopping with nobody
+ * to write to. `scrape` uses each one's canned blurb and `verify` treats it as
+ * deliverable; `personalize` still calls the live model, `enroll` still writes
+ * to the database, and `send` still delivers the first touch — to this agent's
+ * own Sapiom-hosted inbox (`resolveSenderInbox`), never to the fabricated
+ * address. Demo contacts are stored as `demo`, so no scheduled pass ever
+ * follows them up.
  */
 
 // ─────────────────────────────────────────────────────────────── config ──
-/** Postgres handle the engine owns — created on first run, reused after. */
+/** Postgres handle the agent owns — created on first run, reused after. */
 const DEFAULT_DB_HANDLE = "cold-outreach-engine";
-/** The named signal a reply-webhook fires to end the drip early. */
-const REPLY_SIGNAL = "reply.received";
-/** Cap the lead list so cost + latency stay bounded. */
-const MAX_LEADS = 25;
+/** Campaign a run works when it names none. */
+const DEFAULT_CAMPAIGN = "opt-in-follow-up";
+/** Campaign the zero-setup demo writes under — never worked by a schedule. */
+const DEMO_CAMPAIGN = "demo";
+/** Cap the new contacts per run so cost + latency stay bounded. */
+const MAX_CONTACTS = 25;
 /** Truncate each scraped body — the ONLY large data on the scrape→personalize path. */
 const MAX_CONTEXT_CHARS = 1500;
-/** Days between drip touches when the caller doesn't pass one. */
+/** Days between touches when the caller doesn't pass one. */
 const DEFAULT_DRIP_DAYS = 3;
 /** Below this verification confidence score, treat an address as undeliverable. */
 const VERIFY_MIN_SCORE = 50;
@@ -80,50 +77,69 @@ const VERIFY_MIN_SCORE = 50;
 const DEFAULT_SCHEDULE = "0 9 * * 1-5";
 /** Milliseconds in a day — drip interval math. */
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Mailbox providers whose domain says nothing about the contact's company. */
+const PERSONAL_MAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "yahoo.com",
+  "icloud.com",
+  "me.com",
+  "proton.me",
+  "protonmail.com",
+  "aol.com",
+]);
 
 // ─────────────────────────────────────────────────────────────── shapes ──
-/** One row of the lead list. A domain is enough; a name sharpens the match. */
-interface Lead {
-  /** Company domain, e.g. `"example.com"`. Provide this or `company`. */
-  domain?: string;
-  /** Company name, as an alternative to `domain`. */
-  company?: string;
-  /** Prospect's full name — when set, we look up their exact address. */
+/** One person who asked to hear from you. */
+interface OptInContact {
+  /** Their address. Required. */
+  email: string;
+  /** Where they asked to hear from you, e.g. "demo request form". Required. */
+  optInSource: string;
   fullName?: string;
-  /** Prospect's first name (pair with `lastName`, or use `fullName`). */
   firstName?: string;
-  /** Prospect's last name (pair with `firstName`, or use `fullName`). */
   lastName?: string;
+  position?: string;
+  company?: string;
+  /** Company site to read for context; defaults to the email's domain. */
+  domain?: string;
 }
 
-/** One touch in the drip sequence. Tokens: {firstName} {company} {sender}. */
+/** One touch in the sequence. Tokens: {firstName} {company} {sender}. */
 interface Touch {
+  /** Used by the first touch only — later touches reply in its thread. */
   subject: string;
   body: string;
 }
 
 interface EntryInput {
-  /** The leads to work through on this run. */
-  leads?: Lead[];
-  /** Campaign name — also the key for the dedup/log store. */
+  /** New opt-in contacts to enroll on this run. */
+  contacts?: OptInContact[];
+  /** Campaign name — the roster key. A scheduled pass passes only this. */
   campaign?: string;
-  /** The drip sequence; defaults to a three-touch sequence. */
+  /** The sequence; defaults to a three-touch sequence. */
   sequence?: Touch[];
-  /** Days to wait between touches (default 3). */
+  /** Days between touches (default 3). */
   dripIntervalDays?: number;
   /** Display name signed on the outgoing mail. */
   senderName?: string;
-  /** Cron cadence this engine is meant to run on (documentation only). */
+  /** Inbox to send from. Use one on your own domain to reach outside your org. */
+  inboxId?: string;
+  /** Cron cadence this agent is meant to run on (documentation only). */
   schedule?: string;
   /** Postgres handle for the campaign store; defaults to the template handle. */
   dbHandle?: string;
-  /** Compute the plan and openers but skip the send, the DB, and the drip. */
+  /** Compute the plan and openers but skip the send and the DB. */
   dryRun?: boolean;
 }
 
-/** A resolved, workable contact — grows a first line and a verdict downstream. */
+/** A contact as it moves through the run. */
 interface Contact {
   email: string;
+  optInSource?: string;
   firstName?: string;
   lastName?: string;
   fullName?: string;
@@ -136,55 +152,80 @@ interface Contact {
   deliverable?: boolean;
   /** The verification verdict, for the summary (added by `verify`). */
   verifyStatus?: string;
-  /** Drip state: "active" until it replies or the sequence ends. */
-  status?: "active" | "replied" | "done";
-  /** Set on the built-in zero-setup batch — see `DEMO_LEADS`. */
+  /** Roster state: "active" until it replies or the sequence ends. */
+  status?: "active" | "replied" | "done" | "demo";
+  /** Touches sent to this contact so far, across every run. */
+  touchesSent?: number;
+  /** Set on the built-in zero-setup batch — see `DEMO_CONTACTS`. */
   demo?: boolean;
+}
+
+/** A contact the run could not use, and why. */
+interface Rejected {
+  email: string | null;
+  reason: string;
+}
+
+/** A send (or reply check) that failed, as it appears in the run output. */
+interface SendFailure {
+  email: string;
+  touch: number;
+  /** HTTP status from the email capability, when it returned one. */
+  status: number | null;
+  /** Machine-readable code from the error body, e.g. `recipient_not_allowed`. */
+  code: string | null;
+  error: string;
+}
+
+/** The fields a run passed explicitly; they overwrite the stored campaign config. */
+interface ConfigOverrides {
+  sequence?: Touch[];
+  dripMs?: number;
+  senderName?: string;
+  inboxId?: string;
 }
 
 interface Shared extends Record<string, unknown> {
   campaign: string;
   dbHandle: string;
   dryRun: boolean;
+  demoRun: boolean;
   schedule: string;
+  overrides: ConfigOverrides;
+  rejected: Rejected[];
+  /** Read by the dashboard: the contacts this run worked, with their state. */
+  contacts: Contact[];
+  sequence: Touch[];
   senderName: string;
   dripMs: number;
-  sequence: Touch[];
-  contacts: Contact[];
-  touchIndex: number;
-  sent: number;
-  replied: number;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
 type Sql = ReturnType<typeof postgres>;
 
-/** One fabricated company + contact in the built-in zero-setup batch. */
-interface DemoLead {
+/** One fabricated opt-in in the built-in zero-setup batch. */
+interface DemoContact {
   /** `.example` — reserved (RFC 2606), never resolves, never a real inbox. */
   domain: string;
   company: string;
   firstName: string;
   lastName: string;
   position: string;
-  /** A plausible address at `domain` — never dialed; `send` always targets
-   * this agent's own demo inbox instead, so nothing goes to it. */
+  /** Never dialed; `send` targets this agent's own inbox instead. */
   email: string;
+  optInSource: string;
   /** A canned company blurb standing in for the page `scrape` would read. */
   context: string;
 }
 
 /**
- * The zero-setup stand-in: three fabricated companies and contacts, used only
- * when a run supplies no `leads` at all. Email search has no real person to
- * find at a company that doesn't exist, so `enrich` and `verify` simulate its
- * response deterministically for these instead of calling it — `scrape`'s
- * context is likewise canned here rather than fetched. `personalize` (the
- * live model call), `launch` (the real persist), and `send` (a real email to
- * this agent's own demo inbox) all still run for real. See "Make it runnable
- * with nothing" in AUTHORING.md.
+ * The zero-setup stand-in: three fabricated opt-ins, used only when a run
+ * names no `contacts` and no `campaign`. `.example` sites don't resolve and
+ * `.example` addresses can't be verified, so `scrape` and `verify` use canned
+ * stand-ins; `personalize`, `enroll`, and `send` run for real. See "Make it
+ * runnable with nothing" in AUTHORING.md.
  */
-const DEMO_LEADS: DemoLead[] = [
+const DEMO_CONTACTS: DemoContact[] = [
   {
     domain: "brightloop.example",
     company: "Brightloop",
@@ -192,6 +233,7 @@ const DEMO_LEADS: DemoLead[] = [
     lastName: "Rivera",
     position: "Head of Growth",
     email: "jordan.rivera@brightloop.example",
+    optInSource: "demo request form",
     context:
       "Brightloop sells shift-scheduling software to retail chains. Their site " +
       "leads with a case study: a 40-store grocery chain cut no-show shifts by " +
@@ -204,6 +246,7 @@ const DEMO_LEADS: DemoLead[] = [
     lastName: "Nandan",
     position: "VP of Engineering",
     email: "priya.nandan@fernwoodlabs.example",
+    optInSource: "webinar sign-up",
     context:
       "Fernwood Labs builds lab-inventory tracking for biotech startups. They " +
       "just announced a partnership with a reagent supplier to auto-reorder " +
@@ -216,25 +259,26 @@ const DEMO_LEADS: DemoLead[] = [
     lastName: "Webb",
     position: "Director of Operations",
     email: "marcus.webb@haventree.example",
+    optInSource: "pricing page contact form",
     context:
       "Haventree runs a network of urgent-care clinics. Their homepage " +
       "highlights a new online check-in flow that cut waiting-room time in half.",
   },
 ];
 
-/** The three-touch default drip — a personalized open, a bump, and a breakup. */
+/** The three-touch default — a personalized first email, a nudge, and a last note. */
 const DEFAULT_SEQUENCE: Touch[] = [
   {
-    subject: "Quick idea for {company}",
-    body: "Worth a short call to dig in? Either way, happy to share a couple of thoughts.\n\nBest,\n{sender}",
+    subject: "Following up on your request, {firstName}",
+    body: "Happy to set up a short call, or send over a few notes first if that's easier. Just reply with what works.\n\nIf you'd rather not hear from me, reply and I'll stop.\n\nBest,\n{sender}",
   },
   {
-    subject: "Re: Quick idea for {company}",
-    body: "Bumping this in case it slipped — inboxes get busy. Still glad to send over a couple of ideas for {company} whenever the timing's right.\n\nBest,\n{sender}",
+    subject: "Re: Following up on your request, {firstName}",
+    body: "Checking in once in case my last note got buried. Still glad to walk through anything for {company} whenever the timing's right.\n\nBest,\n{sender}",
   },
   {
-    subject: "Closing the loop, {firstName}",
-    body: "I'll stop here so I'm not a bother. If growing {company} is on your list this quarter, just reply and I'll pick it back up.\n\nAll the best,\n{sender}",
+    subject: "Last note, {firstName}",
+    body: "I'll leave it here so I'm not cluttering your inbox. If it becomes a priority for {company} later, just reply and I'll pick it back up.\n\nAll the best,\n{sender}",
   },
 ];
 
@@ -256,28 +300,97 @@ function render(template: string, contact: Contact, sender: string): string {
     .replaceAll("{sender}", sender);
 }
 
-/** Normalize + bound the lead list so downstream cost stays predictable. */
-function normalizeLeads(raw: unknown): Lead[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((l): l is Lead => Boolean(l) && typeof l === "object")
-    .map((l) => ({
-      domain: l.domain?.trim() || undefined,
-      company: l.company?.trim() || undefined,
-      fullName: l.fullName?.trim() || undefined,
-      firstName: l.firstName?.trim() || undefined,
-      lastName: l.lastName?.trim() || undefined,
-    }))
-    .filter((l) => Boolean(l.domain || l.company))
-    .slice(0, MAX_LEADS);
+/** The bare address out of `Name <addr>` or `addr`, lowercased. */
+export function addressOf(from: string): string {
+  const m = /<([^>]+)>/.exec(from);
+  return (m ? m[1] : from).trim().toLowerCase();
 }
 
-/** True when a lead names a specific person we can look up directly. */
-function hasPerson(l: Lead): boolean {
-  return Boolean(l.fullName || (l.firstName && l.lastName));
+/**
+ * Split the supplied contacts into usable ones and rejects. A contact needs a
+ * plausible address and a non-empty `optInSource`: the source is the record
+ * that this person asked to be contacted, and without it the template has no
+ * business emailing them.
+ */
+export function normalizeContacts(raw: unknown): {
+  contacts: Contact[];
+  rejected: Rejected[];
+} {
+  const contacts: Contact[] = [];
+  const rejected: Rejected[] = [];
+  const seen = new Set<string>();
+  if (!Array.isArray(raw)) return { contacts, rejected };
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      rejected.push({ email: null, reason: "not an object" });
+      continue;
+    }
+    const r = entry as Record<string, unknown>;
+    const str = (k: string) =>
+      typeof r[k] === "string" && (r[k] as string).trim()
+        ? (r[k] as string).trim()
+        : undefined;
+    const email = str("email")?.toLowerCase();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      rejected.push({
+        email: email ?? null,
+        reason: "missing or invalid email",
+      });
+      continue;
+    }
+    const optInSource = str("optInSource");
+    if (!optInSource) {
+      rejected.push({
+        email,
+        reason:
+          "missing optInSource — only contacts who asked to hear from you are emailed",
+      });
+      continue;
+    }
+    if (seen.has(email)) continue;
+    seen.add(email);
+    if (contacts.length >= MAX_CONTACTS) {
+      rejected.push({
+        email,
+        reason: `over the ${MAX_CONTACTS}-contact limit per run`,
+      });
+      continue;
+    }
+    const mailDomain = email.split("@")[1];
+    contacts.push({
+      email,
+      optInSource,
+      fullName: str("fullName"),
+      firstName: str("firstName") ?? str("fullName")?.split(/\s+/)[0],
+      lastName: str("lastName"),
+      position: str("position"),
+      company: str("company"),
+      domain:
+        str("domain") ??
+        (PERSONAL_MAIL_DOMAINS.has(mailDomain) ? undefined : mailDomain),
+      status: "active",
+      touchesSent: 0,
+    });
+  }
+  return { contacts, rejected };
 }
 
-/** Open a Postgres client for a live run, or null when unavailable. */
+/** Turn a thrown send error into the shape the run output reports. */
+function toFailure(email: string, touch: number, err: unknown): SendFailure {
+  if (err instanceof EmailHttpError) {
+    const body = err.body as Record<string, unknown> | null;
+    const code =
+      body && typeof body === "object"
+        ? ([body.code, body.error, body.name].find(
+            (v): v is string => typeof v === "string",
+          ) ?? null)
+        : null;
+    return { email, touch, status: err.status, code, error: err.message };
+  }
+  return { email, touch, status: null, code: null, error: String(err) };
+}
+
+/** Open a Postgres client, or null when the database is unavailable. */
 async function openSql(ctx: Ctx, handle: string): Promise<Sql | null> {
   try {
     let db;
@@ -286,8 +399,8 @@ async function openSql(ctx: Ctx, handle: string): Promise<Sql | null> {
     } catch {
       db = await ctx.sapiom.database.create({
         handle,
-        name: "Cold Outreach Engine",
-        description: "Campaign contacts, drip touches, and reply state",
+        name: "Opt-in Lead Follow-up",
+        description: "Campaign roster, sent touches, and reply state",
       });
     }
     const conn = db.connection?.connectionString ?? null;
@@ -295,31 +408,46 @@ async function openSql(ctx: Ctx, handle: string): Promise<Sql | null> {
       ctx.logger.warn("database: no connection string", { handle });
       return null;
     }
-    return postgres(conn, { ssl: "require", connect_timeout: 10 });
+    // One connection, so the session-level advisory lock `send` takes holds
+    // for every query it makes.
+    return postgres(conn, { ssl: "require", connect_timeout: 10, max: 1 });
   } catch (err) {
-    // A stubbed / unreachable DB degrades to "no persistence" rather than
-    // aborting the drip — the working set lives in ctx.shared regardless.
-    ctx.logger.warn("database: unavailable, continuing without persistence", {
-      err: String(err),
-    });
+    ctx.logger.warn("database: unavailable", { err: String(err) });
     return null;
   }
 }
 
 async function initSchema(sql: Sql): Promise<void> {
   await sql`
+    create table if not exists outreach_campaigns (
+      campaign     text primary key,
+      sequence     jsonb not null,
+      drip_ms      bigint not null,
+      sender_name  text not null,
+      inbox_id     text,
+      updated_at   timestamptz not null default now()
+    )`;
+  await sql`
     create table if not exists outreach_contacts (
-      campaign    text not null,
-      email       text not null,
-      full_name   text,
-      company     text,
-      position    text,
-      first_line  text,
-      status      text not null default 'active',
-      replied_at  timestamptz,
-      created_at  timestamptz not null default now(),
+      campaign     text not null,
+      email        text not null,
+      full_name    text,
+      company      text,
+      position     text,
+      first_line   text,
+      status       text not null default 'active',
+      replied_at   timestamptz,
+      created_at   timestamptz not null default now(),
       primary key (campaign, email)
     )`;
+  // Columns added when the template moved from a paused drip to scheduled
+  // passes; `add column if not exists` upgrades a roster an older version made.
+  await sql`alter table outreach_contacts add column if not exists opt_in_source text`;
+  await sql`alter table outreach_contacts add column if not exists first_name text`;
+  await sql`alter table outreach_contacts add column if not exists touches_sent integer not null default 0`;
+  await sql`alter table outreach_contacts add column if not exists last_sent_at timestamptz`;
+  await sql`alter table outreach_contacts add column if not exists thread_id text`;
+  await sql`alter table outreach_contacts add column if not exists last_message_id text`;
   await sql`
     create table if not exists outreach_touches (
       id           bigserial primary key,
@@ -339,9 +467,12 @@ async function initSchema(sql: Sql): Promise<void> {
  * fixed local part can only ever be owned by ONE account across the whole
  * platform — every other tenant's `create` 409s with "Email address is already
  * taken", which fails the step. Omitting it lets AgentMail auto-generate a
- * globally-unique address, so a fresh tenant's first run succeeds and two
- * tenants never collide. `create` still isn't atomic against the `list`, so a
+ * globally-unique address. `create` still isn't atomic against the `list`, so a
  * 409 is treated as "someone already provisioned one" — re-list and reuse.
+ *
+ * A free `sapiom.email` inbox only delivers inside your own organization; a
+ * send to anyone else fails with 403 `recipient_not_allowed`. To reach real
+ * contacts, pass `inboxId` for an inbox on your own domain.
  */
 async function resolveSenderInbox(
   ctx: Ctx,
@@ -350,9 +481,7 @@ async function resolveSenderInbox(
   const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
   if (existing.inboxes.length > 0) return existing.inboxes[0].inboxId;
   try {
-    const inbox = await ctx.sapiom.email.inboxes.create({
-      displayName,
-    });
+    const inbox = await ctx.sapiom.email.inboxes.create({ displayName });
     return inbox.inboxId;
   } catch (err) {
     if (err instanceof EmailHttpError && err.status === 409) {
@@ -367,41 +496,54 @@ async function resolveSenderInbox(
 /**
  * The entry contract — this agent's public API, and what the dashboard "Run
  * once" form renders its labelled fields from. Every field is optional: a
- * zero-input run works a sample batch through a default three-touch sequence.
+ * zero-input run works the built-in demo batch.
  */
 const entryInput = z.object({
-  leads: z
+  contacts: z
     .array(
       z.object({
-        domain: z.string().optional(),
-        company: z.string().optional(),
+        email: z.string(),
+        optInSource: z.string(),
         fullName: z.string().optional(),
         firstName: z.string().optional(),
         lastName: z.string().optional(),
+        position: z.string().optional(),
+        company: z.string().optional(),
+        domain: z.string().optional(),
       }),
     )
     .optional()
-    .describe("The leads to work through on this run."),
+    .describe(
+      "People who asked to hear from you. Each needs an email and an optInSource.",
+    ),
   campaign: z
     .string()
     .optional()
-    .describe("Campaign name — also the key for the dedup/log store."),
+    .describe(
+      "Campaign name — the roster key. A scheduled follow-up run passes only this.",
+    ),
   sequence: z
     .array(z.object({ subject: z.string(), body: z.string() }))
     .optional()
-    .describe("The drip sequence; defaults to a three-touch sequence."),
+    .describe("The sequence; defaults to three touches."),
   dripIntervalDays: z
     .number()
     .optional()
-    .describe("Days to wait between touches (default 3)."),
+    .describe("Days between touches (default 3)."),
   senderName: z
     .string()
     .optional()
     .describe("Display name signed on the outgoing mail."),
+  inboxId: z
+    .string()
+    .optional()
+    .describe(
+      "Inbox to send from. Use one on your own domain to reach people outside your organization.",
+    ),
   schedule: z
     .string()
     .optional()
-    .describe("Cron cadence this engine runs on (documentation only)."),
+    .describe("Cron cadence this agent runs on (documentation only)."),
   dbHandle: z
     .string()
     .optional()
@@ -411,49 +553,54 @@ const entryInput = z.object({
   dryRun: z
     .boolean()
     .optional()
-    .describe(
-      "Compute the plan and openers but skip the send, the DB, and the drip.",
-    ),
+    .describe("Compute the plan and openers but skip the send and the DB."),
 });
 
-const enrich = defineStep({
-  name: "enrich",
+const intake = defineStep({
+  name: "intake",
   inputSchema: entryInput,
-  next: ["scrape"],
+  next: ["scrape", "send"],
+  // Terminal too: a dry run with no new contacts has nothing to plan.
+  terminal: true,
   async run(input: EntryInput, ctx: Ctx) {
-    // Zero-setup: no `leads` at all (not merely leads that fail to normalize —
-    // that's still a real attempt, and stays on the honest "nothing verified"
-    // path below) runs the built-in demo batch instead of stopping with
-    // nobody to write to.
-    const demoRun = !Array.isArray(input.leads) || input.leads.length === 0;
-    const leads = demoRun ? [] : normalizeLeads(input.leads);
-    const sequence =
-      Array.isArray(input.sequence) && input.sequence.length > 0
-        ? input.sequence
-        : DEFAULT_SEQUENCE;
-    const dripDays =
-      Number(input.dripIntervalDays) > 0
-        ? Number(input.dripIntervalDays)
-        : DEFAULT_DRIP_DAYS;
+    const supplied = Array.isArray(input.contacts) && input.contacts.length > 0;
+    const named = Boolean(input.campaign?.trim());
+    // Zero-setup: nothing supplied and no campaign to work. A run that names a
+    // campaign but brings no contacts is a scheduled follow-up pass, not a demo.
+    const demoRun = !supplied && !named;
+    const dryRun = truthy(input.dryRun);
 
-    ctx.shared.set("campaign", input.campaign?.trim() || "cold-outreach");
+    const overrides: ConfigOverrides = {};
+    if (Array.isArray(input.sequence) && input.sequence.length > 0) {
+      overrides.sequence = input.sequence;
+    }
+    if (Number(input.dripIntervalDays) > 0) {
+      overrides.dripMs = Number(input.dripIntervalDays) * DAY_MS;
+    }
+    if (input.senderName?.trim())
+      overrides.senderName = input.senderName.trim();
+    if (input.inboxId?.trim()) overrides.inboxId = input.inboxId.trim();
+
+    ctx.shared.set(
+      "campaign",
+      demoRun ? DEMO_CAMPAIGN : input.campaign?.trim() || DEFAULT_CAMPAIGN,
+    );
     ctx.shared.set(
       "dbHandle",
       resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE }),
     );
-    ctx.shared.set("dryRun", truthy(input.dryRun));
+    ctx.shared.set("dryRun", dryRun);
     ctx.shared.set("demoRun", demoRun);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
-    ctx.shared.set("senderName", input.senderName?.trim() || "The team");
-    ctx.shared.set("dripMs", dripDays * DAY_MS);
-    ctx.shared.set("sequence", sequence);
-    ctx.shared.set("touchIndex", 0);
-    ctx.shared.set("sent", 0);
-    ctx.shared.set("replied", 0);
+    ctx.shared.set("overrides", overrides);
+    ctx.shared.set("sequence", overrides.sequence ?? DEFAULT_SEQUENCE);
+    ctx.shared.set("senderName", overrides.senderName ?? "The team");
+    ctx.shared.set("dripMs", overrides.dripMs ?? DEFAULT_DRIP_DAYS * DAY_MS);
 
     if (demoRun) {
-      const contacts: Contact[] = DEMO_LEADS.map((d) => ({
+      const contacts: Contact[] = DEMO_CONTACTS.map((d) => ({
         email: d.email,
+        optInSource: d.optInSource,
         firstName: d.firstName,
         lastName: d.lastName,
         fullName: `${d.firstName} ${d.lastName}`,
@@ -461,75 +608,39 @@ const enrich = defineStep({
         company: d.company,
         domain: d.domain,
         status: "active",
+        touchesSent: 0,
         demo: true,
       }));
-      ctx.logger.info("zero-setup: enriching the built-in demo leads", {
+      ctx.shared.set("rejected", []);
+      ctx.logger.info("zero-setup: working the built-in demo contacts", {
         contacts: contacts.length,
       });
       return goto("scrape", { contacts });
     }
 
-    const byEmail = new Map<string, Contact>();
-    for (const lead of leads) {
-      try {
-        if (hasPerson(lead)) {
-          // We know who — look up their exact address.
-          const found = await ctx.sapiom.search.emailSearch.findEmail({
-            domain: lead.domain,
-            company: lead.company,
-            fullName: lead.fullName,
-            firstName: lead.firstName,
-            lastName: lead.lastName,
-          });
-          if (found.email) {
-            byEmail.set(found.email.toLowerCase(), {
-              email: found.email,
-              firstName: found.firstName ?? lead.firstName,
-              lastName: found.lastName ?? lead.lastName,
-              fullName: lead.fullName,
-              position: found.position,
-              company: found.company ?? lead.company,
-              domain: lead.domain,
-              status: "active",
-            });
-          }
-        } else if (lead.domain) {
-          // We only have the company — surface a decision-maker.
-          const res = await ctx.sapiom.search.emailSearch.domainSearch({
-            domain: lead.domain,
-            limit: 3,
-            type: "personal",
-            seniority: ["senior", "executive"],
-          });
-          const best = res.emails.find((e) => e.email) ?? res.emails[0];
-          if (best?.email) {
-            byEmail.set(best.email.toLowerCase(), {
-              email: best.email,
-              firstName: best.firstName,
-              lastName: best.lastName,
-              position: best.position,
-              company: res.organization ?? lead.company,
-              domain: lead.domain,
-              status: "active",
-            });
-          }
-        }
-      } catch (err) {
-        // Enrichment fails routinely (no match, rate limit); skip the lead,
-        // never abort the batch.
-        ctx.logger.warn("enrich failed for lead; skipping", {
-          domain: lead.domain,
-          err: String(err),
-        });
-      }
+    const { contacts, rejected } = normalizeContacts(input.contacts);
+    ctx.shared.set("rejected", rejected);
+    if (rejected.length > 0) {
+      ctx.logger.warn("rejected contacts", { rejected: rejected.length });
     }
-
-    const contacts = [...byEmail.values()];
-    ctx.logger.info("enriched leads into contacts", {
-      leads: leads.length,
-      contacts: contacts.length,
-    });
-    return goto("scrape", { contacts });
+    if (contacts.length > 0) {
+      ctx.logger.info("accepted opt-in contacts", {
+        contacts: contacts.length,
+      });
+      return goto("scrape", { contacts });
+    }
+    if (dryRun) {
+      return terminate({
+        campaign: ctx.shared.get("campaign"),
+        dryRun: true,
+        reason: "dry-run",
+        plan: [],
+        rejected,
+        note: "A dry run plans new contacts only, and none were supplied or accepted.",
+      });
+    }
+    // No new contacts: a follow-up pass over the stored roster.
+    return goto("send", { enrolled: [] });
   },
 });
 
@@ -538,7 +649,7 @@ const scrape = defineStep({
   next: ["personalize"],
   async run(input: { contacts: Contact[] }, ctx: Ctx) {
     const contacts = input.contacts ?? [];
-    // One scrape per unique domain — many contacts can share a company.
+    // One scrape per unique domain — several contacts can share a company.
     const domains = [
       ...new Set(contacts.map((c) => c.domain).filter((d): d is string => !!d)),
     ];
@@ -546,7 +657,7 @@ const scrape = defineStep({
     if (ctx.shared.get("demoRun")) {
       // `.example` domains don't resolve — this is the canned blurb the page
       // would have returned, standing in for a live fetch that can't succeed.
-      for (const lead of DEMO_LEADS) context.set(lead.domain, lead.context);
+      for (const d of DEMO_CONTACTS) context.set(d.domain, d.context);
     } else {
       for (const domain of domains) {
         try {
@@ -558,7 +669,8 @@ const scrape = defineStep({
           const text = (page.markdown ?? "").trim();
           if (text) context.set(domain, text.slice(0, MAX_CONTEXT_CHARS));
         } catch (err) {
-          // Paywalls, timeouts, DNS — degrade per-domain; the opener falls back.
+          // Paywalls, timeouts, DNS — degrade per-domain; the model still has
+          // the contact's name, role, and opt-in source.
           ctx.logger.warn("scrape failed; no context for domain", {
             domain,
             err: String(err),
@@ -600,18 +712,20 @@ const personalize = defineStep({
         return (
           `[${i}] ${who}${c.position ? `, ${c.position}` : ""} at ` +
           `${c.company || c.domain || "unknown"}\n` +
+          `ASKED VIA: ${c.optInSource ?? "unknown"}\n` +
           `SITE: ${site ? site.slice(0, 600) : "(no site context)"}`
         );
       })
       .join("\n\n");
 
     const system =
-      "You write cold-email openers. For each prospect you get an index, their " +
-      "name/role/company, and a snippet of their company website. Write ONE " +
-      "warm, specific first line per prospect that references something concrete " +
-      "about their company — never generic flattery, no more than ~25 words, no " +
-      "greeting line and no signature.";
-    const prompt = `PROSPECTS (${contacts.length}):\n${prospects}`;
+      "You write the first line of a follow-up email to people who asked to " +
+      "hear from us. For each contact you get an index, their name/role/company, " +
+      "how they reached out, and a snippet of their company website. Write ONE " +
+      "warm, specific first line per contact that acknowledges their request and " +
+      "references something concrete about their company — never generic " +
+      "flattery, no more than ~25 words, no greeting line and no signature.";
+    const prompt = `CONTACTS (${contacts.length}):\n${prospects}`;
 
     const res = await ctx.sapiom.llm.run({
       request: {
@@ -626,11 +740,9 @@ const personalize = defineStep({
     });
     const lines = readOpeners(ctx.sapiom.llm.structuredOf(res, OPENERS_TOOL));
 
-    // A prospect the model wrote no opener for is NOT emailed a generic one.
-    // The old fallback ("I've been following what your team is building") is
-    // exactly the generic flattery the prompt forbids, and it went out to a real
-    // address — so a missing opener now marks the contact undeliverable, which
-    // is a channel `verify`, `send`, and the run summary already understand.
+    // A contact the model wrote no opener for is NOT emailed a generic one
+    // (SAP-2892): it is marked undeliverable, a channel `verify`, `enroll`, and
+    // the run summary already understand.
     const personalized = contacts.map((c, i) => {
       const firstLine = lines[i]?.trim();
       if (firstLine) return { ...c, firstLine };
@@ -641,25 +753,19 @@ const personalize = defineStep({
       };
     });
     const withOpener = personalized.filter((c) => c.firstLine).length;
-    // Not one prospect matched an opener — the model answered about nobody in
-    // this batch. Marking every contact undeliverable would reach `launch`'s
-    // no-deliverable terminal, which reports `unmet: ["leads"]` and "none of
-    // the N lead(s) verified as deliverable": the operator would read "your
-    // leads are bad" for a model failure, about addresses this run never even
-    // checked. Fail the step instead, like every other read here.
+    // Not one contact matched an opener — the model answered about nobody in
+    // this batch. Fail the step rather than report every address as
+    // undeliverable for what is a model failure.
     if (withOpener === 0) {
       throw new Error(
-        "personalize: the model wrote no opener for any prospect in this batch — refusing to report it as an undeliverable lead list.",
+        "personalize: the model wrote no opener for any contact in this batch — refusing to report it as an undeliverable contact list.",
       );
     }
     if (withOpener < contacts.length) {
-      ctx.logger.warn(
-        "some prospects got no opener; they will not be emailed",
-        {
-          contacts: contacts.length,
-          withOpener,
-        },
-      );
+      ctx.logger.warn("some contacts got no opener; they will not be emailed", {
+        contacts: contacts.length,
+        withOpener,
+      });
     }
     ctx.logger.info("wrote personalized openers", {
       contacts: personalized.length,
@@ -671,24 +777,20 @@ const personalize = defineStep({
 
 const verify = defineStep({
   name: "verify",
-  next: ["launch"],
+  next: ["enroll"],
   async run(input: { contacts: Contact[] }, ctx: Ctx) {
     const contacts = input.contacts ?? [];
     const checked: Contact[] = [];
     for (const c of contacts) {
-      // `personalize` already ruled this one out for having no opener the model
-      // actually wrote (SAP-2892). Don't spend a verification on it, and don't
-      // let the demo stand-in or an `unverified` fallback below flip it back to
-      // deliverable — the reason it is out has nothing to do with its address.
+      // `personalize` already ruled this one out for having no opener. Don't
+      // spend a verification on it or flip it back to deliverable below.
       if (c.deliverable === false && c.verifyStatus) {
         checked.push(c);
         continue;
       }
       if (c.demo) {
-        // Same stand-in as `enrich`: email search can't verify an address at a
-        // company that doesn't exist. Deterministically deliverable, so the
-        // demo reaches a real send rather than stopping for a reason the
-        // caller didn't cause.
+        // A `.example` address can't be verified. Deterministically
+        // deliverable, so the demo reaches a real send to the agent's own inbox.
         checked.push({
           ...c,
           deliverable: true,
@@ -707,8 +809,8 @@ const verify = defineStep({
         const deliverable = !badStatus && !res.disposable && !lowScore;
         checked.push({ ...c, deliverable, verifyStatus: status });
       } catch (err) {
-        // If verification itself errors, don't silently drop the lead — send
-        // to it but flag the address as unverified.
+        // The person gave us this address; a failed check is not a reason to
+        // drop them. Send, but flag the address as unverified.
         ctx.logger.warn("verify failed; keeping contact as unverified", {
           email: c.email,
           err: String(err),
@@ -716,32 +818,28 @@ const verify = defineStep({
         checked.push({ ...c, deliverable: true, verifyStatus: "unverified" });
       }
     }
-    const deliverable = checked.filter((c) => c.deliverable).length;
     ctx.logger.info("verified deliverability", {
       contacts: checked.length,
-      deliverable,
+      deliverable: checked.filter((c) => c.deliverable).length,
     });
-    return goto("launch", { contacts: checked });
+    return goto("enroll", { contacts: checked });
   },
 });
 
-const launch = defineStep({
-  name: "launch",
+const enroll = defineStep({
+  name: "enroll",
   next: ["send"],
-  // Terminal too: a dry run returns the plan and ends here instead of dripping.
+  // Terminal too: a dry run returns the plan and ends here.
   terminal: true,
   async run(input: { contacts: Contact[] }, ctx: Ctx) {
     const contacts = input.contacts ?? [];
-    const dryRun = ctx.shared.get("dryRun") ?? true;
-    const campaign = ctx.shared.get("campaign") || "cold-outreach";
-    const sequence = ctx.shared.get("sequence") ?? DEFAULT_SEQUENCE;
+    const campaign = ctx.shared.get("campaign") || DEFAULT_CAMPAIGN;
+    const demoRun = ctx.shared.get("demoRun") ?? false;
     const deliverable = contacts.filter((c) => c.deliverable);
 
     ctx.shared.set("contacts", contacts);
 
-    // Safe path: a dry run returns the full plan — every opener — without
-    // sending, persisting, or entering the drip.
-    if (dryRun) {
+    if (ctx.shared.get("dryRun")) {
       ctx.logger.info("dry run: returning plan without sending", {
         contacts: contacts.length,
         deliverable: deliverable.length,
@@ -750,12 +848,14 @@ const launch = defineStep({
         campaign,
         dryRun: true,
         reason: "dry-run",
-        touches: sequence.length,
-        enriched: contacts.length,
+        touches: (ctx.shared.get("sequence") ?? DEFAULT_SEQUENCE).length,
+        accepted: contacts.length,
         deliverable: deliverable.length,
+        rejected: ctx.shared.get("rejected") ?? [],
         plan: contacts.map((c) => ({
           email: c.email,
           company: c.company,
+          optInSource: c.optInSource,
           deliverable: c.deliverable,
           verifyStatus: c.verifyStatus,
           firstLine: c.firstLine,
@@ -763,282 +863,390 @@ const launch = defineStep({
       });
     }
 
-    // Nobody to write to. Stop here rather than provision a database, enter the
-    // drip, and then suspend on a reply signal no prospect can ever send — and
-    // rather than report an empty campaign as a completed one. This only fires
-    // when the leads actually supplied don't resolve to a deliverable contact;
-    // a `{}` run with no `leads` at all never reaches here — `enrich` already
-    // routed it to the built-in demo batch (`DEMO_LEADS`) instead. Emailing a
-    // real prospect we invented is the one thing this template must never do.
-    if (deliverable.length === 0) {
-      ctx.logger.info("no deliverable contacts — nothing to launch", {
-        enriched: contacts.length,
-      });
-      return terminate(
-        {
-          campaign,
-          dryRun: false,
-          reason: "no-deliverable-contacts",
-          touches: 0,
-          enriched: contacts.length,
-          deliverable: 0,
-          sent: 0,
-          unmet: ["leads"],
-          note:
-            contacts.length === 0
-              ? "None of the supplied leads could be enriched into a contact, so there was nobody to write to and nothing was sent."
-              : `None of the ${contacts.length} lead(s) verified as deliverable, so nothing was sent.`,
-        },
-        { reason: "no deliverable contacts" },
+    // The roster is what carries a contact from one scheduled pass to the
+    // next, so a live run without it cannot keep its promise to follow up.
+    const sql = await openSql(
+      ctx,
+      ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE,
+    );
+    if (!sql) {
+      throw new Error(
+        "enroll: the campaign database is unavailable, so the roster can't be stored and no follow-up could be sent.",
       );
     }
-
-    // Live path: persist the campaign roster (best-effort), then start the drip.
-    const handle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
-    const sql = await openSql(ctx, handle);
-    if (sql) {
-      try {
-        await initSchema(sql);
-        for (const c of deliverable) {
-          await sql`
-            insert into outreach_contacts
-              (campaign, email, full_name, company, position, first_line, status)
-            values
-              (${campaign}, ${c.email}, ${c.fullName ?? null}, ${c.company ?? null},
-               ${c.position ?? null}, ${c.firstLine ?? null}, 'active')
-            on conflict (campaign, email) do update set
-              full_name  = excluded.full_name,
-              company    = excluded.company,
-              position   = excluded.position,
-              first_line = excluded.first_line`;
-        }
-      } catch (err) {
-        ctx.logger.warn("launch: persistence failed, continuing", {
-          err: String(err),
-        });
-      } finally {
-        await sql.end({ timeout: 5 });
+    const enrolled: string[] = [];
+    try {
+      await initSchema(sql);
+      for (const c of deliverable) {
+        const values = sql`
+          (${campaign}, ${c.email}, ${c.fullName ?? null}, ${c.firstName ?? null},
+           ${c.company ?? null}, ${c.position ?? null}, ${c.firstLine ?? null},
+           ${c.optInSource ?? null}, ${demoRun ? "demo" : "active"})`;
+        // Already enrolled keeps its place in the sequence: a person who signs
+        // up twice is not sent touch 1 again. Demo rows are the exception —
+        // every zero-setup run starts them over, so each one sends its touch.
+        const rows = demoRun
+          ? await sql`
+              insert into outreach_contacts
+                (campaign, email, full_name, first_name, company, position,
+                 first_line, opt_in_source, status)
+              values ${values}
+              on conflict (campaign, email) do update set
+                first_line = excluded.first_line, touches_sent = 0,
+                last_sent_at = null, thread_id = null, last_message_id = null
+              returning email`
+          : await sql`
+              insert into outreach_contacts
+                (campaign, email, full_name, first_name, company, position,
+                 first_line, opt_in_source, status)
+              values ${values}
+              on conflict (campaign, email) do nothing
+              returning email`;
+        if (rows.length > 0) enrolled.push(c.email);
       }
+    } finally {
+      await sql.end({ timeout: 5 });
     }
-
-    ctx.shared.set("touchIndex", 0);
-    return goto("send", {});
+    ctx.logger.info("enrolled contacts", {
+      deliverable: deliverable.length,
+      enrolled: enrolled.length,
+    });
+    return goto("send", { enrolled });
   },
 });
 
+/** One roster row as `send` reads it. */
+interface RosterRow {
+  email: string;
+  full_name: string | null;
+  first_name: string | null;
+  company: string | null;
+  position: string | null;
+  first_line: string | null;
+  opt_in_source: string | null;
+  touches_sent: number;
+  thread_id: string | null;
+  last_message_id: string | null;
+  due: boolean;
+}
+
 const send = defineStep({
   name: "send",
-  next: ["advance", "done"],
-  // Static graph edge: on REPLY_SIGNAL, resume at `advance`. Matches the directive.
-  pause: { signal: REPLY_SIGNAL, resumeStep: "advance" },
-  async run(_input: unknown, ctx: Ctx) {
-    const campaign = ctx.shared.get("campaign") || "cold-outreach";
-    const sequence = ctx.shared.get("sequence") ?? DEFAULT_SEQUENCE;
-    const senderName = ctx.shared.get("senderName") || "The team";
-    const dbHandle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
-    const touchIndex = ctx.shared.get("touchIndex") ?? 0;
-    const contacts = ctx.shared.get("contacts") ?? [];
+  next: [],
+  terminal: true,
+  // Every send in the pass failed: the run ends `failed`, with the failures in
+  // its output, rather than `succeeded` having delivered nothing.
+  canFail: true,
+  async run(input: { enrolled?: string[] }, ctx: Ctx) {
+    const campaign = ctx.shared.get("campaign") || DEFAULT_CAMPAIGN;
     const demoRun = ctx.shared.get("demoRun") ?? false;
-    const active = contacts.filter(
-      (c) => c.deliverable && c.status === "active",
-    );
-    const touch = sequence[touchIndex];
+    const overrides = ctx.shared.get("overrides") ?? {};
+    const enrolled = new Set(input?.enrolled ?? []);
 
-    if (active.length === 0 || !touch) {
-      ctx.logger.info("nothing to send", {
-        touchIndex,
-        active: active.length,
-      });
-      return goto("done", {});
+    const sql = await openSql(
+      ctx,
+      ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE,
+    );
+    if (!sql) {
+      throw new Error(
+        "send: the campaign database is unavailable, so the roster can't be read.",
+      );
     }
 
-    const inboxId = await resolveSenderInbox(ctx, senderName);
-    const sql = await openSql(ctx, dbHandle);
-    let sentThisTouch = 0;
+    const failures: SendFailure[] = [];
+    const worked: Contact[] = [];
+    let sent = 0;
+    let replied = 0;
+    let finished = 0;
+    let waiting = 0;
+
     try {
-      for (const c of active) {
-        const subject = render(touch.subject, c, senderName);
-        // The first touch leads with the personalized opener; later touches
-        // reference the thread and skip it. `personalize` marks a contact
-        // undeliverable rather than inventing an opener, so an active contact
-        // on touch 0 always has one — if that ever stops holding, the send is
-        // skipped instead of going out with a canned line.
-        if (touchIndex === 0 && !c.firstLine?.trim()) {
-          ctx.logger.warn("skipping first touch: no personalized opener", {
-            email: c.email,
-          });
+      await initSchema(sql);
+      // Two overlapping passes (a manual run during a scheduled one) would
+      // both find the same touch due. The second one stops here instead.
+      const [{ locked }] = await sql<{ locked: boolean }[]>`
+        select pg_try_advisory_lock(hashtext(${"outreach:" + campaign})) as locked`;
+      if (!locked) {
+        return terminate(
+          {
+            campaign,
+            dryRun: false,
+            demo: demoRun,
+            sent: 0,
+            note: `Another run is already working campaign "${campaign}"; this one sent nothing.`,
+          },
+          { reason: "campaign busy" },
+        );
+      }
+
+      // Campaign config: this run's explicit fields win, then what an earlier
+      // run stored, then the defaults. Stored so a scheduled pass that passes
+      // only `campaign` sends the same sequence from the same inbox.
+      const [stored] = await sql<
+        {
+          sequence: Touch[];
+          drip_ms: string;
+          sender_name: string;
+          inbox_id: string | null;
+        }[]
+      >`select sequence, drip_ms, sender_name, inbox_id
+        from outreach_campaigns where campaign = ${campaign}`;
+      const sequence =
+        overrides.sequence ?? stored?.sequence ?? DEFAULT_SEQUENCE;
+      const dripMs =
+        overrides.dripMs ??
+        (stored ? Number(stored.drip_ms) : DEFAULT_DRIP_DAYS * DAY_MS);
+      const senderName =
+        overrides.senderName ?? stored?.sender_name ?? "The team";
+      ctx.shared.set("sequence", sequence);
+      ctx.shared.set("senderName", senderName);
+      ctx.shared.set("dripMs", dripMs);
+
+      // `due` is computed by Postgres against its own clock, so a retried
+      // pass agrees with the first attempt about who was already sent to.
+      const roster = demoRun
+        ? await sql<RosterRow[]>`
+            select email, full_name, first_name, company, position, first_line,
+                   opt_in_source, touches_sent, thread_id, last_message_id, true as due
+            from outreach_contacts
+            where campaign = ${campaign} and status = 'demo' and touches_sent = 0
+            order by created_at`
+        : await sql<RosterRow[]>`
+            select email, full_name, first_name, company, position, first_line,
+                   opt_in_source, touches_sent, thread_id, last_message_id,
+                   (last_sent_at is null
+                    or last_sent_at + make_interval(secs => ${dripMs / 1000}::float8)
+                       <= now()) as due
+            from outreach_contacts
+            where campaign = ${campaign} and status = 'active'
+              -- A row with no opt-in source predates the opt-in rework (a cold
+              -- lead from the old enrichment step) and is never emailed.
+              and opt_in_source is not null
+            order by created_at`;
+
+      if (roster.length === 0 && !stored) {
+        return terminate(
+          {
+            campaign,
+            dryRun: false,
+            demo: demoRun,
+            reason: "no-contacts",
+            sent: 0,
+            rejected: ctx.shared.get("rejected") ?? [],
+            unmet: ["contacts"],
+            note: `Campaign "${campaign}" has no contacts. Pass \`contacts\` (each with an \`optInSource\`) to enroll people who asked to hear from you.`,
+          },
+          { reason: "no contacts" },
+        );
+      }
+
+      const inboxId =
+        overrides.inboxId ??
+        stored?.inbox_id ??
+        (await resolveSenderInbox(ctx, senderName));
+      await sql`
+        insert into outreach_campaigns (campaign, sequence, drip_ms, sender_name, inbox_id)
+        values (${campaign}, ${sql.json(sequence as unknown as postgres.JSONValue)},
+                ${dripMs}, ${senderName}, ${inboxId})
+        on conflict (campaign) do update set
+          sequence = excluded.sequence, drip_ms = excluded.drip_ms,
+          sender_name = excluded.sender_name, inbox_id = excluded.inbox_id,
+          updated_at = now()`;
+
+      for (const row of roster) {
+        const c: Contact = {
+          email: row.email,
+          fullName: row.full_name ?? undefined,
+          firstName: row.first_name ?? undefined,
+          company: row.company ?? undefined,
+          position: row.position ?? undefined,
+          firstLine: row.first_line ?? undefined,
+          optInSource: row.opt_in_source ?? undefined,
+          deliverable: true,
+          status: demoRun ? "demo" : "active",
+          touchesSent: row.touches_sent,
+          demo: demoRun,
+        };
+        const touchIndex = row.touches_sent;
+
+        if (touchIndex >= sequence.length) {
+          await sql`update outreach_contacts set status = 'done'
+            where campaign = ${campaign} and email = ${c.email}`;
+          finished += 1;
+          worked.push({ ...c, status: "done" });
           continue;
         }
+        if (!row.due) {
+          waiting += 1;
+          worked.push(c);
+          continue;
+        }
+
+        // Before any follow-up, read the thread. Anyone other than the sending
+        // inbox writing in it is a reply, and a reply ends the sequence.
+        if (touchIndex > 0 && row.thread_id) {
+          try {
+            const thread = await ctx.sapiom.email.threads.get(
+              inboxId,
+              row.thread_id,
+            );
+            const self = addressOf(inboxId);
+            if (thread.messages.some((m) => addressOf(m.from) !== self)) {
+              await sql`update outreach_contacts
+                set status = 'replied', replied_at = now()
+                where campaign = ${campaign} and email = ${c.email}`;
+              replied += 1;
+              worked.push({ ...c, status: "replied" });
+              continue;
+            }
+          } catch (err) {
+            // Without the thread we can't rule out a reply, so this contact is
+            // not sent to on this pass. Reported, and retried on the next one.
+            failures.push(toFailure(c.email, touchIndex + 1, err));
+            worked.push(c);
+            continue;
+          }
+        }
+
+        const touch = sequence[touchIndex];
         const body =
           touchIndex === 0
             ? `${c.firstLine}\n\n${render(touch.body, c, senderName)}`
             : render(touch.body, c, senderName);
-        // Zero-setup: the fabricated demo lead is never a real inbox, so every
-        // touch lands in this agent's own Sapiom-hosted demo inbox instead —
-        // a real, inspectable send rather than mail to nobody.
-        const recipient = demoRun ? inboxId : c.email;
-        const finalSubject = demoRun ? `[Demo lead] ${subject}` : subject;
-        const finalBody = demoRun
-          ? `${body}\n\n— Demo lead: ${c.fullName ?? c.firstName} at ${c.company}. Sent here, to this agent's own demo inbox, instead of a real prospect. Pass your own \`leads\` to reach real contacts.`
-          : body;
-        try {
-          const sent = await ctx.sapiom.email.messages.send(inboxId, {
-            to: recipient,
-            subject: finalSubject,
-            text: finalBody,
-          });
-          sentThisTouch += 1;
-          if (sql) {
-            await sql`
-              insert into outreach_touches
-                (campaign, email, touch_index, subject, message_id)
-              values
-                (${campaign}, ${c.email}, ${touchIndex}, ${subject}, ${sent.messageId ?? null})`;
-          }
-        } catch (err) {
-          ctx.logger.warn("send failed for contact", {
+        if (touchIndex === 0 && !c.firstLine?.trim()) {
+          failures.push({
             email: c.email,
-            err: String(err),
+            touch: 1,
+            status: null,
+            code: "no-personalized-opener",
+            error:
+              "No opener was written for this contact, so nothing was sent.",
           });
+          worked.push(c);
+          continue;
+        }
+        const subject = render(touch.subject, c, senderName);
+        try {
+          let result: { messageId: string; threadId: string };
+          if (demoRun) {
+            // The fabricated address is never a real inbox; the demo touch
+            // lands in this agent's own inbox instead.
+            result = await ctx.sapiom.email.messages.send(inboxId, {
+              to: inboxId,
+              subject: `[Demo contact] ${subject}`,
+              text: `${body}\n\n— Demo contact: ${c.fullName ?? c.firstName} at ${c.company}, who "asked" via ${c.optInSource}. Sent here, to this agent's own inbox, instead of a real person. Pass your own \`contacts\` to reach real people.`,
+            });
+          } else if (touchIndex === 0 || !row.last_message_id) {
+            result = await ctx.sapiom.email.messages.send(inboxId, {
+              to: c.email,
+              subject,
+              text: body,
+            });
+          } else {
+            // A reply in the first touch's thread: the contact sees one
+            // conversation, and their answer lands where the check above reads.
+            // `to` is explicit — the default would be the original sender, us.
+            result = await ctx.sapiom.email.messages.reply(
+              inboxId,
+              row.last_message_id,
+              { to: c.email, text: body },
+            );
+          }
+          await sql`update outreach_contacts set
+              touches_sent = touches_sent + 1,
+              last_sent_at = now(),
+              thread_id = coalesce(thread_id, ${result.threadId ?? null}),
+              last_message_id = ${result.messageId ?? null},
+              status = ${demoRun ? "demo" : touchIndex + 1 >= sequence.length ? "done" : "active"}
+            where campaign = ${campaign} and email = ${c.email}`;
+          await sql`insert into outreach_touches
+              (campaign, email, touch_index, subject, message_id)
+            values (${campaign}, ${c.email}, ${touchIndex}, ${subject}, ${result.messageId ?? null})`;
+          sent += 1;
+          worked.push({
+            ...c,
+            touchesSent: touchIndex + 1,
+            status: demoRun
+              ? "demo"
+              : touchIndex + 1 >= sequence.length
+                ? "done"
+                : "active",
+          });
+        } catch (err) {
+          const failure = toFailure(c.email, touchIndex + 1, err);
+          failures.push(failure);
+          ctx.logger.warn("send failed", { ...failure });
+          worked.push(c);
         }
       }
     } finally {
-      if (sql) await sql.end({ timeout: 5 });
+      await sql.end({ timeout: 5 });
     }
 
-    ctx.shared.set("sent", (ctx.shared.get("sent") ?? 0) + sentThisTouch);
-    ctx.logger.info("sent drip touch", {
-      touchIndex,
-      recipients: active.length,
-      sent: sentThisTouch,
-      demo: demoRun,
-    });
+    // The dashboard reads `contacts` from shared state. On an enrolling run
+    // keep what `enroll` stored there (verdicts, contacts that were not
+    // deliverable) with each one's new state, then the rest of the roster.
+    const byEmail = new Map(worked.map((c) => [c.email, c]));
+    const earlier = ctx.shared.get("contacts") ?? [];
+    const seen = new Set(earlier.map((c) => c.email));
+    const merged = [
+      ...earlier.map((c) => ({ ...c, ...(byEmail.get(c.email) ?? {}) })),
+      ...worked.filter((c) => !seen.has(c.email)),
+    ];
+    ctx.shared.set("contacts", merged);
 
-    // Zero-setup stops right here: it has produced the artifact (a real,
-    // personalized send to the demo inbox) and there is no real prospect to
-    // wait on. The multi-touch drip and the durable reply-wait below are the
-    // live-mode upgrade — pass your own `leads` to unlock both.
-    if (demoRun) {
-      ctx.logger.info("zero-setup: stopping after the first touch");
-      return goto("done", {});
-    }
-
-    // Last touch: nothing left to wait for.
-    if (touchIndex >= sequence.length - 1) {
-      return goto("done", {});
-    }
-
-    // Durable wait: idle at $0 until the interval elapses OR a reply lands.
-    const dripMs = ctx.shared.get("dripMs") ?? DEFAULT_DRIP_DAYS * DAY_MS;
-    ctx.logger.info("pausing between touches", {
-      nextTouch: touchIndex + 1,
-      dripMs,
-    });
-    return pauseUntilSignal({
-      signal: REPLY_SIGNAL,
-      resumeStep: "advance",
-      correlationId: ctx.executionId,
-      timeoutMs: dripMs,
-    });
-  },
-});
-
-const advance = defineStep({
-  name: "advance",
-  next: ["send", "done"],
-  // Input is the reply-signal payload (`{ email }`) or empty on timeout.
-  async run(input: { email?: string } | undefined, ctx: Ctx) {
-    const campaign = ctx.shared.get("campaign") || "cold-outreach";
-    const dbHandle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
-    const sequence = ctx.shared.get("sequence") ?? DEFAULT_SEQUENCE;
-    const contacts = ctx.shared.get("contacts") ?? [];
-    const replyEmail = input?.email?.trim().toLowerCase();
-
-    // A reply short-circuits the drip for that prospect.
-    if (replyEmail) {
-      let replied = false;
-      const updated = contacts.map((c) => {
-        if (c.email.toLowerCase() === replyEmail && c.status === "active") {
-          replied = true;
-          return { ...c, status: "replied" as const };
-        }
-        return c;
-      });
-      ctx.shared.set("contacts", updated);
-      if (replied) {
-        ctx.shared.set("replied", (ctx.shared.get("replied") ?? 0) + 1);
-        const sql = await openSql(ctx, dbHandle);
-        if (sql) {
-          try {
-            await sql`
-              update outreach_contacts set status = 'replied', replied_at = now()
-              where campaign = ${campaign} and email = ${replyEmail}`;
-          } catch (err) {
-            ctx.logger.warn("advance: reply persist failed", {
-              err: String(err),
-            });
-          } finally {
-            await sql.end({ timeout: 5 });
-          }
-        }
-        ctx.logger.info("prospect replied; removed from drip", {
-          email: replyEmail,
-        });
-      }
-    }
-
-    const touchIndex = (ctx.shared.get("touchIndex") ?? 0) + 1;
-    ctx.shared.set("touchIndex", touchIndex);
-    const stillActive = (ctx.shared.get("contacts") ?? []).filter(
-      (c) => c.deliverable && c.status === "active",
+    const blocked = failures.some(
+      (f) => f.code === "recipient_not_allowed" || f.status === 403,
     );
-
-    if (stillActive.length > 0 && touchIndex < sequence.length) {
-      return goto("send", {});
-    }
-    return goto("done", {});
-  },
-});
-
-const done = defineStep({
-  name: "done",
-  next: [],
-  terminal: true,
-  async run(_input: unknown, ctx: Ctx) {
-    const contacts = ctx.shared.get("contacts") ?? [];
-    const campaign = ctx.shared.get("campaign") || "cold-outreach";
-    const demoRun = ctx.shared.get("demoRun") ?? false;
-    const summary = {
+    const output = {
       campaign,
       dryRun: false,
       demo: demoRun,
-      touchesSent: ctx.shared.get("touchIndex") ?? 0,
-      enriched: contacts.length,
-      deliverable: contacts.filter((c) => c.deliverable).length,
-      sent: ctx.shared.get("sent") ?? 0,
-      replied: ctx.shared.get("replied") ?? 0,
-      contacts: contacts.map((c) => ({
+      enrolled: enrolled.size,
+      rejected: ctx.shared.get("rejected") ?? [],
+      sent,
+      failed: failures.length,
+      replied,
+      finished,
+      waiting,
+      sendFailures: failures,
+      contacts: merged.map((c) => ({
         email: c.email,
         company: c.company,
         deliverable: c.deliverable,
-        // Why a contact is out, not just that it is: `no-personalized-opener`
-        // is a model miss on that prospect, not a bad address, and the two
-        // read identically from a `deliverable: false` alone.
         verifyStatus: c.verifyStatus,
         status: c.status,
+        touchesSent: c.touchesSent ?? 0,
       })),
       ...(demoRun
         ? {
-            note: "This is a zero-setup demo: enrichment and verification used simulated responses for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior.",
+            note: 'This is a zero-setup demo: three built-in sample contacts, an opener from a real model call, and a first touch actually sent to this agent\'s own Sapiom-hosted inbox — open it to read the drafts. Pass your own `contacts` (each with an `optInSource`) to follow up with real people, then attach a schedule with `{ "campaign": "<name>" }` for the follow-ups.',
           }
-        : {}),
+        : blocked
+          ? {
+              note: "A free sapiom.email inbox only delivers inside your organization. Pass `inboxId` for an inbox on your own domain to reach these contacts.",
+            }
+          : {}),
     };
-    ctx.logger.info("outreach run complete", {
-      sent: summary.sent,
-      replied: summary.replied,
+    ctx.logger.info("follow-up pass complete", {
+      sent,
+      failed: failures.length,
+      replied,
+      waiting,
       demo: demoRun,
     });
-    return terminate(summary);
+
+    if (sent === 0 && failures.length > 0) {
+      return fail(`every send on this pass failed (${failures.length})`, {
+        output,
+      });
+    }
+    return terminate(
+      output,
+      failures.length > 0
+        ? { reason: `${failures.length} send(s) failed` }
+        : undefined,
+    );
   },
 });
 
@@ -1053,8 +1261,7 @@ const OPENERS_TOOL = "emit_openers";
 
 /**
  * Built per call so `i` is bounded to THIS batch. An index past the end used to
- * be droppable-but-silent: every contact ended up without an opener, and
- * `launch`'s no-deliverable terminal then blamed the lead list for it. Bounding
+ * be droppable-but-silent: every contact ended up without an opener. Bounding
  * it at the wire means the model can't produce that shape in the first place.
  */
 function buildOpenersSchema(count: number): Record<string, unknown> {
@@ -1072,18 +1279,18 @@ function buildOpenersSchema(count: number): Record<string, unknown> {
               type: "integer",
               minimum: 0,
               maximum: Math.max(0, count - 1),
-              description: "The prospect's index, as given in the prompt.",
+              description: "The contact's index, as given in the prompt.",
             },
             firstLine: {
               type: "string",
               description:
-                "One warm, specific first line referencing something concrete about their company. Never generic flattery, ~25 words max, no greeting and no signature.",
+                "One warm, specific first line that acknowledges their request and references something concrete about their company. Never generic flattery, ~25 words max, no greeting and no signature.",
             },
           },
           required: ["i", "firstLine"],
           additionalProperties: false,
         },
-        description: "One entry per prospect.",
+        description: "One entry per contact.",
       },
     },
     required: ["lines"],
@@ -1095,10 +1302,9 @@ function buildOpenersSchema(count: number): Record<string, unknown> {
  * Read the forced tool call back into `{ index: opener }`.
  *
  * Throws when the model returned no openers at all. These lines are emailed to
- * real prospects, so there is nothing safe to substitute — and a model error is
- * no longer swallowed either: the whole batch quietly falling back to one canned
- * greeting is precisely a run that says `succeeded` while sending nothing anyone
- * wrote.
+ * real people, so there is nothing safe to substitute — the whole batch quietly
+ * falling back to one canned greeting is precisely a run that says `succeeded`
+ * while sending nothing anyone wrote.
  */
 export function readOpeners(structured: unknown): Record<number, string> {
   if (structured === null || typeof structured !== "object") {
@@ -1117,7 +1323,7 @@ export function readOpeners(structured: unknown): Record<number, string> {
     if (!entry || typeof entry !== "object") continue;
     const r = entry as Record<string, unknown>;
     // `typeof`, not `Number(...)`: `Number(null)` is `0`, so coercing would
-    // quietly file an entry with no index as prospect 0's opener — and prospect
+    // quietly file an entry with no index as contact 0's opener — and contact
     // 0 is a real person who gets emailed it.
     const i = r.i;
     const firstLine = typeof r.firstLine === "string" ? r.firstLine.trim() : "";
@@ -1135,6 +1341,6 @@ export function readOpeners(structured: unknown): Record<number, string> {
 
 export const agent = defineAgent<EntryInput, Shared>({
   name: "cold-outreach-engine",
-  entry: "enrich",
-  steps: { enrich, scrape, personalize, verify, launch, send, advance, done },
+  entry: "intake",
+  steps: { intake, scrape, personalize, verify, enroll, send },
 });

@@ -195,15 +195,15 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
   },
   {
     id: "cold-outreach-engine",
-    name: "Cold Outreach Personalization Engine",
+    name: "Opt-in Lead Follow-up",
     description:
-      "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip the sends.",
-    tags: ["outreach", "email", "fan-out"],
+      "Write a personalized first email to everyone who asked to hear from you, then send scheduled follow-ups that stop on reply.",
+    tags: ["outreach", "email", "opt-in"],
     category: "revenue-marketing",
     cadence: "scheduled",
     stepCount: 6,
     capabilities: ["web.search", "email.send"],
-    // raw 10.2 → Involved. Two model steps — enrichment and the per-prospect
+    // raw 10.2 → Involved. Two model steps — the site read and the per-contact
     // rewrite — are what lift it well past the saga above.
     complexity: {
       score: 4,
@@ -393,29 +393,29 @@ export const MOCK_TEMPLATE_GRAPHS: Record<
   "cold-outreach-engine": {
     steps: [
       {
-        name: "enrich",
-        description: "Enrich the lead list.",
+        name: "intake",
+        description: "Accept the opt-in contacts.",
         capabilities: ["web.search"],
         kind: "entry",
         sublabel: "entry",
       },
       {
         name: "personalize",
-        description: "Write a first line per prospect.",
+        description: "Write a first line per contact.",
         capabilities: [],
         kind: "step",
         sublabel: "step",
       },
       {
         name: "send",
-        description: "Drip the sends.",
+        description: "Send the touches that are due.",
         capabilities: ["email.send"],
         kind: "terminal-success",
         sublabel: "terminal · success",
       },
     ],
     transitions: [
-      { from: "enrich", to: "personalize", label: null, kind: "continue" },
+      { from: "intake", to: "personalize", label: null, kind: "continue" },
       { from: "personalize", to: "send", label: null, kind: "continue" },
     ],
   },

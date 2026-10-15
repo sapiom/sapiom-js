@@ -5,11 +5,11 @@
 // `index.html` and one JSON route, `/api/run`, carrying the latest completed
 // run of the agent: its terminal output (the campaign counts and the run's own
 // note), the contacts it worked with the opener the model wrote for each, the
-// drip sequence it sent from, and the step trail. The page renders that and
+// follow-up sequence it sent from, and the step trail. The page renders that and
 // nothing else: every name, every opener, and every count on screen came out of
 // a run of the agent.
 //
-// The openers are read from the run's shared state, not its output: `done`
+// The openers are read from the run's shared state, not its output: `send`
 // returns each contact's address and status but not the line the model wrote,
 // and that line is the thing this template produces.
 //
@@ -118,6 +118,8 @@ function projectCampaign(shared) {
       position: text(c?.position),
       company: text(c?.company),
       firstLine: text(c?.firstLine),
+      optInSource: text(c?.optInSource),
+      touchesSent: Number.isInteger(c?.touchesSent) ? c.touchesSent : null,
       deliverable: c?.deliverable === true,
       verifyStatus: text(c?.verifyStatus),
       status: text(c?.status),
@@ -141,9 +143,11 @@ function projectOutput(output) {
     campaign: text(o.campaign),
     demo: o.demo === true,
     dryRun: o.dryRun === true,
-    enriched: n(o.enriched),
+    // `enriched` is the count a run before the opt-in rework reported.
+    enrolled: n(o.enrolled) ?? n(o.enriched),
     deliverable: n(o.deliverable),
     sent: n(o.sent),
+    failed: n(o.failed),
     replied: n(o.replied),
     note: text(o.note),
   };

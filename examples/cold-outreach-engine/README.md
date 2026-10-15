@@ -1,64 +1,117 @@
-# Cold Outreach Personalization Engine
+# Opt-in Lead Follow-up
 
-Enrich a lead list, scrape each company site, write a personalized
-first line for every prospect, verify deliverability, then drip touches with
-durable, $0 waits between them — stopping the moment someone replies.
+Follow up with people who asked to hear from you: a demo request, a waitlist
+sign-up, a contact form. The agent reads each contact's company site, writes a
+personalized first line, verifies the address, sends the first email, and
+sends a short sequence of follow-ups on a schedule. Anyone who replies gets no
+further emails.
+
+This template only emails contacts you supply with an `optInSource`. It does
+not look up or write to people who never contacted you. Unsolicited bulk email
+breaks Sapiom's terms of use and the email provider's.
 
 ## What it does
 
 ```
-enrich ──▶ scrape ──▶ personalize ──▶ verify ──▶ launch ──▶ send ⇄ advance ──▶ done
-(email search) (web)   (llm.run)   (email verify) (database) (email)        (terminal)
+intake ──▶ scrape ──▶ personalize ──▶ verify ──▶ enroll ──▶ send
+ (input)    (web)      (llm.run)     (email     (database)  (email: first touch,
+   │                                  verify)               reply check, follow-ups)
+   └──────────── scheduled pass: { "campaign": "..." } ────▶ send
 ```
 
-1. **enrich** — for each lead (`{ domain, company?, fullName? }`), resolve a real
-   contact through email search: use `findEmail` when you name the person or
-   `domainSearch` to surface a decision-maker when you only have the company.
-   Per-lead failures are skipped, never fatal.
-2. **scrape** — read each unique company site (`ctx.sapiom.search.scrape`) for a
-   few lines of context. Bodies are bounded and die at the next step — they never
-   enter shared state.
-3. **personalize** — hand the snippets to the live model
-   (`ctx.sapiom.llm.run`) for one concrete opener per prospect, falling back to
-   a safe generic line when the model returns nothing usable.
-4. **verify** — check each address for deliverability
-   (`ctx.sapiom.search.emailSearch.verifyEmail`) and drop the ones that would
-   bounce before anything sends.
-5. **launch** — persist the campaign roster to a Postgres store the engine owns
-   (`ctx.sapiom.database`), then start the drip. A `dryRun` stops here and returns
-   the full plan — every opener — without sending or persisting.
-6. **send** — deliver the current touch to everyone still active
-   (`ctx.sapiom.email`), log it, then **pause at $0** until the drip interval
-   elapses or a reply lands.
-7. **advance** — wakes on that reply-or-timeout, marks anyone who replied as done,
-   and either loops back for the next touch or ends the run.
+1. **intake** checks the `contacts` you pass. Each one needs an `email` and an
+   `optInSource`, which records where they asked to hear from you. A contact
+   missing either is rejected and listed under `rejected` in the output.
+2. **scrape** reads each company site (`ctx.sapiom.search.scrape`) for context.
+   The site comes from the contact's `domain`, or from their email address when
+   it is not a personal mailbox such as gmail.com. Page bodies are truncated
+   and never enter shared state.
+3. **personalize** asks the live model (`ctx.sapiom.llm.run`) for one first line
+   per contact that acknowledges their request. If the model writes nothing for
+   a contact, that contact is not emailed.
+4. **verify** checks each address (`ctx.sapiom.search.emailSearch.verifyEmail`)
+   and drops any that would bounce.
+5. **enroll** adds the deliverable contacts to the campaign roster in a Postgres
+   database the agent owns (`ctx.sapiom.database`). A contact who is already
+   enrolled keeps their place in the sequence. With `dryRun: true` the run
+   stops here and returns the plan.
+6. **send** makes one pass over the roster:
+   - newly enrolled contacts get the first touch;
+   - for anyone whose next touch is due, it reads their thread
+     (`ctx.sapiom.email.threads.get`) first. A message from anyone other than
+     the sending inbox counts as a reply, and the contact is marked `replied`;
+   - follow-ups go out as replies in the first touch's thread
+     (`ctx.sapiom.email.messages.reply`).
 
-Input: `{ "leads": [{ "domain": "acme.com", "fullName": "Jordan Rivera" }], "senderName": "Dana", "dripIntervalDays": 3, "dryRun": true }`.
+   The run then ends. Every failed send is listed under `sendFailures` in the
+   output. If every send on a pass fails, the run ends `failed`.
 
-- `leads` supplies the list; a `domain` is enough, a `fullName` sharpens the match.
-- `sequence` overrides the default three touches; `senderName` signs the mail.
-- `dripIntervalDays` sets the gap between touches (default 3).
-- `dryRun: true` returns the plan and openers without sending, persisting, or waiting.
+Input for a first run:
+
+```json
+{
+  "campaign": "spring-demo-requests",
+  "contacts": [
+    {
+      "email": "jordan@acme.com",
+      "optInSource": "demo request form",
+      "fullName": "Jordan Rivera",
+      "company": "Acme"
+    }
+  ],
+  "senderName": "Dana",
+  "inboxId": "dana@mail.yourcompany.com",
+  "dripIntervalDays": 3
+}
+```
+
+- `contacts`: people to enroll. `email` and `optInSource` are required.
+  `fullName`, `firstName`, `lastName`, `position`, `company` and `domain` are
+  optional. A run takes at most 25.
+- `campaign`: the roster name. Defaults to `opt-in-follow-up`.
+- `sequence`: overrides the default three touches. Only the first touch uses
+  its `subject`, because later touches are replies in the same thread.
+- `dripIntervalDays`: days between touches. The default is 3.
+- `senderName`: the name used to sign the email.
+- `inboxId`: the inbox to send from. A free `sapiom.email` inbox only delivers
+  inside your own organization; anything else fails with 403
+  `recipient_not_allowed`. To reach real contacts, create an inbox on your own
+  domain and pass its address here.
+- `dryRun: true`: returns every opener without sending or storing anything.
+
+`sequence`, `dripIntervalDays`, `senderName` and `inboxId` are saved with the
+campaign. A later run that passes only `campaign` uses the saved values.
+
+### Follow-ups run on a schedule
+
+There is no paused run waiting between touches. A pause timeout fails the run
+on Sapiom; it does not resume it. A wait-then-send loop would therefore stop
+after the first email.
+
+Instead, attach a cron trigger to the deployed agent that runs it with
+`{ "campaign": "spring-demo-requests" }`. For example, use
+`sapiom_dev_agents_schedule` with kind `schedule_cron` and the expression
+`0 9 * * 1-5`. Each scheduled run is one pass:
+
+- it sends whatever is due;
+- it stops the sequence for anyone who replied;
+- it marks finished anyone who has had every touch.
+
+Two overlapping runs on the same campaign do not both send: the second one
+stops without sending anything.
 
 ### Zero-setup: `{}`
 
-With no `leads` at all, `enrich` works `DEMO_LEADS` — three built-in, fabricated
-companies and contacts — instead of stopping with nobody to write to. The email
-search capability cannot find or verify a real person at a fabricated company,
-so `enrich` and `verify` simulate its response for these deterministically;
-`personalize` still calls the live model, `launch` still persists the
-campaign, and `send` still delivers the first touch for real — to this
-agent's own Sapiom-hosted demo inbox (`resolveSenderInbox`), never to the
-fabricated address. The run stops right after that touch: the multi-touch
-drip and the durable reply-wait have no real prospect to wait on in demo
-mode, and are what passing your own `leads` unlocks.
+With no `contacts` and no `campaign`, the run works `DEMO_CONTACTS`: three
+fabricated opt-ins at `.example` companies.
 
-### The durable wait
-
-Between touches the run suspends via `pauseUntilSignal` with a timeout: it costs
-nothing while idle, resumes on its own when the interval passes, and
-short-circuits the instant a `reply.received` signal arrives — so a prospect who
-answers never gets the next follow-up.
+- **Stand-ins:** `scrape` and `verify` use canned stand-ins for these contacts.
+- **Real calls:** `personalize` calls the live model, `enroll` writes to the
+  database, and `send` delivers the first touch.
+- **Where the demo email goes:** `send` delivers to this agent's own
+  Sapiom-hosted inbox (`resolveSenderInbox`), never to the fabricated address.
+- **No follow-ups:** demo contacts are stored with status `demo`, so no
+  scheduled run ever follows them up.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -72,24 +125,27 @@ answers never gets the next follow-up.
    `sapiom_status`. Your agent becomes an API-key principal; each step inherits
    that authority to call its metered capability.
 
-3. From this directory: `npm install`, then drive the lifecycle via the MCP —
-   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` (capabilities
-   stubbed; pass `dryRun: true` so the send, DB, and drip are skipped, free) →
-   `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run`
-   (a real, billed run that enriches, personalizes, verifies, and sends).
+3. From this directory, run `npm install`. Then drive the lifecycle through the
+   MCP:
+   - `sapiom_dev_agents_check`
+   - `sapiom_dev_agents_run_local`: capabilities are stubbed. Pass
+     `dryRun: true`, which skips the database and the send and costs nothing.
+   - `sapiom_dev_agents_link`, then `sapiom_dev_agents_deploy`
+   - `sapiom_dev_agents_run`: a real, billed run that enrolls the contacts and
+     sends the first touch.
 
-4. To end the drip early when a prospect replies, fire the `reply.received`
-   signal with the `workflow_signal` MCP tool, passing `{ "email": "..." }` and
-   the run's `executionId` as the `correlationId`. To run it on a cadence, attach
-   the `schedule` as a cron trigger on the deployed agent.
+4. Attach the schedule with `sapiom_dev_agents_schedule`, passing the input
+   `{ "campaign": "<name>" }`, so the follow-ups go out.
 
 ## Files
 
-- `index.ts` — the agent (edit this).
-- `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
-- `app/` — the dashboard this template ships (`node server.mjs`): every
-  prospect with the opener the model wrote and the email it went out in, the
-  drip sequence, and the run's step timings. See `app/README.md`. `preview.png`
-  is its screenshot, referenced from `template.json` → `app.preview`.
+- `index.ts`: the agent (edit this).
+- `index.test.mjs`: unit tests for contact intake, reply detection and opener
+  parsing (`npm test`).
+- `package.json` / `tsconfig.json`: pinned SDK deps and typecheck config.
+- `app/`: the dashboard this template ships (`node server.mjs`). It shows every
+  contact with the opener the model wrote and the email it went out in, the
+  sequence, and the run's step timings. See `app/README.md`. `preview.png` is
+  its screenshot, referenced from `template.json` → `app.preview`.
 
 Run `npm run typecheck` to confirm it compiles.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { readOpeners } from "./index.ts";
+import { addressOf, normalizeContacts, readOpeners } from "./index.ts";
 
 test("reads the forced tool call's openers, keyed by prospect index", () => {
   assert.deepEqual(
@@ -71,4 +71,53 @@ test("an entry with no prospect index is dropped, not filed as prospect 0", () =
     }),
     { 1: "Belongs to prospect 1." },
   );
+});
+
+// ── SAP-4028: only people who asked to hear from you are emailed ────────────
+
+test("a contact without an optInSource is rejected, not emailed", () => {
+  const { contacts, rejected } = normalizeContacts([
+    { email: "ana@acme.com", optInSource: "demo request form" },
+    { email: "stranger@acme.com" },
+    { email: "blank@acme.com", optInSource: "   " },
+  ]);
+  assert.deepEqual(
+    contacts.map((c) => c.email),
+    ["ana@acme.com"],
+  );
+  assert.deepEqual(
+    rejected.map((r) => r.email),
+    ["stranger@acme.com", "blank@acme.com"],
+  );
+  assert.match(rejected[0].reason, /optInSource/);
+});
+
+test("an invalid address is rejected and a duplicate is enrolled once", () => {
+  const { contacts, rejected } = normalizeContacts([
+    { email: "not-an-address", optInSource: "waitlist" },
+    { email: "Ana@Acme.com", optInSource: "waitlist" },
+    { email: "ana@acme.com", optInSource: "demo request form" },
+  ]);
+  assert.equal(contacts.length, 1);
+  assert.equal(contacts[0].email, "ana@acme.com");
+  assert.deepEqual(rejected, [
+    { email: "not-an-address", reason: "missing or invalid email" },
+  ]);
+});
+
+test("the company site comes from the address unless it is a personal mailbox", () => {
+  const { contacts } = normalizeContacts([
+    { email: "ana@acme.com", optInSource: "waitlist" },
+    { email: "bo@gmail.com", optInSource: "waitlist" },
+    { email: "cy@gmail.com", optInSource: "waitlist", domain: "cyco.io" },
+  ]);
+  assert.deepEqual(
+    contacts.map((c) => c.domain),
+    ["acme.com", undefined, "cyco.io"],
+  );
+});
+
+test("reply detection compares bare addresses", () => {
+  assert.equal(addressOf("Dana <Dana@Mail.Acme.com>"), "dana@mail.acme.com");
+  assert.equal(addressOf("ana@acme.com"), "ana@acme.com");
 });
