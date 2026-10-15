@@ -33,7 +33,10 @@ describe("server instructions", () => {
     // from the served endpoint, body and digest together. Editing the body by hand
     // fails this; the fix is to re-run the script, never to re-point the digest.
     expect(AUTHORING_INSTRUCTIONS_DIGEST).toMatch(/^[0-9a-f]{64}$/);
-    expect(AUTHORING_INSTRUCTIONS_RELEASE).toMatch(/^\d+\.\d+$/);
+    // A release id is either a version (2.14) or a date (YYYY-MM-DD).
+    expect(AUTHORING_INSTRUCTIONS_RELEASE).toMatch(
+      /^(\d+\.\d+|\d{4}-\d{2}-\d{2})$/,
+    );
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
