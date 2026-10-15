@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACTIONS,
+  accountLabel,
   decodeAction,
   draftCard,
   encodeAction,
@@ -114,7 +115,18 @@ describe("issueCard", () => {
       { action_id: "issue.take", value: "iss-1" },
       { action_id: "issue.handled", value: "iss-1" },
       { action_id: "issue.close", value: "iss-1" },
+      { action_id: "issue.assign", type: "users_select" },
     ]);
+  });
+
+  it("offers Assign on every open card, preset to the owner", () => {
+    const pick = (over: Partial<typeof issue>) =>
+      buttons(issueCard({ ...issue, ...over }, account)).find(
+        (b) => b.action_id === "issue.assign",
+      ) as Record<string, unknown> | undefined;
+    expect(pick({ ownerSlackId: "U1" })).toMatchObject({ initial_user: "U1" });
+    expect(pick({})).not.toHaveProperty("initial_user");
+    expect(pick({ status: "closed" })).toBeUndefined();
   });
 
   it("offers Handled only while the ball is with the team", () => {
@@ -130,15 +142,18 @@ describe("issueCard", () => {
     ]);
   });
 
-  it("drops Take once owned and all buttons once closed", () => {
+  it("drops Take once owned and every button but Reopen once closed", () => {
     expect(
       buttons(issueCard({ ...issue, ownerSlackId: "U1" }, account)).map(
         (b) => b.action_id,
       ),
-    ).toEqual(["issue.handled", "issue.close"]);
-    expect(buttons(issueCard({ ...issue, status: "closed" }, account))).toEqual(
-      [],
-    );
+    ).toEqual(["issue.handled", "issue.close", "issue.assign"]);
+    // A closed card offers only Reopen.
+    expect(
+      buttons(issueCard({ ...issue, status: "closed" }, account)).map(
+        (b) => b.action_id,
+      ),
+    ).toEqual(["issue.reopen"]);
   });
 
   it("offers Resolved only while the issue is On Hold", () => {
@@ -149,6 +164,7 @@ describe("issueCard", () => {
     ).toMatchObject([
       { action_id: "issue.resolve", value: "iss-1" },
       { action_id: "issue.close", value: "iss-1" },
+      { action_id: "issue.assign" },
     ]);
   });
 
@@ -313,5 +329,16 @@ describe("workingCard", () => {
     expect(workingCard(undefined, "draft.actions", "approve", "U1")).toBeNull();
     expect(workingCard([card[0]], "draft.actions", "approve", "U1")).toBeNull();
     expect(workingCard(card, "issue.actions", "close", "U1")).toBeNull();
+  });
+});
+
+describe("accountLabel", () => {
+  it("shows an account named after its channel as the channel, others escaped", () => {
+    expect(accountLabel({ name: "C0ABC123", slackChannelId: "C0ABC123" })).toBe(
+      "<#C0ABC123>",
+    );
+    expect(accountLabel({ name: "A & B", slackChannelId: "C0ABC123" })).toBe(
+      "A &amp; B",
+    );
   });
 });

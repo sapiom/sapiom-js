@@ -277,6 +277,30 @@ async function rearmTimers() {
   };
 }
 
+/**
+ * Start the controller's review of the selected desk's open tickets: Jev judges each one and the
+ * resolved ones close or get a "Looks resolved" line (`_shared/resolve.ts`). `dryRun` only reports.
+ */
+async function reviewTickets(desk: string, dryRun: boolean) {
+  const slug = agentByKey(CONTROLLER)!.slug;
+  const definitionId = (await definitionIds()).get(slug);
+  if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
+  const started = await sapiom<{
+    executionId?: string;
+    id?: string;
+    status?: string;
+  }>("POST", "/v1/workflows/executions", {
+    definitionId,
+    input: { review: { desk, dryRun } },
+  });
+  return {
+    desk,
+    dryRun,
+    executionId: started.executionId ?? started.id ?? null,
+    status: started.status ?? null,
+  };
+}
+
 /** Turn one agent on or off; returns the trigger ids it created, resumed and deleted. */
 async function setAgent(key: string, on: boolean) {
   const agent = agentByKey(key);
@@ -488,14 +512,19 @@ function members(d: Db, desk: Desk) {
   const cached = memberLists.get(desk.id);
   if (cached && Date.now() - cached.at <= MEMBERS_TTL_MS) return cached.list;
   const list = (async () => {
-    const [people, oncall, escalation] = await Promise.all([
+    const [people, oncall, escalation, team] = await Promise.all([
       deskPeople(d, desk.id),
       oncallFor(d, desk),
       deskEscalation(d, desk.slug),
+      getConfigOr(d, "team.members", []),
     ]);
+    // The Settings roster too, so a teammate who has not worked this desk yet can be handed a ticket.
+    const roster = team
+      .filter((m) => !m.desks?.length || m.desks.includes(desk.slug))
+      .map((m) => m.slackId);
     const ids = [
       ...new Set(
-        [oncall, escalation?.oncallSlackId, ...people].filter(
+        [oncall, escalation?.oncallSlackId, ...people, ...roster].filter(
           (x): x is string => !!x,
         ),
       ),
@@ -621,8 +650,12 @@ async function ticketAction(
   if (!t) throw new HttpError(404, "ticket not found");
   // Only someone on the desk's list: the org key could otherwise record any Slack id as the clicker.
   const actor = typeof body.actor === "string" ? body.actor : "";
-  if (!(await members(d, desk)).members.some((m) => m.id === actor))
+  const people = (await members(d, desk)).members;
+  if (!people.some((m) => m.id === actor))
     throw new HttpError(400, "pick who you are acting as");
+  const assignee = typeof body.to === "string" ? body.to : undefined;
+  if (verb === "assign" && !people.some((m) => m.id === assignee))
+    throw new HttpError(400, "pick a teammate on this desk's list");
   const plan = planAction(
     verb,
     {
@@ -637,6 +670,8 @@ async function ticketAction(
       draft: t.pendingDraft,
     },
     actor,
+    undefined,
+    assignee,
   );
   if (!plan.ok) throw new HttpError(plan.status, plan.reason);
   const result = await sapiom<{
@@ -1042,6 +1077,13 @@ const POST: [RegExp, Handler][] = [
   // Run now: one controller run that resets every open ticket's timer; anything overdue fires
   // within a minute.
   [/^\/api\/controller\/run$/, () => rearmTimers()],
+  [
+    /^\/api\/controller\/review$/,
+    (_, body, url) =>
+      withConsoleDb(async (d) =>
+        reviewTickets((await deskOf(d, url)).slug, body.dryRun === true),
+      ),
+  ],
   [
     /^\/api\/board\/reset$/,
     async (_, body, url) => {

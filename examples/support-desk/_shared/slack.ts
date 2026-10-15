@@ -302,7 +302,13 @@ export async function replies(
 export async function userInfo(
   ctx: SlackCtx,
   user: string,
-): Promise<{ id: string; name: string; email?: string; teamId?: string }> {
+): Promise<{
+  id: string;
+  name: string;
+  email?: string;
+  teamId?: string;
+  isBot?: boolean;
+}> {
   const out = await call<Awaited<ReturnType<SlackApi["userInfo"]>>>(
     ctx,
     "users.info",
@@ -320,12 +326,13 @@ export async function userInfo(
     user;
   // Slack's own field, passed through by the connector: the person's home workspace, which for a
   // Slack Connect guest is theirs, not ours.
-  const teamId = (u as { team_id?: unknown }).team_id;
+  const extra = u as { team_id?: unknown; is_bot?: unknown };
   return {
     id: u.id,
     name,
     email: u.profile?.email,
-    ...(typeof teamId === "string" && { teamId }),
+    ...(typeof extra.team_id === "string" && { teamId: extra.team_id }),
+    ...(extra.is_bot === true && { isBot: true }),
   };
 }
 

@@ -2,7 +2,7 @@
  * The pure half of the digest: SLA per priority, issue age, and the Slack message for one desk.
  * No I/O, so the grouping, ordering and size limits are unit-tested (`digest.test.ts`).
  */
-import { escapeMrkdwn, statusLabel } from "../../_shared/blocks";
+import { accountLabel, escapeMrkdwn, statusLabel } from "../../_shared/blocks";
 import { OPEN_STATUSES, type IssueStatus } from "../../_shared/issues";
 import type { Block } from "../../_shared/slack";
 
@@ -22,8 +22,42 @@ export interface DigestIssue {
   priority: string | null;
   title: string | null;
   accountName: string;
+  /** The account's Slack channel: an account named after it shows as `#channel-name`. */
+  accountChannel?: string | null;
   ownerSlackId: string | null;
   createdAt: Date;
+  /** Where the line's Open button goes: the customer's message, else the triage card. */
+  url?: string | null;
+}
+
+/** The statuses where the ball is with the team; only these can be past SLA. */
+export const ON_TEAM: readonly IssueStatus[] = ["new", "on_you"];
+
+/** `@U096M2LJEM7` in a stored title (mentions are kept inert) as `@Ilan`, when the name is known. */
+export function nameIds(
+  text: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  return text.replace(/@([UW][A-Z0-9]{6,})\b/g, (whole, id: string) =>
+    names.has(id) ? `@${names.get(id)}` : whole,
+  );
+}
+
+/** The user ids a title mentions, for {@link nameIds}. */
+export function idsIn(text: string | null): string[] {
+  return text
+    ? [...text.matchAll(/@([UW][A-Z0-9]{6,})\b/g)].map((m) => m[1])
+    : [];
+}
+
+/**
+ * An account named after its channel id (an unlisted channel's account) shows as Slack's channel
+ * link, which renders the channel's name and notifies nobody.
+ */
+function accountOf(i: DigestIssue): string {
+  return i.accountChannel && i.accountName === i.accountChannel
+    ? accountLabel({ name: i.accountName, slackChannelId: i.accountChannel })
+    : field(i.accountName);
 }
 
 /** A priority the table does not know (or none) counts as `normal`, as intake defaults it. */
@@ -83,9 +117,11 @@ export function digestMessage(input: {
     .filter((i) => OPEN_STATUSES.includes(i.status))
     .map((i) => ({
       ...i,
+      // Waiting on the customer or on engineering is not the team being late.
       pastSla:
+        ON_TEAM.includes(i.status) &&
         now.getTime() - i.createdAt.getTime() >=
-        slaHoursFor(i.priority, sla) * 3600_000,
+          slaHoursFor(i.priority, sla) * 3600_000,
     }))
     .sort(byUrgency);
   const past = ranked.filter((i) => i.pastSla).length;
@@ -99,20 +135,33 @@ export function digestMessage(input: {
   const text = `Daily digest for ${deskName}: ${summary}`;
 
   const line = (i: Ranked) => {
-    // Plain text: Slack attaches a preview to a link to the card, and the preview's Take and Close
-    // buttons send nothing.
+    // Plain text: Slack attaches a preview to a link in the text (a frozen copy of the card or of
+    // the customer's message), so the link is the line's Open button instead.
     const ref = `#${i.number}`;
-    const title = field(i.title ?? "(untitled)");
+    const title = field(nameIds(i.title ?? "(untitled)", owners));
     const owner = i.ownerSlackId
       ? field(owners.get(i.ownerSlackId) ?? i.ownerSlackId)
       : "unassigned";
     const parts = [
-      `${ref} ${field(i.accountName)}: ${title}`,
+      `${ref} ${accountOf(i)}: ${title}`,
       formatAge(now.getTime() - i.createdAt.getTime()),
       owner,
     ];
     if (i.pastSla) parts.push("*past SLA*");
     return parts.join(" · ");
+  };
+
+  /** One issue per section, so each carries its own Open button. */
+  const item = (i: Ranked): Block => {
+    const block = section(line(i).slice(0, maxChars));
+    if (i.url)
+      block.accessory = {
+        type: "button",
+        action_id: "digest.open",
+        text: { type: "plain_text", text: "Open" },
+        url: i.url,
+      };
+    return block;
   };
 
   // Match the Console's status order so readers can compare the digest with the board.
@@ -121,14 +170,8 @@ export function digestMessage(input: {
     for (const status of OPEN_STATUSES) {
       const group = list.filter((i) => i.status === status);
       if (!group.length) continue;
-      let buf = `*${statusLabel(status)} (${group.length})*`;
-      for (const l of group.map(line)) {
-        if (buf.length + 1 + l.length > maxChars) {
-          out.push(section(buf));
-          buf = l;
-        } else buf += `\n${l}`;
-      }
-      out.push(section(buf));
+      out.push(section(`*${statusLabel(status)} (${group.length})*`));
+      for (const i of group) out.push(item(i));
     }
     return out;
   };

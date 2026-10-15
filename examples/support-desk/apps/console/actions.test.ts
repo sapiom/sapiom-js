@@ -105,6 +105,21 @@ describe("planAction", () => {
     );
   });
 
+  it("builds Assign as the card's user picker with the teammate picked", () => {
+    const plan = planAction("assign", target(), ACTOR, "n3", "U0ILAN");
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.payload.actions[0]).toMatchObject({
+      action_id: "issue.assign",
+      type: "users_select",
+      selected_user: "U0ILAN",
+      value: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(planAction("assign", target(), ACTOR, "n4")).toMatchObject({
+      ok: false,
+      status: 400,
+    });
+  });
+
   it("builds the click for a draft verb on the draft card", () => {
     const plan = planAction("approve", target(), ACTOR, "n2");
     if (!plan.ok) throw new Error(plan.reason);
@@ -116,10 +131,18 @@ describe("planAction", () => {
   });
 
   it("refuses what the Slack card would not offer", () => {
-    expect(planAction("reopen", target(), ACTOR)).toMatchObject({
+    expect(planAction("bogus", target(), ACTOR)).toMatchObject({
       ok: false,
       status: 400,
     });
+    // Reopen only on a closed ticket, Handled only while the ball is with the team.
+    expect(planAction("reopen", target(), ACTOR)).toMatchObject({
+      ok: false,
+      status: 409,
+    });
+    expect(
+      planAction("handled", target({ status: "on_customer" }), ACTOR),
+    ).toMatchObject({ ok: false, status: 409 });
     expect(
       planAction("close", target({ status: "closed" }), ACTOR),
     ).toMatchObject({

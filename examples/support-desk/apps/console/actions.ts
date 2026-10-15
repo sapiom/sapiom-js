@@ -20,8 +20,7 @@ import { SlackBlockActions } from "../../_shared/events";
 export const ACTION_TYPE = "slack.block_actions";
 
 export type ActionVerb =
-  | (typeof ACTIONS.issue)[number]
-  | (typeof ACTIONS.draft)[number];
+  (typeof ACTIONS.issue)[number] | (typeof ACTIONS.draft)[number];
 
 export interface ActionTarget {
   issue: {
@@ -59,6 +58,7 @@ const ownerOf = (verb: string): ActionOwner | null =>
 /**
  * The click to emit for `verb` on the target, or why the Slack card would not offer that button:
  * Take only on an open, unowned issue; Resolved only on an On Hold one; Close only on an open one;
+ * Handled only on a New or On You one; Reopen only on a closed one;
  * the draft verbs only while a draft is pending and its card is posted.
  */
 export function planAction(
@@ -67,13 +67,27 @@ export function planAction(
   /** The Slack user id the viewer acts as. */
   actor: string,
   nonce: string = randomUUID(),
+  /** For `assign`: the teammate who gets the ticket. */
+  assignee?: string,
 ): ActionPlan {
   const owner = ownerOf(verb);
   if (!owner)
     return { ok: false, status: 400, reason: `unknown action '${verb}'` };
   const { issue } = target;
-  if (issue.status === "closed")
+  if (verb === "assign" && !assignee)
+    return { ok: false, status: 400, reason: "pick who gets the ticket" };
+  if (verb === "assign" && assignee === issue.ownerSlackId)
+    return { ok: false, status: 409, reason: "they already own it" };
+  if (verb === "reopen" && issue.status !== "closed")
+    return { ok: false, status: 409, reason: "the ticket is not closed" };
+  if (issue.status === "closed" && verb !== "reopen")
     return { ok: false, status: 409, reason: "the ticket is closed" };
+  if (verb === "handled" && issue.status !== "new" && issue.status !== "on_you")
+    return {
+      ok: false,
+      status: 409,
+      reason: "the ticket is not waiting on the team",
+    };
 
   let value: string;
   let channel: string;
@@ -127,7 +141,10 @@ export function planAction(
         action_id: encodeAction(owner, verb),
         block_id: `${owner}.actions`,
         value,
-        type: "button",
+        // Assign is the card's user picker; every other verb is a button.
+        ...(verb === "assign"
+          ? { type: "users_select", selected_user: assignee }
+          : { type: "button" }),
       },
     ],
   });

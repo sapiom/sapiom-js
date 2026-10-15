@@ -89,6 +89,8 @@ export const SlackAction = z.object({
   value: z.string().optional(),
   type: z.string(),
   action_ts: z.string().optional(),
+  /** A `users_select` pick: the Slack user chosen (the card's Assign). */
+  selected_user: z.string().optional(),
 });
 export type SlackAction = z.infer<typeof SlackAction>;
 

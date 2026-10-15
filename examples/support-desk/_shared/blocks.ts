@@ -14,7 +14,7 @@ export type ActionOwner = (typeof ACTION_OWNERS)[number];
 
 /** The verbs M1 ships. A new verb is a new entry here plus a handler in the owning agent. */
 export const ACTIONS = {
-  issue: ["take", "close", "resolve"],
+  issue: ["take", "close", "resolve", "handled", "reopen", "assign"],
   draft: ["approve", "escalate", "dismiss"],
 } as const satisfies Record<ActionOwner, readonly string[]>;
 
@@ -87,8 +87,22 @@ export function mrkdwnLink(url: string, text: string): string {
   return `<${url}|${text}>`;
 }
 
+/**
+ * An account's name as mrkdwn. An account named after its channel id (one created from a channel
+ * not listed in `channels.customer`) shows as Slack's channel link, which renders the channel's
+ * name and notifies nobody.
+ */
+export function accountLabel(account: {
+  name: string;
+  slackChannelId?: string | null;
+}): string {
+  return account.slackChannelId && account.name === account.slackChannelId
+    ? `<#${account.slackChannelId}>`
+    : escapeMrkdwn(account.name);
+}
+
 /** The customer message that opened the issue, when the row knows it. */
-function customerLink(issue: Issue): string | null {
+export function customerLink(issue: Issue): string | null {
   return issue.customerChannel && issue.customerRootTs
     ? permalink(issue.customerChannel, issue.customerRootTs)
     : null;
@@ -157,7 +171,7 @@ export function issueCard(
       block_id: "issue.header",
       text: {
         type: "mrkdwn",
-        text: `*#${issue.number} · ${escapeMrkdwn(account.name)}*\n${customer ? mrkdwnLink(customer, title) : title}`,
+        text: `*#${issue.number} · ${accountLabel(account)}*\n${customer ? mrkdwnLink(customer, title) : title}`,
       },
     },
     {
@@ -178,6 +192,19 @@ export function issueCard(
     buttons.push(button("issue", "resolve", "Resolved", issue.id));
   if (issue.status !== "closed")
     buttons.push(button("issue", "close", "Close", issue.id));
+  // Hand the ticket to a teammate (or escalate it to one): they become the owner and are mentioned.
+  if (issue.status !== "closed") {
+    const pick: Block = {
+      type: "users_select",
+      action_id: encodeAction("issue", "assign"),
+      placeholder: { type: "plain_text", text: "Assign…" },
+    };
+    if (issue.ownerSlackId) pick.initial_user = issue.ownerSlackId;
+    buttons.push(pick);
+  }
+  // Closed by mistake, or closed on its own by the resolve check: back to On You.
+  if (issue.status === "closed")
+    buttons.push(button("issue", "reopen", "Reopen", issue.id));
   if (buttons.length)
     blocks.push({
       type: "actions",
@@ -304,7 +331,50 @@ const WORKING: Record<string, string> = {
   close: "Closing",
   handled: "Marking handled",
   resolve: "Resolving",
+  reopen: "Reopening",
+  assign: "Assigning",
 };
+
+/**
+ * The triage-thread line for an issue the desk closed on its own (Jev judged it resolved, or the
+ * customer went quiet), with Reopen: a wrong close costs one click, not a lost customer.
+ */
+export function autoClosedNote(issue: Issue, why: string): Block[] {
+  return [
+    {
+      type: "section",
+      block_id: "resolve.closed",
+      text: {
+        type: "mrkdwn",
+        text: `:white_check_mark: Closed #${issue.number}: ${why}`,
+      },
+    },
+    {
+      type: "actions",
+      block_id: "resolve.actions",
+      elements: [button("issue", "reopen", "Reopen", issue.id)],
+    },
+  ];
+}
+
+/** "This looks resolved": Jev was not sure enough to close #n itself, so a teammate decides. */
+export function closeSuggestion(issue: Issue, why: string): Block[] {
+  return [
+    {
+      type: "section",
+      block_id: "resolve.suggest",
+      text: {
+        type: "mrkdwn",
+        text: `*Looks resolved:* #${issue.number}. ${why}`,
+      },
+    },
+    {
+      type: "actions",
+      block_id: "resolve.actions",
+      elements: [button("issue", "close", "Close", issue.id, "primary")],
+    },
+  ];
+}
 
 /**
  * The clicked card with its actions block (`actionBlockId`, or the only one when undefined) replaced

@@ -98,6 +98,17 @@ function makeCtx(executionId: string, jev?: IntakeJev | Error) {
   return { ...made, calls, slack };
 }
 
+const nextMoveAt = (p: number, next = p >= 0.5 ? "done" : "team_work") =>
+  ({
+    next_move: {
+      choice: next,
+      probabilities: { done: p, [next]: next === "done" ? p : 1 - p },
+    },
+  }) as unknown as IntakeJev;
+
+const questionsOf = (spec: unknown) =>
+  Object.keys((spec as { questions: Record<string, unknown> }).questions);
+
 const asJev = (isIssue: number, linked = "new", p = 0.9): IntakeJev => ({
   is_issue: { noul: isIssue },
   category: { choice: "bug", probabilities: { bug: 1 } },
@@ -279,7 +290,8 @@ describe("intake agent", () => {
       fup.ctx,
     );
     expect(linked.output).toMatchObject({ outcome: "linked", issueId });
-    expect(fup.calls).toHaveLength(0);
+    // No link call; one resolve check, which fails here, so the follow-up hands the ball back.
+    expect(fup.calls.map(questionsOf)).toEqual([["next_move"]]);
     expect((await getIssue(db, issueId)).status).toBe("on_you");
     // A follow-up redraws the card and posts nothing: no copy of the message in the triage thread.
     expect(fup.slack("chat.postMessage")).toEqual([]);
@@ -372,8 +384,15 @@ describe("intake agent", () => {
         text: "Closed by <@U0TEAMMATE1>",
       }),
     ]);
-    const card = c.slack("chat.update")[0] as { blocks: { type: string }[] };
-    expect(card.blocks.some((b) => b.type === "actions")).toBe(false);
+    // The closed card keeps one button: Reopen.
+    const card = c.slack("chat.update")[0] as {
+      blocks: { type: string; elements?: { action_id: string }[] }[];
+    };
+    expect(
+      card.blocks
+        .filter((b) => b.type === "actions")
+        .flatMap((b) => b.elements!.map((e) => e.action_id)),
+    ).toEqual(["issue.reopen"]);
     const c2 = makeCtx("exec-close-2");
     expect((await run(close, c2.ctx)).output).toMatchObject({ changed: false });
     expect(c2.slack("chat.postMessage")).toHaveLength(0);
@@ -475,6 +494,28 @@ describe("intake agent", () => {
       return output.issueId as string;
     }
 
+    it("a team reply that finishes the request closes the issue; one that promises more leaves it On Customer", async () => {
+      const issueId = await openBug();
+      const done = makeCtx("exec-team-done", nextMoveAt(0.94));
+      expect((await run(teamReply(), done.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        status: "closed",
+        resolve: { verdict: "close", acted: true },
+      });
+      const note = done.slack("chat.postMessage");
+      expect(String(note[0].text)).toMatch(
+        /^Closed #1: Jev judged nothing is left to do \(94%\)\. The team said:/,
+      );
+
+      const other = await openBug();
+      await db.query("update issues set status = 'new' where id = $1", [other]);
+      const later = structuredClone(teamReply()) as { eventId: string };
+      later.eventId = "Ev0TEAMLATER";
+      const promised = makeCtx("exec-team-promised", nextMoveAt(0.05));
+      await run(later, promised.ctx);
+      expect(promised.slack("chat.postMessage")).toEqual([]);
+    });
+
     it("a team reply in an issue thread is stored as agent, hands the ball to the customer, posts nothing", async () => {
       const issueId = await openBug();
       const issue = await getIssue(db, issueId);
@@ -488,7 +529,8 @@ describe("intake agent", () => {
         issueId,
         status: "on_customer",
       });
-      expect(t.calls).toHaveLength(0);
+      // One resolve check after the answer; it fails here, so the answer's move stands.
+      expect(t.calls.map(questionsOf)).toEqual([["next_move"]]);
       expect(t.emitted).toHaveLength(0);
       expect(t.slack("reactions.add")).toHaveLength(0);
       expect(t.slack("reactions.remove")).toHaveLength(0);
@@ -669,6 +711,48 @@ describe("intake agent", () => {
         await run(teamReply(), makeCtx("exec-team").ctx);
         expect((await getIssue(db, issueId)).status).toBe(status);
       }
+    });
+
+    it("a top-level team message answers the one issue waiting on the team in that channel", async () => {
+      const issueId = await openBug();
+      const top = structuredClone(teamReply()) as {
+        event: { thread_ts?: string };
+      };
+      delete top.event.thread_ts;
+      const t = makeCtx("exec-team-top-answer");
+      expect((await run(top, t.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        issueId,
+        status: "on_customer",
+      });
+      expect(t.slack("chat.postMessage")).toEqual([]);
+    });
+
+    it("a top-level team message answers nothing when the customer's message is over an hour old", async () => {
+      const issueId = await openBug();
+      const late = structuredClone(teamReply()) as {
+        event: { thread_ts?: string; ts: string; event_ts: string };
+      };
+      delete late.event.thread_ts;
+      late.event.ts = late.event.event_ts = "1790893700.000100";
+      expect(
+        (await run(late, makeCtx("exec-team-late").ctx)).output,
+      ).toMatchObject({ outcome: "team_message", issueId: null });
+      expect((await getIssue(db, issueId)).status).toBe("new");
+    });
+
+    it("a customer's @mention of a teammate makes them the owner of a new issue", async () => {
+      await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER2"], "test");
+      const msg = structuredClone(
+        intakeFixture("message-created.bug.json").payload,
+      ) as { event: { text: string } };
+      msg.event.text = `<@U0CUSTOMER2> <@U0TEAMMATE1|Ilan> ${msg.event.text}`;
+      const { output } = await run(msg, makeCtx("exec-mention", JEV.bug).ctx);
+      expect(output).toMatchObject({ outcome: "opened" });
+      // The customer's own colleague is skipped; the first teammate mentioned owns it.
+      expect((await getIssue(db, output.issueId as string)).ownerSlackId).toBe(
+        "U0TEAMMATE1",
+      );
     });
 
     it("a team message with no issue is stored and does nothing else", async () => {
@@ -879,6 +963,17 @@ describe("intake agent", () => {
       expect(t.slack("chat.update")).toHaveLength(1);
     });
 
+    it("a teammate's 👍 on a message that settles the request closes the issue", async () => {
+      const issueId = await openBug();
+      const t = makeCtx("exec-react-done", nextMoveAt(0.9));
+      expect((await run(reactTo(BUG_TS, "+1"), t.ctx)).output).toMatchObject({
+        outcome: "acknowledged",
+        issueId,
+        resolve: { verdict: "close" },
+      });
+      expect((await getIssue(db, issueId)).status).toBe("closed");
+    });
+
     it("by the customer, or on an older message, changes nothing", async () => {
       const issueId = await openBug();
       await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER1"], "test");
@@ -1068,7 +1163,7 @@ describe("intake agent", () => {
       outcome: "linked",
       issueId,
     });
-    expect(r.calls).toHaveLength(0);
+    expect(r.calls.map(questionsOf)).toEqual([["next_move"]]);
     expect(await messagesForIssue(db, issueId)).toHaveLength(3);
   });
 
@@ -1844,5 +1939,238 @@ describe("noteOpenLinear against the relay (mocked fetch)", () => {
     expect(await note({ ...issue, triageRootTs: null })).toEqual([]);
     expect(posts()).toHaveLength(0);
     expect(comments()).toHaveLength(1);
+  });
+});
+
+describe("intake resolve check", () => {
+  let db: Db;
+  beforeEach(async () => {
+    setLocalDb(undefined);
+    db = await localFleetDb();
+    setLocalDb(db);
+  });
+
+  /** A fake Jev whose only answer is the resolve check's. */
+  const resolvedAt = (p: number) =>
+    ({
+      next_move: {
+        choice: p >= 0.5 ? "done" : "team_answer",
+        probabilities: { done: p, team_answer: 1 - p },
+      },
+    }) as unknown as IntakeJev;
+
+  async function openBug() {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const opened = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    return opened.output.issueId as string;
+  }
+
+  const followUp = (eventId = "Ev0INTAKEFUP1") => {
+    const payload = structuredClone(
+      intakeFixture("message-created.follow-up.json").payload,
+    ) as { eventId: string };
+    payload.eventId = eventId;
+    return payload;
+  };
+
+  const blocksOf = (posted: Record<string, unknown>) =>
+    (posted.blocks ?? []) as {
+      type: string;
+      elements?: { action_id?: string }[];
+    }[];
+  const actionIds = (posted: Record<string, unknown>) =>
+    blocksOf(posted)
+      .filter((b) => b.type === "actions")
+      .flatMap((b) => (b.elements ?? []).map((e) => e.action_id));
+
+  it("closes an issue the customer's reply resolves, with Reopen, and drafts nothing", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "on_customer");
+    const fup = makeCtx("exec-fup", resolvedAt(0.95));
+    expect((await run(followUp(), fup.ctx)).output).toMatchObject({
+      outcome: "resolved",
+      issueId,
+    });
+    expect((await getIssue(db, issueId)).status).toBe("closed");
+    const note = fup.slack("chat.postMessage");
+    expect(note).toHaveLength(1);
+    expect(String(note[0].text)).toMatch(
+      /^Closed #1: Jev judged nothing is left to do \(95%\)/,
+    );
+    expect(actionIds(note[0])).toEqual(["issue.reopen"]);
+    // No issue.message_added: copilot would only draft a reply to a thank-you.
+    expect(fup.emitted).toEqual([]);
+  });
+
+  it("suggests closing at middling confidence, keeps the status, and suggests once per message", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "on_customer");
+    const fup = makeCtx("exec-fup", resolvedAt(0.7));
+    expect((await run(followUp(), fup.ctx)).output).toMatchObject({
+      outcome: "looks_resolved",
+    });
+    // The thank-you does not hand the ball back to the team.
+    expect((await getIssue(db, issueId)).status).toBe("on_customer");
+    const posts = fup.slack("chat.postMessage");
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0].text)).toMatch(/^Looks resolved: #1\./);
+    expect(actionIds(posts[0])).toEqual(["issue.close"]);
+    expect(fup.emitted).toEqual([]);
+
+    const again = makeCtx("exec-fup-again", resolvedAt(0.7));
+    await run(followUp(), again.ctx);
+    expect(again.slack("chat.postMessage")).toHaveLength(0);
+  });
+
+  it("a thank-you on a closed issue keeps it closed; an open question reopens it", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "closed");
+    const thanks = makeCtx("exec-thanks", resolvedAt(0.9));
+    await run(followUp("Ev0THANKS"), thanks.ctx);
+    expect((await getIssue(db, issueId)).status).toBe("closed");
+    expect(thanks.slack("chat.postMessage")).toHaveLength(0);
+
+    const question = makeCtx("exec-question", resolvedAt(0.1));
+    expect(
+      (await run(followUp("Ev0QUESTION"), question.ctx)).output,
+    ).toMatchObject({
+      outcome: "linked",
+    });
+    expect((await getIssue(db, issueId)).status).toBe("on_you");
+  });
+
+  it("a failed or disabled check leaves the follow-up handing the ball back", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "on_customer");
+    await setConfig(db, "resolve", { enabled: false }, "test");
+    const fup = makeCtx("exec-fup", resolvedAt(0.99));
+    expect((await run(followUp(), fup.ctx)).output).toMatchObject({
+      outcome: "linked",
+    });
+    expect(fup.calls).toHaveLength(0);
+    expect((await getIssue(db, issueId)).status).toBe("on_you");
+  });
+
+  it("Reopen moves a closed issue back to On You and says who reopened it", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "closed");
+    const click = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as { actions: { value: string; action_id: string }[] };
+    click.actions[0].value = issueId;
+    click.actions[0].action_id = "issue.reopen";
+    const r = makeCtx("exec-reopen");
+    expect((await run(click, r.ctx)).output).toMatchObject({
+      outcome: "reopen",
+      changed: true,
+      status: "on_you",
+    });
+    expect(r.slack("chat.postMessage")).toEqual([
+      expect.objectContaining({ text: "Reopened by <@U0TEAMMATE1>" }),
+    ]);
+    const again = makeCtx("exec-reopen-2");
+    expect((await run(click, again.ctx)).output).toMatchObject({
+      changed: false,
+    });
+  });
+});
+
+describe("intake assign and waiting on the customer", () => {
+  let db: Db;
+  beforeEach(async () => {
+    setLocalDb(undefined);
+    db = await localFleetDb();
+    setLocalDb(db);
+  });
+
+  async function openBug() {
+    const opened = await run(
+      intakeFixture("message-created.bug.json").payload,
+      makeCtx("exec-bug", JEV.bug).ctx,
+    );
+    return opened.output.issueId as string;
+  }
+
+  /** The card's user picker: no value, the clicked card names the issue. */
+  const pickOnCard = (cardTs: string, user: string, trigger = "t-assign") => {
+    const click = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as {
+      trigger_id: string;
+      container: { message_ts: string };
+      actions: Record<string, unknown>[];
+    };
+    click.trigger_id = trigger;
+    click.container.message_ts = cardTs;
+    click.actions[0] = {
+      action_id: "issue.assign",
+      block_id: "issue.actions",
+      type: "users_select",
+      selected_user: user,
+    };
+    return click;
+  };
+
+  it("Assign on the card hands an owned ticket to the picked teammate and mentions them", async () => {
+    const issueId = await openBug();
+    await db.query(
+      "update issues set owner_slack_id = 'U0DAVE' where id = $1",
+      [issueId],
+    );
+    const card = (await getIssue(db, issueId)).triageRootTs!;
+    const a = makeCtx("exec-assign");
+    expect((await run(pickOnCard(card, "U0ILAN"), a.ctx)).output).toMatchObject(
+      {
+        outcome: "assign",
+        changed: true,
+        owner: "U0ILAN",
+      },
+    );
+    expect(a.slack("chat.postMessage")).toEqual([
+      expect.objectContaining({
+        threadTs: card,
+        text: "<@U0ILAN> #1 is yours now (assigned by <@U0TEAMMATE1>)",
+      }),
+    ]);
+    const again = makeCtx("exec-assign-2");
+    expect(
+      (await run(pickOnCard(card, "U0ILAN", "t-2"), again.ctx)).output,
+    ).toMatchObject({ changed: false });
+  });
+
+  it("refuses to assign a ticket to a customer", async () => {
+    const issueId = await openBug();
+    await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER1"], "test");
+    const card = (await getIssue(db, issueId)).triageRootTs!;
+    const out = await run(pickOnCard(card, "U0CUSTOMER1"), makeCtx("x").ctx);
+    expect(out.output).toMatchObject({
+      skipped: "assign: U0CUSTOMER1 is not a teammate",
+    });
+    expect((await getIssue(db, issueId)).ownerSlackId).toBeNull();
+  });
+
+  it("a customer's 'I'll get back to you' keeps the ticket On Customer and drafts nothing", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "on_you");
+    const waiting = {
+      next_move: {
+        choice: "customer",
+        probabilities: { customer: 0.8, done: 0.1, team_answer: 0.1 },
+      },
+    } as unknown as IntakeJev;
+    const fup = makeCtx("exec-fup-wait", waiting);
+    expect(
+      (
+        await run(
+          intakeFixture("message-created.follow-up.json").payload,
+          fup.ctx,
+        )
+      ).output,
+    ).toMatchObject({ outcome: "waiting_on_customer" });
+    expect((await getIssue(db, issueId)).status).toBe("on_customer");
+    expect(fup.emitted).toEqual([]);
   });
 });

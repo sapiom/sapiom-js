@@ -106,7 +106,7 @@ describe("digest message", () => {
     expect(header).toBe(
       "*Daily digest · Support · 2026-10-05*\n3 open, 0 past SLA",
     );
-    expect(rest.map((t) => t.split("\n")[0])).toEqual([
+    expect(rest.filter((t) => t.startsWith("*"))).toEqual([
       "*New (1)*",
       "*On Customer (1)*",
       "*On Hold (1)*",
@@ -150,31 +150,59 @@ describe("digest message", () => {
     expect(out).toMatch(/· unassigned · \*past SLA\*$/);
   });
 
-  it("flags past SLA in every open status, lists those first, then oldest first", () => {
+  it("flags past SLA only while the ball is with the team, lists those first, then oldest first", () => {
     const young = issue({ priority: "normal", ageHours: 10 });
     const old = issue({ priority: "normal", ageHours: 20 });
-    const late = issue({ priority: "urgent", ageHours: 4 });
+    const late = issue({ status: "on_you", priority: "urgent", ageHours: 4 });
     const held = issue({ status: "on_hold", priority: "low", ageHours: 200 });
+    const asked = issue({ status: "on_customer", ageHours: 300 });
     const odd = issue({ priority: "weird", ageHours: 80 });
-    const out = message([young, old, late, held, odd]);
+    const out = message([young, old, late, held, asked, odd]);
     const lines = body(out.blocks).split("\n");
-    expect(texts(out.blocks)[0]).toContain("5 open, 3 past SLA");
+    expect(texts(out.blocks)[0]).toContain("6 open, 2 past SLA");
     const order = lines
       .filter((l) => l.includes("Acme"))
       .map((l) => Number(/#(\d+)/.exec(l)![1]));
+    // Board order by status; within one, past SLA first, then oldest first.
     expect(order).toEqual([
       odd.number,
-      late.number,
       old.number,
       young.number,
+      late.number,
+      asked.number,
       held.number,
     ]);
     const line = (i: DigestIssue) =>
       lines.find((l) => l.startsWith(`#${i.number} `))!;
     expect(line(late)).toContain("*past SLA*");
-    expect(line(held)).toContain("*past SLA*");
     expect(line(odd)).toContain("*past SLA*");
+    // Waiting on the customer or on engineering is never the team being late.
+    expect(line(held)).not.toContain("past SLA");
+    expect(line(asked)).not.toContain("past SLA");
     expect(line(old)).not.toContain("past SLA");
+  });
+
+  it("gives each issue an Open button to its link, shows a channel-named account as the channel, and names mentioned people", () => {
+    const linked = issue({
+      url: "https://slack.com/archives/C0CUST/p1790000000000100",
+      accountName: "C0BV2U4MXFD",
+      accountChannel: "C0BV2U4MXFD",
+      title: "@U096M2LJEM7 where are we on @U0UNKNOWN1?",
+    });
+    const bare = issue({ url: null });
+    const out = message([linked, bare], new Map([["U096M2LJEM7", "Ilan"]]));
+    const [, , first, second] = out.blocks as {
+      text: { text: string };
+      accessory?: { url: string; text: { text: string } };
+    }[];
+    expect(first.text.text).toBe(
+      `#${linked.number} <#C0BV2U4MXFD>: @Ilan where are we on @U0UNKNOWN1? · 1h 0m · unassigned`,
+    );
+    expect(first.accessory).toMatchObject({
+      url: "https://slack.com/archives/C0CUST/p1790000000000100",
+      text: { text: "Open" },
+    });
+    expect(second.accessory).toBeUndefined();
   });
 
   it("says so when the desk has no open issues", () => {
@@ -206,9 +234,10 @@ describe("digest message", () => {
     const listed = body(out.blocks).match(/^#\d+ /gm)!.length;
     const last = texts(out.blocks).at(-1)!;
     expect(last).toBe(`+${1500 - listed} more open issues, see the Console`);
-    expect(body(out.blocks).match(/past SLA/g)).toHaveLength(40);
-    // Guard against severe underfilling of the available message capacity.
-    expect(listed).toBeGreaterThan(600);
+    // Overdue issues in New and On You (half of the last 40) all make the cut.
+    expect(body(out.blocks).match(/past SLA/g)).toHaveLength(20);
+    // One section per issue: the message holds what fits beside the group headers.
+    expect(listed).toBeGreaterThanOrEqual(40);
   });
 });
 

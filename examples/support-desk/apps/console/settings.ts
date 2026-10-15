@@ -21,6 +21,7 @@ import {
   type Desk,
 } from "../../_shared/desks";
 import { DEFAULT_SLA_HOURS } from "../../agents/digest/logic";
+import { RESOLVE_DEFAULTS } from "../../_shared/resolve";
 import { TRIGGERS } from "./logic";
 
 const EDITOR = "console";
@@ -51,6 +52,9 @@ export const FleetSettingsSchema = z
     "digest.sla_hours": ConfigSchemas["digest.sla_hours"].nullable(),
     "linear_sync.notify_customer": ConfigSchemas["linear_sync.notify_customer"],
     "intake.listed_channels_only": ConfigSchemas["intake.listed_channels_only"],
+    "team.members": ConfigSchemas["team.members"].nullable(),
+    "assign.auto": ConfigSchemas["assign.auto"],
+    resolve: ConfigSchemas.resolve.nullable(),
   })
   .partial()
   .strict();
@@ -111,10 +115,14 @@ export async function getSettings(db: Db, desk: Desk): Promise<Result> {
           "intake.listed_channels_only",
           false,
         ),
+        "team.members": await getConfigOr(db, "team.members", []),
+        "assign.auto": await getConfigOr(db, "assign.auto", false),
+        resolve: await getConfigOr(db, "resolve", null),
       },
       defaults: {
         "nudge.repeat_minutes": DEFAULT_REPEAT_MINUTES,
         "digest.sla_hours": DEFAULT_SLA_HOURS,
+        resolve: RESOLVE_DEFAULTS,
       },
       digest: digestSchedule(),
     },
@@ -236,5 +244,12 @@ export async function putFleetSettings(
       v["linear_sync.notify_customer"],
       EDITOR,
     );
+  if (v["team.members"] === null) await deleteConfig(db, "team.members");
+  else if (v["team.members"])
+    await setConfig(db, "team.members", v["team.members"], EDITOR);
+  if (v["assign.auto"] !== undefined)
+    await setConfig(db, "assign.auto", v["assign.auto"], EDITOR);
+  if (v.resolve === null) await deleteConfig(db, "resolve");
+  else if (v.resolve) await setConfig(db, "resolve", v.resolve, EDITOR);
   return getSettings(db, desk);
 }

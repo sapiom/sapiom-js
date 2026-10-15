@@ -43,6 +43,7 @@ import {
   type IssueStatus,
 } from "./issues";
 import { linearCheckDue } from "./linear-check";
+import { idleCloseAt, resolveSettings } from "./resolve";
 
 /** The agent every ticket timer starts. */
 export const CONTROLLER = agentSlug("controller");
@@ -224,7 +225,12 @@ export async function escalationConfig(db: Db, desks: Desk[]) {
   };
 }
 
-export type DueReason = "nudge" | "escalation" | "linear_check" | "card_redraw";
+export type DueReason =
+  | "nudge"
+  | "escalation"
+  | "linear_check"
+  | "card_redraw"
+  | "idle_close";
 
 export interface NextDue {
   dueAt: Date;
@@ -262,6 +268,16 @@ export async function nextDue(
       reason: "linear_check",
       detail: issue.linearIdentifier ?? "",
     });
+  // An On Customer issue the customer never answers closes after `resolve.idleCloseHours`.
+  const row = snap.issues.find((i) => i.id === issue.id);
+  const idle = row
+    ? idleCloseAt(
+        row,
+        snap.messages,
+        (await resolveSettings(db)).idleCloseHours,
+      )
+    : null;
+  if (idle) candidates.push({ dueAt: idle, reason: "idle_close", detail: "" });
   // A status move whose card redraw failed: the tick redraws it, so come back now (after a tick
   // that failed again, {@link STUCK_RETRY_MINUTES} later).
   if (issue.cardDirty)
