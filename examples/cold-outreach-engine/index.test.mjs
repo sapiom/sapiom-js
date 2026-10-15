@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { addressOf, normalizeContacts, readOpeners } from "./index.ts";
+import {
+  addressOf,
+  looksLikeEmail,
+  normalizeContacts,
+  readOpeners,
+} from "./index.ts";
 
 test("reads the forced tool call's openers, keyed by prospect index", () => {
   assert.deepEqual(
@@ -120,4 +125,41 @@ test("the company site comes from the address unless it is a personal mailbox", 
 test("reply detection compares bare addresses", () => {
   assert.equal(addressOf("Dana <Dana@Mail.Acme.com>"), "dana@mail.acme.com");
   assert.equal(addressOf("ana@acme.com"), "ana@acme.com");
+});
+
+test("address checks reject malformed input without a backtracking regex", () => {
+  assert.equal(looksLikeEmail("ana@acme.com"), true);
+  for (const bad of [
+    "ana",
+    "@acme.com",
+    "ana@",
+    "ana@acme",
+    "ana@acme.",
+    "a@b@c.com",
+    "a na@acme.com",
+  ]) {
+    assert.equal(looksLikeEmail(bad), false, bad);
+  }
+  // The shapes CodeQL flagged as slow for the old regexes return promptly.
+  // (It ends in "." so it is rejected; the point is that it returns at all.)
+  assert.equal(looksLikeEmail("!@!." + "!.".repeat(50_000)), false);
+  assert.equal(
+    addressOf("<" + "<=".repeat(50_000)),
+    ("<" + "<=".repeat(50_000)).toLowerCase(),
+  );
+  assert.equal(addressOf("<>"), "<>");
+});
+
+test("an incomplete contact is rejected on its own, not with the batch", () => {
+  const { contacts, rejected } = normalizeContacts([
+    { email: "ana@acme.com", optInSource: "demo request" },
+    { email: "bo@acme.com" },
+    { optInSource: "waitlist" },
+    "not-an-object",
+  ]);
+  assert.deepEqual(
+    contacts.map((c) => c.email),
+    ["ana@acme.com"],
+  );
+  assert.equal(rejected.length, 3);
 });

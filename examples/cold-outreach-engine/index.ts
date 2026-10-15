@@ -64,7 +64,7 @@ const DEFAULT_DB_HANDLE = "cold-outreach-engine";
 /** Campaign a run works when it names none. */
 const DEFAULT_CAMPAIGN = "opt-in-follow-up";
 /** Campaign the zero-setup demo writes under — never worked by a schedule. */
-const DEMO_CAMPAIGN = "demo";
+const DEMO_CAMPAIGN = "__zero-setup-demo__";
 /** Cap the new contacts per run so cost + latency stay bounded. */
 const MAX_CONTACTS = 25;
 /** Truncate each scraped body — the ONLY large data on the scrape→personalize path. */
@@ -116,8 +116,8 @@ interface Touch {
 }
 
 interface EntryInput {
-  /** New opt-in contacts to enroll on this run. */
-  contacts?: OptInContact[];
+  /** New opt-in contacts to enroll on this run. Partial: `intake` rejects incomplete ones individually. */
+  contacts?: Partial<OptInContact>[];
   /** Campaign name — the roster key. A scheduled pass passes only this. */
   campaign?: string;
   /** The sequence; defaults to a three-touch sequence. */
@@ -302,8 +302,21 @@ function render(template: string, contact: Contact, sender: string): string {
 
 /** The bare address out of `Name <addr>` or `addr`, lowercased. */
 export function addressOf(from: string): string {
-  const m = /<([^>]+)>/.exec(from);
-  return (m ? m[1] : from).trim().toLowerCase();
+  // String scanning rather than a regex: `from` is a header off inbound mail.
+  const lt = from.lastIndexOf("<");
+  const gt = lt >= 0 ? from.indexOf(">", lt) : -1;
+  const addr = gt > lt + 1 ? from.slice(lt + 1, gt) : from;
+  return addr.trim().toLowerCase();
+}
+
+/** `local@domain.tld` with no whitespace — enough to reject a typo'd field. */
+export function looksLikeEmail(value: string): boolean {
+  if (/\s/.test(value)) return false;
+  const at = value.indexOf("@");
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+  const domain = value.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  return dot > 0 && dot < domain.length - 1;
 }
 
 /**
@@ -331,7 +344,7 @@ export function normalizeContacts(raw: unknown): {
         ? (r[k] as string).trim()
         : undefined;
     const email = str("email")?.toLowerCase();
-    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (!email || !looksLikeEmail(email)) {
       rejected.push({
         email: email ?? null,
         reason: "missing or invalid email",
@@ -448,6 +461,9 @@ async function initSchema(sql: Sql): Promise<void> {
   await sql`alter table outreach_contacts add column if not exists last_sent_at timestamptz`;
   await sql`alter table outreach_contacts add column if not exists thread_id text`;
   await sql`alter table outreach_contacts add column if not exists last_message_id text`;
+  // The inbox a contact's thread lives in. Changing the campaign's `inboxId`
+  // later must not strand threads the old inbox started.
+  await sql`alter table outreach_contacts add column if not exists inbox_id text`;
   await sql`
     create table if not exists outreach_touches (
       id           bigserial primary key,
@@ -502,8 +518,10 @@ const entryInput = z.object({
   contacts: z
     .array(
       z.object({
-        email: z.string(),
-        optInSource: z.string(),
+        // Required, but checked per contact in `intake`: a schema failure here
+        // would reject the whole batch instead of just the incomplete entry.
+        email: z.string().optional(),
+        optInSource: z.string().optional(),
         fullName: z.string().optional(),
         firstName: z.string().optional(),
         lastName: z.string().optional(),
@@ -900,7 +918,16 @@ const enroll = defineStep({
                 (campaign, email, full_name, first_name, company, position,
                  first_line, opt_in_source, status)
               values ${values}
-              on conflict (campaign, email) do nothing
+              -- An existing opt-in keeps its place in the sequence. A row with
+              -- no opt-in source is a cold lead from the old version: this
+              -- person has now opted in, so it starts over as theirs.
+              on conflict (campaign, email) do update set
+                opt_in_source = excluded.opt_in_source,
+                first_line = excluded.first_line,
+                first_name = excluded.first_name,
+                status = 'active', touches_sent = 0, last_sent_at = null,
+                thread_id = null, last_message_id = null, inbox_id = null
+              where outreach_contacts.opt_in_source is null
               returning email`;
         if (rows.length > 0) enrolled.push(c.email);
       }
@@ -927,6 +954,7 @@ interface RosterRow {
   touches_sent: number;
   thread_id: string | null;
   last_message_id: string | null;
+  inbox_id: string | null;
   due: boolean;
 }
 
@@ -1007,13 +1035,13 @@ const send = defineStep({
       const roster = demoRun
         ? await sql<RosterRow[]>`
             select email, full_name, first_name, company, position, first_line,
-                   opt_in_source, touches_sent, thread_id, last_message_id, true as due
+                   opt_in_source, touches_sent, thread_id, last_message_id, inbox_id, true as due
             from outreach_contacts
             where campaign = ${campaign} and status = 'demo' and touches_sent = 0
             order by created_at`
         : await sql<RosterRow[]>`
             select email, full_name, first_name, company, position, first_line,
-                   opt_in_source, touches_sent, thread_id, last_message_id,
+                   opt_in_source, touches_sent, thread_id, last_message_id, inbox_id,
                    (last_sent_at is null
                     or last_sent_at + make_interval(secs => ${dripMs / 1000}::float8)
                        <= now()) as due
@@ -1084,13 +1112,14 @@ const send = defineStep({
 
         // Before any follow-up, read the thread. Anyone other than the sending
         // inbox writing in it is a reply, and a reply ends the sequence.
+        const contactInbox = row.inbox_id ?? inboxId;
         if (touchIndex > 0 && row.thread_id) {
           try {
             const thread = await ctx.sapiom.email.threads.get(
-              inboxId,
+              contactInbox,
               row.thread_id,
             );
-            const self = addressOf(inboxId);
+            const self = addressOf(contactInbox);
             if (thread.messages.some((m) => addressOf(m.from) !== self)) {
               await sql`update outreach_contacts
                 set status = 'replied', replied_at = now()
@@ -1126,8 +1155,8 @@ const send = defineStep({
           continue;
         }
         const subject = render(touch.subject, c, senderName);
+        let result: { messageId: string; threadId: string };
         try {
-          let result: { messageId: string; threadId: string };
           if (demoRun) {
             // The fabricated address is never a real inbox; the demo touch
             // lands in this agent's own inbox instead.
@@ -1137,7 +1166,7 @@ const send = defineStep({
               text: `${body}\n\n— Demo contact: ${c.fullName ?? c.firstName} at ${c.company}, who "asked" via ${c.optInSource}. Sent here, to this agent's own inbox, instead of a real person. Pass your own \`contacts\` to reach real people.`,
             });
           } else if (touchIndex === 0 || !row.last_message_id) {
-            result = await ctx.sapiom.email.messages.send(inboxId, {
+            result = await ctx.sapiom.email.messages.send(contactInbox, {
               to: c.email,
               subject,
               text: body,
@@ -1147,37 +1176,51 @@ const send = defineStep({
             // conversation, and their answer lands where the check above reads.
             // `to` is explicit — the default would be the original sender, us.
             result = await ctx.sapiom.email.messages.reply(
-              inboxId,
+              contactInbox,
               row.last_message_id,
               { to: c.email, text: body },
             );
           }
-          await sql`update outreach_contacts set
-              touches_sent = touches_sent + 1,
-              last_sent_at = now(),
-              thread_id = coalesce(thread_id, ${result.threadId ?? null}),
-              last_message_id = ${result.messageId ?? null},
-              status = ${demoRun ? "demo" : touchIndex + 1 >= sequence.length ? "done" : "active"}
-            where campaign = ${campaign} and email = ${c.email}`;
-          await sql`insert into outreach_touches
-              (campaign, email, touch_index, subject, message_id)
-            values (${campaign}, ${c.email}, ${touchIndex}, ${subject}, ${result.messageId ?? null})`;
-          sent += 1;
-          worked.push({
-            ...c,
-            touchesSent: touchIndex + 1,
-            status: demoRun
-              ? "demo"
-              : touchIndex + 1 >= sequence.length
-                ? "done"
-                : "active",
-          });
         } catch (err) {
           const failure = toFailure(c.email, touchIndex + 1, err);
           failures.push(failure);
           ctx.logger.warn("send failed", { ...failure });
           worked.push(c);
+          continue;
         }
+
+        // The email went out. Count it as sent whatever happens next.
+        sent += 1;
+        const status = demoRun
+          ? "demo"
+          : touchIndex + 1 >= sequence.length
+            ? "done"
+            : "active";
+        try {
+          await sql`update outreach_contacts set
+              touches_sent = touches_sent + 1,
+              last_sent_at = now(),
+              thread_id = coalesce(thread_id, ${result.threadId ?? null}),
+              last_message_id = ${result.messageId ?? null},
+              inbox_id = coalesce(inbox_id, ${contactInbox}),
+              status = ${status}
+            where campaign = ${campaign} and email = ${c.email}`;
+          await sql`insert into outreach_touches
+              (campaign, email, touch_index, subject, message_id)
+            values (${campaign}, ${c.email}, ${touchIndex}, ${subject}, ${result.messageId ?? null})`;
+        } catch (err) {
+          // Sent but not recorded: the roster still says this touch is due,
+          // so the next pass would send it again. Report it as such rather
+          // than as a failed send.
+          failures.push({
+            email: c.email,
+            touch: touchIndex + 1,
+            status: null,
+            code: "sent-not-recorded",
+            error: `The email was sent but the roster update failed, so the next run may repeat this touch: ${String(err)}`,
+          });
+        }
+        worked.push({ ...c, touchesSent: touchIndex + 1, status });
       }
     } finally {
       await sql.end({ timeout: 5 });
@@ -1203,6 +1246,7 @@ const send = defineStep({
       dryRun: false,
       demo: demoRun,
       enrolled: enrolled.size,
+      deliverable: merged.filter((c) => c.deliverable).length,
       rejected: ctx.shared.get("rejected") ?? [],
       sent,
       failed: failures.length,

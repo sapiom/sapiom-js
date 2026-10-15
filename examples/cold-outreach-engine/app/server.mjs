@@ -143,8 +143,9 @@ function projectOutput(output) {
     campaign: text(o.campaign),
     demo: o.demo === true,
     dryRun: o.dryRun === true,
-    // `enriched` is the count a run before the opt-in rework reported.
-    enrolled: n(o.enrolled) ?? n(o.enriched),
+    // A dry run reports `accepted` (it enrolls nobody); `enriched` is the
+    // count a run before the opt-in rework reported.
+    enrolled: n(o.enrolled) ?? n(o.accepted) ?? n(o.enriched),
     deliverable: n(o.deliverable),
     sent: n(o.sent),
     failed: n(o.failed),

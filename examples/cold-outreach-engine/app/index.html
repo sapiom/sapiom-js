@@ -640,7 +640,7 @@
         document.getElementById("kpis").innerHTML = [
           kpi(
             "Contacts enrolled",
-            count(o.enrolled ?? o.enriched),
+            count(o.enrolled ?? o.accepted ?? o.enriched),
             demo ? "one per demo company" : "who asked to hear from you",
           ),
           kpi(
