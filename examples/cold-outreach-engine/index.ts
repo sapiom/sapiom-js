@@ -1000,8 +1000,10 @@ const send = defineStep({
             campaign,
             dryRun: false,
             demo: demoRun,
+            enrolled: enrolled.size,
+            rejected: ctx.shared.get("rejected") ?? [],
             sent: 0,
-            note: `Another run is already working campaign "${campaign}"; this one sent nothing.`,
+            note: `Another run is already working campaign "${campaign}"; this one sent nothing. Contacts enrolled by this run get their first touch on the next pass.`,
           },
           { reason: "campaign busy" },
         );
