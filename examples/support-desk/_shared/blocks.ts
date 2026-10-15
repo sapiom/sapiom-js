@@ -14,7 +14,7 @@ export type ActionOwner = (typeof ACTION_OWNERS)[number];
 
 /** The verbs M1 ships. A new verb is a new entry here plus a handler in the owning agent. */
 export const ACTIONS = {
-  issue: ["take", "close", "resolve", "handled", "reopen"],
+  issue: ["take", "close", "resolve", "handled", "reopen", "assign"],
   draft: ["approve", "escalate", "dismiss"],
 } as const satisfies Record<ActionOwner, readonly string[]>;
 
@@ -192,6 +192,16 @@ export function issueCard(
     buttons.push(button("issue", "resolve", "Resolved", issue.id));
   if (issue.status !== "closed")
     buttons.push(button("issue", "close", "Close", issue.id));
+  // Hand the ticket to a teammate (or escalate it to one): they become the owner and are mentioned.
+  if (issue.status !== "closed") {
+    const pick: Block = {
+      type: "users_select",
+      action_id: encodeAction("issue", "assign"),
+      placeholder: { type: "plain_text", text: "Assign…" },
+    };
+    if (issue.ownerSlackId) pick.initial_user = issue.ownerSlackId;
+    buttons.push(pick);
+  }
   // Closed by mistake, or closed on its own by the resolve check: back to On You.
   if (issue.status === "closed")
     buttons.push(button("issue", "reopen", "Reopen", issue.id));
@@ -322,6 +332,7 @@ const WORKING: Record<string, string> = {
   handled: "Marking handled",
   resolve: "Resolving",
   reopen: "Reopening",
+  assign: "Assigning",
 };
 
 /**

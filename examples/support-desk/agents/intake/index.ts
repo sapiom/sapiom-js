@@ -80,10 +80,11 @@ export { noteOpenLinear };
 import { rescheduleIssue } from "../../_shared/timers";
 import { autoAssign } from "../../_shared/assign";
 import {
+  CUSTOMER_MOVE_MIN,
   closeOnOwn,
   issueThread,
   judgeAfterAnswer,
-  judgeResolved,
+  judgeNextMove,
   resolveSettings,
   suggestClose,
   verdictFor,
@@ -200,6 +201,8 @@ const Classified = Context.extend({
   jev: z.unknown().nullable(),
   /** Jev's probability that the linked issue is resolved with this message; null when not asked. */
   resolved: z.number().nullable().optional(),
+  /** Jev's probability that the customer owes the next move (they will get back to us). */
+  customerNext: z.number().nullable().optional(),
 });
 type Classified = z.infer<typeof Classified>;
 
@@ -218,6 +221,8 @@ const Persisted = z.object({
   /** For a follow-up: what the resolve check decided (`_shared/resolve.ts`). */
   verdict: VerdictSchema.optional(),
   resolved: z.number().nullable().optional(),
+  /** The customer owes the next move: the issue waits On Customer and gets no draft. */
+  waiting: z.boolean().optional(),
 });
 type Persisted = z.infer<typeof Persisted>;
 
@@ -876,14 +881,14 @@ const context = defineStep({
 });
 
 /**
- * Jev's probability that issue `issueId` is resolved once the customer has said `text`, or null when
- * the check is off or fails (a failure keeps today's behaviour: the follow-up hands the ball back).
+ * Who has the next move on issue `issueId` once the customer has said `text`, or null when the check
+ * is off or fails (a failure keeps today's behaviour: the follow-up hands the ball back).
  */
 async function judgeFollowUp(
-  ctx: DbCtx & Parameters<typeof judgeResolved>[0],
+  ctx: DbCtx & Parameters<typeof judgeNextMove>[0],
   issueId: string,
   text: string,
-): Promise<number | null> {
+): Promise<{ resolved: number; customerNext: number } | null> {
   const found = await withDb(ctx, async (db) => {
     if (!(await resolveSettings(db)).enabled) return null;
     return {
@@ -893,7 +898,7 @@ async function judgeFollowUp(
   });
   if (!found) return null;
   try {
-    return await judgeResolved(ctx, {
+    const judged = await judgeNextMove(ctx, {
       title: found.issue.title,
       status: found.issue.status,
       thread: [
@@ -901,6 +906,11 @@ async function judgeFollowUp(
         { from: "customer", text: slackToPlain(stripClientFooter(text)) },
       ],
     });
+    return {
+      resolved: judged.done,
+      customerNext:
+        judged.next === "customer" ? (judged.probabilities.customer ?? 0) : 0,
+    };
   } catch (err) {
     ctx.logger.warn("resolve check failed; treating the follow-up as open", {
       issueId,
@@ -921,7 +931,9 @@ const classify = defineStep({
       return goto("persist", {
         ...input,
         jev: null,
-        resolved: await judgeFollowUp(ctx, input.threadIssueId, input.text),
+        ...((await judgeFollowUp(ctx, input.threadIssueId, input.text)) ?? {
+          resolved: null,
+        }),
       } satisfies Classified);
     const account = await withDb(ctx, (db) => getAccount(db, input.accountId));
     let jev: IntakeJev | null = null;
@@ -957,11 +969,15 @@ const classify = defineStep({
             candidates: input.candidates,
           })
         : null;
-    const resolved =
+    const judged =
       linked?.kind === "link"
         ? await judgeFollowUp(ctx, linked.issueId, input.text)
         : null;
-    return goto("persist", { ...input, jev, resolved } satisfies Classified);
+    return goto("persist", {
+      ...input,
+      jev,
+      ...(judged ?? { resolved: null }),
+    } satisfies Classified);
   },
 });
 
@@ -991,6 +1007,8 @@ const persist = defineStep({
 
     return withDb(ctx, async (db) => {
       const verdict: Verdict = verdictFor(resolved, await resolveSettings(db));
+      const waiting =
+        verdict === "open" && (input.customerNext ?? 0) >= CUSTOMER_MOVE_MIN;
       // The message row first: keyed on the Slack event id, it makes a retry or a redelivery a no-op.
       let messageId = input.storedMessageId;
       let duplicate = false;
@@ -1009,7 +1027,7 @@ const persist = defineStep({
           first?.id !== replay.id &&
           !(await eventLogged(db, "issue.message_added", input.eventId))
         )
-          await followUp(db, issue.id, verdict);
+          await followUp(db, issue.id, verdict, waiting);
         return goto("announce", {
           incoming,
           userName: input.userName,
@@ -1023,6 +1041,7 @@ const persist = defineStep({
           created: false,
           verdict: first?.id === replay.id ? undefined : verdict,
           resolved,
+          waiting: first?.id === replay.id ? undefined : waiting,
         } satisfies Persisted);
       }
       if (!messageId) {
@@ -1086,7 +1105,7 @@ const persist = defineStep({
         } satisfies Persisted);
       }
 
-      const current = await followUp(db, decision.issueId, verdict);
+      const current = await followUp(db, decision.issueId, verdict, waiting);
       await recordRun(db, ctx, AGENT, current.id);
       await assignMentioned(ctx, db, current.id, input.text, input.teamId);
       return goto("announce", {
@@ -1097,6 +1116,7 @@ const persist = defineStep({
         created: false,
         verdict,
         resolved,
+        waiting,
       } satisfies Persisted);
     });
   },
@@ -1158,9 +1178,16 @@ async function followUp(
   db: Db,
   issueId: string,
   verdict: Verdict = "open",
+  waiting = false,
 ): Promise<Issue> {
   const current = await getIssue(db, issueId);
   if (verdict !== "open") return current;
+  // "I passed this to legal and will get back to you": the ball stays with the customer. A
+  // closed or On Hold issue stays as it is; the customer's next real message moves it.
+  if (waiting)
+    return current.status === "new" || current.status === "on_you"
+      ? setStatus(db, current.id, "on_customer")
+      : current;
   return current.status === "on_hold"
     ? current
     : setStatus(db, current.id, "on_you");
@@ -1295,16 +1322,21 @@ const notify = defineStep({
         slack: refOf(input.incoming),
       };
       // The emit id is `<type>:<causationId>`, so a redelivered event's emit dedups.
-      // A message that resolves the issue gets no draft: copilot would only answer a thank-you.
+      // A message that resolves the issue, or leaves the next move with the customer, gets no
+      // draft: copilot would only answer a thank-you or an "I'll get back to you".
       if (
         input.decision === "link" &&
-        input.verdict &&
-        input.verdict !== "open"
+        ((input.verdict && input.verdict !== "open") || input.waiting)
       ) {
         await rescheduleIssue(db, ctx, issue.id);
         return goto("settle", {
           incoming: input.incoming,
-          outcome: input.verdict === "close" ? "resolved" : "looks_resolved",
+          outcome:
+            input.verdict === "close"
+              ? "resolved"
+              : input.verdict === "suggest"
+                ? "looks_resolved"
+                : "waiting_on_customer",
           issueId: issue.id,
           number: issue.number,
           opened: false,
@@ -1392,7 +1424,14 @@ const button = defineStep({
   async run(input, ctx) {
     const action = input.actions[0];
     const verb = decodeAction(action.action_id)?.verb;
-    const issueId = IssueId.safeParse(action.value);
+    // A users_select carries no value: the card it sits on names the issue.
+    const cardTs = input.container?.message_ts;
+    const rawId =
+      action.value ??
+      (verb === "assign" && cardTs
+        ? (await withDb(ctx, (db) => issueByTriageRoot(db, cardTs)))?.id
+        : undefined);
+    const issueId = IssueId.safeParse(rawId);
     if (!issueId.success)
       return terminate({ skipped: `no issue id in ${action.action_id}` });
     const clicker = input.user.id;
@@ -1401,7 +1440,8 @@ const button = defineStep({
       verb === "close" ||
       verb === "resolve" ||
       verb === "handled" ||
-      verb === "reopen";
+      verb === "reopen" ||
+      verb === "assign";
     // Before any database work, so the click shows at once; every path below redraws the card.
     if (known) await showWorking(ctx, input, verb, workingCard);
 
@@ -1492,6 +1532,72 @@ const button = defineStep({
         return terminate({
           outcome: verb,
           changed: applied,
+          issueId: issue.id,
+          status: issue.status,
+          owner: issue.ownerSlackId,
+        });
+      }
+
+      if (verb === "assign") {
+        const target = action.selected_user;
+        const person = target
+          ? await userInfo(ctx, target).catch(() => null)
+          : null;
+        const side =
+          person && !person.isBot
+            ? classifyPoster({
+                user: target!,
+                userTeam: person.teamId,
+                envelopeTeamId: input.team?.id ?? "",
+                teamSlackTeamIds: await getConfigOr(
+                  db,
+                  "team.slack_team_ids",
+                  undefined,
+                ),
+                testUserIds: await getConfigOr(
+                  db,
+                  "customers.test_user_ids",
+                  [],
+                ),
+              })
+            : null;
+        if (side !== "team") {
+          await restoreClicked(ctx, input);
+          return terminate({
+            skipped: `assign: ${target ?? "nobody"} is not a teammate`,
+          });
+        }
+        // Reassigning is the point: unlike Take, an owned issue gets the new owner.
+        const { issue, changed } = await db.transaction(async (tx) => {
+          const locked = await lockIssue(tx, issueId.data);
+          if (locked.status === "closed" || locked.ownerSlackId === target)
+            return { issue: locked, changed: false };
+          return { issue: await assign(tx, locked.id, target!), changed: true };
+        });
+        await refreshCard(
+          ctx,
+          db,
+          triageChannel,
+          issue,
+          await getAccount(db, issue.accountId),
+        );
+        if (input.container?.message_ts !== issue.triageRootTs)
+          await settleClicked(
+            ctx,
+            input,
+            changed ? `Assigned to <@${target}>` : "No change",
+          );
+        // The mention is the notification: whoever was handed the ticket hears about it.
+        if (changed && issue.triageRootTs)
+          await post(ctx, {
+            channel: triageChannel,
+            threadTs: issue.triageRootTs,
+            text: `<@${target}> #${issue.number} is yours now (assigned by <@${clicker}>)`,
+          });
+        await rescheduleIssue(db, ctx, issue.id);
+        return terminate({
+          outcome: verb,
+          changed,
           issueId: issue.id,
           status: issue.status,
           owner: issue.ownerSlackId,
@@ -1638,7 +1744,7 @@ const button = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Asks Jev whether a follow-up resolves its issue and closes it or suggests closing it. Handles Take, Close, Reopen, Resolved, Handled, the ticket reaction and teammates' reactions, and resets each changed issue's controller timer.",
+    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Asks Jev whether a follow-up resolves its issue and closes it or suggests closing it. Handles Take, Assign, Close, Reopen, Resolved, Handled, the ticket reaction and teammates' reactions, and resets each changed issue's controller timer.",
   entry: "guard",
   steps: {
     guard,

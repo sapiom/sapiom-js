@@ -20,8 +20,7 @@ import { SlackBlockActions } from "../../_shared/events";
 export const ACTION_TYPE = "slack.block_actions";
 
 export type ActionVerb =
-  | (typeof ACTIONS.issue)[number]
-  | (typeof ACTIONS.draft)[number];
+  (typeof ACTIONS.issue)[number] | (typeof ACTIONS.draft)[number];
 
 export interface ActionTarget {
   issue: {
@@ -68,11 +67,17 @@ export function planAction(
   /** The Slack user id the viewer acts as. */
   actor: string,
   nonce: string = randomUUID(),
+  /** For `assign`: the teammate who gets the ticket. */
+  assignee?: string,
 ): ActionPlan {
   const owner = ownerOf(verb);
   if (!owner)
     return { ok: false, status: 400, reason: `unknown action '${verb}'` };
   const { issue } = target;
+  if (verb === "assign" && !assignee)
+    return { ok: false, status: 400, reason: "pick who gets the ticket" };
+  if (verb === "assign" && assignee === issue.ownerSlackId)
+    return { ok: false, status: 409, reason: "they already own it" };
   if (verb === "reopen" && issue.status !== "closed")
     return { ok: false, status: 409, reason: "the ticket is not closed" };
   if (issue.status === "closed" && verb !== "reopen")
@@ -136,7 +141,10 @@ export function planAction(
         action_id: encodeAction(owner, verb),
         block_id: `${owner}.actions`,
         value,
-        type: "button",
+        // Assign is the card's user picker; every other verb is a button.
+        ...(verb === "assign"
+          ? { type: "users_select", selected_user: assignee }
+          : { type: "button" }),
       },
     ],
   });

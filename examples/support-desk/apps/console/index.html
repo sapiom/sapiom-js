@@ -1601,11 +1601,25 @@
           : "";
         const ticketActions = [
           !t.owner && !closed ? actButton(t, "take", "Take") : "",
+          t.status === "new" || t.status === "on_you"
+            ? actButton(t, "handled", "Handled")
+            : "",
           t.status === "on_hold" ? actButton(t, "resolve", "Resolved") : "",
           !closed ? actButton(t, "close", "Close", "danger") : "",
+          closed ? actButton(t, "reopen", "Reopen") : "",
         ].join("");
+        // Hand the ticket to (or escalate it to) a teammate: they own it and are mentioned in Slack.
+        const others = people.members.filter((m) => m.id !== t.ownerSlackId);
+        const assignRow =
+          !closed && others.length
+            ? `<div class="row"><span class="label">Assign</span><select id="assign-to" aria-label="Assign to">${others
+                .map(
+                  (m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`,
+                )
+                .join("")}</select>${actButton(t, "assign", "Assign")}</div>`
+            : "";
         return `${head(`#${t.number} · ${esc(t.account)}`, t.title || "(untitled)")}
-          ${closed ? "" : actorPicker()}
+          ${actorPicker()}
           <dl class="facts">
             <dt>Status</dt><dd>${statusPill(t.status)}</dd>
             <dt>Priority</dt><dd>${prio(t.priority)}</dd>
@@ -1621,8 +1635,8 @@
           </div>
           ${t.pendingDraft ? `<div class="draft-text">${esc(t.pendingDraft.text)}</div>` : ""}
           ${
-            draftActions || ticketActions
-              ? `<div class="actions">${draftActions}${ticketActions ? `<div class="row"><span class="label">Ticket</span>${ticketActions}</div>` : ""}
+            draftActions || ticketActions || assignRow
+              ? `<div class="actions">${draftActions}${ticketActions ? `<div class="row"><span class="label">Ticket</span>${ticketActions}</div>` : ""}${assignRow}
                 <div class="hint">The agents handle these as if clicked in Slack by the person you act as, and the Slack card redraws.</div></div>`
               : ""
           }`;
@@ -1672,6 +1686,7 @@
         try {
           const out = await post(scoped(`/api/tickets/${id}/actions/${verb}`), {
             actor: actor(),
+            ...(verb === "assign" ? { to: $("assign-to")?.value } : {}),
           });
           log(
             `${verb} #${out.number}: sent (receipt ${out.receiptId}${out.duplicate ? ", already sent" : ""}); the Slack card redraws when the agent finishes`,

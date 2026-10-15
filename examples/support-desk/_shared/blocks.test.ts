@@ -71,8 +71,7 @@ type Btn = { action_id: string; value: string };
 /** The mrkdwn text of the block with this `block_id` (a section's text, or a context's first element). */
 const textOf = (blocks: Record<string, unknown>[], id: string): string => {
   const b = blocks.find((x) => x.block_id === id) as
-    | { text?: { text: string }; elements?: { text: string }[] }
-    | undefined;
+    { text?: { text: string }; elements?: { text: string }[] } | undefined;
   return b?.text?.text ?? b?.elements?.[0]?.text ?? "";
 };
 const buttons = (blocks: Record<string, unknown>[]): Btn[] =>
@@ -116,7 +115,18 @@ describe("issueCard", () => {
       { action_id: "issue.take", value: "iss-1" },
       { action_id: "issue.handled", value: "iss-1" },
       { action_id: "issue.close", value: "iss-1" },
+      { action_id: "issue.assign", type: "users_select" },
     ]);
+  });
+
+  it("offers Assign on every open card, preset to the owner", () => {
+    const pick = (over: Partial<typeof issue>) =>
+      buttons(issueCard({ ...issue, ...over }, account)).find(
+        (b) => b.action_id === "issue.assign",
+      ) as Record<string, unknown> | undefined;
+    expect(pick({ ownerSlackId: "U1" })).toMatchObject({ initial_user: "U1" });
+    expect(pick({})).not.toHaveProperty("initial_user");
+    expect(pick({ status: "closed" })).toBeUndefined();
   });
 
   it("offers Handled only while the ball is with the team", () => {
@@ -137,7 +147,7 @@ describe("issueCard", () => {
       buttons(issueCard({ ...issue, ownerSlackId: "U1" }, account)).map(
         (b) => b.action_id,
       ),
-    ).toEqual(["issue.handled", "issue.close"]);
+    ).toEqual(["issue.handled", "issue.close", "issue.assign"]);
     // A closed card offers only Reopen.
     expect(
       buttons(issueCard({ ...issue, status: "closed" }, account)).map(
@@ -154,6 +164,7 @@ describe("issueCard", () => {
     ).toMatchObject([
       { action_id: "issue.resolve", value: "iss-1" },
       { action_id: "issue.close", value: "iss-1" },
+      { action_id: "issue.assign" },
     ]);
   });
 

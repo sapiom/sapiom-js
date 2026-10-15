@@ -2077,3 +2077,100 @@ describe("intake resolve check", () => {
     });
   });
 });
+
+describe("intake assign and waiting on the customer", () => {
+  let db: Db;
+  beforeEach(async () => {
+    setLocalDb(undefined);
+    db = await localFleetDb();
+    setLocalDb(db);
+  });
+
+  async function openBug() {
+    const opened = await run(
+      intakeFixture("message-created.bug.json").payload,
+      makeCtx("exec-bug", JEV.bug).ctx,
+    );
+    return opened.output.issueId as string;
+  }
+
+  /** The card's user picker: no value, the clicked card names the issue. */
+  const pickOnCard = (cardTs: string, user: string, trigger = "t-assign") => {
+    const click = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as {
+      trigger_id: string;
+      container: { message_ts: string };
+      actions: Record<string, unknown>[];
+    };
+    click.trigger_id = trigger;
+    click.container.message_ts = cardTs;
+    click.actions[0] = {
+      action_id: "issue.assign",
+      block_id: "issue.actions",
+      type: "users_select",
+      selected_user: user,
+    };
+    return click;
+  };
+
+  it("Assign on the card hands an owned ticket to the picked teammate and mentions them", async () => {
+    const issueId = await openBug();
+    await db.query(
+      "update issues set owner_slack_id = 'U0DAVE' where id = $1",
+      [issueId],
+    );
+    const card = (await getIssue(db, issueId)).triageRootTs!;
+    const a = makeCtx("exec-assign");
+    expect((await run(pickOnCard(card, "U0ILAN"), a.ctx)).output).toMatchObject(
+      {
+        outcome: "assign",
+        changed: true,
+        owner: "U0ILAN",
+      },
+    );
+    expect(a.slack("chat.postMessage")).toEqual([
+      expect.objectContaining({
+        threadTs: card,
+        text: "<@U0ILAN> #1 is yours now (assigned by <@U0TEAMMATE1>)",
+      }),
+    ]);
+    const again = makeCtx("exec-assign-2");
+    expect(
+      (await run(pickOnCard(card, "U0ILAN", "t-2"), again.ctx)).output,
+    ).toMatchObject({ changed: false });
+  });
+
+  it("refuses to assign a ticket to a customer", async () => {
+    const issueId = await openBug();
+    await setConfig(db, "customers.test_user_ids", ["U0CUSTOMER1"], "test");
+    const card = (await getIssue(db, issueId)).triageRootTs!;
+    const out = await run(pickOnCard(card, "U0CUSTOMER1"), makeCtx("x").ctx);
+    expect(out.output).toMatchObject({
+      skipped: "assign: U0CUSTOMER1 is not a teammate",
+    });
+    expect((await getIssue(db, issueId)).ownerSlackId).toBeNull();
+  });
+
+  it("a customer's 'I'll get back to you' keeps the ticket On Customer and drafts nothing", async () => {
+    const issueId = await openBug();
+    await setStatus(db, issueId, "on_you");
+    const waiting = {
+      next_move: {
+        choice: "customer",
+        probabilities: { customer: 0.8, done: 0.1, team_answer: 0.1 },
+      },
+    } as unknown as IntakeJev;
+    const fup = makeCtx("exec-fup-wait", waiting);
+    expect(
+      (
+        await run(
+          intakeFixture("message-created.follow-up.json").payload,
+          fup.ctx,
+        )
+      ).output,
+    ).toMatchObject({ outcome: "waiting_on_customer" });
+    expect((await getIssue(db, issueId)).status).toBe("on_customer");
+    expect(fup.emitted).toEqual([]);
+  });
+});
