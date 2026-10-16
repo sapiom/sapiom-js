@@ -454,6 +454,9 @@ async function fillCard(
   page: Page,
   placeholder: HeldPlaceholder,
 ): Promise<void> {
+  if (await detectChallenge(page)) {
+    await assertNoChallenge(page, "before card entry");
+  }
   const roles = await cardFrames(page);
   const frames = page.frames().filter((frame) => {
     const blob = `${frame.name()} ${frame.url()}`;
@@ -514,7 +517,16 @@ async function typeFrame(frame: Frame, text: string): Promise<void> {
     target = candidate;
     break;
   }
-  await target.click({ force: true });
+  await target.scrollIntoViewIfNeeded().catch(() => {});
+  try {
+    await target.click({ force: true, timeout: 5_000 });
+  } catch (error) {
+    const page = frame.page();
+    if (!(await detectChallenge(page))) throw error;
+    await assertNoChallenge(page, "during card entry");
+    await target.scrollIntoViewIfNeeded().catch(() => {});
+    await target.click({ force: true, timeout: 5_000 });
+  }
   await target.fill("");
   await target.pressSequentially(text, { delay: 20 });
 }
