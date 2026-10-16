@@ -402,6 +402,9 @@ async function acceptAddressSuggestion(page: Page): Promise<void> {
     return;
   }
   mark("accepting the address suggestion");
+  if (await detectChallenge(page)) {
+    await assertNoChallenge(page, "before address suggestion");
+  }
   const buttons = page.getByRole("button");
   const count = await buttons.count();
   for (let index = 0; index < count; index += 1) {
@@ -413,7 +416,6 @@ async function acceptAddressSuggestion(page: Page): Promise<void> {
       continue;
     }
     if (/^\d{5}$/.test(name) || /5th|suggested/i.test(name)) {
-      await page.keyboard.press("Escape").catch(() => {});
       await button.evaluate((element) => {
         (element as { click: () => void }).click();
       });
