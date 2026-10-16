@@ -111,7 +111,9 @@ interface Session {
   fetchEnabled?: boolean;
 }
 
-/** Workers and extension pages belong to the captcha solver. Leave them alone. */
+function isBlankTarget(url: string): boolean {
+  return url === "" || url === "about:blank" || url === "about:srcdoc";
+}
 function isHandsOffTarget(session: Session): boolean {
   if (
     session.type === "worker" ||
@@ -171,9 +173,10 @@ export async function attachInterceptor(
     }
     seen.add(sessionId);
     const session = sessions.get(sessionId);
-    // A captcha frame or the solver's own target must run without Fetch.
-    // Pausing its requests keeps the widget up past the solver's timeout.
-    if (session && isHandsOffTarget(session)) {
+    // A blank frame has not navigated yet. Holding it for Fetch.enable freezes
+    // a captcha widget that is about to load. Arm Fetch only once the URL is a
+    // page we might need to pause.
+    if (!session || isHandsOffTarget(session) || isBlankTarget(session.url)) {
       await releaseTarget(connection, sessionId, waitingForDebugger);
       return;
     }
@@ -303,14 +306,21 @@ export async function attachInterceptor(
       for (const session of sessions.values()) {
         if (session.targetId !== info.targetId) continue;
         session.url = info.url;
-        if (!isHandsOffTarget(session)) continue;
-        session.fetchEnabled = false;
-        void connection
-          .send("Fetch.disable", {}, session.sessionId)
-          .catch(() => {});
-        void connection
-          .send("Runtime.runIfWaitingForDebugger", {}, session.sessionId)
-          .catch(() => {});
+        if (isHandsOffTarget(session)) {
+          if (session.fetchEnabled) {
+            session.fetchEnabled = false;
+            void connection
+              .send("Fetch.disable", {}, session.sessionId)
+              .catch(() => {});
+          }
+          void connection
+            .send("Runtime.runIfWaitingForDebugger", {}, session.sessionId)
+            .catch(() => {});
+          continue;
+        }
+        if (!session.fetchEnabled && !isBlankTarget(session.url)) {
+          void armFetch(connection, session);
+        }
       }
     } else if (event.method === "Fetch.requestPaused") onPaused(event);
   });
