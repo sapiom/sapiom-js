@@ -127,6 +127,9 @@ import type {
   DomainList,
   CreateWebhookInput,
   Webhook,
+  EmailWebhook,
+  EmailWebhookList,
+  EmailRates,
 } from "./email/index.js";
 import * as domains from "./domains/index.js";
 import type {
@@ -448,12 +451,25 @@ export interface Sapiom {
       /** Fetch a single full thread (including its messages). */
       get(inboxId: string, threadId: string): Promise<Thread>;
     };
-    /** Register / delete inbound-event webhooks. */
+    /** Register / list / get / delete inbound-event webhooks. */
     webhooks: {
       /** Register a webhook for inbound events. The returned `secret` is shown only once. */
       create(input: CreateWebhookInput): Promise<Webhook>;
+      /** List your registered webhooks, newest first (no secrets). */
+      list(): Promise<EmailWebhookList>;
+      /** Fetch one registered webhook by id (no secret). */
+      get(id: number): Promise<EmailWebhook>;
       /** Delete a webhook by id. */
       delete(id: number): Promise<void>;
+    };
+    /** Your organization's sending reputation. */
+    metrics: {
+      /**
+       * Rolling 24-hour bounce and complaint rates across every inbox, the figures
+       * AgentMail moderation acts on. Requires the organization's own key; a
+       * customer-tenant key gets a 403.
+       */
+      rates(): Promise<EmailRates>;
     };
   };
   /**
@@ -845,7 +861,12 @@ function bind(transport: Transport): Sapiom {
       },
       webhooks: {
         create: (input) => email.createWebhook(input, transport),
+        list: () => email.listWebhooks(transport),
+        get: (id) => email.getWebhook(id, transport),
         delete: (id) => email.deleteWebhook(id, transport),
+      },
+      metrics: {
+        rates: () => email.getRates(transport),
       },
     },
     domains: {

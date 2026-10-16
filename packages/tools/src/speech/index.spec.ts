@@ -403,7 +403,7 @@ describe("Core speech HTTP contract", () => {
     const failed = new Transport({
       apiKey: "test-key",
       fetch: localFetch,
-      coreBaseUrl: "http://non-local.invalid",
+      coreBaseUrl: "https://non-local.invalid",
     });
     await expect(
       speech.createSoundEffect({ text: "Bell" }, failed),

@@ -731,13 +731,97 @@ describe("email.webhooks", () => {
       email.createWebhook(
         {
           url: "https://hook.acme.com",
-          eventType: undefined as unknown as string,
+          eventType: undefined as unknown as email.WebhookEventType,
         },
         transport,
         BASE,
       ),
     ).rejects.toMatchObject({ status: 400 });
     expect(calls).toHaveLength(0);
+  });
+
+  it("list() GETs /v1/webhooks and returns registrations without secrets", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          webhooks: [
+            {
+              id: 8,
+              url: "https://hook.acme.com/all",
+              eventType: "*",
+              createdAt: "2026-10-13T00:02:00.000Z",
+            },
+            {
+              id: 7,
+              url: "https://hook.acme.com/bounces",
+              eventType: "message.bounced",
+              createdAt: "2026-10-13T00:01:00.000Z",
+              secret: "must-not-leak",
+            },
+          ],
+        }),
+    ]);
+
+    const result = await email.listWebhooks(transport, BASE);
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/webhooks`);
+    expect(calls[0]!.init.method ?? "GET").toBe("GET");
+    expect(result).toEqual({
+      webhooks: [
+        {
+          id: 8,
+          url: "https://hook.acme.com/all",
+          eventType: "*",
+          createdAt: "2026-10-13T00:02:00.000Z",
+        },
+        {
+          id: 7,
+          url: "https://hook.acme.com/bounces",
+          eventType: "message.bounced",
+          createdAt: "2026-10-13T00:01:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("get() GETs /v1/webhooks/:id and drops any secret", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          id: 7,
+          url: "https://hook.acme.com/bounces",
+          eventType: "message.bounced",
+          createdAt: "2026-10-13T00:01:00.000Z",
+          secret: "must-not-leak",
+        }),
+    ]);
+
+    const result = await email.getWebhook(7, transport, BASE);
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/webhooks/7`);
+    expect(result).toEqual({
+      id: 7,
+      url: "https://hook.acme.com/bounces",
+      eventType: "message.bounced",
+      createdAt: "2026-10-13T00:01:00.000Z",
+    });
+  });
+
+  it("get() guards a non-number id with a clean 400", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+    await expect(
+      email.getWebhook("7" as unknown as number, transport, BASE),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("get() surfaces a 404 as EmailHttpError", async () => {
+    const { transport } = makeTransport([
+      () => jsonResponse({ message: "Webhook not found" }, { status: 404 }),
+    ]);
+    await expect(email.getWebhook(9, transport, BASE)).rejects.toMatchObject({
+      status: 404,
+    });
   });
 
   it("delete() DELETEs /v1/webhooks/:id (numeric)", async () => {
@@ -863,5 +947,96 @@ describe("EmailHttpError", () => {
     expect(err.status).toBe(422);
     expect(err.body).toEqual({ message: "invalid" });
     expect(err.name).toBe("EmailHttpError");
+  });
+});
+
+// ===========================================================================
+// metrics
+// ===========================================================================
+
+describe("email.metrics", () => {
+  it("getRates() GETs /v1/email/metrics/rates and returns the rates", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          bounceRate: 0.02,
+          complaintRate: null,
+          sent: 1500,
+          windowSeconds: 86400,
+          windowEnd: "2026-10-13T12:00:00Z",
+        }),
+    ]);
+
+    const result = await email.getRates(transport, BASE);
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/email/metrics/rates`);
+    expect(result).toEqual({
+      bounceRate: 0.02,
+      complaintRate: null,
+      sent: 1500,
+      windowSeconds: 86400,
+      windowEnd: "2026-10-13T12:00:00Z",
+    });
+  });
+
+  it("getRates() surfaces the 403 a customer-tenant key gets", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse(
+          { error: "agentmail_rates_internal_tenant_only" },
+          { status: 403 },
+        ),
+    ]);
+    await expect(email.getRates(transport, BASE)).rejects.toMatchObject({
+      status: 403,
+      body: { error: "agentmail_rates_internal_tenant_only" },
+    });
+  });
+});
+
+// ===========================================================================
+// event payload types (compile-time narrowing)
+// ===========================================================================
+
+describe("EmailEvent", () => {
+  function describeEvent(event: email.EmailEvent): string {
+    switch (event.eventType) {
+      case "message.bounced":
+        // bounceType is only reachable after narrowing.
+        return `bounce:${event.bounceType ?? "unknown"}:${event.recipients?.[0]?.address ?? ""}`;
+      case "message.complained":
+        return `complaint:${event.complaintType ?? "unknown"}`;
+      case "domain.verified":
+        return `domain:${event.domainId ?? ""}`;
+      default:
+        return event.eventType;
+    }
+  }
+
+  it("narrows on eventType to the matching payload", () => {
+    const bounced = {
+      event: "message.bounced",
+      eventType: "message.bounced",
+      eventId: "evt_1",
+      bounceType: "Permanent",
+      bounceSubType: "General",
+      recipients: [{ address: "x@example.com", status: "5.1.1" }],
+    } satisfies email.MessageBouncedEvent;
+
+    expect(describeEvent(bounced)).toBe("bounce:Permanent:x@example.com");
+    expect(
+      describeEvent({
+        event: "message.complained",
+        eventType: "message.complained",
+        complaintType: null,
+        complaintSubType: null,
+      }),
+    ).toBe("complaint:unknown");
+    expect(
+      describeEvent({
+        event: "message.received.spam",
+        eventType: "message.received.spam",
+      }),
+    ).toBe("message.received.spam");
   });
 });

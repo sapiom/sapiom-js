@@ -1,5 +1,27 @@
 # @sapiom/tools
 
+## 0.45.0
+
+### Minor Changes
+
+- bc61687: Add email reputation reads and typed webhook events (SAP-4021).
+
+  - `email.metrics.rates()` returns the organization's rolling 24-hour bounce and complaint rates and the send count behind them. It needs the organization's own key; a customer-tenant key gets a 403.
+  - `email.webhooks.list()` and `email.webhooks.get(id)` read your registrations. Neither returns the signing secret.
+  - `EmailEventType` lists every subscribable event, and `EmailEvent` is the union of delivered payloads. Narrow on `eventType`. `message.bounced` carries `bounceType` / `bounceSubType`, and `message.complained` carries `complaintType` / `complaintSubType`.
+
+  **Type change:** `CreateWebhookInput.eventType` and `Webhook.eventType` are now `WebhookEventType` (`EmailEventType | "*"`) instead of `string`. A call that passes a plain `string` variable needs a cast or a narrower type. The gateway already rejected any value outside this set with a 400.
+
+  Requires the matching Sapiom gateway release (sapiom/Sapiom, SAP-4021). Against an older gateway, `webhooks.list` / `webhooks.get` / `metrics.rates` return 404, and delivered events have no `eventType` or bounce/complaint types.
+
+- 6714512: `search.scrape()` accepts an optional `maxAge` (milliseconds): the oldest cached copy of the page to accept. `maxAge: 0` reads the page fresh instead of returning a cached copy up to 2 days old. Calls without `maxAge` send the same request as before.
+
+  Requires deployed SAP-4042 backend (Sapiom #5752). Against an older backend the field is ignored and the cached copy is returned.
+
+### Patch Changes
+
+- 7741094: Docs: the `models` README was titled `# agent` and showed `agent.coding.run`, an export that does not exist. It is now titled `# models`, uses `models.coding.run` / `models.coding.launch`, and documents `models.run` as the managed loop (prompt, optional `system`, remote `mcps` as its tools, `model` omitted so the platform routes the run). The package README's namespace table now lists `models` and `agents` (it listed `agent` and `orchestrations`, which link to directories that do not exist), and the repositories, schedules and content-generation READMEs use "agent" and "run" in place of "orchestration" and "workflow".
+
 ## 0.44.0
 
 ### Minor Changes

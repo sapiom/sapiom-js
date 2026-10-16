@@ -19,7 +19,8 @@
  *   - `messages` — send / list / get / reply / replyAll / forward
  *   - `domains`  — register a custom sending domain, verify it, read status
  *   - `threads`  — list / get conversation threads
- *   - `webhooks` — register / delete inbound-event webhooks
+ *   - `webhooks` — register / list / get / delete inbound-event webhooks
+ *   - `metrics`  — your organization's rolling bounce and complaint rates
  *
  * An `inboxId` is the inbox's email address; message, thread, and domain ids are
  * opaque strings returned by their create/list calls. Failed requests throw
@@ -382,6 +383,25 @@ export interface DomainList {
 // Webhooks
 // ===========================================================================
 
+/**
+ * Every email event a webhook can subscribe to. Matches the set the gateway
+ * accepts at registration.
+ */
+export type EmailEventType =
+  | "message.received"
+  | "message.received.spam"
+  | "message.received.blocked"
+  | "message.received.unauthenticated"
+  | "message.sent"
+  | "message.delivered"
+  | "message.bounced"
+  | "message.complained"
+  | "message.rejected"
+  | "domain.verified";
+
+/** What a webhook subscribes to: one {@link EmailEventType}, or `"*"` for all of them. */
+export type WebhookEventType = EmailEventType | "*";
+
 export interface CreateWebhookInput {
   /** HTTPS URL to deliver events to. Required. */
   url: string;
@@ -389,7 +409,7 @@ export interface CreateWebhookInput {
    * The event to subscribe to (e.g. "message.received"), or "*" for all events.
    * Required.
    */
-  eventType: string;
+  eventType: WebhookEventType;
 }
 
 export interface Webhook {
@@ -398,12 +418,175 @@ export interface Webhook {
   /** The delivery URL. */
   url: string;
   /** The subscribed event type ("*" for all). */
-  eventType: string;
+  eventType: WebhookEventType;
   /**
    * Signing secret for verifying delivered event signatures. Returned only at
    * creation time — store it now; it cannot be retrieved later.
    */
   secret: string;
+}
+
+/**
+ * A registered webhook as `webhooks.list` and `webhooks.get` return it. The
+ * signing secret is never included; it is returned once, by `webhooks.create`.
+ */
+export interface EmailWebhook {
+  /** Unique webhook identifier. */
+  id: number;
+  /** The delivery URL. */
+  url: string;
+  /** The subscribed event type ("*" for all). */
+  eventType: WebhookEventType;
+  /** ISO-8601 timestamp when the webhook was registered. */
+  createdAt: string;
+}
+
+export interface EmailWebhookList {
+  /** Your registrations, newest first. */
+  webhooks: EmailWebhook[];
+}
+
+// ===========================================================================
+// Webhook event payloads
+//
+// The JSON body POSTed to a registered webhook URL, signed with the webhook's
+// secret in the `X-Sapiom-Signature` header. Narrow on `eventType`:
+//
+//   const event = JSON.parse(rawBody) as EmailEvent;
+//   if (event.eventType === "message.bounced" && event.bounceType === "Permanent") {
+//     // stop sending to event.recipients
+//   }
+//
+// Fields other than `event`, `eventType` and the bounce / complaint types are
+// present only when AgentMail sent them. Deliveries are at least once: dedupe
+// on `eventId`.
+// ===========================================================================
+
+interface EmailEventBase<T extends EmailEventType> {
+  /** The event type. Narrow the {@link EmailEvent} union on this field. */
+  eventType: T;
+  /** The same value as `eventType`, kept for receivers written before `eventType` existed. */
+  event: T;
+  /** Stable id of the upstream event; identical on every retry. Dedupe on it. */
+  eventId?: string;
+  /** ISO-8601 timestamp of the event. */
+  timestamp?: string;
+}
+
+interface EmailMessageEventFields {
+  /** The inbox (its email address) the message belongs to. */
+  inboxId?: string;
+  /** The message's thread. */
+  threadId?: string;
+  /** The message. */
+  messageId?: string;
+}
+
+/** A recipient of a bounced message, with its delivery status code. */
+export interface BouncedRecipient {
+  /** Recipient address. */
+  address: string;
+  /** Delivery status reported for this recipient (e.g. "5.1.1"). */
+  status: string;
+}
+
+/** Inbound mail arrived. The `.spam`, `.blocked` and `.unauthenticated` variants classify it. */
+export interface MessageReceivedEvent<
+  T extends
+    | "message.received"
+    | "message.received.spam"
+    | "message.received.blocked"
+    | "message.received.unauthenticated" = "message.received",
+>
+  extends EmailEventBase<T>, EmailMessageEventFields {
+  from?: string;
+  to?: string[];
+  subject?: string;
+  /** Short preview of the body. */
+  preview?: string;
+}
+
+export interface MessageSentEvent
+  extends EmailEventBase<"message.sent">, EmailMessageEventFields {
+  recipients?: string[];
+}
+
+export interface MessageDeliveredEvent
+  extends EmailEventBase<"message.delivered">, EmailMessageEventFields {
+  recipients?: string[];
+}
+
+/**
+ * A sent message bounced. `bounceType` tells a hard bounce ("Permanent") from a
+ * soft one ("Transient"); both count toward the organization's bounce rate.
+ */
+export interface MessageBouncedEvent
+  extends EmailEventBase<"message.bounced">, EmailMessageEventFields {
+  recipients?: BouncedRecipient[];
+  /** Bounce type, e.g. "Permanent" or "Transient". Null when AgentMail sent none. */
+  bounceType: string | null;
+  /** Bounce sub-type, e.g. "General" or "Suppressed". Null when AgentMail sent none. */
+  bounceSubType: string | null;
+}
+
+/** A recipient marked a sent message as spam. */
+export interface MessageComplainedEvent
+  extends EmailEventBase<"message.complained">, EmailMessageEventFields {
+  recipients?: string[];
+  /** Complaint type, e.g. "abuse". Null when AgentMail sent none. */
+  complaintType: string | null;
+  /** Complaint sub-type. Null when AgentMail sent none. */
+  complaintSubType: string | null;
+}
+
+/** AgentMail refused to send a message. */
+export interface MessageRejectedEvent
+  extends EmailEventBase<"message.rejected">, EmailMessageEventFields {
+  /** Why the message was rejected. */
+  reason?: string;
+}
+
+/** A custom sending domain finished verification. */
+export interface DomainVerifiedEvent extends EmailEventBase<"domain.verified"> {
+  domain?: string;
+  domainId?: string;
+  status?: string;
+}
+
+/** Any email webhook event. Narrow on `eventType` to get its payload type. */
+export type EmailEvent =
+  | MessageReceivedEvent<"message.received">
+  | MessageReceivedEvent<"message.received.spam">
+  | MessageReceivedEvent<"message.received.blocked">
+  | MessageReceivedEvent<"message.received.unauthenticated">
+  | MessageSentEvent
+  | MessageDeliveredEvent
+  | MessageBouncedEvent
+  | MessageComplainedEvent
+  | MessageRejectedEvent
+  | DomainVerifiedEvent;
+
+// ===========================================================================
+// Metrics
+// ===========================================================================
+
+/**
+ * Your organization's rolling bounce and complaint rates, across every inbox.
+ * AgentMail moderation acts on these over a rolling 24 hours once 1,000 or more
+ * messages were sent: bounce warns at 5% and suspends at 10%; complaint warns at
+ * 0.5% and suspends at 1%. A suspension stops sending for the whole organization.
+ */
+export interface EmailRates {
+  /** Bounced over sent in the window, as a fraction (0.05 is 5%). Null when nothing was sent. */
+  bounceRate: number | null;
+  /** Complained over sent in the window, as a fraction. Null when nothing was sent. */
+  complaintRate: number | null;
+  /** Messages sent in the window, counted per recipient. */
+  sent: number;
+  /** Length of the rolling window, in seconds (86400). */
+  windowSeconds: number;
+  /** ISO-8601 end of the window, or null when there is no data yet. */
+  windowEnd: string | null;
 }
 
 // ===========================================================================
@@ -533,7 +716,7 @@ interface RawDomainList {
 interface RawWebhook {
   id: number;
   url: string;
-  eventType: string;
+  eventType: WebhookEventType;
   secret: string;
 }
 
@@ -666,6 +849,30 @@ function mapDomainListItem(raw: RawDomainListItem): DomainListItem {
     feedbackEnabled: raw.feedbackEnabled,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
+  };
+}
+
+interface RawEmailWebhook {
+  id: number;
+  url: string;
+  eventType: WebhookEventType;
+  createdAt: string;
+}
+
+interface RawEmailRates {
+  bounceRate: number | null;
+  complaintRate: number | null;
+  sent: number;
+  windowSeconds: number;
+  windowEnd: string | null;
+}
+
+function mapEmailWebhook(raw: RawEmailWebhook): EmailWebhook {
+  return {
+    id: raw.id,
+    url: raw.url,
+    eventType: raw.eventType,
+    createdAt: raw.createdAt,
   };
 }
 
@@ -1145,19 +1352,42 @@ export async function createWebhook(
   return mapWebhook((await res.json()) as RawWebhook);
 }
 
+/** List your registered webhooks, newest first. Never includes the signing secret. */
+export async function listWebhooks(
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<EmailWebhookList> {
+  const res = await ensureOk(
+    await transport.fetch(`${baseUrl}/v1/webhooks`),
+    "Failed to list webhooks",
+  );
+  const raw = (await res.json()) as { webhooks: RawEmailWebhook[] };
+  return { webhooks: raw.webhooks.map(mapEmailWebhook) };
+}
+
+/** Fetch one registered webhook by id. Never includes the signing secret. */
+export async function getWebhook(
+  id: number,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<EmailWebhook> {
+  assertWebhookId(id);
+  const res = await ensureOk(
+    await transport.fetch(
+      `${baseUrl}/v1/webhooks/${encodeURIComponent(String(id))}`,
+    ),
+    `Failed to get webhook '${id}'`,
+  );
+  return mapEmailWebhook((await res.json()) as RawEmailWebhook);
+}
+
 /** Delete a webhook by id. */
 async function deleteWebhook(
   id: number,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<void> {
-  if (typeof id !== "number" || !Number.isFinite(id)) {
-    throw new EmailHttpError(
-      "webhook id is required and must be a number",
-      400,
-      undefined,
-    );
-  }
+  assertWebhookId(id);
   await ensureOk(
     await transport.fetch(
       `${baseUrl}/v1/webhooks/${encodeURIComponent(String(id))}`,
@@ -1168,3 +1398,40 @@ async function deleteWebhook(
 }
 
 export { deleteWebhook };
+
+function assertWebhookId(id: unknown): void {
+  if (typeof id !== "number" || !Number.isFinite(id)) {
+    throw new EmailHttpError(
+      "webhook id is required and must be a number",
+      400,
+      undefined,
+    );
+  }
+}
+
+// ===========================================================================
+// Metrics — operations
+// ===========================================================================
+
+/**
+ * Read your organization's rolling 24-hour bounce and complaint rates, the
+ * figures AgentMail moderation acts on. Free. Requires your organization's own
+ * key: a key for one of your customer tenants gets a 403.
+ */
+export async function getRates(
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<EmailRates> {
+  const res = await ensureOk(
+    await transport.fetch(`${baseUrl}/v1/email/metrics/rates`),
+    "Failed to get email rates",
+  );
+  const raw = (await res.json()) as RawEmailRates;
+  return {
+    bounceRate: raw.bounceRate,
+    complaintRate: raw.complaintRate,
+    sent: raw.sent,
+    windowSeconds: raw.windowSeconds,
+    windowEnd: raw.windowEnd,
+  };
+}

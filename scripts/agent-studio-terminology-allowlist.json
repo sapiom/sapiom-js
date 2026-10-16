@@ -14,20 +14,6 @@
     "reason": "github.workflow is the exact GitHub Actions context used to isolate concurrent runs."
   },
   {
-    "id": "cold-outreach-readme-signal-tool",
-    "path": "examples/cold-outreach-engine/README.md",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "cold-outreach-manifest-signal-tool",
-    "path": "examples/cold-outreach-engine/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
     "id": "proposal-agents-signal-tools",
     "path": "examples/proposal-generator/AGENTS.md",
     "pattern": "signal_workflow|workflow_signal",

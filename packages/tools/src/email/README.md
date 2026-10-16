@@ -38,7 +38,8 @@ Operations are grouped by resource:
 - **`messages`** — `send`, `list`, `get`, `reply`, `replyAll`, `forward`
 - **`domains`** — `create`, `verify`, `get`, `list`, `delete`
 - **`threads`** — `list`, `get`
-- **`webhooks`** — `create`, `delete`
+- **`webhooks`** — `create`, `list`, `get`, `delete`
+- **`metrics`** — `rates`
 
 ## Inboxes
 
@@ -81,6 +82,62 @@ summaries (without messages); `threads.get` returns the full thread including it
 events (e.g. `"message.received"`, or `"*"` for all). The response includes a
 `secret` **returned only once** — store it to verify the signature on delivered
 events.
+
+`webhooks.list()` returns your registrations, newest first; `webhooks.get(id)`
+returns one. Neither includes the `secret`.
+
+### Event payloads
+
+Each delivery is a JSON body signed with the webhook's secret: HMAC-SHA256 of the
+raw request body, lowercase hex, in the `X-Sapiom-Signature` header. Verify it
+against the raw bytes before parsing, then type the body as `EmailEvent` and
+narrow on `eventType`:
+
+```typescript
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { email } from "@sapiom/tools";
+
+function verified(
+  rawBody: string,
+  signature: string | undefined,
+  secret: string,
+): boolean {
+  if (signature === undefined) return false;
+  const expected = Buffer.from(
+    createHmac("sha256", secret).update(rawBody).digest("hex"),
+  );
+  const given = Buffer.from(signature);
+  // Compare byte lengths: timingSafeEqual throws when they differ.
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+// rawBody: the request body exactly as received (not re-serialized JSON).
+const signature = req.headers["x-sapiom-signature"] as string | undefined;
+if (!verified(rawBody, signature, WEBHOOK_SECRET)) {
+  return res.status(401).end();
+}
+const event = JSON.parse(rawBody) as email.EmailEvent;
+if (event.eventType === "message.bounced" && event.bounceType === "Permanent") {
+  // A hard bounce: stop sending to these addresses.
+  for (const r of event.recipients ?? []) suppress(r.address);
+}
+```
+
+`message.bounced` carries `bounceType` (`"Permanent"` or `"Transient"`) and
+`bounceSubType`; `message.complained` carries `complaintType` and
+`complaintSubType`. Each is `null` when AgentMail sent no value. Deliveries are
+at least once, so dedupe on `eventId`. `event` carries the same value as
+`eventType` for older receivers.
+
+## Metrics
+
+`metrics.rates()` returns your organization's rolling 24-hour `bounceRate` and
+`complaintRate` (fractions; `0.05` is 5%) across every inbox, with the `sent`
+count behind them. AgentMail moderation acts on these once 1,000 or more messages
+were sent in the window: bounce warns at 5% and suspends at 10%, complaint warns
+at 0.5% and suspends at 1%, and a suspension stops sending for the whole
+organization. The call is free. It needs your organization's own key; a key for
+one of your customer tenants gets a 403.
 
 ## Gotchas
 

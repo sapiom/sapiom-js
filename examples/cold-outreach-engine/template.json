@@ -5,20 +5,22 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Turns a list of target companies into personalized outreach that follows up on its own. It finds a real contact at each company, verifies the address, writes a first line from what it learned, and stops the moment someone replies.",
-  "longDescription": "Give it a list of companies, one domain each and optionally a person, and it handles the cold outreach prep. It finds a real contact through email search (`findEmail` when you name the person, `domainSearch` when you don't), reads each site for context, and asks a model (`llm.run`) to write an opener per prospect, checking every address for deliverability. It then runs the sequence itself, pausing durably between touches, and drops anyone the moment they reply. Set `dryRun` to research and write without sending.",
+  "whatItDoes": "Follows up with people who asked to hear from you. It reads each contact's company site, writes a personalized first line, verifies the address, sends the first email, and sends scheduled follow-ups that stop when someone replies.",
+  "longDescription": "Give it the contacts who reached out, such as demo requests or waitlist sign-ups. Each needs an email and an `optInSource` saying where they asked to hear from you; contacts without one are rejected. It reads each company site, asks a model (`llm.run`) for a first line per contact, checks every address, and sends the first touch. Follow-ups go out on a schedule you attach, as replies in the same thread, and stop for anyone who answers. Set `dryRun` to preview without sending.",
   "useCases": [
-    "Verified contact per company",
+    "Follow up on demo requests",
     "Personalized first line",
-    "Drip that stops on reply"
+    "Follow-ups that stop on reply"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nIt runs with no setup. Given no `leads` it works three built-in demo companies instead, and sends the personalized first touch to this agent's own Sapiom-hosted inbox. Open it to read a real, personalized draft. Give it `leads`, an array of `{ domain, company?, fullName? }`, and it enriches, personalizes, verifies, and starts the drip against real contacts instead. Set `senderName` for the signature, `sequence` to override the default three touches, and `dripIntervalDays` for the gap between them (default 3). Pass `dryRun: true` to research and write every opener and get the plan back **without sending, persisting, or waiting**.\n\nThis template **pauses between touches** and resumes on its own when the interval passes. To end the drip early when a prospect replies, fire the `reply.received` signal with the MCP `workflow_signal` tool (or the API), passing `{ \"email\": \"prospect@their-co.com\" }` and the run's `executionId` as the `correlationId`. There is no one-click signal button yet. To run it on a cadence over a fresh lead batch, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` and `dryRun: true` to trace enrich, scrape, personalize, verify (capabilities stubbed), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nIt runs with no setup. Given no `contacts` it works three built-in demo opt-ins instead, and sends the personalized first touch to this agent's own Sapiom-hosted inbox. Open it to read a real, personalized draft.\n\nTo follow up with real people, pass `contacts`: an array of `{ email, optInSource, fullName?, company?, domain? }`, where `optInSource` records where they asked to hear from you (for example `\"demo request form\"`). Contacts without one are rejected. Pass `campaign` to name the roster, `senderName` for the signature, `sequence` to override the default three touches, and `dripIntervalDays` for the gap between them (default 3). Pass `dryRun: true` to write every opener and get the plan back **without sending or storing anything**.\n\nA free `sapiom.email` inbox only delivers inside your own organization. To reach real contacts, create an inbox on your own domain and pass its address as `inboxId`. Failed sends are listed under `sendFailures` in the run output.\n\nFollow-ups run on a **schedule**, not a pause. After the first run, attach a cron trigger (`schedule_cron`, for example `0 9 * * 1-5`) that runs the agent with `{ \"campaign\": \"<name>\" }`. Each scheduled run checks every contact's thread, stops the sequence for anyone who replied, and sends the follow-ups that are due.\n\nPrefer to work from the code? Run it locally with `run_local` and `dryRun: true` to trace scrape, personalize and verify (capabilities stubbed), or edit and deploy it with the Sapiom MCP.",
   "resources": [
     {
       "kind": "postgres",
       "handle": "cold-outreach-engine",
       "ephemeral": false,
-      "reuse": { "key": "dbHandle" }
+      "reuse": {
+        "key": "dbHandle"
+      }
     }
   ],
   "settings": [
@@ -33,32 +35,36 @@
   ],
   "examples": [
     {
-      "title": "Research + personalize one lead, preview only (dry run)",
+      "title": "Write the first email for one demo request, preview only (dry run)",
       "input": {
         "dryRun": true,
+        "campaign": "demo-requests",
         "senderName": "Dana",
-        "leads": [
+        "contacts": [
           {
-            "domain": "acme.com",
-            "company": "Acme",
-            "fullName": "Jordan Rivera"
+            "email": "jordan@acme.com",
+            "optInSource": "demo request form",
+            "fullName": "Jordan Rivera",
+            "company": "Acme"
           }
         ]
       },
       "output": {
-        "campaign": "cold-outreach",
+        "campaign": "demo-requests",
         "dryRun": true,
         "reason": "dry-run",
         "touches": 3,
-        "enriched": 1,
+        "accepted": 1,
         "deliverable": 1,
+        "rejected": [],
         "plan": [
           {
             "email": "jordan@acme.com",
             "company": "Acme",
+            "optInSource": "demo request form",
             "deliverable": true,
             "verifyStatus": "valid",
-            "firstLine": "Saw Acme just opened its platform API — the kind of move that usually means outreach volume is about to jump."
+            "firstLine": "Thanks for asking about a demo, Jordan. Acme opening its platform API usually means a lot more inbound to sort through."
           }
         ]
       }
@@ -74,11 +80,25 @@
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [
-      { "path": "demo", "assert": "equals", "value": true },
-      { "path": "sent", "assert": "equals", "value": 3 },
-      { "path": "contacts", "assert": "nonEmptyArray" },
-      { "path": "note", "assert": "nonEmptyString" }
+      {
+        "path": "demo",
+        "assert": "equals",
+        "value": true
+      },
+      {
+        "path": "sent",
+        "assert": "equals",
+        "value": 3
+      },
+      {
+        "path": "contacts",
+        "assert": "nonEmptyArray"
+      },
+      {
+        "path": "note",
+        "assert": "nonEmptyString"
+      }
     ],
-    "narrative": "Works 3 built-in demo leads end to end: enrichment and verification are simulated for these fabricated companies, but the opener comes from a real model call and the first touch is a real, inspectable send to this agent's own Sapiom-hosted demo inbox. Pass your own `leads` to run a real campaign, including the multi-touch drip and reply-to-stop."
+    "narrative": "Works 3 built-in demo opt-ins end to end: their site context and verification are stand-ins, but the opener comes from a real model call and the first touch is a real, inspectable send to this agent's own Sapiom-hosted inbox. Pass your own `contacts` to follow up with real people, and attach a schedule for the follow-ups."
   }
 }

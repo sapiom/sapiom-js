@@ -15,6 +15,7 @@
  * async/stateful caps (SAP-1117) keep their `resolveServiceUrl` → provider-gateway
  * path. Do not consolidate the two until the async/resource primitives exist.
  */
+import { ensureOk } from "./errors.js";
 import { Transport, defaultTransport } from "./index.js";
 import { ExecutionClient } from "../executions/client.js";
 import {
@@ -134,20 +135,9 @@ export async function capabilityCall<Res>(
     { authHeader: "x-api-key" },
   );
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = text;
-    }
-    throw opts.makeError(
-      `${opts.errorPrefix}: ${res.status} ${text}`,
-      res.status,
-      body,
-    );
-  }
+  await ensureOk(res, opts.errorPrefix, ({ message, status, body }) =>
+    opts.makeError(message, status, body),
+  );
 
   return (await res.json()) as Res;
 }

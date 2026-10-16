@@ -105,6 +105,9 @@ import type {
   Domain,
   DomainList,
   Webhook,
+  EmailWebhook,
+  EmailWebhookList,
+  EmailRates,
 } from "../email/index.js";
 import type {
   DomainAvailability,
@@ -1171,7 +1174,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     executions: new ExecutionClient(
       new Transport({
         apiKey: "stub",
-        coreBaseUrl: "http://stub.invalid",
+        coreBaseUrl: "https://stub.invalid",
         fetch: async () => {
           throw new ExecutionProtocolError(
             "Durable executions are unavailable in stub mode.",
@@ -2022,9 +2025,36 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               secret: "stub-webhook-secret",
             })) as Webhook,
           ),
+        list: () =>
+          Promise.resolve(
+            r("email.webhooks.list", [], () => ({
+              webhooks: [],
+            })) as EmailWebhookList,
+          ),
+        get: (id) =>
+          Promise.resolve(
+            r("email.webhooks.get", [id], () => ({
+              id,
+              url: "https://example.com/stub-webhook",
+              eventType: "*" as const,
+              createdAt: "2099-01-01T00:00:00Z",
+            })) as EmailWebhook,
+          ),
         delete: (id) =>
           Promise.resolve(
             r("email.webhooks.delete", [id], () => undefined) as void,
+          ),
+      },
+      metrics: {
+        rates: () =>
+          Promise.resolve(
+            r("email.metrics.rates", [], () => ({
+              bounceRate: null,
+              complaintRate: null,
+              sent: 0,
+              windowSeconds: 86400,
+              windowEnd: null,
+            })) as EmailRates,
           ),
       },
     },
