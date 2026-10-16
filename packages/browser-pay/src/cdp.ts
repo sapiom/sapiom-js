@@ -71,15 +71,15 @@ class WebSocketClient {
   onmessage: (data: string) => void = () => {};
   onclose: () => void = () => {};
   onerror: (error: Error) => void = () => {};
+  private notified = false;
 
   private constructor(private readonly socket: Duplex) {
     socket.on("data", (chunk: Buffer) => {
       this.append(chunk);
     });
     socket.on("close", () => {
-      if (this.closed) return;
       this.closed = true;
-      this.onclose();
+      this.notifyClose();
     });
     socket.on("error", (error: Error) => {
       this.fail(
@@ -143,6 +143,12 @@ class WebSocketClient {
     this.closed = true;
     this.onerror(error);
     this.socket.destroy();
+    this.notifyClose();
+  }
+
+  private notifyClose(): void {
+    if (this.notified) return;
+    this.notified = true;
     this.onclose();
   }
 
@@ -242,7 +248,9 @@ class WebSocketClient {
       const opcode = first & 0x0f;
       const fin = (first & 0x80) !== 0;
       if (opcode === 0x8) {
-        this.close();
+        this.closed = true;
+        this.notifyClose();
+        this.socket.end();
         return;
       }
       if (opcode === 0x9) {
@@ -267,7 +275,6 @@ class WebSocketClient {
   }
 
   private frame(opcode: number, data: Buffer): void {
-    if (this.closed) return;
     const mask = crypto.randomBytes(4);
     const length = data.length;
     let header: Buffer;
@@ -294,17 +301,19 @@ class WebSocketClient {
   }
 
   send(data: string): void {
+    if (this.closed) throw new Error("CDP connection closed");
     this.frame(0x1, Buffer.from(data, "utf8"));
   }
 
   close(): void {
     if (this.closed) return;
-    this.closed = true;
     try {
       this.frame(0x8, Buffer.alloc(0));
     } catch {
       // The socket may already be gone.
     }
+    this.closed = true;
+    this.notifyClose();
     this.socket.end();
     setTimeout(() => this.socket.destroy(), 200);
   }
@@ -312,6 +321,7 @@ class WebSocketClient {
 
 export class CdpConnection {
   private nextId = 0;
+  private closed = false;
   private readonly pending = new Map<number, Pending>();
   private readonly listeners = new Set<(event: CdpEvent) => void>();
 
@@ -356,6 +366,7 @@ export class CdpConnection {
       rejectAll(error);
     };
     socket.onclose = () => {
+      this.closed = true;
       rejectAll(new Error("CDP connection closed"));
     };
   }
@@ -375,6 +386,10 @@ export class CdpConnection {
   ): Promise<unknown> {
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
+      if (this.closed) {
+        reject(new Error("CDP connection closed"));
+        return;
+      }
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP ${method} timed out`));
@@ -384,14 +399,22 @@ export class CdpConnection {
         reject,
         timer,
       });
-      this.socket.send(
-        JSON.stringify({
-          id,
-          method,
-          params,
-          ...(sessionId ? { sessionId } : {}),
-        }),
-      );
+      try {
+        this.socket.send(
+          JSON.stringify({
+            id,
+            method,
+            params,
+            ...(sessionId ? { sessionId } : {}),
+          }),
+        );
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(
+          error instanceof Error ? error : new Error("CDP connection closed"),
+        );
+      }
     });
   }
 

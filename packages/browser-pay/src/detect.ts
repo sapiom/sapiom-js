@@ -1,15 +1,3 @@
-/**
- * Whether a paused request body holds the one placeholder this interceptor
- * was given.
- *
- * Luhn gate first: the held number has to be 13–19 digits and pass Luhn, or
- * nothing matches. Then the exact digit sequence, anywhere in the raw body.
- * Digits may be grouped by spaces or dashes, including the URL-encoded and
- * JSON-escaped forms of those separators. Expiry and CVC are not compared.
- * A different Luhn-valid number does not match.
- */
-
-/** A placeholder as the API hands it to the agent. */
 export interface HeldPlaceholder {
   number: string;
   expMonth: number;
@@ -18,37 +6,50 @@ export interface HeldPlaceholder {
   injectionRef: string;
 }
 
-export type BodyPlaceholderMatch =
-  | { kind: "match"; injectionRef: string }
-  | { kind: "not_held" };
-
-/** Separators the card field may insert between digits, raw or encoded. */
-const SEPARATOR = "(?:[ \\t-]|\\+|%20|%2[Dd]|\\\\u0020|\\\\u002[Dd])?";
-
-export function luhnCheckDigit(body: string): string {
-  let sum = 0;
-  for (let i = 0; i < body.length; i++) {
-    let digit = Number(body[body.length - 1 - i]);
-    if (i % 2 === 0) {
-      digit *= 2;
-      if (digit > 9) digit -= 9;
-    }
-    sum += digit;
-  }
-  return String((10 - (sum % 10)) % 10);
-}
-
-/** Digits of a held number that pass Luhn. Null when the gate is closed. */
-export function luhnHeldPan(number: string): string | null {
+function placeholderDigits(number: string): string | undefined {
   const digits = number.replace(/[\s-]/g, "");
-  if (!/^\d{13,19}$/.test(digits)) return null;
-  return luhnCheckDigit(digits.slice(0, -1)) === digits.slice(-1)
-    ? digits
-    : null;
+  if (digits.length === 0 || !/^\d+$/.test(digits)) return undefined;
+  return digits;
 }
 
-function placeholderPattern(pan: string): RegExp {
-  return new RegExp(pan.split("").join(SEPARATOR));
+function separatorLength(text: string, index: number): number {
+  const code = text.charCodeAt(index);
+  if (code === 32 || code === 9 || code === 45 || code === 43) return 1;
+  if (
+    text.startsWith("%20", index) ||
+    text.startsWith("%2D", index) ||
+    text.startsWith("%2d", index)
+  ) {
+    return 3;
+  }
+  if (
+    text.startsWith("\\u0020", index) ||
+    text.startsWith("\\u002D", index) ||
+    text.startsWith("\\u002d", index)
+  ) {
+    return 6;
+  }
+  return 0;
+}
+
+function holdsDigits(text: string, digits: string): boolean {
+  const last = text.length - digits.length;
+  for (let start = 0; start <= last; start++) {
+    if (text[start] !== digits[0]) continue;
+    let index = start + 1;
+    let matched = true;
+    for (let digit = 1; digit < digits.length; digit++) {
+      const skip = separatorLength(text, index);
+      if (skip > 0 && text[index + skip] === digits[digit]) index += skip;
+      if (text[index] !== digits[digit]) {
+        matched = false;
+        break;
+      }
+      index += 1;
+    }
+    if (matched) return true;
+  }
+  return false;
 }
 
 function decodeForSearch(text: string): string {
@@ -64,61 +65,23 @@ function decodeForSearch(text: string): string {
   }
 }
 
-/**
- * True when `text` contains the held PAN. The PAN must already have passed
- * the Luhn gate. Grouped, percent-encoded, and JSON-escaped forms count.
- */
 export function textHoldsPlaceholderNumber(
   text: string,
   number: string,
 ): boolean {
-  const pan = luhnHeldPan(number);
-  if (!pan || text.length === 0) return false;
-  const pattern = placeholderPattern(pan);
-  if (pattern.test(text)) return true;
+  if (number.length === 0 || text.length === 0) return false;
+  if (text.includes(number)) return true;
+  const digits = placeholderDigits(number);
+  if (!digits) return false;
+  if (holdsDigits(text, digits)) return true;
   const decoded = decodeForSearch(text);
   if (decoded === text) return false;
-  pattern.lastIndex = 0;
-  return pattern.test(decoded);
+  return decoded.includes(number) || holdsDigits(decoded, digits);
 }
 
-/**
- * A Luhn-valid card number in `text` that is not the held placeholder.
- * Used to refuse a relay response that still carries a real PAN.
- */
-export function textContainsForeignCard(
-  text: string,
-  placeholderNumber: string,
-): boolean {
-  const held = luhnHeldPan(placeholderNumber);
-  if (!held) return false;
-  const decoded = decodeForSearch(text);
-  const runs = decoded.match(/\d(?:[\s+-]*\d)+/g) ?? [];
-  for (const run of runs) {
-    const digits = run.replace(/\D/g, "");
-    if (digits.length < 13) continue;
-    const last = Math.min(19, digits.length);
-    for (let length = 13; length <= last; length++) {
-      for (let index = 0; index + length <= digits.length; index++) {
-        const candidate = digits.slice(index, index + length);
-        if (candidate === held || held.includes(candidate)) continue;
-        if (luhnHeldPan(candidate)) return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Whether `body` contains the single held placeholder.
- * `not_held` covers a foreign card, a Luhn failure, and an empty body.
- */
-export function matchHeldPlaceholderInBody(
-  body: string,
-  held: HeldPlaceholder,
-): BodyPlaceholderMatch {
-  if (!textHoldsPlaceholderNumber(body, held.number)) {
-    return { kind: "not_held" };
-  }
-  return { kind: "match", injectionRef: held.injectionRef };
+export function redactHeld(value: string, number: string): string {
+  let out = number.length > 0 ? value.split(number).join("••••") : value;
+  const digits = placeholderDigits(number);
+  if (digits && digits !== number) out = out.split(digits).join("••••");
+  return out;
 }

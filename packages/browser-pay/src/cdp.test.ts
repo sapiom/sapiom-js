@@ -80,6 +80,22 @@ describe("CdpConnection", () => {
     }
   });
 
+  it("rejects pending calls when Chrome sends a close frame, and later sends reject", async () => {
+    const stub = await listen();
+    try {
+      const connection = await CdpConnection.connect(stub.url);
+      const socket = await stub.onceSocket;
+      const pending = connection.send("Fetch.enable", {}, undefined, 30_000);
+      socket.write(Buffer.from([0x88, 0x00]));
+      await expect(pending).rejects.toThrow(/closed/);
+      await expect(
+        connection.send("Runtime.evaluate", {}, undefined, 30_000),
+      ).rejects.toThrow(/closed/);
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("rejects a pending call when the socket errors without a close frame", async () => {
     const stub = await listen();
     try {

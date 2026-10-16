@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { paymentIdempotencyKey } from "./contract";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
 import type { PayLogger } from "./logger";
 import { stubPaymentRelay, type RelayCallOptions } from "./relay";
@@ -38,8 +37,6 @@ interface StubOptions {
   postDataError?: boolean;
   targets?: { targetId: string; type: string; url: string }[];
   attachedSessionId?: string;
-  languages?: string[];
-  cookies?: { name: string; value: string }[];
 }
 
 function serverFrame(text: string): Buffer {
@@ -134,18 +131,7 @@ async function startStub(options: StubOptions = {}): Promise<{
       return;
     }
     if (message.method === "Runtime.evaluate") {
-      const expression = message.params?.expression;
-      if (expression === "navigator.languages") {
-        reply(message.id, {
-          result: { value: options.languages ?? ["en-US", "en"] },
-        });
-        return;
-      }
       reply(message.id, {});
-      return;
-    }
-    if (message.method === "Network.getCookies") {
-      reply(message.id, { cookies: options.cookies ?? [] });
       return;
     }
     if (message.method === "Fetch.getRequestPostData") {
@@ -267,18 +253,19 @@ function attachPage(
 }
 
 const success = (): RelayResponse => ({
-  kind: "relayed",
-  status: 201,
-  headers: [["content-type", "application/json"]],
-  body: '{"id":"sess"}',
-  bodyEncoding: "utf8",
+  outcome: "relayed",
+  response: {
+    status: 201,
+    headers: { "content-type": "application/json" },
+    body: '{"id":"sess"}',
+  },
 });
 
 function header(
-  headers: RelayRequest["headers"],
+  headers: RelayRequest["request"]["headers"],
   name: string,
 ): string | undefined {
-  return headers.find(([key]) => key.toLowerCase() === name)?.[1];
+  return headers[name.toLowerCase()];
 }
 
 describe("interceptor CDP decisions", () => {
@@ -289,7 +276,7 @@ describe("interceptor CDP decisions", () => {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => success()),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -331,7 +318,7 @@ describe("interceptor CDP decisions", () => {
           return success();
         }),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -365,16 +352,19 @@ describe("interceptor CDP decisions", () => {
         ),
       ).toBe(true);
       expect(calls).toHaveLength(1);
-      expect(calls[0].body).toBe(CARD);
+      expect(calls[0].request.body).toBe(CARD);
       expect(calls[0].idempotencyKey).toBe(
-        paymentIdempotencyKey("POST", calls[0].url, CARD),
+        crypto
+          .createHash("sha256")
+          .update(`POST\0${calls[0].request.url}\0${CARD}`)
+          .digest("hex"),
       );
-      expect(header(calls[0].headers, "content-type")).toBe("application/json");
-      expect(header(calls[0].headers, "sec-fetch-site")).toBe("cross-site");
-      expect(header(calls[0].headers, "sec-fetch-dest")).toBe("empty");
-      expect(header(calls[0].headers, "accept-language")).toBe(
-        "en-US,en;q=0.9",
+      expect(calls[0].profileId).toBe("shopify-card-vault");
+      expect(header(calls[0].request.headers, "content-type")).toBe(
+        "application/json",
       );
+      expect(calls[0].request.headers).not.toHaveProperty("cookie");
+      expect(calls[0].request.headers).not.toHaveProperty("sec-fetch-site");
       await handle.detach();
     } finally {
       await stub.close();
@@ -392,7 +382,7 @@ describe("interceptor CDP decisions", () => {
           return success();
         }),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -435,7 +425,7 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("fails a request whose URL holds the placeholder even when the body does not", async () => {
+  it("relays a request whose URL holds the placeholder even when the body does not", async () => {
     const stub = await startStub();
     const calls: RelayRequest[] = [];
     const events: InterceptorEvent[] = [];
@@ -446,7 +436,7 @@ describe("interceptor CDP decisions", () => {
           return success();
         }),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -468,15 +458,19 @@ describe("interceptor CDP decisions", () => {
         },
       });
       await waitFor(
-        () => events.some((event) => event.type === "failed"),
-        "failed",
+        () => events.some((event) => event.type === "relayed"),
+        "relayed",
       );
-      expect(calls).toHaveLength(0);
-      expect(events[0]).toMatchObject({
-        type: "failed",
-        reason: "placeholder_mismatch",
-      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].request.url).toContain(HELD.number);
+      expect(calls[0].request.body).toBe('{"event":"ping"}');
+      expect(events.map((event) => event.type)).toEqual(["paused", "relayed"]);
       expect(JSON.stringify(events)).not.toContain(HELD.number);
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Fetch.continueRequest",
+        ),
+      ).toBe(false);
       await handle.detach();
     } finally {
       await stub.close();
@@ -495,7 +489,7 @@ describe("interceptor CDP decisions", () => {
           return success();
         }),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       attachPage(stub.emit);
       await waitFor(
@@ -516,7 +510,7 @@ describe("interceptor CDP decisions", () => {
         },
       });
       await waitFor(() => calls.length === 1, "relay");
-      expect(calls[0].body).toBe(multipart);
+      expect(calls[0].request.body).toBe(multipart);
       expect(
         stub.commands.some(
           (command) => command.method === "Fetch.continueRequest",
@@ -547,7 +541,7 @@ describe("interceptor CDP decisions", () => {
             }),
         ),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
         timeoutMs: 30_000,
       });
       handle.on((event) => events.push(event));
@@ -594,7 +588,7 @@ describe("interceptor CDP decisions", () => {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => success()),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -636,20 +630,21 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("does not fulfill a response that contains a different card number", async () => {
+  it("fulfills a response that contains a different card number or a timestamp", async () => {
     const stub = await startStub();
     const events: InterceptorEvent[] = [];
     try {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => ({
-          kind: "relayed",
-          status: 200,
-          headers: [["content-type", "text/plain"]],
-          body: "4111111111111111",
-          bodyEncoding: "utf8",
+          outcome: "relayed",
+          response: {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+            body: '{"id":"sess","created_at":1760650000123,"pan":"4111111111111111"}',
+          },
         })),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -671,16 +666,15 @@ describe("interceptor CDP decisions", () => {
         },
       });
       await waitFor(
-        () => events.some((event) => event.type === "failed"),
-        "failed",
+        () => events.some((event) => event.type === "relayed"),
+        "relayed",
       );
-      expect(events.map((event) => event.type)).toEqual(["paused", "failed"]);
-      expect(events[1]).toMatchObject({ reason: "response_credential" });
+      expect(events.map((event) => event.type)).toEqual(["paused", "relayed"]);
       expect(
         stub.commands.some(
           (command) => command.method === "Fetch.fulfillRequest",
         ),
-      ).toBe(false);
+      ).toBe(true);
       await handle.detach();
     } finally {
       await stub.close();
@@ -693,7 +687,7 @@ describe("interceptor CDP decisions", () => {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => success()),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       attachPage(stub.emit, "page-1");
       await waitFor(
@@ -768,8 +762,7 @@ describe("interceptor CDP decisions", () => {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => success()),
         placeholder: HELD,
-        transactionId: "tx",
-        pauseOnlyUrls: ["checkout.pci.shopifyinc.com"],
+        profileId: "shopify-card-vault",
       });
       const enable = stub.commands.findIndex(
         (command) =>
@@ -798,7 +791,7 @@ describe("interceptor CDP decisions", () => {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => success()),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       stub.emit({
@@ -855,10 +848,10 @@ describe("interceptor CDP decisions", () => {
         relay: stubPaymentRelay(async () => {
           calls += 1;
           if (calls === 1) await gate;
-          return { kind: "refused", reason: "already_relayed" };
+          return { outcome: "refused", reason: "already_relayed" };
         }),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
         logger,
       });
       handle.on((event) => events.push(event));
@@ -908,10 +901,8 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("copies a missing Cookie the way Chrome would", async () => {
-    const stub = await startStub({
-      cookies: [{ name: "cart", value: "1" }],
-    });
+  it("forwards only the headers David accepts", async () => {
+    const stub = await startStub();
     const calls: RelayRequest[] = [];
     const events: InterceptorEvent[] = [];
     try {
@@ -921,7 +912,7 @@ describe("interceptor CDP decisions", () => {
           return success();
         }),
         placeholder: HELD,
-        transactionId: "tx",
+        profileId: "shopify-card-vault",
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -939,7 +930,13 @@ describe("interceptor CDP decisions", () => {
           request: {
             url: "https://checkout.example/sessions",
             method: "POST",
-            headers: { "Sec-Fetch-Site": "same-origin" },
+            headers: {
+              "Content-Type": "application/json",
+              Cookie: "cart=1",
+              Accept: "application/json",
+              "Shopify-Identification-Signature": "sig",
+              "X-Unforwarded": "nope",
+            },
             postData: CARD,
           },
         },
@@ -948,9 +945,355 @@ describe("interceptor CDP decisions", () => {
         () => events.some((event) => event.type === "relayed"),
         "relayed",
       );
-      expect(header(calls[0].headers, "sec-fetch-site")).toBe("same-origin");
-      expect(header(calls[0].headers, "cookie")).toBe("cart=1");
-      expect(header(calls[0].headers, "sec-fetch-dest")).toBe("empty");
+      expect(calls[0].request.headers).toEqual({
+        accept: "application/json",
+        "content-type": "application/json",
+        "shopify-identification-signature": "sig",
+      });
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("fails a relayed response that still contains the held placeholder", async () => {
+    const stub = await startStub();
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => ({
+          outcome: "relayed",
+          response: {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+            body: `session ${HELD.number}`,
+          },
+        })),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-held-back",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: CARD,
+          },
+        },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "failed",
+      );
+      expect(events[1]).toMatchObject({ reason: "response_credential" });
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Fetch.fulfillRequest",
+        ),
+      ).toBe(false);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("relays a held number that fails the Luhn check", async () => {
+    const number = "4242424242424243";
+    const stub = await startStub();
+    const calls: RelayRequest[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: { ...HELD, number },
+        profileId: "shopify-card-vault",
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-luhn",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: JSON.stringify({ number }),
+          },
+        },
+      });
+      await waitFor(() => calls.length === 1, "relay");
+      expect(calls[0].request.body).toContain(number);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("fails the paused request when the relay ignores the abort signal", async () => {
+    const stub = await startStub();
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: { relay: () => new Promise(() => {}) },
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        timeoutMs: 40,
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-hang",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: CARD,
+          },
+        },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "timeout",
+      );
+      expect(events[1]).toMatchObject({ type: "failed", reason: "timeout" });
+      expect(
+        stub.commands.some((command) => command.method === "Fetch.failRequest"),
+      ).toBe(true);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("does not let an earlier timeout abort a later retry of the same body", async () => {
+    const stub = await startStub();
+    const events: InterceptorEvent[] = [];
+    let calls = 0;
+    let aborted = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(
+          (_request, options) =>
+            new Promise((resolve, reject) => {
+              calls += 1;
+              const finish = () => resolve(success());
+              options?.signal?.addEventListener("abort", () => {
+                aborted = true;
+                reject(new Error("aborted"));
+              });
+              void gate.then(finish);
+            }),
+        ),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        timeoutMs: 400,
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      const paused = {
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-early",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: CARD,
+          },
+        },
+      };
+      stub.emit(paused);
+      await waitFor(() => calls === 1, "first relay");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      stub.emit({
+        ...paused,
+        params: { ...paused.params, requestId: "req-later" },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(aborted).toBe(false);
+      expect(events.filter((event) => event.type === "failed")).toHaveLength(1);
+      release();
+      await waitFor(
+        () => events.some((event) => event.type === "relayed"),
+        "later relay",
+      );
+      expect(calls).toBe(1);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("decodes postDataEntries that split a multibyte character", async () => {
+    const text = `{"number":"${HELD.number}","name":"é"}`;
+    const bytes = Buffer.from(text, "utf8");
+    const splitAt =
+      Buffer.from(text.slice(0, text.indexOf("é")), "utf8").length + 1;
+    const first = bytes.subarray(0, splitAt);
+    const second = bytes.subarray(splitAt);
+    const stub = await startStub();
+    const calls: RelayRequest[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-bytes",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postDataEntries: [
+              { bytes: first.toString("base64") },
+              { bytes: second.toString("base64") },
+            ],
+          },
+        },
+      });
+      await waitFor(() => calls.length === 1, "relay");
+      expect(calls[0].request.body).toBe(text);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("does not send a second relay after outcome unknown", async () => {
+    const stub = await startStub();
+    const events: InterceptorEvent[] = [];
+    let calls = 0;
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => {
+          calls += 1;
+          return { outcome: "unknown" };
+        }),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      const paused = {
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-unknown-1",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: CARD,
+          },
+        },
+      };
+      stub.emit(paused);
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "unknown",
+      );
+      stub.emit({
+        ...paused,
+        params: { ...paused.params, requestId: "req-unknown-2" },
+      });
+      await waitFor(
+        () => events.filter((event) => event.type === "failed").length === 2,
+        "second unknown",
+      );
+      expect(calls).toBe(1);
+      expect(events[1]).toMatchObject({ reason: "unknown" });
+      expect(events[3]).toMatchObject({ reason: "unknown" });
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("does not enable Fetch on a captcha iframe", async () => {
+    const stub = await startStub();
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "captcha-1",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-captcha",
+            type: "iframe",
+            url: "https://hcaptcha.com/captcha/v1/abc/static/hcaptcha.html",
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Runtime.runIfWaitingForDebugger" &&
+              command.sessionId === "captcha-1",
+          ),
+        "resume captcha",
+      );
+      expect(
+        stub.commands.some(
+          (command) =>
+            command.method === "Fetch.enable" &&
+            command.sessionId === "captcha-1",
+        ),
+      ).toBe(false);
       await handle.detach();
     } finally {
       await stub.close();

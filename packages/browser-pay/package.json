@@ -28,11 +28,6 @@
       "types": "./dist/cjs/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/cjs/index.js"
-    },
-    "./testing": {
-      "types": "./dist/cjs/testing.d.ts",
-      "import": "./dist/esm/testing.js",
-      "require": "./dist/cjs/testing.js"
     }
   },
   "files": [

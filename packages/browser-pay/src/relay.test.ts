@@ -1,15 +1,33 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import {
-  RELAY_REFUSAL_REASONS,
-  parseRelayResponse,
-  type RelayRequest,
-} from "./contract";
-import { relayRefusalFixtures, shopifyCardSessionRoundTrip } from "./fixtures";
-import { matchHeldPlaceholderInBody } from "./detect";
-import { httpPaymentRelay, stubPaymentRelay } from "./relay";
+import type { RelayRequest } from "./contract";
+import { httpPaymentRelay } from "./relay";
 
-const REQUEST: RelayRequest = shopifyCardSessionRoundTrip.request;
+const REQUEST: RelayRequest = {
+  injectionRef: "inj_fixture_shopify",
+  profileId: "shopify-card-vault",
+  pageOrigin: "https://shop.example",
+  request: {
+    method: "POST",
+    url: "https://checkout.pci.shopifyinc.com/sessions",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "shopify-identification-signature": "fixture-signature",
+    },
+    body: '{"credit_card":{"number":"4242424242424242"}}',
+  },
+  idempotencyKey: "a".repeat(64),
+};
+
+const RELAYED = {
+  outcome: "relayed",
+  response: {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: '{"id":"west-fixture-session"}',
+  },
+};
 
 function listen(handler: http.RequestListener): Promise<http.Server> {
   const server = http.createServer(handler);
@@ -23,61 +41,14 @@ function origin(server: http.Server): string {
   return `http://127.0.0.1:${address.port}`;
 }
 
-describe("T7 fixtures", () => {
-  it("round-trips a Shopify card session and matches the placeholder", () => {
-    const { request, response } = shopifyCardSessionRoundTrip;
-    expect(request.url).toBe("https://checkout.pci.shopifyinc.com/sessions");
-    expect(request.merchantOrigin).toBe("https://shop.example");
-    expect(Object.keys(response).sort()).toEqual([
-      "body",
-      "bodyEncoding",
-      "headers",
-      "kind",
-      "status",
-    ]);
-    expect(response.headers.filter(([name]) => name === "set-cookie")).toEqual([
-      ["set-cookie", "session=a"],
-      ["set-cookie", "session=b"],
-    ]);
-    expect(
-      matchHeldPlaceholderInBody(request.body, {
-        number: "4242424242424242",
-        expMonth: 12,
-        expYear: 2028,
-        cvc: "123",
-        injectionRef: request.injectionRef,
-      }),
-    ).toEqual({ kind: "match", injectionRef: "inj_fixture_shopify" });
-    expect(response.body).not.toMatch(/\d(?:[\s-]*\d){12,18}/);
-  });
-
-  it("has one refusal per reason and does not echo a request", () => {
-    expect(Object.keys(relayRefusalFixtures).sort()).toEqual(
-      [...RELAY_REFUSAL_REASONS].sort(),
-    );
-    for (const reason of RELAY_REFUSAL_REASONS) {
-      expect(relayRefusalFixtures[reason]).toEqual({
-        kind: "refused",
-        reason,
-      });
-      expect(parseRelayResponse(relayRefusalFixtures[reason])).toEqual({
-        kind: "refused",
-        reason,
-      });
-    }
-  });
-});
-
 describe("httpPaymentRelay", () => {
-  it("POSTs the T7 body to David's route with the API key and does not retry", async () => {
+  it("POSTs David's body to the transaction path and does not retry", async () => {
     const seen: {
       url?: string;
       headers?: http.IncomingHttpHeaders;
       body?: string;
       count: number;
-    } = {
-      count: 0,
-    };
+    } = { count: 0 };
     const server = await listen((req, res) => {
       seen.count += 1;
       const chunks: Buffer[] = [];
@@ -94,6 +65,7 @@ describe("httpPaymentRelay", () => {
       const relay = httpPaymentRelay({
         baseUrl: origin(server),
         apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
         timeoutMs: 1000,
       });
       await expect(relay.relay(REQUEST)).rejects.toThrow(
@@ -104,43 +76,54 @@ describe("httpPaymentRelay", () => {
         "/v1/transactions/tx_fixture_shopify/payment/relay",
       );
       expect(seen.headers?.["x-api-key"]).toBe("test-key");
-      expect(seen.headers?.["idempotency-key"]).toBe(REQUEST.idempotencyKey);
+      expect(seen.headers?.["idempotency-key"]).toBeUndefined();
       expect(JSON.parse(seen.body ?? "")).toEqual(REQUEST);
+      expect(JSON.parse(seen.body ?? "")).not.toHaveProperty("transactionId");
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
   });
 
-  it("returns a provider response and a typed refusal", async () => {
+  it("returns a relayed response, a preserved refusal reason, and outcome unknown", async () => {
     const payloads = [
-      shopifyCardSessionRoundTrip.response,
-      relayRefusalFixtures.already_relayed,
+      RELAYED,
+      { outcome: "refused", reason: "merchant_mismatch" },
+      {
+        outcome: "refused",
+        reason: "future_reason",
+        body: REQUEST.request.body,
+      },
+      { outcome: "unknown" },
     ];
     const server = await listen((_req, res) => {
       const payload = payloads.shift();
-      res.writeHead(payload && payload.kind === "relayed" ? 200 : 403, {
-        "content-type": "application/json",
-      });
+      res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     });
     try {
       const relay = httpPaymentRelay({
         baseUrl: `${origin(server)}/`,
         apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
       });
-      await expect(relay.relay(REQUEST)).resolves.toEqual(
-        shopifyCardSessionRoundTrip.response,
-      );
+      await expect(relay.relay(REQUEST)).resolves.toEqual(RELAYED);
       await expect(relay.relay(REQUEST)).resolves.toEqual({
-        kind: "refused",
-        reason: "already_relayed",
+        outcome: "refused",
+        reason: "merchant_mismatch",
+      });
+      await expect(relay.relay(REQUEST)).resolves.toEqual({
+        outcome: "refused",
+        reason: "future_reason",
+      });
+      await expect(relay.relay(REQUEST)).resolves.toEqual({
+        outcome: "unknown",
       });
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
   });
 
-  it("aborts when the caller signal fires and does not keep its own timer", async () => {
+  it("aborts when the caller signal fires before timeoutMs", async () => {
     let arrived: () => void = () => {};
     const requestArrived = new Promise<void>((resolve) => {
       arrived = resolve;
@@ -154,6 +137,7 @@ describe("httpPaymentRelay", () => {
       const relay = httpPaymentRelay({
         baseUrl: origin(server),
         apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
         timeoutMs: 30_000,
       });
       const pending = relay.relay(REQUEST, { signal: controller.signal });
@@ -169,33 +153,27 @@ describe("httpPaymentRelay", () => {
     }
   });
 
-  it("times out without including a response body", async () => {
+  it("times out on its own timeoutMs while the caller signal stays open", async () => {
     const server = await listen(() => {
       // Never respond.
     });
+    const controller = new AbortController();
     try {
       const relay = httpPaymentRelay({
         baseUrl: origin(server),
         apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
         timeoutMs: 50,
       });
-      await expect(relay.relay(REQUEST)).rejects.toThrow(
-        "Payment relay timed out",
-      );
+      const started = Date.now();
+      await expect(
+        relay.relay(REQUEST, { signal: controller.signal }),
+      ).rejects.toThrow("Payment relay timed out");
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(controller.signal.aborted).toBe(false);
     } finally {
+      server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     }
-  });
-});
-
-describe("stubPaymentRelay", () => {
-  it("returns the handler's response", async () => {
-    const relay = stubPaymentRelay(
-      async () => relayRefusalFixtures.already_relayed,
-    );
-    await expect(relay.relay(REQUEST)).resolves.toEqual({
-      kind: "refused",
-      reason: "already_relayed",
-    });
   });
 });

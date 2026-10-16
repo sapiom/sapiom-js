@@ -5,7 +5,7 @@
  *
  * A raw CDP URL works the same way: `attachInterceptor(process.env.CDP_URL, …)`.
  *
- *   SAPIOM_API_KEY=… TRANSACTION_ID=… INJECTION_REF=… \
+ *   SAPIOM_API_KEY=… TRANSACTION_ID=… INJECTION_REF=… PROFILE_ID=shopify-card-vault \
  *   PLACEHOLDER_NUMBER=… PLACEHOLDER_EXP_MONTH=… PLACEHOLDER_EXP_YEAR=… PLACEHOLDER_CVC=… \
  *   npx tsx examples/attach.ts
  */
@@ -14,7 +14,6 @@ import { createClient } from "@sapiom/tools";
 import {
   attachInterceptor,
   httpPaymentRelay,
-  maskCardNumber,
   type PayLogger,
 } from "../src/index.js";
 
@@ -33,9 +32,10 @@ async function main(): Promise<void> {
   const transactionId = process.env.TRANSACTION_ID;
   const injectionRef = process.env.INJECTION_REF;
   const number = process.env.PLACEHOLDER_NUMBER;
-  if (!transactionId || !injectionRef || !number) {
+  const profileId = process.env.PROFILE_ID;
+  if (!transactionId || !injectionRef || !number || !profileId) {
     throw new Error(
-      "TRANSACTION_ID, INJECTION_REF, and PLACEHOLDER_NUMBER are required",
+      "TRANSACTION_ID, INJECTION_REF, PROFILE_ID, and PLACEHOLDER_NUMBER are required",
     );
   }
 
@@ -52,8 +52,9 @@ async function main(): Promise<void> {
     relay: httpPaymentRelay({
       baseUrl: process.env.SAPIOM_BASE_URL ?? "https://api.sapiom.ai",
       apiKey,
+      transactionId,
     }),
-    transactionId,
+    profileId,
     placeholder: {
       number,
       expMonth: Number(process.env.PLACEHOLDER_EXP_MONTH),
@@ -63,7 +64,8 @@ async function main(): Promise<void> {
     },
     logger: log,
   });
-  log.info("interceptor attached", { placeholder: maskCardNumber(number) });
+  const last4 = number.replace(/\D/g, "").slice(-4);
+  log.info("interceptor attached", { last4 });
   handle.on((event) => {
     if (event.type === "relayed") log.info("relayed", { status: event.status });
     else if (event.type === "refused") {

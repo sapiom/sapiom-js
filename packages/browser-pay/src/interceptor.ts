@@ -1,43 +1,24 @@
 import { CdpConnection, type CdpEvent } from "./cdp.js";
+import { paymentIdempotencyKey, type RelayResponse } from "./contract.js";
 import {
-  parseRelayResponse,
-  paymentIdempotencyKey,
-  type RelayHeader,
-  type RelayResponse,
-} from "./contract.js";
-import {
-  luhnHeldPan,
-  matchHeldPlaceholderInBody,
-  textContainsForeignCard,
+  redactHeld,
   textHoldsPlaceholderNumber,
   type HeldPlaceholder,
 } from "./detect.js";
-import {
-  acceptLanguageHeader,
-  cookieHeader,
-  secFetchDest,
-  secFetchSite,
-} from "./headers.js";
 import { silentLogger, type PayLogger } from "./logger.js";
 import type { PaymentRelay } from "./relay.js";
-import { redact } from "./redact.js";
 
 export interface AttachOptions {
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
   placeholder: HeldPlaceholder;
-  transactionId: string;
+  /** Relay profile, for example `shopify-card-vault`. */
+  profileId: string;
   /**
    * How long to wait for the relay before failing the paused request.
-   * The relay is not retried.
+   * The relay is not retried. `outcome: "unknown"` is not sent again.
    */
   timeoutMs?: number;
-  /**
-   * When set, Fetch pauses only URLs containing one of these strings.
-   * Other requests are not paused, so a captcha solver keeps running.
-   * Omit it to pause every page and iframe request.
-   */
-  pauseOnlyUrls?: string[];
   /** Defaults to a logger that discards every line. */
   logger?: PayLogger;
 }
@@ -70,7 +51,7 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const TARGET_FILTER = [{ type: "page" }, { type: "iframe" }];
 
 /** GET/HEAD with no body and no held number in the URL. Safe to continue immediately. */
-export function canContinueWithoutReading(
+function canContinueWithoutReading(
   method: string,
   url: string,
   hasBody: boolean,
@@ -83,11 +64,10 @@ export function canContinueWithoutReading(
 }
 
 /**
- * Captcha widgets and the session solver. Their requests are not the card
- * post. Holding them on Fetch or the debugger stalls the solver past its
- * own timeout. A POST is still scanned so a placeholder is never continued.
+ * Captcha widgets and the session solver. Holding them on Fetch or the
+ * debugger stalls the solver past its own timeout.
  */
-export function isSolverTraffic(url: string): boolean {
+function isSolverTraffic(url: string): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -135,13 +115,8 @@ function isBlankTarget(url: string): boolean {
   return url === "" || url === "about:blank" || url === "about:srcdoc";
 }
 
-function shouldPauseTarget(
-  session: Session,
-  pauseOnlyUrls?: string[],
-): boolean {
-  if (isHandsOffTarget(session) || isBlankTarget(session.url)) return false;
-  if (!pauseOnlyUrls || pauseOnlyUrls.length === 0) return true;
-  return pauseOnlyUrls.some((part) => session.url.includes(part));
+function shouldPauseTarget(session: Session): boolean {
+  return !isHandsOffTarget(session) && !isBlankTarget(session.url);
 }
 function isHandsOffTarget(session: Session): boolean {
   if (
@@ -155,21 +130,6 @@ function isHandsOffTarget(session: Session): boolean {
   return isSolverTraffic(session.url);
 }
 
-/**
- * Attach the payment interceptor to a browser.
- *
- * Page and iframe requests are paused. Captcha widgets, extension pages, and
- * workers are not: pausing them stalls the session's captcha solver. A paused
- * body that does not contain the held placeholder is continued. A match is
- * sent to the relay and the paused request is fulfilled with the provider
- * response. A mismatch, refusal, timeout, or network error fails the paused
- * request. The placeholder is never continued: it is a random number in a
- * real BIN range.
- *
- * `detach()` fails in-flight paused requests before it disables Fetch, so a
- * placeholder mid-relay is not released. If this process crashes or the CDP
- * socket drops first, Chrome continues those paused requests on its own.
- */
 export async function attachInterceptor(
   target: InterceptorTarget,
   options: AttachOptions,
@@ -181,8 +141,9 @@ export async function attachInterceptor(
   const seen = new Set<string>();
   const listeners = new Set<(event: InterceptorEvent) => void>();
   const inflight = new Map<string, Inflight>();
-  const relayFlights = new Map<string, Promise<RelayResponse>>();
+  const relayFlights = new Map<string, Flight>();
   const relayAborts = new Set<AbortController>();
+  const consumed = new Set<string>();
   const loggedRefusals = new Set<string>();
   const pendingArms: Promise<void>[] = [];
   let closed = false;
@@ -218,13 +179,15 @@ export async function attachInterceptor(
       return;
     }
     // Fetch has to be on before the target runs, or the card iframe can post
-    // before we are listening. Network has to be enabled before
-    // Network.getCookies will return the jar the card session needs.
-    const armed = await armFetch(connection, session, options.pauseOnlyUrls);
+    // before we are listening.
+    const armed = await armFetch(connection, session);
     if (!armed) {
       emit({
         type: "failed",
-        url: redact(session.url || session.targetId),
+        url: redactHeld(
+          session.url || session.targetId,
+          options.placeholder.number,
+        ),
         reason: "intercept_unavailable",
       });
       await connection
@@ -297,7 +260,7 @@ export async function attachInterceptor(
       void failRequest(connection, sessionId, params.requestId);
       emit({
         type: "failed",
-        url: redact(params.request.url ?? ""),
+        url: redactHeld(params.request.url ?? "", options.placeholder.number),
         reason: "unknown_session",
       });
       return;
@@ -325,6 +288,7 @@ export async function attachInterceptor(
       loggedRefusals,
       logger,
       relayAborts,
+      consumed,
       isClosed: () => closed,
     };
     if (
@@ -345,29 +309,11 @@ export async function attachInterceptor(
       });
       return;
     }
-    if (
-      !hasBody &&
-      (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD")
-    ) {
-      void finish(ctx, entry, "fail").then(() => {
-        emit({
-          type: "failed",
-          url: redact(url),
-          reason: "placeholder_mismatch",
-        });
-      });
-      return;
-    }
     if (closed) {
       void settleClosed(ctx, entry, url, params.request);
       return;
     }
-    const session = sessions.get(sessionId);
-    if (isSolverTraffic(url) || (session ? isHandsOffTarget(session) : false)) {
-      void continueSolverRequest(ctx, entry, url, params.request);
-      return;
-    }
-    void handlePaused(ctx, entry, params.resourceType ?? "", params.request);
+    void handlePaused(ctx, entry, params.request);
   };
 
   connection.onEvent((event) => {
@@ -386,7 +332,7 @@ export async function attachInterceptor(
       for (const session of sessions.values()) {
         if (session.targetId !== info.targetId) continue;
         session.url = info.url;
-        if (!shouldPauseTarget(session, options.pauseOnlyUrls)) {
+        if (!shouldPauseTarget(session)) {
           if (session.fetchEnabled) {
             session.fetchEnabled = false;
             void connection
@@ -399,19 +345,20 @@ export async function attachInterceptor(
           continue;
         }
         if (!session.fetchEnabled) {
-          void armFetch(connection, session, options.pauseOnlyUrls).then(
-            (armed) => {
-              if (armed || closed) return;
-              emit({
-                type: "failed",
-                url: redact(session.url || session.targetId),
-                reason: "intercept_unavailable",
-              });
-              void connection
-                .send("Target.closeTarget", { targetId: session.targetId })
-                .catch(() => {});
-            },
-          );
+          void armFetch(connection, session).then((armed) => {
+            if (armed || closed) return;
+            emit({
+              type: "failed",
+              url: redactHeld(
+                session.url || session.targetId,
+                options.placeholder.number,
+              ),
+              reason: "intercept_unavailable",
+            });
+            void connection
+              .send("Target.closeTarget", { targetId: session.targetId })
+              .catch(() => {});
+          });
         }
       }
     }
@@ -426,7 +373,7 @@ export async function attachInterceptor(
   await connection
     .send("Target.setDiscoverTargets", { discover: true })
     .catch(() => {});
-  await attachExistingPaymentFrames(connection, sessions, options, (session) =>
+  await attachExistingPaymentFrames(connection, sessions, (session) =>
     enableSession(session.sessionId, false),
   );
   await Promise.all([...pendingArms]);
@@ -476,6 +423,12 @@ interface PausedRequest {
   postDataEntries?: { bytes?: string }[];
 }
 
+interface Flight {
+  promise: Promise<RelayResponse>;
+  controller: AbortController;
+  waiters: number;
+}
+
 interface PauseContext {
   connection: CdpConnection;
   sessions: Map<string, Session>;
@@ -483,10 +436,11 @@ interface PauseContext {
   timeoutMs: number;
   emit: (event: InterceptorEvent) => void;
   inflight: Map<string, Inflight>;
-  relayFlights: Map<string, Promise<RelayResponse>>;
+  relayFlights: Map<string, Flight>;
   loggedRefusals: Set<string>;
   logger: PayLogger;
   relayAborts: Set<AbortController>;
+  consumed: Set<string>;
   isClosed: () => boolean;
 }
 
@@ -549,12 +503,12 @@ async function finishContinue(
 async function handlePaused(
   ctx: PauseContext,
   entry: Inflight,
-  resourceType: string,
   request: PausedRequest,
 ): Promise<void> {
   const url = request.url ?? "";
   const method = request.method ?? "GET";
-  const safeUrl = redact(url);
+  const number = ctx.options.placeholder.number;
+  const safeUrl = redactHeld(url, number);
   const targetType = ctx.sessions.get(entry.sessionId)?.type ?? "";
   try {
     const read = await readBodyResult(
@@ -568,74 +522,61 @@ async function handlePaused(
       ctx.emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
       return;
     }
-    const urlHolds = textHoldsPlaceholderNumber(
-      url,
-      ctx.options.placeholder.number,
-    );
-    const match = matchHeldPlaceholderInBody(
-      read.body,
-      ctx.options.placeholder,
-    );
-    if (match.kind === "not_held" && !urlHolds) {
+    const held =
+      textHoldsPlaceholderNumber(url, number) ||
+      textHoldsPlaceholderNumber(read.body, number);
+    if (!held) {
       await finishContinue(ctx, entry);
       return;
     }
-    if (match.kind !== "match" || ctx.isClosed()) {
+    if (ctx.isClosed()) {
       await finish(ctx, entry, "fail");
-      ctx.emit({
-        type: "failed",
-        url: safeUrl,
-        reason: "placeholder_mismatch",
-      });
+      ctx.emit({ type: "failed", url: safeUrl, reason: "detached" });
       return;
     }
     ctx.emit({ type: "paused", url: safeUrl, method, targetType });
-    const merchantOrigin = await readMerchantOrigin(
+    const pageOrigin = await readPageOrigin(
       ctx.connection,
       ctx.sessions,
       entry.sessionId,
     );
-    if (!merchantOrigin || ctx.isClosed()) {
+    if (!pageOrigin || ctx.isClosed()) {
       await finish(ctx, entry, "fail");
       ctx.emit({
         type: "failed",
         url: safeUrl,
-        reason: merchantOrigin ? "detached" : "merchant_origin",
+        reason: pageOrigin ? "detached" : "page_origin",
       });
       return;
     }
-    const headers = await completeHeaders(
-      ctx.connection,
-      ctx.sessions,
-      entry.sessionId,
-      url,
-      resourceType,
-      request.headers,
-    );
     const idempotencyKey = paymentIdempotencyKey(method, url, read.body);
-    const controller = new AbortController();
-    ctx.relayAborts.add(controller);
-    const timer = setTimeout(() => controller.abort(), ctx.timeoutMs);
+    if (ctx.consumed.has(idempotencyKey)) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({ type: "failed", url: safeUrl, reason: "unknown" });
+      return;
+    }
+    const flight = relayOnce(ctx, idempotencyKey, (signal) =>
+      ctx.options.relay.relay(
+        {
+          injectionRef: ctx.options.placeholder.injectionRef,
+          profileId: ctx.options.profileId,
+          pageOrigin,
+          request: {
+            method,
+            url,
+            headers: forwardedHeaders(request.headers),
+            body: read.body,
+          },
+          idempotencyKey,
+        },
+        { signal },
+      ),
+    );
     let response: RelayResponse;
     try {
-      response = parseRelayResponse(
-        await relayOnce(ctx, idempotencyKey, () =>
-          ctx.options.relay.relay(
-            {
-              transactionId: ctx.options.transactionId,
-              injectionRef: match.injectionRef,
-              merchantOrigin,
-              url,
-              method,
-              headers,
-              body: read.body,
-              idempotencyKey,
-            },
-            { signal: controller.signal },
-          ),
-        ),
-      );
+      response = await failAfter(flight.promise, ctx.timeoutMs);
     } catch (error) {
+      releaseWaiter(ctx, flight);
       await finish(ctx, entry, "fail");
       ctx.emit({
         type: "failed",
@@ -643,11 +584,15 @@ async function handlePaused(
         reason: ctx.isClosed() ? "detached" : failureReason(error),
       });
       return;
-    } finally {
-      clearTimeout(timer);
-      ctx.relayAborts.delete(controller);
     }
-    if (response.kind === "refused") {
+    releaseWaiter(ctx, flight);
+    if (response.outcome === "unknown") {
+      ctx.consumed.add(idempotencyKey);
+      await finish(ctx, entry, "fail");
+      ctx.emit({ type: "failed", url: safeUrl, reason: "unknown" });
+      return;
+    }
+    if (response.outcome === "refused") {
       if (!ctx.loggedRefusals.has(idempotencyKey)) {
         ctx.loggedRefusals.add(idempotencyKey);
         ctx.logger.warn("payment relay refused the paused request", {
@@ -658,11 +603,7 @@ async function handlePaused(
       ctx.emit({ type: "refused", url: safeUrl, reason: response.reason });
       return;
     }
-    const responseText =
-      response.bodyEncoding === "base64"
-        ? Buffer.from(response.body, "base64").toString("utf8")
-        : response.body;
-    if (textContainsForeignCard(responseText, ctx.options.placeholder.number)) {
+    if (textHoldsPlaceholderNumber(response.response.body, number)) {
       await finish(ctx, entry, "fail");
       ctx.emit({ type: "failed", url: safeUrl, reason: "response_credential" });
       return;
@@ -674,15 +615,13 @@ async function handlePaused(
           ctx.connection,
           entry.sessionId,
           entry.requestId,
-          response,
+          response.response,
         );
         fulfilled = true;
       }
     } catch {
       fulfilled = false;
     }
-    // A failed fulfill must not leave the pause open. Chrome continues an
-    // open pause when the socket drops, which would deliver the placeholder.
     if (!fulfilled && !entry.settled) {
       await failRequest(ctx.connection, entry.sessionId, entry.requestId);
     }
@@ -692,11 +631,15 @@ async function handlePaused(
     }
     ctx.emit(
       fulfilled
-        ? { type: "relayed", url: safeUrl, status: response.status }
+        ? {
+            type: "relayed",
+            url: safeUrl,
+            status: response.response.status,
+          }
         : {
             type: "relayed_unfulfilled",
             url: safeUrl,
-            status: response.status,
+            status: response.response.status,
           },
     );
   } catch {
@@ -711,7 +654,7 @@ async function settleClosed(
   url: string,
   request: PausedRequest,
 ): Promise<void> {
-  const safeUrl = redact(url);
+  const safeUrl = redactHeld(url, ctx.options.placeholder.number);
   try {
     let holds = textHoldsPlaceholderNumber(url, ctx.options.placeholder.number);
     let unreadable = false;
@@ -725,8 +668,7 @@ async function settleClosed(
       unreadable = read.unreadable;
       holds =
         unreadable ||
-        matchHeldPlaceholderInBody(read.body, ctx.options.placeholder).kind !==
-          "not_held";
+        textHoldsPlaceholderNumber(read.body, ctx.options.placeholder.number);
     }
     if (holds) {
       await finish(ctx, entry, "fail");
@@ -744,10 +686,9 @@ async function settleClosed(
   }
 }
 
-export type PostDataPlan = "inline" | "entries" | "fetch" | "empty";
+type PostDataPlan = "inline" | "entries" | "fetch" | "empty";
 
-/** How a paused request's body should be read. Missing entry bytes are fetched. */
-export function postDataPlan(request: {
+function postDataPlan(request: {
   postData?: string;
   hasPostData?: boolean;
   postDataEntries?: { bytes?: string }[];
@@ -776,9 +717,11 @@ async function readBodyResult(
   if (plan === "inline")
     return { body: request.postData ?? "", unreadable: false };
   if (plan === "entries") {
-    const body = (request.postDataEntries ?? [])
-      .map((entry) => Buffer.from(entry.bytes ?? "", "base64").toString("utf8"))
-      .join("");
+    const body = Buffer.concat(
+      (request.postDataEntries ?? []).map((entry) =>
+        Buffer.from(entry.bytes ?? "", "base64"),
+      ),
+    ).toString("utf8");
     return { body, unreadable: false };
   }
   try {
@@ -795,7 +738,7 @@ async function readBodyResult(
   }
 }
 
-async function readMerchantOrigin(
+async function readPageOrigin(
   connection: CdpConnection,
   sessions: Map<string, Session>,
   sessionId: string,
@@ -870,121 +813,42 @@ function topPageSession(
   return undefined;
 }
 
-/**
- * At the Fetch Request stage Chrome has not yet added the headers its network
- * stack appends. Fill the ones that are missing. Never override a header the
- * request already has. Cookie values are not logged.
- */
-async function completeHeaders(
-  connection: CdpConnection,
-  sessions: Map<string, Session>,
-  sessionId: string,
-  requestUrl: string,
-  resourceType: string,
-  rawHeaders: unknown,
-): Promise<RelayHeader[]> {
-  const headers = headerList(rawHeaders);
-  const has = (name: string) =>
-    headers.some(([key]) => key.toLowerCase() === name);
-  const frameUrl = sessions.get(sessionId)?.url || requestUrl;
-  const site = secFetchSite(requestUrl, frameUrl);
-  if (!has("sec-fetch-site") && site) {
-    headers.push(["Sec-Fetch-Site", site]);
-  }
-  const dest = secFetchDest(resourceType);
-  if (!has("sec-fetch-dest") && dest) {
-    headers.push(["Sec-Fetch-Dest", dest]);
-  }
-  if (!has("accept-language")) {
-    const languages = await readLanguages(connection, sessionId);
-    if (languages.length > 0) {
-      headers.push(["Accept-Language", acceptLanguageHeader(languages)]);
-    }
-  }
-  if (!has("cookie")) {
-    const cookies = await readCookies(connection, sessionId, requestUrl);
-    if (cookies.length > 0) {
-      headers.push(["Cookie", cookieHeader(cookies)]);
-    }
-  }
-  return headers;
-}
+const FORWARDED_HEADERS = new Set([
+  "accept",
+  "content-type",
+  "shopify-identification-signature",
+]);
 
-async function readLanguages(
-  connection: CdpConnection,
-  sessionId: string,
-): Promise<string[]> {
-  const evaluated = await connection
-    .send(
-      "Runtime.evaluate",
-      { expression: "navigator.languages", returnByValue: true },
-      sessionId,
-    )
-    .catch(() => undefined);
-  return stringList(evaluated);
-}
-
-async function readCookies(
-  connection: CdpConnection,
-  sessionId: string,
-  requestUrl: string,
-): Promise<{ name: string; value: string }[]> {
-  const result = await connection
-    .send("Network.getCookies", { urls: [requestUrl] }, sessionId)
-    .catch(() => undefined);
-  if (!isRecord(result) || !Array.isArray(result.cookies)) return [];
-  const cookies: { name: string; value: string }[] = [];
-  for (const entry of result.cookies) {
-    if (!isRecord(entry)) continue;
-    if (typeof entry.name !== "string" || typeof entry.value !== "string") {
-      continue;
-    }
-    cookies.push({ name: entry.name, value: entry.value });
-  }
-  return cookies;
-}
-
-function stringList(value: unknown): string[] {
-  if (!isRecord(value) || !isRecord(value.result)) return [];
-  const list = value.result.value;
-  if (
-    !Array.isArray(list) ||
-    !list.every((entry) => typeof entry === "string")
-  ) {
-    return [];
-  }
-  return list.filter((entry): entry is string => typeof entry === "string");
-}
-
-function headerList(headers: unknown): RelayHeader[] {
-  if (!headers) return [];
-  if (Array.isArray(headers)) {
-    const out: RelayHeader[] = [];
-    for (const entry of headers) {
+function forwardedHeaders(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  const take = (name: string, value: string) => {
+    const key = name.toLowerCase();
+    if (!FORWARDED_HEADERS.has(key) || value.length > 8192) return;
+    out[key] = value;
+  };
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
       if (
         Array.isArray(entry) &&
         entry.length === 2 &&
         typeof entry[0] === "string" &&
         typeof entry[1] === "string"
       ) {
-        out.push([entry[0], entry[1]]);
+        take(entry[0], entry[1]);
         continue;
       }
       if (isRecord(entry) && typeof entry.name === "string") {
-        const value = entry.value;
-        out.push([entry.name, typeof value === "string" ? value : ""]);
+        take(entry.name, typeof entry.value === "string" ? entry.value : "");
       }
     }
     return out;
   }
-  if (isRecord(headers)) {
-    const out: RelayHeader[] = [];
-    for (const [key, value] of Object.entries(headers)) {
-      if (typeof value === "string") out.push([key, value]);
+  if (isRecord(raw)) {
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === "string") take(key, value);
     }
-    return out;
   }
-  return [];
+  return out;
 }
 
 function parseAttachedTarget(value: unknown):
@@ -1013,16 +877,12 @@ function parseAttachedTarget(value: unknown):
 
 function parsePaused(
   value: unknown,
-):
-  | { requestId: string; resourceType: string; request: PausedRequest }
-  | undefined {
+): { requestId: string; request: PausedRequest } | undefined {
   if (!isRecord(value) || typeof value.requestId !== "string") return undefined;
   if (!isRecord(value.request)) return undefined;
   const request = value.request;
   return {
     requestId: value.requestId,
-    resourceType:
-      typeof value.resourceType === "string" ? value.resourceType : "",
     request: {
       url: typeof request.url === "string" ? request.url : "",
       method: typeof request.method === "string" ? request.method : "GET",
@@ -1085,17 +945,13 @@ function requestHasBody(request: PausedRequest): boolean {
 async function armFetch(
   connection: CdpConnection,
   session: Session | undefined,
-  pauseOnlyUrls: string[] | undefined,
 ): Promise<boolean> {
   if (!session || isHandsOffTarget(session)) return false;
   if (session.fetchEnabled) return true;
-  await connection
-    .send("Network.enable", {}, session.sessionId)
-    .catch(() => {});
   try {
     await connection.send(
       "Fetch.enable",
-      { patterns: fetchPatterns(pauseOnlyUrls) },
+      { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
       session.sessionId,
     );
   } catch {
@@ -1103,19 +959,6 @@ async function armFetch(
   }
   session.fetchEnabled = true;
   return true;
-}
-
-function fetchPatterns(
-  pauseOnlyUrls: string[] | undefined,
-): { urlPattern: string; requestStage: "Request" }[] {
-  if (!pauseOnlyUrls || pauseOnlyUrls.length === 0) {
-    return [{ urlPattern: "*", requestStage: "Request" }];
-  }
-  const patterns: { urlPattern: string; requestStage: "Request" }[] = [];
-  for (const part of pauseOnlyUrls) {
-    patterns.push({ urlPattern: `*${part}*`, requestStage: "Request" });
-  }
-  return patterns;
 }
 
 async function releaseTarget(
@@ -1127,47 +970,6 @@ async function releaseTarget(
   await connection
     .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
     .catch(() => {});
-}
-
-async function continueSolverRequest(
-  ctx: PauseContext,
-  entry: Inflight,
-  url: string,
-  request: PausedRequest,
-): Promise<void> {
-  const safeUrl = redact(url);
-  if (
-    textHoldsPlaceholderNumber(url, ctx.options.placeholder.number) ||
-    requestHasBody(request)
-  ) {
-    try {
-      const read = requestHasBody(request)
-        ? await readBodyResult(
-            ctx.connection,
-            entry.sessionId,
-            entry.requestId,
-            request,
-          )
-        : { body: "", unreadable: false };
-      const held =
-        textHoldsPlaceholderNumber(url, ctx.options.placeholder.number) ||
-        (!read.unreadable &&
-          matchHeldPlaceholderInBody(read.body, ctx.options.placeholder)
-            .kind !== "not_held");
-      if (held) {
-        await finish(ctx, entry, "fail");
-        ctx.emit({
-          type: "failed",
-          url: safeUrl,
-          reason: "placeholder_mismatch",
-        });
-        return;
-      }
-    } catch {
-      // An unreadable captcha body is not the card post. Continue it.
-    }
-  }
-  await finishContinue(ctx, entry);
 }
 
 async function continueRequest(
@@ -1200,23 +1002,21 @@ async function fulfillRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  response: Extract<RelayResponse, { kind: "relayed" }>,
+  response: { status: number; headers: Record<string, string>; body: string },
 ): Promise<void> {
-  const responseHeaders = response.headers.flatMap(([name, value]) => {
-    if (RESPONSE_HOP.has(name.toLowerCase())) return [];
-    return [{ name, value }];
-  });
-  const body =
-    response.bodyEncoding === "base64"
-      ? response.body
-      : Buffer.from(response.body, "utf8").toString("base64");
+  const responseHeaders = Object.entries(response.headers).flatMap(
+    ([name, value]) => {
+      if (RESPONSE_HOP.has(name.toLowerCase())) return [];
+      return [{ name, value }];
+    },
+  );
   await connection.send(
     "Fetch.fulfillRequest",
     {
       requestId,
       responseCode: response.status,
       responseHeaders,
-      body,
+      body: Buffer.from(response.body, "utf8").toString("base64"),
     },
     sessionId,
   );
@@ -1240,21 +1040,56 @@ function failureReason(error: unknown): string {
 function relayOnce(
   ctx: PauseContext,
   key: string,
-  call: () => Promise<RelayResponse>,
-): Promise<RelayResponse> {
+  start: (signal: AbortSignal) => Promise<RelayResponse>,
+): Flight {
   const existing = ctx.relayFlights.get(key);
-  if (existing) return existing;
-  const flight = call().finally(() => {
-    if (ctx.relayFlights.get(key) === flight) ctx.relayFlights.delete(key);
+  if (existing && !existing.controller.signal.aborted) {
+    existing.waiters += 1;
+    return existing;
+  }
+  const controller = new AbortController();
+  ctx.relayAborts.add(controller);
+  const promise = start(controller.signal).finally(() => {
+    ctx.relayAborts.delete(controller);
+    const current = ctx.relayFlights.get(key);
+    if (current?.controller === controller) ctx.relayFlights.delete(key);
   });
+  void promise.catch(() => {});
+  const flight = { controller, waiters: 1, promise };
   ctx.relayFlights.set(key, flight);
   return flight;
+}
+
+function releaseWaiter(ctx: PauseContext, flight: Flight): void {
+  flight.waiters -= 1;
+  if (flight.waiters > 0) return;
+  flight.controller.abort();
+  ctx.relayAborts.delete(flight.controller);
+}
+
+function failAfter<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("Payment relay timed out"));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(
+          error instanceof Error ? error : new Error("Payment relay failed"),
+        );
+      },
+    );
+  });
 }
 
 async function attachExistingPaymentFrames(
   connection: CdpConnection,
   sessions: Map<string, Session>,
-  options: AttachOptions,
   enable: (session: Session) => Promise<void>,
 ): Promise<void> {
   const listed = await connection
@@ -1262,7 +1097,6 @@ async function attachExistingPaymentFrames(
     .catch(() => undefined);
   for (const info of parseTargetInfos(listed)) {
     if (info.type !== "iframe") continue;
-    if (!urlMatchesPause(info.url, options.pauseOnlyUrls)) continue;
     const known = [...sessions.values()].some(
       (session) => session.targetId === info.targetId,
     );
@@ -1295,11 +1129,6 @@ async function attachExistingPaymentFrames(
   }
 }
 
-function urlMatchesPause(url: string, pauseOnlyUrls?: string[]): boolean {
-  if (!pauseOnlyUrls || pauseOnlyUrls.length === 0) return true;
-  return pauseOnlyUrls.some((part) => url.includes(part));
-}
-
 function parseTargetInfos(
   value: unknown,
 ): { targetId: string; type: string; url: string }[] {
@@ -1328,24 +1157,14 @@ function assertAttachOptions(options: AttachOptions): void {
   if (typeof options.relay?.relay !== "function") {
     throw new Error("A payment relay is required");
   }
-  if (!options.transactionId) {
-    throw new Error("transactionId is required");
+  if (!options.profileId) {
+    throw new Error("profileId is required");
   }
-  if (
-    !options.placeholder?.injectionRef ||
-    !luhnHeldPan(options.placeholder.number)
-  ) {
+  const digits = options.placeholder?.number?.replace(/\D/g, "") ?? "";
+  if (!options.placeholder?.injectionRef || digits.length === 0) {
     throw new Error(
-      "placeholder.injectionRef and a Luhn-valid placeholder number are required",
+      "placeholder.injectionRef and placeholder.number are required",
     );
-  }
-  const patterns = options.pauseOnlyUrls;
-  if (
-    patterns !== undefined &&
-    (!Array.isArray(patterns) ||
-      patterns.some((part) => typeof part !== "string"))
-  ) {
-    throw new Error("pauseOnlyUrls must be an array of strings");
   }
 }
 
@@ -1353,7 +1172,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function resolveCdpUrl(target: InterceptorTarget): string {
+function resolveCdpUrl(target: InterceptorTarget): string {
   if (typeof target === "string") {
     if (!target) throw new Error("A CDP websocket URL is required");
     return target;
