@@ -176,4 +176,77 @@ describe("httpPaymentRelay", () => {
       await new Promise((resolve) => server.close(resolve));
     }
   });
+
+  it("refuses a redirect", async () => {
+    const server = await listen((_req, res) => {
+      res.writeHead(302, { location: "https://evil.example/steal" });
+      res.end();
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      await expect(relay.relay(REQUEST)).rejects.toThrow(
+        "Payment relay refused a redirect",
+      );
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("times out when headers arrive and the body stays open", async () => {
+    const relay = httpPaymentRelay({
+      baseUrl: "https://relay.example",
+      apiKey: "test-key",
+      transactionId: "tx_fixture_shopify",
+      timeoutMs: 50,
+      fetchImpl: stalledBody,
+    });
+    const started = Date.now();
+    await expect(relay.relay(REQUEST)).rejects.toThrow(
+      "Payment relay timed out",
+    );
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("aborts a stalled body when the caller signal fires after headers", async () => {
+    const controller = new AbortController();
+    const relay = httpPaymentRelay({
+      baseUrl: "https://relay.example",
+      apiKey: "test-key",
+      transactionId: "tx_fixture_shopify",
+      timeoutMs: 30_000,
+      fetchImpl: stalledBody,
+    });
+    const pending = relay.relay(REQUEST, { signal: controller.signal });
+    const expectation = expect(pending).rejects.toThrow(
+      "Payment relay timed out",
+    );
+    controller.abort();
+    await expectation;
+  });
 });
+
+function stalledBody(
+  _input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+): Promise<Response> {
+  const stream = new ReadableStream({
+    start(controller) {
+      const fail = () => {
+        try {
+          controller.error(
+            new DOMException("The operation was aborted.", "AbortError"),
+          );
+        } catch {
+          // The stream may already be cancelled.
+        }
+      };
+      if (init?.signal?.aborted) fail();
+      else init?.signal?.addEventListener("abort", fail, { once: true });
+    },
+  });
+  return Promise.resolve(new Response(stream, { status: 200 }));
+}

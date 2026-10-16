@@ -451,7 +451,7 @@ describe("interceptor CDP decisions", () => {
         params: {
           requestId: "req-url",
           request: {
-            url: `https://checkout.example/pay?number=${HELD.number}`,
+            url: "https://checkout.example/pay?number=4242%204242%204242%204242",
             method: "POST",
             postData: '{"event":"ping"}',
           },
@@ -462,10 +462,12 @@ describe("interceptor CDP decisions", () => {
         "relayed",
       );
       expect(calls).toHaveLength(1);
-      expect(calls[0].request.url).toContain(HELD.number);
+      expect(calls[0].request.url).toContain("4242%204242%204242%204242");
       expect(calls[0].request.body).toBe('{"event":"ping"}');
       expect(events.map((event) => event.type)).toEqual(["paused", "relayed"]);
       expect(JSON.stringify(events)).not.toContain(HELD.number);
+      expect(JSON.stringify(events)).not.toContain("4242");
+      expect(JSON.stringify(events)).not.toContain("%20");
       expect(
         stub.commands.some(
           (command) => command.method === "Fetch.continueRequest",

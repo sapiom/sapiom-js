@@ -88,9 +88,10 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
         config.timeoutMs,
         call?.signal,
       );
-      let response: Response;
+      let text: string;
+      let status = 0;
       try {
-        response = await config.fetchImpl(url, {
+        const response = await config.fetchImpl(url, {
           method: "POST",
           redirect: "manual",
           headers: {
@@ -101,7 +102,18 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
           body: JSON.stringify(request),
           signal,
         });
+        status = response.status;
+        if (status >= 300 && status < 400) {
+          throw new Error("Payment relay refused a redirect");
+        }
+        text = await response.text();
       } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "Payment relay refused a redirect"
+        ) {
+          throw error;
+        }
         if (signal.aborted || isTimeout(error)) {
           throw new Error("Payment relay timed out");
         }
@@ -109,10 +121,6 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
       } finally {
         dispose();
       }
-      if (response.status >= 300 && response.status < 400) {
-        throw new Error("Payment relay refused a redirect");
-      }
-      const text = await response.text();
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -126,7 +134,7 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
           // The thrown error must not include the response text.
         }
       }
-      throw new Error(`Payment relay failed (HTTP ${response.status})`);
+      throw new Error(`Payment relay failed (HTTP ${status})`);
     },
   };
 }

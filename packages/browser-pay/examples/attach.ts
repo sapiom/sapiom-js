@@ -14,6 +14,7 @@ import { createClient } from "@sapiom/tools";
 import {
   attachInterceptor,
   httpPaymentRelay,
+  type InterceptorHandle,
   type PayLogger,
 } from "../src/index.js";
 
@@ -48,43 +49,49 @@ async function main(): Promise<void> {
     stealth: true,
     headless: false,
   });
-  const handle = await attachInterceptor(session.cdpUrl, {
-    relay: httpPaymentRelay({
-      baseUrl: process.env.SAPIOM_BASE_URL ?? "https://api.sapiom.ai",
-      apiKey,
-      transactionId,
-    }),
-    profileId,
-    placeholder: {
-      number,
-      expMonth: Number(process.env.PLACEHOLDER_EXP_MONTH),
-      expYear: Number(process.env.PLACEHOLDER_EXP_YEAR),
-      cvc: process.env.PLACEHOLDER_CVC ?? "",
-      injectionRef,
-    },
-    logger: log,
-  });
-  const last4 = number.replace(/\D/g, "").slice(-4);
-  log.info("interceptor attached", { last4 });
-  handle.on((event) => {
-    if (event.type === "relayed") log.info("relayed", { status: event.status });
-    else if (event.type === "refused") {
-      log.warn("refused", { reason: event.reason });
-    } else if (event.type === "failed") {
-      log.warn("failed", { reason: event.reason });
-    }
-  });
-
+  let handle: InterceptorHandle | undefined;
   const shutdown = async () => {
-    await handle.detach();
+    await handle?.detach()?.catch(() => {});
     await sapiom.browserAutomation.sessions
       .closeManaged(session.sessionId)
       .catch(() => {});
     await sapiom.shutdown().catch(() => {});
   };
-  process.on("SIGINT", () => {
-    void shutdown().finally(() => process.exit(0));
-  });
+  try {
+    handle = await attachInterceptor(session.cdpUrl, {
+      relay: httpPaymentRelay({
+        baseUrl: process.env.SAPIOM_BASE_URL ?? "https://api.sapiom.ai",
+        apiKey,
+        transactionId,
+      }),
+      profileId,
+      placeholder: {
+        number,
+        expMonth: Number(process.env.PLACEHOLDER_EXP_MONTH),
+        expYear: Number(process.env.PLACEHOLDER_EXP_YEAR),
+        cvc: process.env.PLACEHOLDER_CVC ?? "",
+        injectionRef,
+      },
+      logger: log,
+    });
+    const last4 = number.replace(/\D/g, "").slice(-4);
+    log.info("interceptor attached", { last4 });
+    handle.on((event) => {
+      if (event.type === "relayed")
+        log.info("relayed", { status: event.status });
+      else if (event.type === "refused") {
+        log.warn("refused", { reason: event.reason });
+      } else if (event.type === "failed") {
+        log.warn("failed", { reason: event.reason });
+      }
+    });
+    process.on("SIGINT", () => {
+      void shutdown().finally(() => process.exit(0));
+    });
+  } catch (error) {
+    await shutdown();
+    throw error;
+  }
 }
 
 main().catch((error: unknown) => {
