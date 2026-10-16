@@ -145,8 +145,12 @@ function isStreamBody(body: RequestInit["body"]): boolean {
 const SRI_ALGORITHMS = ["sha256", "sha384", "sha512"];
 
 /** base64url and a missing `=` pad compare equal, as in Node's `fetch`. */
-const normalizeDigest = (digest: string): string =>
-  digest.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+function normalizeDigest(digest: string): string {
+  // A scan, not `/=+$/`: that regex is quadratic on a long run of `=` in the metadata.
+  let end = digest.length;
+  while (end > 0 && digest.charCodeAt(end - 1) === 61 /* '=' */) end -= 1;
+  return digest.slice(0, end).replace(/-/g, "+").replace(/_/g, "/");
+}
 
 /**
  * Subresource Integrity, as `fetch` applies `integrity`: unknown algorithms and

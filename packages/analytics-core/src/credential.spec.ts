@@ -273,6 +273,7 @@ describe("matchesIntegrity", () => {
     ],
     ["an empty digest for a known algorithm", "sha256-"],
     ["a malformed digest for a known algorithm", "sha256-!!!"],
+    ["a digest of only padding", `sha256-${"=".repeat(100_000)}x`],
   ])("rejects %s", (_label, metadata) => {
     expect(matchesIntegrity(BODY, metadata)).toBe(false);
   });
