@@ -17,6 +17,7 @@
       - any-glob-to-any-file:
           - packages/core/**
           - packages/analytics-core/**
+          - packages/browser-pay/**
 
 "area: integrations":
   - changed-files:

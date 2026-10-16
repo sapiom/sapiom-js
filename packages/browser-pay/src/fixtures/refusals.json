@@ -1,0 +1,14 @@
+{
+  "wrong_key": { "ok": false, "reason": "wrong_key" },
+  "unknown_placeholder": { "ok": false, "reason": "unknown_placeholder" },
+  "closed_placeholder": { "ok": false, "reason": "closed_placeholder" },
+  "expired_placeholder": { "ok": false, "reason": "expired_placeholder" },
+  "off_profile_destination": {
+    "ok": false,
+    "reason": "off_profile_destination"
+  },
+  "replay": { "ok": false, "reason": "replay" },
+  "merchant_origin": { "ok": false, "reason": "merchant_origin" },
+  "changed_total": { "ok": false, "reason": "changed_total" },
+  "cancelled": { "ok": false, "reason": "cancelled" }
+}

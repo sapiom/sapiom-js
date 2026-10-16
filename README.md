@@ -151,6 +151,7 @@ claude mcp add sapiom-dev -- npx -y @sapiom/mcp
 - **[The two Sapiom MCP servers](./docs/mcp-servers.md)** — local dev vs. remote capabilities
 - **[@sapiom/agent](./packages/agent/README.md)** — authoring contract
 - **[@sapiom/tools](./packages/tools/README.md)** — capability client
+- **[@sapiom/browser-pay](./packages/browser-pay/README.md)** — browser payment interceptor
 - **[@sapiom/cli](./packages/cli/README.md)** — command line
 - **[@sapiom/mcp](./packages/mcp/README.md)** — developer MCP
 - **[Agent Studio](./packages/harness/README.md)** — local app for building with your coding agent
@@ -167,6 +168,8 @@ claude mcp add sapiom-dev -- npx -y @sapiom/mcp
             └── @sapiom/mcp     Local developer MCP (sapiom-dev)
 
 @sapiom/tools            Typed capability client (sandboxes, repos, models, …)
+
+@sapiom/browser-pay      CDP payment interceptor (placeholder card to relay)
 
 @sapiom/harness          Agent Studio (local web app; launched via @sapiom/agent-studio)
     ↑
