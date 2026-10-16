@@ -43,6 +43,21 @@ import { SHOPIFY_PAYMENTS_TEST_CARD } from "./relays/shopify-payments-test-card.
 
 const CART_URL = "https://1a2uh3-r7.myshopify.com/cart/67652208394372:1";
 const SHOP_ORIGIN = "https://1a2uh3-r7.myshopify.com";
+const SOLVER_WAIT_MS = 180_000;
+const ADDRESS = {
+  line: "350 5th Ave",
+  city: "New York",
+  state: "New York",
+  zip: "10118",
+  phone: "2127363100",
+} as const;
+
+let startedAt = Date.now();
+
+function mark(message: string): void {
+  const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(`t+${seconds}s ${message}`);
+}
 
 class CheckoutStopped extends Error {
   constructor(
@@ -62,6 +77,8 @@ async function main(): Promise<void> {
     );
   }
   const mode = process.env.MODE === "refuse" ? "refuse" : "pay";
+  startedAt = Date.now();
+  sessionsObserved = false;
   const placeholder = loadPlaceholder(relayName);
   console.log(
     `checkout ${mode} via RELAY=${relayName} BROWSER=${process.env.BROWSER ?? "local"} placeholder ${maskCardNumber(placeholder.number)} test card ${maskCardNumber(SHOPIFY_PAYMENTS_TEST_CARD.number)}`,
@@ -110,11 +127,23 @@ async function main(): Promise<void> {
     const relay: PaymentRelay = {
       async relay(request) {
         relayCalls += 1;
-        sessionsUrl = request.url.includes(
+        const isSessions = request.url.includes(
           "checkout.pci.shopifyinc.com/sessions",
         );
+        if (isSessions && !sessionsUrl) {
+          sessionsObserved = true;
+          mark("pci sessions paused");
+        }
+        sessionsUrl = sessionsUrl || isSessions;
         merchantOrigin = request.merchantOrigin;
         const result = await selected.relay(request);
+        if (request.url.includes("checkout.pci.shopifyinc.com/sessions")) {
+          mark(
+            result.ok
+              ? `pci sessions relayed HTTP ${result.status}`
+              : `pci sessions refused ${result.reason}`,
+          );
+        }
         const note = result.ok
           ? `status ${result.status} body ${redact(result.body).slice(0, 180)}`
           : `refused ${result.reason}`;
@@ -125,7 +154,9 @@ async function main(): Promise<void> {
       },
     };
 
+    mark("opening browser session");
     browserSession = await openBrowser();
+    mark("browser session ready");
     handle = await attachInterceptor(browserSession.cdpUrl, {
       relay,
       placeholder,
@@ -272,7 +303,10 @@ async function runCheckout(
   await chooseShipping(page);
   console.log("fill card fields");
   await fillCard(page, placeholder);
+  mark("card typed");
   await assertNoChallenge(page, "before pay");
+  await assertReadyToPay(page, placeholder);
+  mark("pre-pay checks passed");
   console.log("pay once");
   await clickPay(page);
   if (mode === "refuse") {
@@ -319,20 +353,21 @@ async function fillShipping(page: Page): Promise<void> {
   }
   await fill(page, /first name/i, "Test", 'input[name="firstName"]');
   await fill(page, /last name/i, "Buyer", 'input[name="lastName"]');
-  await fill(page, /^address$/i, "1 Test Street", 'input[name="address1"]');
+  await fill(page, /^address$/i, ADDRESS.line, 'input[name="address1"]');
   await dismissAddressSuggestions(page);
-  await fill(page, /^city$/i, "New York", 'input[name="city"]');
+  await fill(page, /^city$/i, ADDRESS.city, 'input[name="city"]');
   await fill(
     page,
     /zip code|postal code/i,
-    "10001",
+    ADDRESS.zip,
     'input[name="postalCode"]',
   );
   const phone = page.getByLabel(/phone/i).first();
   if (await phone.isVisible().catch(() => false))
-    await phone.fill("2015550123");
+    await phone.fill(ADDRESS.phone);
   await selectState(page);
   await dismissAddressSuggestions(page);
+  await page.waitForTimeout(2500);
 }
 
 async function dismissAddressSuggestions(page: Page): Promise<void> {
@@ -397,25 +432,32 @@ async function chooseShipping(page: Page): Promise<void> {
   console.log("no shipping-rate radio appeared");
 }
 
-async function fillCard(
-  page: Page,
-  placeholder: HeldPlaceholder,
-): Promise<void> {
+async function cardFrames(page: Page): Promise<Map<string, Frame>> {
   await page
     .waitForSelector(
       'iframe[src*="checkout.pci.shopifyinc.com"], iframe[name*="card-fields"], iframe[title*="Card number"]',
       { timeout: 30_000 },
     )
     .catch(() => {});
+  const roles = new Map<string, Frame>();
+  for (const frame of page.frames()) {
+    const blob = `${frame.name()} ${frame.url()}`;
+    if (!/checkout\.pci\.shopifyinc\.com|card-fields/i.test(blob)) continue;
+    const role = frameRole(blob);
+    if (role !== "unknown" && !roles.has(role)) roles.set(role, frame);
+  }
+  return roles;
+}
+
+async function fillCard(
+  page: Page,
+  placeholder: HeldPlaceholder,
+): Promise<void> {
+  const roles = await cardFrames(page);
   const frames = page.frames().filter((frame) => {
     const blob = `${frame.name()} ${frame.url()}`;
     return /checkout\.pci\.shopifyinc\.com|card-fields/i.test(blob);
   });
-  const roles = new Map<string, Frame>();
-  for (const frame of frames) {
-    const role = frameRole(`${frame.name()} ${frame.url()}`);
-    if (role !== "unknown" && !roles.has(role)) roles.set(role, frame);
-  }
   const number = roles.get("number");
   if (!number) {
     throw new CheckoutStopped(
@@ -476,85 +518,184 @@ async function typeFrame(frame: Frame, text: string): Promise<void> {
   await target.pressSequentially(text, { delay: 20 });
 }
 
+async function assertReadyToPay(
+  page: Page,
+  placeholder: HeldPlaceholder,
+): Promise<void> {
+  const suggestion = page
+    .getByText(/did you mean|suggested address|address suggestion/i)
+    .first();
+  if (await suggestion.isVisible().catch(() => false)) {
+    throw new CheckoutStopped("address suggestion still shown before pay", 2);
+  }
+  const invalid = await page
+    .locator('input[aria-invalid="true"], select[aria-invalid="true"]')
+    .count();
+  if (invalid > 0) {
+    throw new CheckoutStopped(`${invalid} invalid fields before pay`, 2);
+  }
+  const alerts = await page
+    .locator('[role="alert"]')
+    .allInnerTexts()
+    .catch(() => [] as string[]);
+  const fieldError = alerts
+    .map((alert) => alert.replace(/\s+/g, " ").trim())
+    .find((alert) =>
+      /address|phone|email|city|zip|postal|state|required|invalid|enter a/i.test(
+        alert,
+      ),
+    );
+  if (fieldError) {
+    throw new CheckoutStopped(
+      `field error before pay: ${redact(fieldError).slice(0, 180)}`,
+      2,
+    );
+  }
+  const anyChecked = await page
+    .locator('input[type="radio"]:checked')
+    .evaluateAll((nodes) =>
+      nodes.some((node) =>
+        /shipping|delivery|rate/i.test(
+          `${(node as { name?: string }).name ?? ""} ${(node as { id?: string }).id ?? ""}`,
+        ),
+      ),
+    )
+    .catch(() => false);
+  const radios = await page.locator('input[type="radio"]').count();
+  if (radios > 0 && !anyChecked) {
+    throw new CheckoutStopped("no shipping rate selected before pay", 2);
+  }
+  await assertCardHoldsPlaceholder(page, placeholder);
+  console.log(
+    `card iframes hold placeholder ${maskCardNumber(placeholder.number)}`,
+  );
+}
+
+async function assertCardHoldsPlaceholder(
+  page: Page,
+  placeholder: HeldPlaceholder,
+): Promise<void> {
+  const roles = await cardFrames(page);
+  const number = digits(await cardFieldValue(requiredFrame(roles, "number")));
+  const expiryFrame = roles.get("expiry");
+  const expiry = expiryFrame ? digits(await cardFieldValue(expiryFrame)) : "";
+  const cvc = digits(await cardFieldValue(requiredFrame(roles, "cvc")));
+  const numberOk =
+    number === placeholder.number ||
+    (number.length >= 4 && number.endsWith(placeholder.number.slice(-4)));
+  const expiryOk =
+    !expiryFrame ||
+    (expiry.includes(String(placeholder.expMonth).padStart(2, "0")) &&
+      expiry.includes(String(placeholder.expYear).slice(-2)));
+  const cvcOk = cvc === placeholder.cvc;
+  if (!numberOk || !expiryOk || !cvcOk) {
+    throw new CheckoutStopped(
+      `card iframes do not hold the placeholder (number last4 ${number.slice(-4) || "empty"}, expiry ${expiry ? "present" : "empty"}, cvc ${cvc ? "present" : "empty"})`,
+      2,
+    );
+  }
+}
+
+function requiredFrame(roles: Map<string, Frame>, role: string): Frame {
+  const frame = roles.get(role);
+  if (!frame) throw new CheckoutStopped(`card ${role} iframe not found`, 2);
+  return frame;
+}
+
+async function cardFieldValue(frame: Frame): Promise<string> {
+  const inputs = frame.locator(
+    'input:not([data-honeypot-field]):not([aria-hidden="true"])',
+  );
+  const count = await inputs.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = inputs.nth(index);
+    if ((await candidate.getAttribute("tabindex")) === "-1") continue;
+    return candidate.inputValue();
+  }
+  return inputs.first().inputValue();
+}
+
+function digits(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
 async function clickPay(page: Page): Promise<void> {
-  await acceptAddressSuggestion(page);
-  await dismissCheckoutModal(page);
   const named = page.locator("#checkout-pay-button").first();
   const target = (await named.isVisible().catch(() => false))
     ? named
     : page.getByRole("button", { name: /pay now/i }).first();
+  mark("clicking pay once");
   await target.click({ timeout: 15_000 });
-}
-
-async function acceptAddressSuggestion(page: Page): Promise<void> {
-  const prompt = page.getByText(/did you mean/i).first();
-  if (!(await prompt.isVisible().catch(() => false))) return;
-  const buttons = page.locator("button");
-  const count = await buttons.count();
-  for (let index = 0; index < count; index += 1) {
-    const label = (
-      await buttons
-        .nth(index)
-        .innerText()
-        .catch(() => "")
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!/^\d+\s+\S+/.test(label) || label.length > 80) continue;
-    if (/pay now|order summary/i.test(label)) continue;
-    console.log("accept address suggestion");
-    await buttons.nth(index).click();
-    await page.waitForTimeout(800);
-    return;
-  }
-}
-
-async function dismissCheckoutModal(page: Page): Promise<void> {
-  const keep = page
-    .getByRole("button", {
-      name: /use entered address|keep address|continue with entered/i,
-    })
-    .first();
-  if (await keep.isVisible().catch(() => false)) {
-    console.log("dismiss address suggestion");
-    await keep.click();
-    await page.waitForTimeout(400);
-  }
-  if (await detectChallenge(page)) return;
-  await page.keyboard.press("Escape").catch(() => {});
-  await page.evaluate(() => {
-    const doc = globalThis as unknown as {
-      document: {
-        querySelectorAll: (selector: string) => Iterable<{
-          innerText?: string;
-          style: { setProperty: (name: string, value: string) => void };
-        }>;
-      };
-    };
-    for (const el of doc.document.querySelectorAll('[data-type="modal"]')) {
-      if (/captcha|verify you are human/i.test(el.innerText ?? "")) continue;
-      el.style.setProperty("pointer-events", "none");
-    }
-  });
+  mark("pay click returned");
 }
 
 async function waitForConfirmation(page: Page): Promise<void> {
-  const deadline =
-    Date.now() +
-    ((process.env.BROWSER ?? "local") === "sapiom" ? 180_000 : 60_000);
+  const deadline = Date.now() + (solverEnabled() ? 240_000 : 60_000);
+  let captchaAt = 0;
+  let captchaCleared = false;
+  let sawSessions = false;
   while (Date.now() < deadline) {
-    await assertNoChallenge(page, "waiting for confirmation");
-    if (/thank[-_]you/i.test(page.url())) return;
+    const challenge = await detectChallenge(page);
+    if (challenge) {
+      if (!captchaAt) {
+        captchaAt = Date.now();
+        mark(`captcha visible after pay (${challenge})`);
+      }
+      if (Date.now() - captchaAt > SOLVER_WAIT_MS) {
+        const waited = ((Date.now() - captchaAt) / 1000).toFixed(1);
+        throw new CheckoutStopped(
+          `captcha still shown ${waited}s after pay. Not bypassing it.`,
+          3,
+        );
+      }
+      await page.waitForTimeout(1000);
+      continue;
+    }
+    if (captchaAt && !captchaCleared) {
+      captchaCleared = true;
+      mark(
+        `captcha cleared ${((Date.now() - captchaAt) / 1000).toFixed(1)}s after it appeared`,
+      );
+    }
+    if (sessionsSeen() && !sawSessions) {
+      sawSessions = true;
+      mark("pci sessions observed while waiting for confirmation");
+    }
+    if (/thank[-_]you/i.test(page.url())) {
+      mark("thank-you page");
+      return;
+    }
     const heading = page.getByRole("heading", { name: /thank you/i }).first();
-    if (await heading.isVisible().catch(() => false)) return;
+    if (await heading.isVisible().catch(() => false)) {
+      mark("thank-you heading");
+      return;
+    }
     const paymentError = await paymentAlert(page);
     if (paymentError) throw new CheckoutStopped(redact(paymentError), 2);
     await page.waitForTimeout(500);
   }
+  if (captchaAt && !captchaCleared) {
+    throw new CheckoutStopped(
+      "captcha still shown after pay. Not bypassing it.",
+      3,
+    );
+  }
   throw new CheckoutStopped(
-    `checkout did not confirm (${redactUrl(page.url())})`,
+    sessionsSeen()
+      ? `sessions relayed but checkout did not confirm (${redactUrl(page.url())})`
+      : `pci sessions request was not relayed (${redactUrl(page.url())})`,
     2,
   );
+}
+
+function solverEnabled(): boolean {
+  return (process.env.BROWSER ?? "local") === "sapiom";
+}
+
+let sessionsObserved = false;
+
+function sessionsSeen(): boolean {
+  return sessionsObserved;
 }
 
 async function paymentAlert(page: Page): Promise<string | null> {
@@ -572,15 +713,15 @@ async function paymentAlert(page: Page): Promise<string | null> {
 
 async function assertNoChallenge(page: Page, where: string): Promise<void> {
   if (!(await detectChallenge(page))) return;
-  if ((process.env.BROWSER ?? "local") === "sapiom") {
-    console.log(
-      `captcha visible ${where}; waiting for the browser session's solver`,
-    );
-    const deadline = Date.now() + 120_000;
-    while (Date.now() < deadline) {
+  if (solverEnabled()) {
+    const seen = Date.now();
+    mark(`captcha visible ${where}; waiting up to 180s for the solver`);
+    while (Date.now() - seen < SOLVER_WAIT_MS) {
       if (/thank[-_]you/i.test(page.url())) return;
       if (!(await detectChallenge(page))) {
-        console.log(`captcha cleared ${where}`);
+        mark(
+          `captcha cleared ${where} after ${((Date.now() - seen) / 1000).toFixed(1)}s`,
+        );
         return;
       }
       await page.waitForTimeout(1000);
