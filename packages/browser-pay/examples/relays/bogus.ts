@@ -3,6 +3,7 @@ import { SHOPIFY_PAYMENTS_TEST_CARD } from "./shopify-payments-test-card.js";
 import {
   forwardRequestHeaders,
   providerResponseHeaders,
+  relayBodyText,
   replacePlaceholderCard,
 } from "./replace-card.js";
 
@@ -21,7 +22,7 @@ export function bogusShopifyRelay(options: {
   return {
     async relay(request) {
       const body = replacePlaceholderCard(
-        request.body,
+        relayBodyText(request),
         options.placeholder.number,
         {
           number: BOGUS_CARD.number,
@@ -45,6 +46,7 @@ export function bogusShopifyRelay(options: {
         status: response.status,
         headers: providerResponseHeaders(response.headers),
         body: await response.text(),
+        bodyEncoding: "utf8",
       };
     },
   };

@@ -7,14 +7,22 @@ export type {
 } from "./interceptor.js";
 
 export { httpPaymentRelay, stubPaymentRelay } from "./relay.js";
-export type { HttpRelayOptions, PaymentRelay } from "./relay.js";
+export type {
+  HttpRelayOptions,
+  PaymentRelay,
+  RelayCallOptions,
+} from "./relay.js";
 
 export {
+  RELAY_CONTRACT_VERSION,
   RELAY_REFUSAL_REASONS,
   isRelayRefusalReason,
   parseRelayResponse,
+  relayHeadersFromRecord,
 } from "./contract.js";
 export type {
+  RelayBodyEncoding,
+  RelayHeader,
   RelayRefusal,
   RelayRefusalReason,
   RelayRequest,
@@ -35,10 +43,5 @@ export type {
   HeldPlaceholderMatch,
   TypedCard,
 } from "./detect.js";
-
-export {
-  relayRefusalFixtures,
-  shopifyCardSessionRoundTrip,
-} from "./fixtures.js";
 
 export { maskCardNumber, redact } from "./redact.js";

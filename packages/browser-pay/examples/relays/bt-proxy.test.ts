@@ -23,11 +23,14 @@ const REQUEST: RelayRequest = {
   merchantOrigin: "https://shop.example",
   url: "https://checkout.pci.shopifyinc.com/sessions",
   method: "POST",
-  headers: {
-    "content-type": "application/json",
-    "content-length": "40",
-    "shopify-identification-signature": "sig",
-  },
+  headers: [
+    ["content-type", "application/json"],
+    ["content-length", "40"],
+    ["shopify-identification-signature", "sig"],
+  ],
+  bodyEncoding: "utf8",
+  version: 1,
+  idempotencyKey: "req_demo",
   body: JSON.stringify({
     credit_card: {
       number: "4242424242424242",
@@ -91,8 +94,9 @@ describe("btProxyRelay", () => {
     expect(response).toEqual({
       ok: true,
       status: 201,
-      headers: { "content-type": "application/json" },
+      headers: [["content-type", "application/json"]],
       body: '{"id":"sess_bt"}',
+      bodyEncoding: "utf8",
     });
     if (!response.ok) throw new Error("expected a fulfilled relay response");
     expect(JSON.stringify(response.headers)).not.toContain("bt-");

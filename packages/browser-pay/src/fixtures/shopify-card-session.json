@@ -1,28 +1,35 @@
 {
   "request": {
+    "version": 1,
     "transactionId": "tx_fixture_shopify",
     "injectionRef": "inj_fixture_shopify",
     "merchantOrigin": "https://shop.example",
+    "frameOrigin": "https://checkout.pci.shopifyinc.com",
     "url": "https://checkout.pci.shopifyinc.com/sessions",
     "method": "POST",
-    "headers": {
-      "accept": "application/json",
-      "content-type": "application/json",
-      "origin": "https://checkout.pci.shopifyinc.com",
-      "referer": "https://checkout.pci.shopifyinc.com/",
-      "user-agent": "Mozilla/5.0 (fixture)",
-      "accept-language": "en-US,en;q=0.9",
-      "shopify-identification-signature": "fixture-signature"
-    },
-    "body": "{\"credit_card\":{\"number\":\"4242424242424242\",\"month\":12,\"year\":2028,\"verification_value\":\"123\",\"name\":\"Fixture Buyer\"},\"payment_session_scope\":\"fixture_scope\"}"
+    "headers": [
+      ["accept", "application/json"],
+      ["content-type", "application/json"],
+      ["origin", "https://checkout.pci.shopifyinc.com"],
+      ["referer", "https://checkout.pci.shopifyinc.com/"],
+      ["user-agent", "Mozilla/5.0 (fixture)"],
+      ["accept-language", "en-US,en;q=0.9"],
+      ["shopify-identification-signature", "fixture-signature"]
+    ],
+    "body": "{\"credit_card\":{\"number\":\"4242424242424242\",\"month\":12,\"year\":2028,\"verification_value\":\"123\",\"name\":\"Fixture Buyer\"},\"payment_session_scope\":\"fixture_scope\"}",
+    "bodyEncoding": "utf8",
+    "idempotencyKey": "req_fixture_shopify"
   },
   "response": {
     "ok": true,
     "status": 200,
-    "headers": {
-      "content-type": "application/json",
-      "access-control-allow-origin": "https://checkout.pci.shopifyinc.com"
-    },
-    "body": "{\"id\":\"west-fixture-session\"}"
+    "headers": [
+      ["content-type", "application/json"],
+      ["access-control-allow-origin", "https://checkout.pci.shopifyinc.com"],
+      ["set-cookie", "session=a"],
+      ["set-cookie", "session=b"]
+    ],
+    "body": "{\"id\":\"west-fixture-session\"}",
+    "bodyEncoding": "utf8"
   }
 }

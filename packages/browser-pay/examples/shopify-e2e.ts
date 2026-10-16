@@ -178,6 +178,7 @@ async function main(): Promise<void> {
       // Pause only the card iframe. Pausing the checkout page holds the
       // captcha solver that runs after Pay.
       pauseOnlyUrls: ["checkout.pci.shopifyinc.com"],
+      synthesizeBrowserHeaders: true,
     });
     handle.on((event) => events.push(event));
     await assertCardHoldsPlaceholder(checkout, placeholder);

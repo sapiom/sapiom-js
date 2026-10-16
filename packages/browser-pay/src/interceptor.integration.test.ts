@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -6,8 +7,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
-import { stubPaymentRelay, type PaymentRelay } from "./relay";
-import type { HeldPlaceholder, RelayRequest } from "./index";
+import {
+  stubPaymentRelay,
+  type PaymentRelay,
+  type RelayCallOptions,
+} from "./relay";
+import type { HeldPlaceholder, RelayHeader, RelayRequest } from "./index";
+
+const nodeRequire = createRequire(__filename);
 
 const PLACEHOLDER: HeldPlaceholder = {
   number: "4242424242424242",
@@ -88,9 +95,14 @@ function freePort(): Promise<number> {
 function startServer(
   hits: Hit[],
   html: string,
+  host: string,
 ): Promise<{ server: http.Server; port: number }> {
   const server = http.createServer((req, res) => {
-    if (req.method === "GET" && req.url === "/frame.html") {
+    const pathOnly = (req.url ?? "").split("?")[0];
+    if (
+      req.method === "GET" &&
+      (pathOnly === "/" || pathOnly === "/frame.html")
+    ) {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(html);
       return;
@@ -107,7 +119,7 @@ function startServer(
     });
   });
   return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       resolve({ server, port });
@@ -115,15 +127,28 @@ function startServer(
   });
 }
 
-function chromeExecutable(): string | undefined {
+function chromeExecutable(): string {
   const candidates = [
     process.env.CHROME_PATH,
     "/usr/local/bin/google-chrome",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
-  ];
-  return candidates.find((candidate) => candidate && existsSync(candidate));
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found) return found;
+  let playwrightPath = "";
+  try {
+    playwrightPath = nodeRequire(
+      "playwright",
+    ).chromium.executablePath() as string;
+  } catch {
+    playwrightPath = "";
+  }
+  if (playwrightPath && existsSync(playwrightPath)) return playwrightPath;
+  throw new Error(
+    `Chrome is required for the interceptor integration test. Set CHROME_PATH. Looked for: ${[...candidates, playwrightPath].filter(Boolean).join(", ")}`,
+  );
 }
 
 async function waitForDebugger(
@@ -152,9 +177,9 @@ async function waitForDebugger(
   throw new Error(`CDP endpoint did not come up (${last})`);
 }
 
-const describeWithChrome = chromeExecutable() ? describe : describe.skip;
+const chromeBin = chromeExecutable();
 
-describeWithChrome("attachInterceptor on headless Chromium", () => {
+describe("attachInterceptor on headless Chromium", () => {
   let chrome: ChildProcess;
   let userDataDir: string;
   let cdpUrl: string;
@@ -163,21 +188,16 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
   const hits: Hit[] = [];
 
   beforeAll(async () => {
-    const executable = chromeExecutable();
-    if (!executable) {
-      throw new Error(
-        "google-chrome or chromium is required for the interceptor integration test",
-      );
-    }
     userDataDir = await mkdtemp(path.join(os.tmpdir(), "browser-pay-"));
     const port = await freePort();
     chrome = spawn(
-      executable,
+      chromeBin,
       [
         "--headless=new",
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
+        "--site-per-process",
         `--remote-debugging-port=${port}`,
         "--remote-allow-origins=*",
         `--user-data-dir=${userDataDir}`,
@@ -188,8 +208,12 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
       { stdio: "ignore" },
     );
     cdpUrl = await waitForDebugger(port, chrome);
-    card = await startServer(hits, FRAME_HTML);
-    merchant = await startServer(hits, "");
+    card = await startServer(hits, FRAME_HTML, "127.0.0.1");
+    merchant = await startServer(
+      hits,
+      `<!doctype html><title>merchant</title><iframe src="http://127.0.0.1:${card.port}/frame.html"></iframe>`,
+      "localhost",
+    );
   }, 30_000);
 
   afterAll(async () => {
@@ -206,20 +230,21 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
   async function drive(
     relay: PaymentRelay,
     bodies: { ping: string; other?: string; mismatch?: string; card: string },
+    timeoutMs = 5_000,
   ) {
     const events: InterceptorEvent[] = [];
     const calls: RelayRequest[] = [];
     const wrapped: PaymentRelay = {
-      relay: async (request) => {
+      relay: async (request, options) => {
         calls.push(request);
-        return relay.relay(request);
+        return relay.relay(request, options);
       },
     };
     const handle = await attachInterceptor(cdpUrl, {
       relay: wrapped,
       placeholder: PLACEHOLDER,
       transactionId: "tx_integration",
-      timeoutMs: 5_000,
+      timeoutMs,
     });
     handle.on((event) => events.push(event));
     const { chromium } = await import("playwright");
@@ -228,12 +253,8 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
     try {
       const context = browser.contexts()[0];
       page = context.pages()[0] ?? (await context.newPage());
-      const merchantOrigin = `http://127.0.0.1:${merchant.port}`;
+      const merchantOrigin = `http://localhost:${merchant.port}`;
       await page.goto(`${merchantOrigin}/`, { waitUntil: "domcontentloaded" });
-      await page.setContent(
-        `<!doctype html><title>merchant</title><iframe src="http://127.0.0.1:${card.port}/frame.html"></iframe>`,
-        { waitUntil: "domcontentloaded" },
-      );
       // The driver's Playwright session is a second CDP client on this browser.
       expect(
         await page.evaluate(
@@ -241,10 +262,26 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
             (globalThis as { document?: { title: string } }).document?.title,
         ),
       ).toBe("merchant");
-      const frame = page
+      let frame = page
         .frames()
         .find((candidate) => candidate.url().includes(String(card.port)));
-      if (!frame) throw new Error("cross-origin card frame was not attached");
+      const frameDeadline = Date.now() + 5_000;
+      while (!frame && Date.now() < frameDeadline) {
+        await page.waitForTimeout(50);
+        frame = page
+          .frames()
+          .find((candidate) => candidate.url().includes(String(card.port)));
+      }
+      if (!frame) {
+        const urls = page.frames().map((candidate) => candidate.url());
+        const count = await page
+          .locator("iframe")
+          .count()
+          .catch(() => -1);
+        throw new Error(
+          `cross-origin card frame was not attached (iframes=${count}; ${urls.join(" | ")})`,
+        );
+      }
       await frame.waitForFunction(
         () => typeof (globalThis as { run?: unknown }).run === "function",
       );
@@ -277,8 +314,9 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
       stubPaymentRelay(async () => ({
         ok: true,
         status: 201,
-        headers: { "content-type": "application/json" },
+        headers: [["content-type", "application/json"]],
         body: '{"id":"sess_test"}',
+        bodyEncoding: "utf8",
       })),
       { ping: PING, other: UNRELATED, mismatch: MISMATCH, card: CARD },
     );
@@ -291,15 +329,22 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
+      version: 1,
       transactionId: "tx_integration",
       injectionRef: "inj_integration",
       merchantOrigin,
+      frameOrigin: `http://127.0.0.1:${card.port}`,
       method: "POST",
       url: `http://127.0.0.1:${card.port}/sessions`,
       body: CARD,
+      bodyEncoding: "utf8",
     });
+    expect(calls[0].idempotencyKey).toMatch(/:[0-9a-f]{16}$/);
     expect(calls[0].merchantOrigin).not.toContain(String(card.port));
     expect(header(calls[0].headers, "content-type")).toBe("application/json");
+    expect(events.filter((event) => event.type === "paused")).toEqual([
+      expect.objectContaining({ type: "paused", targetType: "iframe" }),
+    ]);
 
     expect(result).toEqual({
       ping: { status: 200, text: JSON.stringify({ ok: true, via: "server" }) },
@@ -354,14 +399,119 @@ describeWithChrome("attachInterceptor on headless Chromium", () => {
     expect(events[1]).toMatchObject({ type: "failed", reason: "network" });
     expect(JSON.stringify(events)).not.toContain(PLACEHOLDER.number);
   }, 60_000);
+
+  it("fails a relay that does not finish before the timeout", async () => {
+    const { events, result } = await drive(
+      stubPaymentRelay(
+        (_request, options?: RelayCallOptions) =>
+          new Promise((_resolve, reject) => {
+            const abort = () => reject(new Error("Payment relay timed out"));
+            if (options?.signal?.aborted) abort();
+            else
+              options?.signal?.addEventListener("abort", abort, { once: true });
+          }),
+      ),
+      { ping: PING, other: PING, mismatch: PING, card: CARD },
+      400,
+    );
+    expect(hits.filter((hit) => hit.body.includes(PLACEHOLDER.number))).toEqual(
+      [],
+    );
+    expect(result).toMatchObject({ card: { error: "TypeError" } });
+    expect(events.map((event) => event.type)).toEqual(["paused", "failed"]);
+    expect(events[1]).toMatchObject({ type: "failed", reason: "timeout" });
+  }, 60_000);
+
+  it("does not deliver a placeholder sent as a query or after a multipart boundary", async () => {
+    const events: InterceptorEvent[] = [];
+    const calls: RelayRequest[] = [];
+    const handle = await attachInterceptor(cdpUrl, {
+      relay: {
+        relay: async (request) => {
+          calls.push(request);
+          return {
+            ok: true as const,
+            status: 201,
+            headers: [["content-type", "text/plain"] as RelayHeader],
+            body: "ok",
+            bodyEncoding: "utf8" as const,
+          };
+        },
+      },
+      placeholder: PLACEHOLDER,
+      transactionId: "tx_integration",
+      timeoutMs: 5_000,
+    });
+    handle.on((event) => events.push(event));
+    const { chromium } = await import("playwright");
+    const browser = await chromium.connectOverCDP(cdpUrl);
+    const page =
+      browser.contexts()[0].pages()[0] ??
+      (await browser.contexts()[0].newPage());
+    try {
+      await page.goto(`http://localhost:${merchant.port}/`, {
+        waitUntil: "domcontentloaded",
+      });
+      let frame = page
+        .frames()
+        .find((candidate) => candidate.url().includes(String(card.port)));
+      const frameDeadline = Date.now() + 5_000;
+      while (!frame && Date.now() < frameDeadline) {
+        await page.waitForTimeout(50);
+        frame = page
+          .frames()
+          .find((candidate) => candidate.url().includes(String(card.port)));
+      }
+      if (!frame) throw new Error("cross-origin card frame was not attached");
+      const boundary = "----WebKitFormBoundary123";
+      const multipart = `--${boundary}\r\nContent-Disposition: form-data; name="number"\r\n\r\n4242 4242 4242 4242\r\n--${boundary}--`;
+      const outcome = await frame.evaluate(
+        async ({ query, multipartBody, formBoundary }) => {
+          const queryResult = await fetch(query).then(
+            (response) => ({ status: response.status }),
+            (error: Error) => ({ error: error.name }),
+          );
+          const formResult = await fetch("/sessions", {
+            method: "POST",
+            headers: {
+              "content-type": `multipart/form-data; boundary=${formBoundary}`,
+            },
+            body: multipartBody,
+          }).then(
+            async (response) => ({
+              status: response.status,
+              text: await response.text(),
+            }),
+            (error: Error) => ({ error: error.name }),
+          );
+          return { queryResult, formResult };
+        },
+        {
+          query: `/lookup?number=${PLACEHOLDER.number}`,
+          multipartBody: multipart,
+          formBoundary: boundary,
+        },
+      );
+      expect(outcome.queryResult).toEqual({ error: "TypeError" });
+      expect(outcome.formResult).toEqual({ status: 201, text: "ok" });
+      expect(
+        hits.filter((hit) => hit.body.includes(PLACEHOLDER.number)),
+      ).toEqual([]);
+      expect(hits.map((hit) => hit.path)).not.toContain(
+        `/lookup?number=${PLACEHOLDER.number}`,
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body).toContain("4242 4242 4242 4242");
+      expect(events.filter((event) => event.type === "paused")).toHaveLength(1);
+      expect(events.some((event) => event.type === "failed")).toBe(true);
+    } finally {
+      await page.close().catch(() => {});
+      await handle.detach();
+      void browser;
+    }
+  }, 60_000);
 });
 
-function header(
-  headers: Record<string, string>,
-  name: string,
-): string | undefined {
-  const key = Object.keys(headers).find(
-    (candidate) => candidate.toLowerCase() === name,
-  );
-  return key ? headers[key] : undefined;
+function header(headers: RelayHeader[], name: string): string | undefined {
+  return headers.find(([key]) => key.toLowerCase() === name)?.[1];
 }

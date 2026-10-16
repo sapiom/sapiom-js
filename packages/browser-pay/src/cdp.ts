@@ -22,24 +22,32 @@ type Pending = {
   timer: NodeJS.Timeout;
 };
 
+/** One CDP payload, including a large getRequestPostData body, stays under this. */
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
 class WebSocketClient {
-  private buffer = Buffer.alloc(0);
+  private chunks: Buffer[] = [];
+  private buffered = 0;
   private fragments: Buffer[] = [];
+  private fragmentBytes = 0;
   private closed = false;
   onmessage: (data: string) => void = () => {};
   onclose: () => void = () => {};
+  onerror: (error: Error) => void = () => {};
 
   private constructor(private readonly socket: Duplex) {
     socket.on("data", (chunk: Buffer) => {
-      this.buffer = Buffer.concat([this.buffer, chunk]);
-      this.parse();
+      this.append(chunk);
     });
     socket.on("close", () => {
+      if (this.closed) return;
       this.closed = true;
       this.onclose();
     });
-    socket.on("error", () => {
-      this.closed = true;
+    socket.on("error", (error: Error) => {
+      this.fail(
+        error instanceof Error ? error : new Error("CDP websocket error"),
+      );
     });
   }
 
@@ -75,10 +83,7 @@ class WebSocketClient {
           return;
         }
         const client = new WebSocketClient(socket);
-        if (head?.length) {
-          client.buffer = Buffer.from(head);
-          client.parse();
-        }
+        if (head?.length) client.append(Buffer.from(head));
         resolve(client);
       });
       request.on("response", (response) => {
@@ -96,34 +101,107 @@ class WebSocketClient {
     });
   }
 
+  private fail(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.onerror(error);
+    this.socket.destroy();
+    this.onclose();
+  }
+
+  private append(chunk: Buffer): void {
+    if (this.closed) return;
+    this.chunks.push(chunk);
+    this.buffered += chunk.length;
+    if (this.buffered > MAX_FRAME_BYTES) {
+      this.fail(new Error("CDP websocket frame exceeded the size cap"));
+      return;
+    }
+    try {
+      this.parse();
+    } catch (error) {
+      this.fail(
+        error instanceof Error
+          ? error
+          : new Error("CDP websocket parse failed"),
+      );
+    }
+  }
+
+  private peek(length: number): Buffer | null {
+    if (this.buffered < length) return null;
+    if (this.chunks[0] && this.chunks[0].length >= length) {
+      return this.chunks[0].subarray(0, length);
+    }
+    const out = Buffer.allocUnsafe(length);
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      const take = Math.min(chunk.length, length - offset);
+      chunk.copy(out, offset, 0, take);
+      offset += take;
+      if (offset >= length) break;
+    }
+    return out;
+  }
+
+  private consume(length: number): Buffer | null {
+    if (this.buffered < length) return null;
+    const out = Buffer.allocUnsafe(length);
+    let offset = 0;
+    while (offset < length) {
+      const head = this.chunks[0];
+      const need = length - offset;
+      if (head.length <= need) {
+        head.copy(out, offset);
+        offset += head.length;
+        this.chunks.shift();
+      } else {
+        head.copy(out, offset, 0, need);
+        this.chunks[0] = head.subarray(need);
+        offset += need;
+      }
+    }
+    this.buffered -= length;
+    return out;
+  }
+
   private parse(): void {
     for (;;) {
-      if (this.buffer.length < 2) return;
-      const first = this.buffer[0];
-      const second = this.buffer[1];
+      const header = this.peek(2);
+      if (!header) return;
+      const first = header[0];
+      const second = header[1];
       let length = second & 0x7f;
       let offset = 2;
       if (length === 126) {
-        if (this.buffer.length < 4) return;
-        length = this.buffer.readUInt16BE(2);
+        const extended = this.peek(4);
+        if (!extended) return;
+        length = extended.readUInt16BE(2);
         offset = 4;
       } else if (length === 127) {
-        if (this.buffer.length < 10) return;
-        length = Number(this.buffer.readBigUInt64BE(2));
+        const extended = this.peek(10);
+        if (!extended) return;
+        length = Number(extended.readBigUInt64BE(2));
         offset = 10;
+      }
+      if (length > MAX_FRAME_BYTES) {
+        this.fail(new Error("CDP websocket frame exceeded the size cap"));
+        return;
       }
       const masked = (second & 0x80) !== 0;
       const maskOffset = offset;
       if (masked) offset += 4;
-      if (this.buffer.length < offset + length) return;
-      let payload = this.buffer.subarray(offset, offset + length);
+      const frame = this.consume(offset + length);
+      if (!frame) return;
+      let payload = frame.subarray(offset, offset + length);
       if (masked) {
-        const mask = this.buffer.subarray(maskOffset, maskOffset + 4);
-        payload = Buffer.from(
-          payload.map((byte, index) => byte ^ mask[index % 4]),
-        );
+        const mask = frame.subarray(maskOffset, maskOffset + 4);
+        const unmasked = Buffer.allocUnsafe(payload.length);
+        for (let index = 0; index < payload.length; index++) {
+          unmasked[index] = payload[index] ^ mask[index % 4];
+        }
+        payload = unmasked;
       }
-      this.buffer = this.buffer.subarray(offset + length);
       const opcode = first & 0x0f;
       const fin = (first & 0x80) !== 0;
       if (opcode === 0x8) {
@@ -136,10 +214,16 @@ class WebSocketClient {
       }
       if (opcode === 0xa) continue;
       if (opcode !== 0x1 && opcode !== 0x0) continue;
+      this.fragmentBytes += payload.length;
+      if (this.fragmentBytes > MAX_FRAME_BYTES) {
+        this.fail(new Error("CDP websocket frame exceeded the size cap"));
+        return;
+      }
       this.fragments.push(Buffer.from(payload));
       if (fin) {
         const message = Buffer.concat(this.fragments).toString("utf8");
         this.fragments = [];
+        this.fragmentBytes = 0;
         this.onmessage(message);
       }
     }
@@ -165,7 +249,10 @@ class WebSocketClient {
       header[1] = 0x80 | 127;
       header.writeBigUInt64BE(BigInt(length), 2);
     }
-    const body = Buffer.from(data.map((byte, index) => byte ^ mask[index % 4]));
+    const body = Buffer.allocUnsafe(data.length);
+    for (let index = 0; index < data.length; index++) {
+      body[index] = data[index] ^ mask[index % 4];
+    }
     this.socket.write(Buffer.concat([header, mask, body]));
   }
 
@@ -218,12 +305,18 @@ export class CdpConnection {
       };
       for (const listener of this.listeners) listener(event);
     };
-    socket.onclose = () => {
+    const rejectAll = (error: Error) => {
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timer);
-        pending.reject(new Error("CDP connection closed"));
+        pending.reject(error);
       }
       this.pending.clear();
+    };
+    socket.onerror = (error) => {
+      rejectAll(error);
+    };
+    socket.onclose = () => {
+      rejectAll(new Error("CDP connection closed"));
     };
   }
 

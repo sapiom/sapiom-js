@@ -1,4 +1,8 @@
-import { canContinueWithoutReading, isSolverTraffic } from "./interceptor";
+import {
+  canContinueWithoutReading,
+  isSolverTraffic,
+  postDataPlan,
+} from "./interceptor";
 
 describe("isSolverTraffic", () => {
   it("matches captcha widgets and the browser solver, not the card host", () => {
@@ -80,5 +84,19 @@ describe("canContinueWithoutReading", () => {
         number,
       ),
     ).toBe(false);
+  });
+});
+
+describe("postDataPlan", () => {
+  it("fetches when an entry has no bytes or the body was not inlined", () => {
+    expect(postDataPlan({ postData: '{"a":1}' })).toBe("inline");
+    expect(postDataPlan({ postDataEntries: [{ bytes: "e30=" }] })).toBe(
+      "entries",
+    );
+    expect(postDataPlan({ hasPostData: true, postDataEntries: [{}] })).toBe(
+      "fetch",
+    );
+    expect(postDataPlan({ hasPostData: true })).toBe("fetch");
+    expect(postDataPlan({})).toBe("empty");
   });
 });

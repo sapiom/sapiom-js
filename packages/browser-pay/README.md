@@ -4,7 +4,7 @@ Browser-side payment interceptor for a card checkout in the agent's own Chromium
 
 The agent types a placeholder card into the checkout. This module attaches over CDP, pauses the request whose body contains that placeholder, and sends it to the relay. The relay's response fulfills the paused request. The browser never sees a real card value.
 
-M0 pauses page and iframe requests and inspects the body. Pass `pauseOnlyUrls` to pause only matching targets, which leaves a checkout page free for a captcha solver. GET and HEAD requests with no body are continued as soon as the URL is checked, so captcha and other subresources are not held for a remote round trip. A URL that contains the held number is failed. Captcha widgets, extension pages, and workers are left running so a session captcha solver is not held on the debugger. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, or network error fails the paused request; the placeholder is never sent on.
+M0 pauses page and iframe requests and inspects the body and the URL. Pass `pauseOnlyUrls` to pause only matching targets, which leaves a checkout page free for a captcha solver. GET and HEAD requests with no body are continued as soon as the URL is checked, so captcha and other subresources are not held for a remote round trip. A URL that contains the held number is failed. Captcha widgets, extension pages, and workers are left running so a session captcha solver is not held on the debugger. One CDP session is kept per target. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, unreadable body, or network error fails the paused request; the placeholder is never sent on. `detach()` fails paused requests that are still undecided or mid-relay before it turns Fetch off. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames and client-side-encrypted card payloads are not visible to this check, and worklet targets are not paused.
 
 ## Attach
 
@@ -41,7 +41,8 @@ const handle = await attachInterceptor(session.cdpUrl, {
   },
 });
 handle.on((event) => {
-  // paused, relayed, refused, failed. Card numbers are masked if one appears in a URL.
+  // paused, relayed, relayed_unfulfilled, refused, failed.
+  // Card numbers are masked if one appears in a URL.
 });
 ```
 
@@ -57,13 +58,15 @@ await attachInterceptor(process.env.CDP_URL!, {
 
 `examples/attach.ts` is that script. The HTTP relay calls `POST /v1/transactions/:id/payment/relay` with the `x-api-key` header. That route may not be deployed yet. Swap a demo relay in without changing the interceptor: both implement `PaymentRelay`.
 
-`merchantOrigin` on the relay request is the top-level page origin (scheme + host), not the card iframe's host.
+`merchantOrigin` on the relay request is the top-level page origin (scheme + host). `frameOrigin` is the frame that sent the request. Pass `synthesizeBrowserHeaders: true` only when the processor needs Cookie and Sec-Fetch-\* copied out of the browser. Those headers can include HttpOnly cookies. The relay backend must not log or persist them.
 
 ## Relay contract
 
-Types and fixtures live in this package (`RelayRequest`, `RelayResponse`, `shopifyCardSessionRoundTrip`, `relayRefusalFixtures`). The Shopify fixture posts to `https://checkout.pci.shopifyinc.com/sessions`. A refusal is `{ ok: false, reason }` and does not echo the request. Reasons: `wrong_key`, `unknown_placeholder`, `closed_placeholder`, `expired_placeholder`, `off_profile_destination`, `replay`, `merchant_origin`, `changed_total`, `cancelled`.
+`RelayRequest` is version 1. `headers` is a list of `[name, value]` pairs so repeated `Set-Cookie` values survive. `bodyEncoding` is `"utf8"` or `"base64"` on the request and the success response. `idempotencyKey` is the CDP request id plus a nonce; the HTTP client also sends it as `idempotency-key`. The relay call takes an `AbortSignal`, and that signal is the only timeout when the interceptor owns it.
 
-Placeholder detection matches the backend's placeholder-detection rules (separators, 13–19 digits, Luhn, then expiry and CVC when those fields are present). It is duplicated here so a browser bundle does not import the backend. It should move to a shared package.
+A refusal is `{ ok: false, reason }` and does not echo the request. Reasons: `wrong_key`, `unknown_placeholder`, `closed_placeholder`, `expired_placeholder`, `off_profile_destination`, `replay`, `merchant_origin`, `changed_total`, `cancelled`. An unrecognized reason becomes `unknown`. Fixtures, including the Shopify card-session round trip, are exported from `@sapiom/browser-pay/testing`.
+
+Placeholder detection matches the backend's placeholder-detection rules (separators, 13–19 digits, Luhn, then expiry and CVC when those fields are present). The held number is also searched for after separators are stripped, so a longer digit run cannot hide it. The rules are duplicated here so a browser bundle does not import the backend. They should move to a shared package. The interceptor does not fulfill a provider response that contains a different Luhn-valid card number.
 
 ## Shopify dev-store script
 

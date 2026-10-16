@@ -1,4 +1,5 @@
 import { cardNumberCandidate } from "../../src/detect.js";
+import type { RelayHeader, RelayRequest } from "../../src/index.js";
 
 export interface CardReplacement {
   number: string;
@@ -201,20 +202,29 @@ export const HOP_BY_HOP = new Set([
   "proxy-authorization",
 ]);
 
+export function relayBodyText(request: RelayRequest): string {
+  if (request.bodyEncoding === "base64") {
+    return Buffer.from(request.body, "base64").toString("utf8");
+  }
+  return request.body;
+}
+
 export function forwardRequestHeaders(
-  headers: Record<string, string>,
+  headers: RelayHeader[],
 ): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
+  for (const [key, value] of headers) {
     if (HOP_BY_HOP.has(key.toLowerCase())) continue;
-    out[key] = value;
+    const existing = Object.keys(out).find(
+      (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+    );
+    if (existing) out[existing] = `${out[existing]}, ${value}`;
+    else out[key] = value;
   }
   return out;
 }
 
-export function providerResponseHeaders(
-  headers: Headers,
-): Record<string, string> {
+export function providerResponseHeaders(headers: Headers): RelayHeader[] {
   const drop = new Set([
     "content-encoding",
     "content-length",
@@ -225,13 +235,13 @@ export function providerResponseHeaders(
     "trailer",
     "upgrade",
   ]);
-  const out: Record<string, string> = {};
+  const out: RelayHeader[] = [];
   headers.forEach((value, key) => {
     if (drop.has(key) || key.startsWith("bt-") || key === "set-cookie") return;
-    out[key] = value;
+    out.push([key, value]);
   });
   const setCookies =
     typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
-  if (setCookies.length > 0) out["set-cookie"] = setCookies.join("\n");
+  for (const cookie of setCookies) out.push(["set-cookie", cookie]);
   return out;
 }

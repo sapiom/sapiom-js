@@ -1,5 +1,12 @@
+import crypto from "node:crypto";
 import { CdpConnection, type CdpEvent } from "./cdp.js";
-import { matchHeldPlaceholderInBody, type HeldPlaceholder } from "./detect.js";
+import { RELAY_CONTRACT_VERSION, type RelayHeader } from "./contract.js";
+import {
+  matchHeldPlaceholderInBody,
+  textContainsForeignCard,
+  textHoldsPlaceholderNumber,
+  type HeldPlaceholder,
+} from "./detect.js";
 import type { PaymentRelay, RelayResponse } from "./relay.js";
 import { redact } from "./redact.js";
 
@@ -19,11 +26,19 @@ export interface AttachOptions {
    * Omit it to pause every page and iframe.
    */
   pauseOnlyUrls?: string[];
+  /**
+   * Copy Cookie, Accept-Language, and Sec-Fetch-* from the browser onto the
+   * relay request. Off by default. Those headers can include HttpOnly cookies
+   * the relay backend must not log or persist. Shopify's card session needs
+   * them, so the dev-store script turns this on.
+   */
+  synthesizeBrowserHeaders?: boolean;
 }
 
 export type InterceptorEvent =
-  | { type: "paused"; url: string; method: string }
+  | { type: "paused"; url: string; method: string; targetType: string }
   | { type: "relayed"; url: string; status: number }
+  | { type: "relayed_unfulfilled"; url: string; status: number }
   | { type: "refused"; url: string; reason: string }
   | { type: "failed"; url: string; reason: string };
 
@@ -151,6 +166,10 @@ function isHandsOffTarget(session: Session): boolean {
  * response. A mismatch, refusal, timeout, or network error fails the paused
  * request. The placeholder is never continued: it is a random number in a
  * real BIN range.
+ *
+ * `detach()` fails in-flight paused requests before it disables Fetch, so a
+ * placeholder mid-relay is not released. If this process crashes or the CDP
+ * socket drops first, Chrome continues those paused requests on its own.
  */
 export async function attachInterceptor(
   target: InterceptorTarget,
@@ -161,6 +180,8 @@ export async function attachInterceptor(
   const sessions = new Map<string, Session>();
   const seen = new Set<string>();
   const listeners = new Set<(event: InterceptorEvent) => void>();
+  const inflight = new Map<string, Inflight>();
+  const relayAborts = new Set<AbortController>();
   let closed = false;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -200,10 +221,20 @@ export async function attachInterceptor(
       return;
     }
     // Fetch has to be on before the target runs, or the card iframe can post
-    // before we are listening. waitForDebuggerOnStart holds it until then.
-    // Network has to be enabled before Network.getCookies will return the
-    // jar the card session needs.
-    await armFetch(connection, session);
+    // before we are listening. Network has to be enabled before
+    // Network.getCookies will return the jar the card session needs.
+    const armed = await armFetch(connection, session);
+    if (!armed) {
+      emit({
+        type: "failed",
+        url: redact(session.url || session.targetId),
+        reason: "intercept_unavailable",
+      });
+      await connection
+        .send("Target.closeTarget", { targetId: session.targetId })
+        .catch(() => {});
+      return;
+    }
     await releaseTarget(connection, sessionId, waitingForDebugger);
   };
 
@@ -240,6 +271,23 @@ export async function attachInterceptor(
       url: info.url ?? "",
       ...(event.sessionId ? { parentSessionId: event.sessionId } : {}),
     });
+    // Browser-level auto-attach covers pages. Child iframes attach only when
+    // the page (or parent frame) session asks for them. A second session for
+    // the same target is detached in onAttached.
+    if (info.type === "page" || info.type === "iframe") {
+      void connection
+        .send(
+          "Target.setAutoAttach",
+          {
+            autoAttach: true,
+            waitForDebuggerOnStart: false,
+            flatten: true,
+            filter: [{ type: "iframe" }],
+          },
+          sessionId,
+        )
+        .catch(() => {});
+    }
     void enableSession(sessionId, params.waitingForDebugger === true);
   };
 
@@ -248,19 +296,31 @@ export async function attachInterceptor(
     const params = event.params as {
       requestId?: string;
       resourceType?: string;
-      request?: {
-        url?: string;
-        method?: string;
-        headers?: unknown;
-        postData?: string;
-        hasPostData?: boolean;
-        postDataEntries?: { bytes?: string }[];
-      };
+      request?: PausedRequest;
     };
     if (!sessionId || !params.requestId || !params.request) return;
     const url = params.request.url ?? "";
     const method = params.request.method ?? "GET";
     const hasBody = requestHasBody(params.request);
+    const key = inflightKey(sessionId, params.requestId);
+    if (inflight.has(key)) return;
+    const entry: Inflight = {
+      key,
+      sessionId,
+      requestId: params.requestId,
+      settled: false,
+    };
+    inflight.set(key, entry);
+    const ctx: PauseContext = {
+      connection,
+      sessions,
+      options,
+      timeoutMs,
+      emit,
+      inflight,
+      relayAborts,
+      isClosed: () => closed,
+    };
     if (
       canContinueWithoutReading(
         method,
@@ -269,49 +329,46 @@ export async function attachInterceptor(
         options.placeholder.number,
       )
     ) {
-      void continueRequest(connection, sessionId, params.requestId);
+      entry.continuing = continueRequest(
+        connection,
+        sessionId,
+        params.requestId,
+      ).finally(() => {
+        entry.settled = true;
+        inflight.delete(key);
+      });
       return;
     }
     if (
       !hasBody &&
       (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD")
     ) {
-      void failRequest(connection, sessionId, params.requestId);
-      emit({
-        type: "failed",
-        url: redact(url),
-        reason: "placeholder_mismatch",
+      void finish(ctx, entry, "fail").then(() => {
+        emit({
+          type: "failed",
+          url: redact(url),
+          reason: "placeholder_mismatch",
+        });
       });
+      return;
+    }
+    if (closed) {
+      void settleClosed(ctx, entry, url, params.request);
       return;
     }
     const session = sessions.get(sessionId);
     if (isSolverTraffic(url) || (session ? isHandsOffTarget(session) : false)) {
-      void continueSolverRequest(
-        connection,
-        options,
-        emit,
-        sessionId,
-        params.requestId,
-        url,
-        params.request,
-      );
+      void continueSolverRequest(ctx, entry, url, params.request);
       return;
     }
-    void handlePaused(
-      connection,
-      sessions,
-      options,
-      timeoutMs,
-      emit,
-      () => closed,
-      sessionId,
-      params.requestId,
-      params.resourceType ?? "",
-      params.request,
-    );
+    void handlePaused(ctx, entry, params.resourceType ?? "", params.request);
   };
 
   connection.onEvent((event) => {
+    if (event.method === "Fetch.requestPaused") {
+      onPaused(event);
+      return;
+    }
     if (closed) return;
     if (event.method === "Target.attachedToTarget") onAttached(event);
     else if (event.method === "Target.detachedFromTarget") {
@@ -338,10 +395,20 @@ export async function attachInterceptor(
           continue;
         }
         if (!session.fetchEnabled) {
-          void armFetch(connection, session);
+          void armFetch(connection, session).then((armed) => {
+            if (armed || closed) return;
+            emit({
+              type: "failed",
+              url: redact(session.url || session.targetId),
+              reason: "intercept_unavailable",
+            });
+            void connection
+              .send("Target.closeTarget", { targetId: session.targetId })
+              .catch(() => {});
+          });
         }
       }
-    } else if (event.method === "Fetch.requestPaused") onPaused(event);
+    }
   });
 
   await connection.send("Target.setAutoAttach", {
@@ -362,9 +429,14 @@ export async function attachInterceptor(
     async detach() {
       if (closed) return;
       closed = true;
+      for (const controller of relayAborts) controller.abort();
+      await drainInflight(connection, inflight);
       for (const sessionId of sessions.keys()) {
         await connection.send("Fetch.disable", {}, sessionId).catch(() => {});
       }
+      // A pause delivered while disable was in flight is still failed or
+      // continued here, before the socket goes away.
+      await drainInflight(connection, inflight);
       await connection
         .send("Target.setAutoAttach", {
           autoAttach: false,
@@ -377,143 +449,332 @@ export async function attachInterceptor(
   };
 }
 
-async function handlePaused(
+interface Inflight {
+  key: string;
+  sessionId: string;
+  requestId: string;
+  settled: boolean;
+  continuing?: Promise<void>;
+}
+
+interface PausedRequest {
+  url?: string;
+  method?: string;
+  headers?: unknown;
+  postData?: string;
+  hasPostData?: boolean;
+  postDataEntries?: { bytes?: string }[];
+}
+
+interface PauseContext {
+  connection: CdpConnection;
+  sessions: Map<string, Session>;
+  options: AttachOptions;
+  timeoutMs: number;
+  emit: (event: InterceptorEvent) => void;
+  inflight: Map<string, Inflight>;
+  relayAborts: Set<AbortController>;
+  isClosed: () => boolean;
+}
+
+function inflightKey(sessionId: string, requestId: string): string {
+  return `${sessionId}\n${requestId}`;
+}
+
+async function drainInflight(
   connection: CdpConnection,
-  sessions: Map<string, Session>,
-  options: AttachOptions,
-  timeoutMs: number,
-  emit: (event: InterceptorEvent) => void,
-  isClosed: () => boolean,
-  sessionId: string,
-  requestId: string,
+  inflight: Map<string, Inflight>,
+): Promise<void> {
+  const entries = [...inflight.values()];
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.settled) return;
+      if (entry.continuing) {
+        await entry.continuing;
+        return;
+      }
+      entry.settled = true;
+      inflight.delete(entry.key);
+      await failRequest(connection, entry.sessionId, entry.requestId);
+    }),
+  );
+}
+
+async function finish(
+  ctx: PauseContext,
+  entry: Inflight,
+  action: "fail" | "continue",
+): Promise<boolean> {
+  if (entry.settled) return false;
+  entry.settled = true;
+  ctx.inflight.delete(entry.key);
+  if (action === "continue") {
+    await continueRequest(ctx.connection, entry.sessionId, entry.requestId);
+  } else {
+    await failRequest(ctx.connection, entry.sessionId, entry.requestId);
+  }
+  return true;
+}
+
+async function finishContinue(
+  ctx: PauseContext,
+  entry: Inflight,
+): Promise<void> {
+  if (entry.settled) return;
+  const promise = continueRequest(
+    ctx.connection,
+    entry.sessionId,
+    entry.requestId,
+  ).finally(() => {
+    entry.settled = true;
+    ctx.inflight.delete(entry.key);
+  });
+  entry.continuing = promise;
+  await promise;
+}
+
+async function handlePaused(
+  ctx: PauseContext,
+  entry: Inflight,
   resourceType: string,
-  request: {
-    url?: string;
-    method?: string;
-    headers?: unknown;
-    postData?: string;
-    hasPostData?: boolean;
-    postDataEntries?: { bytes?: string }[];
-  },
+  request: PausedRequest,
 ): Promise<void> {
   const url = request.url ?? "";
   const method = request.method ?? "GET";
   const safeUrl = redact(url);
+  const targetType = ctx.sessions.get(entry.sessionId)?.type ?? "";
   try {
-    let body = "";
-    try {
-      body = await readBody(connection, sessionId, requestId, request);
-    } catch {
-      // A body we cannot read might still be the placeholder. Fail it.
-      if (request.hasPostData) {
-        await failRequest(connection, sessionId, requestId);
-        emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
-        return;
-      }
-    }
-    const match = matchHeldPlaceholderInBody(body, options.placeholder);
-    if (match.kind === "not_held") {
-      await continueRequest(connection, sessionId, requestId);
+    const read = await readBodyResult(
+      ctx.connection,
+      entry.sessionId,
+      entry.requestId,
+      request,
+    );
+    if (read.unreadable) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
       return;
     }
-    if (match.kind === "mismatch") {
-      // The placeholder number is here with someone else's expiry or CVC.
-      // Continuing it would still put that number on the network.
-      await failRequest(connection, sessionId, requestId);
-      emit({
+    const urlHolds = textHoldsPlaceholderNumber(
+      url,
+      ctx.options.placeholder.number,
+    );
+    const match = matchHeldPlaceholderInBody(
+      read.body,
+      ctx.options.placeholder,
+    );
+    if (match.kind === "not_held" && !urlHolds) {
+      if (ctx.isClosed()) {
+        await finishContinue(ctx, entry);
+        return;
+      }
+      await finishContinue(ctx, entry);
+      return;
+    }
+    if (match.kind !== "match" || ctx.isClosed()) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({
         type: "failed",
         url: safeUrl,
         reason: "placeholder_mismatch",
       });
       return;
     }
-    if (isClosed()) {
-      await failRequest(connection, sessionId, requestId);
-      return;
-    }
-    // A later injection profile (W7 U3) can reject a matched destination
-    // here, before the relay call, and must fail the request rather than
-    // continue it. M0 has no URL filter.
-    emit({ type: "paused", url: safeUrl, method });
+    ctx.emit({ type: "paused", url: safeUrl, method, targetType });
     const merchantOrigin = await readMerchantOrigin(
-      connection,
-      sessions,
-      sessionId,
+      ctx.connection,
+      ctx.sessions,
+      entry.sessionId,
     );
-    if (!merchantOrigin) {
-      await failRequest(connection, sessionId, requestId);
-      emit({ type: "failed", url: safeUrl, reason: "merchant_origin" });
-      return;
-    }
-    const headers = await completeHeaders(
-      connection,
-      sessions,
-      sessionId,
-      url,
-      resourceType,
-      request.headers,
-    );
-    let response: RelayResponse;
-    try {
-      response = await withTimeout(
-        options.relay.relay({
-          transactionId: options.transactionId,
-          injectionRef: match.injectionRef,
-          merchantOrigin,
-          url,
-          method,
-          headers,
-          body,
-        }),
-        timeoutMs,
-      );
-    } catch (error) {
-      await failRequest(connection, sessionId, requestId);
-      emit({
+    if (!merchantOrigin || ctx.isClosed()) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({
         type: "failed",
         url: safeUrl,
-        reason: failureReason(error),
+        reason: merchantOrigin ? "detached" : "merchant_origin",
       });
       return;
     }
+    const headers = ctx.options.synthesizeBrowserHeaders
+      ? await completeHeaders(
+          ctx.connection,
+          ctx.sessions,
+          entry.sessionId,
+          url,
+          resourceType,
+          request.headers,
+        )
+      : headerList(request.headers);
+    const frameOrigin = readFrameOrigin(ctx.sessions, entry.sessionId, url);
+    const controller = new AbortController();
+    ctx.relayAborts.add(controller);
+    const timer = setTimeout(() => controller.abort(), ctx.timeoutMs);
+    let response: RelayResponse;
+    try {
+      response = await ctx.options.relay.relay(
+        {
+          version: RELAY_CONTRACT_VERSION,
+          transactionId: ctx.options.transactionId,
+          injectionRef: match.injectionRef,
+          merchantOrigin,
+          ...(frameOrigin ? { frameOrigin } : {}),
+          url,
+          method,
+          headers,
+          body: read.body,
+          bodyEncoding: "utf8",
+          idempotencyKey: `${entry.requestId}:${crypto.randomBytes(8).toString("hex")}`,
+        },
+        { signal: controller.signal },
+      );
+    } catch (error) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({
+        type: "failed",
+        url: safeUrl,
+        reason: ctx.isClosed() ? "detached" : failureReason(error),
+      });
+      return;
+    } finally {
+      clearTimeout(timer);
+      ctx.relayAborts.delete(controller);
+    }
     if (!response.ok) {
-      await failRequest(connection, sessionId, requestId);
-      emit({ type: "refused", url: safeUrl, reason: response.reason });
+      await finish(ctx, entry, "fail");
+      ctx.emit({ type: "refused", url: safeUrl, reason: response.reason });
       return;
     }
-    await fulfillRequest(connection, sessionId, requestId, response);
-    emit({ type: "relayed", url: safeUrl, status: response.status });
+    const responseText =
+      response.bodyEncoding === "base64"
+        ? Buffer.from(response.body, "base64").toString("utf8")
+        : response.body;
+    if (textContainsForeignCard(responseText, ctx.options.placeholder.number)) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({ type: "failed", url: safeUrl, reason: "response_credential" });
+      return;
+    }
+    let fulfilled = false;
+    try {
+      if (!entry.settled) {
+        await fulfillRequest(
+          ctx.connection,
+          entry.sessionId,
+          entry.requestId,
+          response,
+        );
+        fulfilled = true;
+      }
+    } catch {
+      fulfilled = false;
+    }
+    if (!entry.settled) {
+      entry.settled = true;
+      ctx.inflight.delete(entry.key);
+    }
+    ctx.emit(
+      fulfilled
+        ? { type: "relayed", url: safeUrl, status: response.status }
+        : {
+            type: "relayed_unfulfilled",
+            url: safeUrl,
+            status: response.status,
+          },
+    );
   } catch {
-    await failRequest(connection, sessionId, requestId);
-    emit({ type: "failed", url: safeUrl, reason: "network" });
+    await finish(ctx, entry, "fail");
+    ctx.emit({ type: "failed", url: safeUrl, reason: "network" });
   }
 }
 
-async function readBody(
+async function settleClosed(
+  ctx: PauseContext,
+  entry: Inflight,
+  url: string,
+  request: PausedRequest,
+): Promise<void> {
+  const safeUrl = redact(url);
+  try {
+    let holds = textHoldsPlaceholderNumber(url, ctx.options.placeholder.number);
+    let unreadable = false;
+    if (!holds && requestHasBody(request)) {
+      const read = await readBodyResult(
+        ctx.connection,
+        entry.sessionId,
+        entry.requestId,
+        request,
+      );
+      unreadable = read.unreadable;
+      holds =
+        unreadable ||
+        matchHeldPlaceholderInBody(read.body, ctx.options.placeholder).kind !==
+          "not_held";
+    }
+    if (holds) {
+      await finish(ctx, entry, "fail");
+      ctx.emit({
+        type: "failed",
+        url: safeUrl,
+        reason: unreadable ? "unreadable_body" : "placeholder_mismatch",
+      });
+      return;
+    }
+    await finishContinue(ctx, entry);
+  } catch {
+    await finish(ctx, entry, "fail");
+    ctx.emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
+  }
+}
+
+export type PostDataPlan = "inline" | "entries" | "fetch" | "empty";
+
+/** How a paused request's body should be read. Missing entry bytes are fetched. */
+export function postDataPlan(request: {
+  postData?: string;
+  hasPostData?: boolean;
+  postDataEntries?: { bytes?: string }[];
+}): PostDataPlan {
+  if (typeof request.postData === "string" && request.postData.length > 0) {
+    return "inline";
+  }
+  if (request.postDataEntries && request.postDataEntries.length > 0) {
+    const missing = request.postDataEntries.some(
+      (entry) => typeof entry.bytes !== "string" || entry.bytes.length === 0,
+    );
+    return missing ? "fetch" : "entries";
+  }
+  if (request.hasPostData) return "fetch";
+  return "empty";
+}
+
+async function readBodyResult(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  request: {
-    postData?: string;
-    hasPostData?: boolean;
-    postDataEntries?: { bytes?: string }[];
-  },
-): Promise<string> {
-  if (typeof request.postData === "string" && request.postData.length > 0) {
-    return request.postData;
-  }
-  if (request.postDataEntries && request.postDataEntries.length > 0) {
-    return request.postDataEntries
+  request: PausedRequest,
+): Promise<{ body: string; unreadable: boolean }> {
+  const plan = postDataPlan(request);
+  if (plan === "empty") return { body: "", unreadable: false };
+  if (plan === "inline")
+    return { body: request.postData ?? "", unreadable: false };
+  if (plan === "entries") {
+    const body = (request.postDataEntries ?? [])
       .map((entry) => Buffer.from(entry.bytes ?? "", "base64").toString("utf8"))
       .join("");
+    return { body, unreadable: false };
   }
-  if (!request.hasPostData) return "";
-  const result = await connection.send<{ postData?: string }>(
-    "Fetch.getRequestPostData",
-    { requestId },
-    sessionId,
-  );
-  return result.postData ?? "";
+  try {
+    const result = await connection.send<{ postData?: string }>(
+      "Fetch.getRequestPostData",
+      { requestId },
+      sessionId,
+    );
+    if (typeof result.postData !== "string" || result.postData.length === 0) {
+      return { body: "", unreadable: true };
+    }
+    return { body: result.postData, unreadable: false };
+  } catch {
+    return { body: "", unreadable: true };
+  }
 }
 
 async function readMerchantOrigin(
@@ -522,22 +783,60 @@ async function readMerchantOrigin(
   sessionId: string,
 ): Promise<string | undefined> {
   const pageSessionId = topPageSession(sessions, sessionId);
-  if (!pageSessionId) return undefined;
+  if (pageSessionId) {
+    const fromPage = await originFromSession(
+      connection,
+      sessions,
+      pageSessionId,
+    );
+    if (fromPage) return fromPage;
+  }
+  const ancestors = await connection
+    .send<{ result?: { value?: unknown } }>(
+      "Runtime.evaluate",
+      {
+        expression:
+          "location.ancestorOrigins[location.ancestorOrigins.length - 1]",
+        returnByValue: true,
+      },
+      sessionId,
+    )
+    .catch(() => null);
+  const value = ancestors?.result?.value;
+  if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  return undefined;
+}
+
+async function originFromSession(
+  connection: CdpConnection,
+  sessions: Map<string, Session>,
+  sessionId: string,
+): Promise<string | undefined> {
   const evaluated = await connection
     .send<{
       result?: { value?: unknown };
-    }>(
-      "Runtime.evaluate",
-      { expression: "location.origin", returnByValue: true },
-      pageSessionId,
-    )
+    }>("Runtime.evaluate", { expression: "location.origin", returnByValue: true }, sessionId)
     .catch(() => null);
   const value = evaluated?.result?.value;
   if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
-  const url = sessions.get(pageSessionId)?.url;
+  const url = sessions.get(sessionId)?.url;
   if (!url) return undefined;
   try {
     const origin = new URL(url).origin;
+    return /^https?:\/\//.test(origin) ? origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readFrameOrigin(
+  sessions: Map<string, Session>,
+  sessionId: string,
+  requestUrl: string,
+): string | undefined {
+  const raw = sessions.get(sessionId)?.url || requestUrl;
+  try {
+    const origin = new URL(raw).origin;
     return /^https?:\/\//.test(origin) ? origin : undefined;
   } catch {
     return undefined;
@@ -553,18 +852,23 @@ function topPageSession(
   while (current && !seen.has(current)) {
     seen.add(current);
     const session = sessions.get(current);
-    if (!session) return undefined;
+    if (!session) break;
     if (session.type === "page") return current;
-    if (!session.parentSessionId) return undefined;
+    if (!session.parentSessionId) break;
     current = session.parentSessionId;
   }
+  const pages = [...sessions.values()].filter(
+    (session) => session.type === "page",
+  );
+  if (pages.length === 1) return pages[0].sessionId;
   return undefined;
 }
 
 /**
  * At the Fetch Request stage Chrome has not yet added the headers its network
  * stack appends (Cookie, Sec-Fetch-*, Accept-Language). Shopify's card session
- * needs those. Never override a header the request already has.
+ * needs those. Never override a header the request already has. Only called
+ * when `synthesizeBrowserHeaders` is set.
  */
 async function completeHeaders(
   connection: CdpConnection,
@@ -573,10 +877,10 @@ async function completeHeaders(
   requestUrl: string,
   resourceType: string,
   rawHeaders: unknown,
-): Promise<Record<string, string>> {
-  const headers = headerRecord(rawHeaders);
+): Promise<RelayHeader[]> {
+  const headers = headerList(rawHeaders);
   const has = (name: string) =>
-    Object.keys(headers).some((key) => key.toLowerCase() === name);
+    headers.some(([key]) => key.toLowerCase() === name);
   const frameUrl = sessions.get(sessionId)?.url || requestUrl;
   try {
     const target = new URL(requestUrl);
@@ -584,38 +888,39 @@ async function completeHeaders(
     if (!has("sec-fetch-site")) {
       const site = (value: URL) =>
         value.hostname.split(".").slice(-2).join(".");
-      headers["Sec-Fetch-Site"] =
+      headers.push([
+        "Sec-Fetch-Site",
         target.origin === frame.origin
           ? "same-origin"
           : site(target) === site(frame) && target.protocol === frame.protocol
             ? "same-site"
-            : "cross-site";
+            : "cross-site",
+      ]);
     }
     if (!has("sec-fetch-dest") && /^(Fetch|XHR)$/.test(resourceType)) {
-      headers["Sec-Fetch-Dest"] = "empty";
+      headers.push(["Sec-Fetch-Dest", "empty"]);
     }
     if (!has("accept-language")) {
       const languages = await connection
         .send<{
           result?: { value?: unknown };
-        }>(
-          "Runtime.evaluate",
-          { expression: "navigator.languages", returnByValue: true },
-          sessionId,
-        )
+        }>("Runtime.evaluate", { expression: "navigator.languages", returnByValue: true }, sessionId)
         .catch(() => null);
       const list = languages?.result?.value;
       if (
         Array.isArray(list) &&
         list.every((entry) => typeof entry === "string")
       ) {
-        headers["Accept-Language"] = list
-          .map((language, index) =>
-            index === 0
-              ? language
-              : `${language};q=${Math.max(0.1, 1 - index / 10).toFixed(1)}`,
-          )
-          .join(",");
+        headers.push([
+          "Accept-Language",
+          list
+            .map((language, index) =>
+              index === 0
+                ? language
+                : `${language};q=${Math.max(0.1, 1 - index / 10).toFixed(1)}`,
+            )
+            .join(","),
+        ]);
       }
     }
     if (!has("cookie")) {
@@ -625,9 +930,12 @@ async function completeHeaders(
         }>("Network.getCookies", { urls: [requestUrl] }, sessionId)
         .catch(() => null);
       if (cookies?.cookies?.length) {
-        headers["Cookie"] = cookies.cookies
-          .map((cookie) => `${cookie.name}=${cookie.value}`)
-          .join("; ");
+        headers.push([
+          "Cookie",
+          cookies.cookies
+            .map((cookie) => `${cookie.name}=${cookie.value}`)
+            .join("; "),
+        ]);
       }
     }
   } catch {
@@ -636,34 +944,39 @@ async function completeHeaders(
   return headers;
 }
 
-function headerRecord(headers: unknown): Record<string, string> {
-  if (!headers) return {};
+function headerList(headers: unknown): RelayHeader[] {
+  if (!headers) return [];
   if (Array.isArray(headers)) {
-    const out: Record<string, string> = {};
+    const out: RelayHeader[] = [];
     for (const entry of headers) {
-      if (entry && typeof entry.name === "string") {
-        out[entry.name] = String(entry.value ?? "");
+      if (Array.isArray(entry) && entry.length === 2) {
+        out.push([String(entry[0]), String(entry[1])]);
+        continue;
+      }
+      if (
+        entry &&
+        typeof entry === "object" &&
+        typeof (entry as { name?: unknown }).name === "string"
+      ) {
+        const named = entry as { name: string; value?: unknown };
+        out.push([named.name, String(named.value ?? "")]);
       }
     }
     return out;
   }
   if (typeof headers === "object") {
-    const out: Record<string, string> = {};
+    const out: RelayHeader[] = [];
     for (const [key, value] of Object.entries(
       headers as Record<string, unknown>,
     )) {
-      if (typeof value === "string") out[key] = value;
+      if (typeof value === "string") out.push([key, value]);
     }
     return out;
   }
-  return {};
+  return [];
 }
 
-function requestHasBody(request: {
-  postData?: string;
-  hasPostData?: boolean;
-  postDataEntries?: { bytes?: string }[];
-}): boolean {
+function requestHasBody(request: PausedRequest): boolean {
   if (request.hasPostData) return true;
   if (typeof request.postData === "string" && request.postData.length > 0) {
     return true;
@@ -674,19 +987,23 @@ function requestHasBody(request: {
 async function armFetch(
   connection: CdpConnection,
   session: Session | undefined,
-): Promise<void> {
-  if (!session || session.fetchEnabled || isHandsOffTarget(session)) return;
+): Promise<boolean> {
+  if (!session || isHandsOffTarget(session)) return false;
+  if (session.fetchEnabled) return true;
   await connection
     .send("Network.enable", {}, session.sessionId)
     .catch(() => {});
-  await connection
-    .send(
+  try {
+    await connection.send(
       "Fetch.enable",
       { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
       session.sessionId,
-    )
-    .catch(() => {});
+    );
+  } catch {
+    return false;
+  }
   session.fetchEnabled = true;
+  return true;
 }
 
 async function releaseTarget(
@@ -701,27 +1018,35 @@ async function releaseTarget(
 }
 
 async function continueSolverRequest(
-  connection: CdpConnection,
-  options: AttachOptions,
-  emit: (event: InterceptorEvent) => void,
-  sessionId: string,
-  requestId: string,
+  ctx: PauseContext,
+  entry: Inflight,
   url: string,
-  request: {
-    postData?: string;
-    hasPostData?: boolean;
-    postDataEntries?: { bytes?: string }[];
-  },
+  request: PausedRequest,
 ): Promise<void> {
-  if (requestHasBody(request)) {
+  const safeUrl = redact(url);
+  if (
+    textHoldsPlaceholderNumber(url, ctx.options.placeholder.number) ||
+    requestHasBody(request)
+  ) {
     try {
-      const body = await readBody(connection, sessionId, requestId, request);
-      const match = matchHeldPlaceholderInBody(body, options.placeholder);
-      if (match.kind !== "not_held") {
-        await failRequest(connection, sessionId, requestId);
-        emit({
+      const read = requestHasBody(request)
+        ? await readBodyResult(
+            ctx.connection,
+            entry.sessionId,
+            entry.requestId,
+            request,
+          )
+        : { body: "", unreadable: false };
+      const held =
+        textHoldsPlaceholderNumber(url, ctx.options.placeholder.number) ||
+        (!read.unreadable &&
+          matchHeldPlaceholderInBody(read.body, ctx.options.placeholder)
+            .kind !== "not_held");
+      if (held) {
+        await finish(ctx, entry, "fail");
+        ctx.emit({
           type: "failed",
-          url: redact(url),
+          url: safeUrl,
           reason: "placeholder_mismatch",
         });
         return;
@@ -730,7 +1055,7 @@ async function continueSolverRequest(
       // An unreadable captcha body is not the card post. Continue it.
     }
   }
-  await continueRequest(connection, sessionId, requestId);
+  await finishContinue(ctx, entry);
 }
 
 async function continueRequest(
@@ -765,54 +1090,35 @@ async function fulfillRequest(
   requestId: string,
   response: Extract<RelayResponse, { ok: true }>,
 ): Promise<void> {
-  const responseHeaders = Object.entries(response.headers).flatMap(
-    ([name, value]) => {
-      if (RESPONSE_HOP.has(name.toLowerCase())) return [];
-      if (name.toLowerCase() === "set-cookie") {
-        return value
-          .split("\n")
-          .filter((part) => part.length > 0)
-          .map((part) => ({ name, value: part }));
-      }
-      return [{ name, value }];
-    },
-  );
+  const responseHeaders = response.headers.flatMap(([name, value]) => {
+    if (RESPONSE_HOP.has(name.toLowerCase())) return [];
+    return [{ name, value }];
+  });
+  const body =
+    response.bodyEncoding === "base64"
+      ? response.body
+      : Buffer.from(response.body, "utf8").toString("base64");
   await connection.send(
     "Fetch.fulfillRequest",
     {
       requestId,
       responseCode: response.status,
       responseHeaders,
-      body: Buffer.from(response.body, "utf8").toString("base64"),
+      body,
     },
     sessionId,
   );
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new Error("Payment relay timed out");
-      error.name = "TimeoutError";
-      reject(error);
-    }, timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
-}
-
 function failureReason(error: unknown): string {
+  if (!error || typeof error !== "object") return "network";
+  const name = "name" in error ? String(error.name) : "";
+  const message = "message" in error ? String(error.message) : "";
   if (
-    error instanceof Error &&
-    (error.name === "TimeoutError" ||
-      error.message === "Payment relay timed out")
+    name === "TimeoutError" ||
+    name === "AbortError" ||
+    message === "Payment relay timed out" ||
+    /timeout/i.test(message)
   ) {
     return "timeout";
   }

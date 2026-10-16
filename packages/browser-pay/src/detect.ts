@@ -90,10 +90,57 @@ export function luhnCheckDigit(body: string): string {
 }
 
 /**
+ * Whether `text` contains the held number. Separators, `+`, `%20`, percent
+ * escapes, and JSON `\u` escapes are removed first. One placeholder is held,
+ * so a longer digit run that still contains that number counts.
+ */
+export function textHoldsPlaceholderNumber(
+  text: string,
+  number: string,
+): boolean {
+  if (!/^\d{13,19}$/.test(number) || text.length === 0) return false;
+  return normalizeForHeldSearch(text).includes(number);
+}
+
+/**
+ * A Luhn-valid card number in `text` that is not the held placeholder.
+ * Used to refuse a relay response that still carries a real PAN.
+ */
+export function textContainsForeignCard(
+  text: string,
+  placeholderNumber: string,
+): boolean {
+  const decoded = decodeForHeldSearch(text);
+  const runs = decoded.match(/\d(?:[\s+-]*\d)+/g) ?? [];
+  for (const run of runs) {
+    const digits = run.replace(/\D/g, "");
+    if (digits.length < 13) continue;
+    const last = Math.min(19, digits.length);
+    for (let length = 13; length <= last; length++) {
+      for (let index = 0; index + length <= digits.length; index++) {
+        const candidate = digits.slice(index, index + length);
+        if (
+          candidate === placeholderNumber ||
+          placeholderNumber.includes(candidate)
+        ) {
+          continue;
+        }
+        if (cardNumberCandidate(candidate)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Whether `body` contains the single held placeholder.
  * `not_held` means the placeholder number is not in the body (other card
  * numbers included). `mismatch` means the number is present but the expiry or
  * CVC beside it disagrees. `match` carries only the injection ref.
+ *
+ * The structured parse decides match versus mismatch. If that parse misses
+ * the number because more digits follow it, the separator-stripped body is
+ * searched for the held number and the request is still not `not_held`.
  */
 export function matchHeldPlaceholderInBody(
   body: string,
@@ -110,7 +157,10 @@ export function matchHeldPlaceholderInBody(
     if (result.kind === "mismatch" && !mismatch) mismatch = result;
   }
   if (mismatch) return mismatch;
-  return { kind: "not_held" };
+  if (!textHoldsPlaceholderNumber(body, held.number)) {
+    return { kind: "not_held" };
+  }
+  return classifyAdjacentHeld(body, held);
 }
 
 /** Card numbers in a body, with expiry and CVC taken from the same object or form group. */
@@ -364,6 +414,65 @@ function readExpiry(
   const match = value.trim().match(/^(0?[1-9]|1[0-2])\s*[/-]\s*(\d{2}|\d{4})$/);
   if (!match) return undefined;
   return { expMonth: Number(match[1]), expYear: Number(match[2]) };
+}
+
+function classifyAdjacentHeld(
+  body: string,
+  held: HeldPlaceholder,
+): BodyPlaceholderMatch {
+  const sources = [body];
+  const decoded = decodeForHeldSearch(body);
+  if (decoded !== body) sources.push(decoded);
+  const pattern = new RegExp(held.number.split("").join("[\\s+-]*"), "g");
+  for (const source of sources) {
+    for (const match of source.matchAll(pattern)) {
+      const after = source.slice((match.index ?? 0) + match[0].length);
+      const expiry = after.match(
+        /^\s*(0?[1-9]|1[0-2])\s*[/-]\s*(\d{2}|\d{4})(?!\d)/,
+      );
+      if (expiry) {
+        const expMonth = Number(expiry[1]);
+        const expYear = Number(expiry[2]);
+        if (
+          expMonth !== held.expMonth ||
+          expYear % 100 !== held.expYear % 100
+        ) {
+          return {
+            kind: "mismatch",
+            injectionRef: held.injectionRef,
+            mismatch: "expiry",
+          };
+        }
+        continue;
+      }
+      const cvc = after.match(/^\s*(\d{3,4})(?!\d)/);
+      if (cvc && cvc[1] !== held.cvc) {
+        return {
+          kind: "mismatch",
+          injectionRef: held.injectionRef,
+          mismatch: "cvc",
+        };
+      }
+    }
+  }
+  return { kind: "match", injectionRef: held.injectionRef };
+}
+
+function decodeForHeldSearch(text: string): string {
+  const withUnicode = text.replace(
+    /\\u([0-9a-fA-F]{4})/g,
+    (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+  const plus = withUnicode.replace(/\+/g, " ");
+  try {
+    return decodeURIComponent(plus);
+  } catch {
+    return plus;
+  }
+}
+
+function normalizeForHeldSearch(text: string): string {
+  return decodeForHeldSearch(text).replace(/[\s+-]|%20/gi, "");
 }
 
 function scanRawNumbers(body: string): string[] {

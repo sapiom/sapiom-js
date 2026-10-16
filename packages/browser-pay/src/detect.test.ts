@@ -2,6 +2,8 @@ import {
   cardNumberCandidate,
   matchHeldPlaceholder,
   matchHeldPlaceholderInBody,
+  textContainsForeignCard,
+  textHoldsPlaceholderNumber,
   type HeldPlaceholder,
 } from "./detect";
 import { maskCardNumber, redact } from "./redact";
@@ -111,6 +113,34 @@ describe("matchHeldPlaceholderInBody", () => {
     ).toEqual({ kind: "not_held" });
   });
 
+  it("still sees the placeholder when more digits follow it", () => {
+    expect(matchHeldPlaceholderInBody("4242 4242 4242 4242 123", HELD)).toEqual(
+      { kind: "match", injectionRef: "inj_test" },
+    );
+    expect(matchHeldPlaceholderInBody("4242 4242 4242 4242 999", HELD)).toEqual(
+      { kind: "mismatch", injectionRef: "inj_test", mismatch: "cvc" },
+    );
+    expect(
+      matchHeldPlaceholderInBody(
+        json({ number: "4242 4242 4242 4242 12/28" }),
+        HELD,
+      ),
+    ).toEqual({ kind: "match", injectionRef: "inj_test" });
+    expect(
+      matchHeldPlaceholderInBody("4242 4242 4242 4242 01/28", HELD),
+    ).toEqual({
+      kind: "mismatch",
+      injectionRef: "inj_test",
+      mismatch: "expiry",
+    });
+    const boundary = "----WebKitFormBoundary123";
+    const multipart = `--${boundary}\r\nContent-Disposition: form-data; name="number"\r\n\r\n4242424242424242\r\n--${boundary}--`;
+    expect(matchHeldPlaceholderInBody(multipart, HELD)).toEqual({
+      kind: "match",
+      injectionRef: "inj_test",
+    });
+  });
+
   it("mismatches a held number with the wrong cvc", () => {
     expect(
       matchHeldPlaceholderInBody(
@@ -177,6 +207,20 @@ describe("matchHeldPlaceholderInBody", () => {
     expect(matchHeldPlaceholderInBody('{"order":12345}', HELD)).toEqual({
       kind: "not_held",
     });
+  });
+
+  it("finds a percent-encoded placeholder and ignores a different Luhn card inside a longer run", () => {
+    const encoded = encodeURIComponent("4242 4242 4242 4242");
+    expect(textHoldsPlaceholderNumber(encoded, HELD.number)).toBe(true);
+    expect(matchHeldPlaceholderInBody(encoded, HELD)).toEqual({
+      kind: "match",
+      injectionRef: "inj_test",
+    });
+    expect(textContainsForeignCard("4111111111111111", HELD.number)).toBe(true);
+    expect(textContainsForeignCard(HELD.number, HELD.number)).toBe(false);
+    expect(textContainsForeignCard('{"id":"west-fixture"}', HELD.number)).toBe(
+      false,
+    );
   });
 });
 

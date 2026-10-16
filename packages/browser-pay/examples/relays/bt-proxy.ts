@@ -3,6 +3,7 @@ import { SHOPIFY_PAYMENTS_TEST_CARD } from "./shopify-payments-test-card.js";
 import {
   forwardRequestHeaders,
   providerResponseHeaders,
+  relayBodyText,
   replacePlaceholderCard,
 } from "./replace-card.js";
 
@@ -258,7 +259,7 @@ export function btProxyRelay(options: {
   return {
     async relay(request) {
       const body = replacePlaceholderCard(
-        request.body,
+        relayBodyText(request),
         options.placeholder.number,
         {
           number: expression("number"),
@@ -299,6 +300,7 @@ export function btProxyRelay(options: {
         status: hasDestination ? destination : response.status,
         headers: providerResponseHeaders(response.headers),
         body: await response.text(),
+        bodyEncoding: "utf8",
       };
     },
   };

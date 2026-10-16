@@ -6,9 +6,17 @@ import {
 
 export type { RelayRequest, RelayResponse };
 
+export interface RelayCallOptions {
+  /** Aborts the relay. The interceptor aborts this when its own timeout fires or it detaches. */
+  signal?: AbortSignal;
+}
+
 /** Pluggable relay. The HTTP client and the in-memory stub both implement this. */
 export interface PaymentRelay {
-  relay(request: RelayRequest): Promise<RelayResponse>;
+  relay(
+    request: RelayRequest,
+    options?: RelayCallOptions,
+  ): Promise<RelayResponse>;
 }
 
 export interface HttpRelayOptions {
@@ -38,8 +46,11 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
-    async relay(request) {
+    async relay(request, options) {
       const url = `${baseUrl}/v1/transactions/${encodeURIComponent(request.transactionId)}/payment/relay`;
+      // The caller owns the deadline when it passes a signal. Otherwise this
+      // client is the only timeout.
+      const signal = options?.signal ?? AbortSignal.timeout(timeoutMs);
       let response: Response;
       try {
         response = await fetchImpl(url, {
@@ -49,12 +60,15 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
             accept: "application/json",
             "content-type": "application/json",
             "x-api-key": apiKey,
+            "idempotency-key": request.idempotencyKey,
           },
           body: JSON.stringify(request),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal,
         });
       } catch (error) {
-        if (isTimeout(error)) throw new Error("Payment relay timed out");
+        if (signal.aborted || isTimeout(error)) {
+          throw new Error("Payment relay timed out");
+        }
         throw new Error("Payment relay failed");
       }
       // A redirect would be the provider (or an attacker) pointing the real
@@ -83,11 +97,14 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
 
 /** In-memory relay for tests and local demos. */
 export function stubPaymentRelay(
-  handler: (request: RelayRequest) => RelayResponse | Promise<RelayResponse>,
+  handler: (
+    request: RelayRequest,
+    options?: RelayCallOptions,
+  ) => RelayResponse | Promise<RelayResponse>,
 ): PaymentRelay {
   return {
-    relay(request) {
-      return Promise.resolve(handler(request));
+    relay(request, options) {
+      return Promise.resolve(handler(request, options));
     },
   };
 }

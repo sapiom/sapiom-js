@@ -30,19 +30,15 @@ describe("T7 fixtures", () => {
     expect(request.merchantOrigin).toBe("https://shop.example");
     expect(Object.keys(response).sort()).toEqual([
       "body",
+      "bodyEncoding",
       "headers",
       "ok",
       "status",
     ]);
-    expect(response).toEqual({
-      ok: true,
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-        "access-control-allow-origin": "https://checkout.pci.shopifyinc.com",
-      },
-      body: '{"id":"west-fixture-session"}',
-    });
+    expect(response.headers.filter(([name]) => name === "set-cookie")).toEqual([
+      ["set-cookie", "session=a"],
+      ["set-cookie", "session=b"],
+    ]);
     expect(
       matchHeldPlaceholderInBody(request.body, {
         number: "4242424242424242",
@@ -105,6 +101,7 @@ describe("httpPaymentRelay", () => {
         "/v1/transactions/tx_fixture_shopify/payment/relay",
       );
       expect(seen.headers?.["x-api-key"]).toBe("test-key");
+      expect(seen.headers?.["idempotency-key"]).toBe(REQUEST.idempotencyKey);
       expect(JSON.parse(seen.body ?? "")).toEqual(REQUEST);
     } finally {
       await new Promise((resolve) => server.close(resolve));
@@ -136,6 +133,35 @@ describe("httpPaymentRelay", () => {
         reason: "cancelled",
       });
     } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("aborts when the caller signal fires and does not keep its own timer", async () => {
+    let arrived: () => void = () => {};
+    const requestArrived = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    const server = await listen((_req, res) => {
+      arrived();
+      res.writeHead(200);
+    });
+    const controller = new AbortController();
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        timeoutMs: 30_000,
+      });
+      const pending = relay.relay(REQUEST, { signal: controller.signal });
+      await requestArrived;
+      const expectation = expect(pending).rejects.toThrow(
+        "Payment relay timed out",
+      );
+      controller.abort();
+      await expectation;
+    } finally {
+      server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     }
   });

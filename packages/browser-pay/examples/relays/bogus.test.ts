@@ -28,13 +28,16 @@ function request(body = BODY): RelayRequest {
     merchantOrigin: "https://1a2uh3-r7.myshopify.com",
     url: "https://checkout.pci.shopifyinc.com/sessions?x=1",
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "content-length": "999",
-      host: "checkout.pci.shopifyinc.com",
-      "shopify-identification-signature": "sig",
-    },
+    headers: [
+      ["content-type", "application/json"],
+      ["content-length", "999"],
+      ["host", "checkout.pci.shopifyinc.com"],
+      ["shopify-identification-signature", "sig"],
+    ],
     body,
+    bodyEncoding: "utf8",
+    version: 1,
+    idempotencyKey: "req_demo",
   };
 }
 
@@ -80,11 +83,12 @@ describe("bogusShopifyRelay", () => {
     expect(response).toEqual({
       ok: true,
       status: 201,
-      headers: {
-        "content-type": "application/json",
-        "set-cookie": "a=b",
-      },
+      headers: [
+        ["content-type", "application/json"],
+        ["set-cookie", "a=b"],
+      ],
       body: '{"id":"sess_bogus"}',
+      bodyEncoding: "utf8",
     });
   });
 

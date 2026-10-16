@@ -10,5 +10,6 @@
   "replay": { "ok": false, "reason": "replay" },
   "merchant_origin": { "ok": false, "reason": "merchant_origin" },
   "changed_total": { "ok": false, "reason": "changed_total" },
-  "cancelled": { "ok": false, "reason": "cancelled" }
+  "cancelled": { "ok": false, "reason": "cancelled" },
+  "unknown": { "ok": false, "reason": "unknown" }
 }
