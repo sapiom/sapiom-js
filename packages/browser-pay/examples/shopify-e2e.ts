@@ -689,11 +689,13 @@ function digits(value: string): string {
 
 async function clickPay(page: Page): Promise<void> {
   const named = page.locator("#checkout-pay-button").first();
-  const target = (await named.isVisible().catch(() => false))
-    ? named
-    : page.getByRole("button", { name: /pay now/i }).first();
+  await named.waitFor({ state: "attached", timeout: 15_000 });
   mark("clicking pay once");
-  await target.click({ timeout: 15_000 });
+  // A Shop Pay overlay sits on top of the button and swallows pointer events.
+  // One DOM click still submits the form.
+  await named.evaluate((element) => {
+    (element as { click: () => void }).click();
+  });
   mark("pay click returned");
 }
 
