@@ -32,6 +32,16 @@ function separatorLength(text: string, index: number): number {
   return 0;
 }
 
+function separatorRun(text: string, index: number): number {
+  let cursor = index;
+  while (cursor < text.length) {
+    const skip = separatorLength(text, cursor);
+    if (skip === 0) break;
+    cursor += skip;
+  }
+  return cursor - index;
+}
+
 function holdsDigits(text: string, digits: string): boolean {
   const last = text.length - digits.length;
   for (let start = 0; start <= last; start++) {
@@ -39,7 +49,7 @@ function holdsDigits(text: string, digits: string): boolean {
     let index = start + 1;
     let matched = true;
     for (let digit = 1; digit < digits.length; digit++) {
-      const skip = separatorLength(text, index);
+      const skip = separatorRun(text, index);
       if (skip > 0 && text[index + skip] === digits[digit]) index += skip;
       if (text[index] !== digits[digit]) {
         matched = false;
@@ -121,9 +131,14 @@ function heldSpanEnd(
   if (first.char !== digits[0]) return undefined;
   let index = first.next;
   for (let digit = 1; digit < digits.length; digit++) {
-    const separator = readDecoded(text, index);
-    if (isSeparatorChar(separator.char)) {
-      const after = readDecoded(text, separator.next);
+    let cursor = index;
+    while (cursor < text.length) {
+      const separator = readDecoded(text, cursor);
+      if (!isSeparatorChar(separator.char) || separator.next === cursor) break;
+      cursor = separator.next;
+    }
+    if (cursor !== index) {
+      const after = readDecoded(text, cursor);
       if (after.char === digits[digit]) {
         index = after.next;
         continue;

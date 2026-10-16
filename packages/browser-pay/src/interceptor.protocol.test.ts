@@ -134,7 +134,7 @@ async function startStub(options: StubOptions = {}): Promise<{
       reply(message.id, {});
       return;
     }
-    if (message.method === "Fetch.getRequestPostData") {
+    if (message.method === "Network.getRequestPostData") {
       if (options.postDataError) {
         reply(message.id, undefined, { message: "no body" });
         return;
@@ -332,6 +332,7 @@ describe("interceptor CDP decisions", () => {
         sessionId: "page-1",
         params: {
           requestId: "req-1",
+          networkId: "net-1",
           request: {
             url: "https://checkout.example/sessions",
             method: "POST",
@@ -346,11 +347,17 @@ describe("interceptor CDP decisions", () => {
         () => events.some((event) => event.type === "relayed"),
         "relayed",
       );
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Network.getRequestPostData",
+          params: { requestId: "net-1" },
+        }),
+      );
       expect(
         stub.commands.some(
           (command) => command.method === "Fetch.getRequestPostData",
         ),
-      ).toBe(true);
+      ).toBe(false);
       expect(calls).toHaveLength(1);
       expect(calls[0].request.body).toBe(CARD);
       expect(calls[0].idempotencyKey).toBe(
@@ -396,6 +403,7 @@ describe("interceptor CDP decisions", () => {
         sessionId: "page-1",
         params: {
           requestId: "req-2",
+          networkId: "net-2",
           request: {
             url: "https://checkout.example/sessions",
             method: "POST",
@@ -513,6 +521,50 @@ describe("interceptor CDP decisions", () => {
       });
       await waitFor(() => calls.length === 1, "relay");
       expect(calls[0].request.body).toBe(multipart);
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Fetch.continueRequest",
+        ),
+      ).toBe(false);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("relays a placeholder split by repeated spaces and dashes", async () => {
+    const body = "4242  4242 - 4242  4242";
+    const stub = await startStub();
+    const calls: RelayRequest[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-spaced",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: body,
+          },
+        },
+      });
+      await waitFor(() => calls.length === 1, "relay");
+      expect(calls[0].request.body).toBe(body);
       expect(
         stub.commands.some(
           (command) => command.method === "Fetch.continueRequest",
@@ -740,7 +792,9 @@ describe("interceptor CDP decisions", () => {
       );
       expect(
         stub.commands.some(
-          (command) => command.method === "Fetch.getRequestPostData",
+          (command) =>
+            command.method === "Network.getRequestPostData" ||
+            command.method === "Fetch.getRequestPostData",
         ),
       ).toBe(false);
       await handle.detach();

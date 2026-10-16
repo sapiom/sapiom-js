@@ -421,6 +421,7 @@ interface PausedRequest {
   postData?: string;
   hasPostData?: boolean;
   postDataEntries?: { bytes?: string }[];
+  networkId?: string;
 }
 
 interface Flight {
@@ -511,12 +512,7 @@ async function handlePaused(
   const safeUrl = redactHeld(url, number);
   const targetType = ctx.sessions.get(entry.sessionId)?.type ?? "";
   try {
-    const read = await readBodyResult(
-      ctx.connection,
-      entry.sessionId,
-      entry.requestId,
-      request,
-    );
+    const read = await readBodyResult(ctx.connection, entry.sessionId, request);
     if (read.unreadable) {
       await finish(ctx, entry, "fail");
       ctx.emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
@@ -662,7 +658,6 @@ async function settleClosed(
       const read = await readBodyResult(
         ctx.connection,
         entry.sessionId,
-        entry.requestId,
         request,
       );
       unreadable = read.unreadable;
@@ -709,7 +704,6 @@ function postDataPlan(request: {
 async function readBodyResult(
   connection: CdpConnection,
   sessionId: string,
-  requestId: string,
   request: PausedRequest,
 ): Promise<{ body: string; unreadable: boolean }> {
   const plan = postDataPlan(request);
@@ -724,14 +718,21 @@ async function readBodyResult(
     ).toString("utf8");
     return { body, unreadable: false };
   }
+  if (!request.networkId) return { body: "", unreadable: true };
   try {
     const result = await connection.send(
-      "Fetch.getRequestPostData",
-      { requestId },
+      "Network.getRequestPostData",
+      { requestId: request.networkId },
       sessionId,
     );
     const postData = readStringField(result, "postData");
     if (!postData) return { body: "", unreadable: true };
+    if (isRecord(result) && result.base64Encoded === true) {
+      return {
+        body: Buffer.from(postData, "base64").toString("utf8"),
+        unreadable: false,
+      };
+    }
     return { body: postData, unreadable: false };
   } catch {
     return { body: "", unreadable: true };
@@ -891,6 +892,9 @@ function parsePaused(
         typeof request.postData === "string" ? request.postData : undefined,
       hasPostData: request.hasPostData === true,
       postDataEntries: parsePostDataEntries(request.postDataEntries),
+      ...(typeof value.networkId === "string" && value.networkId.length > 0
+        ? { networkId: value.networkId }
+        : {}),
     },
   };
 }
@@ -949,6 +953,9 @@ async function armFetch(
   if (!session || isHandsOffTarget(session)) return false;
   if (session.fetchEnabled) return true;
   try {
+    await connection
+      .send("Network.enable", {}, session.sessionId)
+      .catch(() => {});
     await connection.send(
       "Fetch.enable",
       { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
