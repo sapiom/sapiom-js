@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-/**
- * Fails when SDK source sets the tenant key header (`x-api-key` /
- * `x-sapiom-api-key`) by hand instead of passing the key to `credentialFetch`
- * from `@sapiom/analytics-core/credential`, the one place that checks the
- * channel and drops the key on a cross-origin redirect (SAP-4106).
- *
- * It reads literals only: a header name held in a variable, or the key sent as
- * `Authorization: Bearer`, passes. An allowlist entry exempts one file by exact
- * path, and an entry whose file no longer matches fails, so a fixed file leaves it.
- */
+/** Enforce shared credential transport for literal header writes (SAP-4106).
+ * Exact-path exceptions must still match; see credential-header-allowlist.json. */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

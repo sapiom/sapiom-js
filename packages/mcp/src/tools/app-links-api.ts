@@ -77,15 +77,8 @@ export type AppLinksResponse =
   | { kind: "response"; status: number; ok: boolean; data: unknown }
   | { kind: "network"; url: string; cause: unknown };
 
-/**
- * One JSON call against the backend's App Links REST API, authenticated with the
- * cached `sapiom_authenticate` credential as `x-api-key`.
- *
- * The URL is concatenated, not `new URL(route, base)`: a custom `apiURL` carrying
- * a base path (a local proxy, a tunnel) would have it silently dropped by the
- * latter. A body-less method (`GET`, `DELETE`) sends no body and no content-type.
- * Refusals map to network; a refused redirect can follow an already-sent request.
- */
+/** Concatenate routes so a configured proxy base path is preserved.
+ * Refusals map to network; a refused redirect can follow an already-sent request. */
 export async function appLinksFetch(
   apiURL: string,
   apiKey: string,

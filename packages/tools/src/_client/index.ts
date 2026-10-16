@@ -1,31 +1,5 @@
-/**
- * Auth + transport core for `@sapiom/tools` — the private "runtime half" every
- * capability namespace wraps. Capability modules call THIS; they never import each
- * other's runtime, so the cross-capability mesh (`repo.pushFromSandbox(sandbox)`)
- * has no package/module cycles. See docs/plans/capability-authoring-sdk.md.
- *
- * The credential resolves from one of two sources, same surface either way:
- *   - explicit:  createClient({ apiKey })  — standalone / open-source use
- *   - ambient:   SAPIOM_API_KEY (env), which the workflow engine injects per
- *                execution so step authors write zero auth plumbing.
- *
- * Attribution (which agent / trace a call belongs to) is execution context the
- * runtime owns, NOT a parameter of any operation — so it lives here on the
- * transport, set once and injected on every request, never threaded through
- * capability methods. The engine sets it per execution by constructing the
- * per-execution client; `withAttribution(...)` is a quiet escape hatch for the
- * router / standalone cases. Capability method signatures deliberately have no
- * attribution argument: that absence keeps LLM-authored step code from setting
- * (and getting wrong) context it doesn't own.
- *
- * Being the single HTTP choke point also makes this the (one) instrumentation
- * seam: every call enqueues a `capability.call` usage event — synchronously,
- * never awaited, live by default. See `./analytics.ts`.
- *
- * It is also where the credential's channel is enforced: https, or plain http
- * to loopback only, and never across a redirect to another origin. See
- * `@sapiom/analytics-core/credential`.
- */
+/** Shared transport keeps credential handling consistent across capability modules.
+ * See @sapiom/analytics-core/credential for channel and redirect constraints. */
 import {
   CAPABILITY_CALL_EVENT,
   analyticsFor,

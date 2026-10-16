@@ -1,12 +1,5 @@
-/**
- * Where the tenant credential may travel: over https, or plain http to a
- * loopback host. Redirects are followed here rather than by `fetch`, because
- * `fetch` drops `authorization` on an origin change but keeps custom headers
- * such as `x-sapiom-api-key`.
- *
- * Clients send the key through {@link credentialFetch} so they share one policy;
- * `pnpm credential-header:check` guards literal header writes (harness: SAP-4112).
- */
+/** Centralize channel and redirect checks so clients share one tenant-credential policy.
+ * Harness exceptions to the literal-header guard are tracked in SAP-4112. */
 import { createHash } from "node:crypto";
 
 export const ALLOW_INSECURE_HTTP_ENV = "SAPIOM_ALLOW_INSECURE_HTTP";
