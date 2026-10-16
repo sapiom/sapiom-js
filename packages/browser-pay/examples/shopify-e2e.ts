@@ -953,8 +953,6 @@ async function openBrowser(): Promise<{
       proxy: true,
       stealth: true,
       headless: false,
-      popupBlocker: false,
-      adblock: false,
     });
     const fields = session as {
       sessionId?: string;
@@ -977,7 +975,7 @@ async function openBrowser(): Promise<{
       );
     }
     console.log(
-      "Sapiom browser session created (captchaSolver, proxy, stealth, popup blocker off; CDP websocket present)",
+      "Sapiom browser session created (captchaSolver, proxy, and stealth requested; CDP websocket present)",
     );
     return {
       cdpUrl,

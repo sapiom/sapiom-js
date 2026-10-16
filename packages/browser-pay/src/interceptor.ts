@@ -327,7 +327,7 @@ export async function attachInterceptor(
 
   await connection.send("Target.setAutoAttach", {
     autoAttach: true,
-    waitForDebuggerOnStart: true,
+    waitForDebuggerOnStart: false,
     flatten: true,
     filter: TARGET_FILTER,
   });
