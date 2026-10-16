@@ -13,10 +13,13 @@ export interface ManagedSessionInput extends BrowserMutation {
   idleTimeoutMinutes?: number;
   maxDurationMinutes?: number;
   headless?: false;
-  adblock?: true;
+  /** When false, the gateway is asked to disable ad blocking. */
+  adblock?: boolean;
   stealth?: true;
   captchaSolver?: true;
   proxy?: true;
+  /** When false, the gateway is asked to disable the popup blocker. Anchor's blocker also hides captcha consent banners. */
+  popupBlocker?: boolean;
 }
 /** A session accessed with its secret sessionId. Both a CDP client and a managed task can control it, at separate times. */
 export interface ManagedBrowserSession {

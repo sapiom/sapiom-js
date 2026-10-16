@@ -945,6 +945,7 @@ async function openBrowser(): Promise<{
     const sapiom: Sapiom = createClient({ apiKey });
     // Anchor disables captcha solving unless the session proxy is active.
     // extra stealth uses the same proxy. headless false keeps the browser headful.
+    // popupBlocker and adblock default on and can block the captcha banner.
     const session = await sapiom.browserAutomation.sessions.createManaged({
       idempotencyKey: randomUUID(),
       recording: false,
@@ -952,6 +953,8 @@ async function openBrowser(): Promise<{
       proxy: true,
       stealth: true,
       headless: false,
+      popupBlocker: false,
+      adblock: false,
     });
     const fields = session as {
       sessionId?: string;
@@ -974,7 +977,7 @@ async function openBrowser(): Promise<{
       );
     }
     console.log(
-      "Sapiom browser session created (captchaSolver, proxy, and stealth requested; CDP websocket present)",
+      "Sapiom browser session created (captchaSolver, proxy, stealth, popup blocker off; CDP websocket present)",
     );
     return {
       cdpUrl,
