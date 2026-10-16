@@ -306,6 +306,7 @@ async function runCheckout(
   await fillCard(page, placeholder);
   mark("card typed");
   await assertNoChallenge(page, "before pay");
+  await acceptAddressSuggestion(page);
   await assertReadyToPay(page, placeholder);
   mark("pre-pay checks passed");
   console.log("pay once");
@@ -364,11 +365,42 @@ async function fillShipping(page: Page): Promise<void> {
     'input[name="postalCode"]',
   );
   const phone = page.getByLabel(/phone/i).first();
-  if (await phone.isVisible().catch(() => false))
-    await phone.fill(ADDRESS.phone);
+  if (await phone.isVisible().catch(() => false)) {
+    await phone.click();
+    await phone.fill("");
+    await phone.pressSequentially(ADDRESS.phone, { delay: 20 });
+  }
   await selectState(page);
+  await acceptAddressSuggestion(page);
+  await page.waitForTimeout(1500);
+}
+
+async function acceptAddressSuggestion(page: Page): Promise<void> {
+  const banner = page
+    .getByText(/did you mean|suggested address|address suggestion/i)
+    .first();
+  if (!(await banner.isVisible().catch(() => false))) {
+    await dismissAddressSuggestions(page);
+    return;
+  }
+  mark("accepting the address suggestion");
+  const buttons = page.getByRole("button");
+  const count = await buttons.count();
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index);
+    const name = (await button.innerText().catch(() => ""))
+      .replace(/\s+/g, " ")
+      .trim();
+    if (/pay now|submit|refund|privacy|terms|contact|order summary|show more/i.test(name)) {
+      continue;
+    }
+    if (/^\d{5}$/.test(name) || /5th|suggested/i.test(name)) {
+      await button.click();
+      await page.waitForTimeout(1000);
+      return;
+    }
+  }
   await dismissAddressSuggestions(page);
-  await page.waitForTimeout(2500);
 }
 
 async function dismissAddressSuggestions(page: Page): Promise<void> {
