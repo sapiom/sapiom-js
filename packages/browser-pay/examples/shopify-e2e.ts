@@ -12,7 +12,8 @@
  * One checkout per process. Pay is clicked once. RELAY=bt creates a Basis Theory
  * card token at setup and deletes it afterwards. BROWSER=sapiom asks the Sapiom
  * browser session to solve captchas, with the proxy and stealth that session
- * requires. This script does not bypass them itself.
+ * requires. The interceptor attaches after that solver finishes and before
+ * Pay. This script does not bypass captchas itself.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -158,6 +159,16 @@ async function main(): Promise<void> {
     mark("opening browser session");
     browserSession = await openBrowser();
     mark("browser session ready");
+    driver = await chromium.connectOverCDP(browserSession.cdpUrl);
+    const context = driver.contexts()[0] ?? (await driver.newContext());
+    page = context.pages()[0] ?? (await context.newPage());
+    const checkout = page;
+    await checkout.setViewportSize({ width: 1280, height: 900 });
+    await prepareCheckout(checkout, placeholder);
+    // The session solver clears hCaptcha in a few seconds when nothing else is
+    // pausing the widget. Attach after that, and before Pay, so the card post
+    // is still paused.
+    mark("attaching interceptor");
     handle = await attachInterceptor(browserSession.cdpUrl, {
       relay,
       placeholder,
@@ -166,11 +177,41 @@ async function main(): Promise<void> {
       timeoutMs: 30_000,
     });
     handle.on((event) => events.push(event));
-    driver = await chromium.connectOverCDP(browserSession.cdpUrl);
-    const context = driver.contexts()[0] ?? (await driver.newContext());
-    page = context.pages()[0] ?? (await context.newPage());
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await runCheckout(page, placeholder, mode);
+    await assertCardHoldsPlaceholder(checkout, placeholder);
+    mark("interceptor attached; placeholder still in the card fields");
+    console.log("pay once");
+    await clickPay(checkout);
+    if (mode === "refuse") {
+      await waitFor(async () => checkout.url(), 20_000);
+      await checkout.waitForTimeout(3000);
+      if (/thank[-_]you/i.test(checkout.url())) {
+        throw new CheckoutStopped(
+          "refusal still reached the thank-you page",
+          2,
+        );
+      }
+      const text = await checkout
+        .locator("body")
+        .innerText()
+        .catch(() => "");
+      if (/order\s+#\d+/i.test(text) && /thank you/i.test(text)) {
+        throw new CheckoutStopped("refusal still created an order", 2);
+      }
+      console.log(`refusal held; page ${redactUrl(checkout.url())}`);
+    } else {
+      await waitForConfirmation(checkout);
+      const text = await checkout
+        .locator("body")
+        .innerText()
+        .catch(() => "");
+      const order =
+        text.match(/order\s+#\s*(\d+)/i) ??
+        text.match(/confirmation\s+#\s*(\d+)/i);
+      console.log(`confirmed ${redactUrl(page.url())}`);
+      console.log(
+        order ? `order ${order[1]}` : "order id not shown on the page",
+      );
+    }
     if (!sessionsUrl) {
       throw new CheckoutStopped(
         "interceptor did not relay a request to checkout.pci.shopifyinc.com/sessions",
@@ -277,10 +318,9 @@ function loadPlaceholder(relayName: string): HeldPlaceholder {
   };
 }
 
-async function runCheckout(
+async function prepareCheckout(
   page: Page,
   placeholder: HeldPlaceholder,
-  mode: "pay" | "refuse",
 ): Promise<void> {
   console.log("open cart");
   await page.goto(CART_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -309,33 +349,6 @@ async function runCheckout(
   await acceptAddressSuggestion(page);
   await assertReadyToPay(page, placeholder);
   mark("pre-pay checks passed");
-  console.log("pay once");
-  await clickPay(page);
-  if (mode === "refuse") {
-    await waitFor(async () => page.url(), 20_000);
-    await page.waitForTimeout(3000);
-    if (/thank[-_]you/i.test(page.url())) {
-      throw new CheckoutStopped("refusal still reached the thank-you page", 2);
-    }
-    const text = await page
-      .locator("body")
-      .innerText()
-      .catch(() => "");
-    if (/order\s+#\d+/i.test(text) && /thank you/i.test(text)) {
-      throw new CheckoutStopped("refusal still created an order", 2);
-    }
-    console.log(`refusal held; page ${redactUrl(page.url())}`);
-    return;
-  }
-  await waitForConfirmation(page);
-  const text = await page
-    .locator("body")
-    .innerText()
-    .catch(() => "");
-  const order =
-    text.match(/order\s+#\s*(\d+)/i) ?? text.match(/confirmation\s+#\s*(\d+)/i);
-  console.log(`confirmed ${redactUrl(page.url())}`);
-  console.log(order ? `order ${order[1]}` : "order id not shown on the page");
 }
 
 async function fillShipping(page: Page): Promise<void> {
