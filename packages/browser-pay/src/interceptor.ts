@@ -41,7 +41,28 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 const TARGET_FILTER = [{ type: "page" }, { type: "iframe" }];
 
-const RELEVANT_TYPES = new Set(TARGET_FILTER.map((entry) => entry.type));
+/** GET/HEAD with no body and no held number in the URL. Safe to continue immediately. */
+export function canContinueWithoutReading(
+  method: string,
+  url: string,
+  hasBody: boolean,
+  placeholderNumber: string,
+): boolean {
+  const verb = method.toUpperCase();
+  if (verb !== "GET" && verb !== "HEAD") return false;
+  if (hasBody) return false;
+  return !urlDigits(url).includes(placeholderNumber);
+}
+
+function urlDigits(url: string): string {
+  let decoded = url;
+  try {
+    decoded = decodeURIComponent(url);
+  } catch {
+    // Keep the raw URL when it is not valid percent-encoding.
+  }
+  return decoded.replace(/\D/g, "");
+}
 
 /**
  * Captcha widgets and the session solver. Their requests are not the card
@@ -161,20 +182,6 @@ export async function attachInterceptor(
     // Network has to be enabled before Network.getCookies will return the
     // jar the card session needs.
     await armFetch(connection, session);
-    if (session && RELEVANT_TYPES.has(session.type)) {
-      await connection
-        .send(
-          "Target.setAutoAttach",
-          {
-            autoAttach: true,
-            waitForDebuggerOnStart: true,
-            flatten: true,
-            filter: TARGET_FILTER,
-          },
-          sessionId,
-        )
-        .catch(() => {});
-    }
     await releaseTarget(connection, sessionId, waitingForDebugger);
   };
 
@@ -187,6 +194,23 @@ export async function attachInterceptor(
     const sessionId = params.sessionId;
     const info = params.targetInfo;
     if (!sessionId || !info?.type || !info.targetId) return;
+    const duplicate = [...sessions.values()].some(
+      (session) => session.targetId === info.targetId,
+    );
+    if (duplicate) {
+      // setAutoAttach already owns this target. A second session would pause
+      // every request twice.
+      void releaseTarget(
+        connection,
+        sessionId,
+        params.waitingForDebugger === true,
+      ).then(() =>
+        connection
+          .send("Target.detachFromTarget", { sessionId })
+          .catch(() => {}),
+      );
+      return;
+    }
     sessions.set(sessionId, {
       sessionId,
       targetId: info.targetId,
@@ -213,6 +237,31 @@ export async function attachInterceptor(
     };
     if (!sessionId || !params.requestId || !params.request) return;
     const url = params.request.url ?? "";
+    const method = params.request.method ?? "GET";
+    const hasBody = requestHasBody(params.request);
+    if (
+      canContinueWithoutReading(
+        method,
+        url,
+        hasBody,
+        options.placeholder.number,
+      )
+    ) {
+      void continueRequest(connection, sessionId, params.requestId);
+      return;
+    }
+    if (
+      !hasBody &&
+      (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD")
+    ) {
+      void failRequest(connection, sessionId, params.requestId);
+      emit({
+        type: "failed",
+        url: redact(url),
+        reason: "placeholder_mismatch",
+      });
+      return;
+    }
     const session = sessions.get(sessionId);
     if (isSolverTraffic(url) || (session ? isHandsOffTarget(session) : false)) {
       void continueSolverRequest(
@@ -275,21 +324,6 @@ export async function attachInterceptor(
   await connection
     .send("Target.setDiscoverTargets", { discover: true })
     .catch(() => {});
-
-  const existing = await connection
-    .send<{
-      targetInfos?: { targetId: string; type: string }[];
-    }>("Target.getTargets")
-    .catch(() => ({ targetInfos: [] }));
-  for (const info of existing.targetInfos ?? []) {
-    if (!RELEVANT_TYPES.has(info.type)) continue;
-    await connection
-      .send("Target.attachToTarget", {
-        targetId: info.targetId,
-        flatten: true,
-      })
-      .catch(() => {});
-  }
 
   return {
     on(listener) {

@@ -1,4 +1,4 @@
-import { isSolverTraffic } from "./interceptor";
+import { canContinueWithoutReading, isSolverTraffic } from "./interceptor";
 
 describe("isSolverTraffic", () => {
   it("matches captcha widgets and the browser solver, not the card host", () => {
@@ -27,5 +27,58 @@ describe("isSolverTraffic", () => {
       false,
     );
     expect(isSolverTraffic("not a url")).toBe(false);
+  });
+});
+
+describe("canContinueWithoutReading", () => {
+  const number = "4123456789012349";
+
+  it("continues a GET or HEAD whose URL does not hold the placeholder", () => {
+    expect(
+      canContinueWithoutReading(
+        "GET",
+        "https://newassets.hcaptcha.com/captcha/v1/api.js",
+        false,
+        number,
+      ),
+    ).toBe(true);
+    expect(
+      canContinueWithoutReading(
+        "HEAD",
+        "https://example.com/style.css",
+        false,
+        number,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not skip a body, a query holding the placeholder, or a POST", () => {
+    expect(
+      canContinueWithoutReading("GET", "https://example.com/a", true, number),
+    ).toBe(false);
+    expect(
+      canContinueWithoutReading(
+        "GET",
+        `https://example.com/pay?card=${number}`,
+        false,
+        number,
+      ),
+    ).toBe(false);
+    expect(
+      canContinueWithoutReading(
+        "GET",
+        "https://example.com/pay?card=4123-4567-8901-2349",
+        false,
+        number,
+      ),
+    ).toBe(false);
+    expect(
+      canContinueWithoutReading(
+        "POST",
+        "https://example.com/sessions",
+        false,
+        number,
+      ),
+    ).toBe(false);
   });
 });

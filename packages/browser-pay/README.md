@@ -4,7 +4,7 @@ Browser-side payment interceptor for a card checkout in the agent's own Chromium
 
 The agent types a placeholder card into the checkout. This module attaches over CDP, pauses the request whose body contains that placeholder, and sends it to the relay. The relay's response fulfills the paused request. The browser never sees a real card value.
 
-M0 pauses page and iframe requests and inspects the body. Captcha widgets, extension pages, and workers are left running so a session captcha solver is not held on the debugger. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, or network error fails the paused request; the placeholder is never sent on.
+M0 pauses page and iframe requests and inspects the body. GET and HEAD requests with no body are continued as soon as the URL is checked, so captcha and other subresources are not held for a remote round trip. A URL that contains the held number is failed. Captcha widgets, extension pages, and workers are left running so a session captcha solver is not held on the debugger. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, or network error fails the paused request; the placeholder is never sent on.
 
 ## Attach
 
