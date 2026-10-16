@@ -42,6 +42,30 @@ function origin(server: http.Server): string {
 }
 
 describe("httpPaymentRelay", () => {
+  it("accepts https and loopback http, and rejects other http base URLs", () => {
+    const options = {
+      apiKey: "test-key",
+      transactionId: "tx_fixture_shopify",
+    };
+    expect(() =>
+      httpPaymentRelay({ ...options, baseUrl: "https://api.sapiom.ai" }),
+    ).not.toThrow();
+    expect(() =>
+      httpPaymentRelay({ ...options, baseUrl: "http://localhost:3000" }),
+    ).not.toThrow();
+    expect(() =>
+      httpPaymentRelay({ ...options, baseUrl: "http://127.0.0.1:3000" }),
+    ).not.toThrow();
+    expect(() =>
+      httpPaymentRelay({ ...options, baseUrl: "http://[::1]:3000" }),
+    ).not.toThrow();
+    expect(() =>
+      httpPaymentRelay({ ...options, baseUrl: "http://example.com" }),
+    ).toThrow(
+      "Payment relay baseUrl must be https (http is only allowed on loopback)",
+    );
+  });
+
   it("POSTs David's body to the transaction path and does not retry", async () => {
     const seen: {
       url?: string;

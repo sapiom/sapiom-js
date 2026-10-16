@@ -27,6 +27,28 @@ export interface HttpRelayOptions {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
+function assertBaseUrl(baseUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error(
+      "Payment relay baseUrl must be https (http is only allowed on loopback)",
+    );
+  }
+  const host = url.hostname;
+  if (url.protocol === "https:") return;
+  if (
+    url.protocol === "http:" &&
+    (host === "localhost" || host === "127.0.0.1" || host === "[::1]")
+  ) {
+    return;
+  }
+  throw new Error(
+    "Payment relay baseUrl must be https (http is only allowed on loopback)",
+  );
+}
+
 function requireHttpOptions(options: HttpRelayOptions): {
   baseUrl: string;
   apiKey: string;
@@ -37,6 +59,7 @@ function requireHttpOptions(options: HttpRelayOptions): {
   if (!options || typeof options.baseUrl !== "string" || !options.baseUrl) {
     throw new Error("Payment relay baseUrl is required");
   }
+  assertBaseUrl(options.baseUrl);
   if (!options.transactionId) {
     throw new Error("Payment relay transactionId is required");
   }
