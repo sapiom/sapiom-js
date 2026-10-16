@@ -13,6 +13,12 @@ export interface AttachOptions {
    * The relay is not retried.
    */
   timeoutMs?: number;
+  /**
+   * When set, only targets whose URL contains one of these strings are paused.
+   * Other pages keep running, so a captcha solver is not held on their traffic.
+   * Omit it to pause every page and iframe.
+   */
+  pauseOnlyUrls?: string[];
 }
 
 export type InterceptorEvent =
@@ -114,6 +120,15 @@ interface Session {
 function isBlankTarget(url: string): boolean {
   return url === "" || url === "about:blank" || url === "about:srcdoc";
 }
+
+function shouldPauseTarget(
+  session: Session,
+  pauseOnlyUrls?: string[],
+): boolean {
+  if (isHandsOffTarget(session) || isBlankTarget(session.url)) return false;
+  if (!pauseOnlyUrls || pauseOnlyUrls.length === 0) return true;
+  return pauseOnlyUrls.some((part) => session.url.includes(part));
+}
 function isHandsOffTarget(session: Session): boolean {
   if (
     session.type === "worker" ||
@@ -176,7 +191,11 @@ export async function attachInterceptor(
     // A blank frame has not navigated yet. Holding it for Fetch.enable freezes
     // a captcha widget that is about to load. Arm Fetch only once the URL is a
     // page we might need to pause.
-    if (!session || isHandsOffTarget(session) || isBlankTarget(session.url)) {
+    if (!session || !shouldPauseTarget(session, options.pauseOnlyUrls)) {
+      if (session?.fetchEnabled) {
+        session.fetchEnabled = false;
+        await connection.send("Fetch.disable", {}, sessionId).catch(() => {});
+      }
       await releaseTarget(connection, sessionId, waitingForDebugger);
       return;
     }
@@ -306,7 +325,7 @@ export async function attachInterceptor(
       for (const session of sessions.values()) {
         if (session.targetId !== info.targetId) continue;
         session.url = info.url;
-        if (isHandsOffTarget(session)) {
+        if (!shouldPauseTarget(session, options.pauseOnlyUrls)) {
           if (session.fetchEnabled) {
             session.fetchEnabled = false;
             void connection
@@ -318,7 +337,7 @@ export async function attachInterceptor(
             .catch(() => {});
           continue;
         }
-        if (!session.fetchEnabled && !isBlankTarget(session.url)) {
+        if (!session.fetchEnabled) {
           void armFetch(connection, session);
         }
       }

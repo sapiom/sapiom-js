@@ -175,6 +175,9 @@ async function main(): Promise<void> {
       transactionId:
         relayName === "http" ? required("TRANSACTION_ID") : "tx_local_demo",
       timeoutMs: 30_000,
+      // Pause only the card iframe. Pausing the checkout page holds the
+      // captcha solver that runs after Pay.
+      pauseOnlyUrls: ["checkout.pci.shopifyinc.com"],
     });
     handle.on((event) => events.push(event));
     await assertCardHoldsPlaceholder(checkout, placeholder);
@@ -412,7 +415,11 @@ async function acceptAddressSuggestion(page: Page): Promise<void> {
     const name = (await button.innerText().catch(() => ""))
       .replace(/\s+/g, " ")
       .trim();
-    if (/pay now|submit|refund|privacy|terms|contact|order summary|show more/i.test(name)) {
+    if (
+      /pay now|submit|refund|privacy|terms|contact|order summary|show more/i.test(
+        name,
+      )
+    ) {
       continue;
     }
     if (/^\d{5}$/.test(name) || /5th|suggested/i.test(name)) {
