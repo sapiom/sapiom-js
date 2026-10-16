@@ -377,15 +377,20 @@ async function fillShipping(page: Page): Promise<void> {
     ADDRESS.zip,
     'input[name="postalCode"]',
   );
+  await selectState(page);
+  await page.waitForTimeout(1000);
+  await acceptAddressSuggestion(page);
   const phone = page.getByLabel(/phone/i).first();
   if (await phone.isVisible().catch(() => false)) {
-    await phone.click();
-    await phone.fill("");
-    await phone.pressSequentially(ADDRESS.phone, { delay: 20 });
+    await phone.fill(ADDRESS.phone);
+    const typed = (await phone.inputValue().catch(() => "")).replace(/\D/g, "");
+    if (typed.length < 10) {
+      await phone.click({ force: true }).catch(() => {});
+      await phone.fill("");
+      await phone.pressSequentially(ADDRESS.phone, { delay: 30 });
+    }
   }
-  await selectState(page);
-  await acceptAddressSuggestion(page);
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1000);
 }
 
 async function acceptAddressSuggestion(page: Page): Promise<void> {
@@ -408,7 +413,10 @@ async function acceptAddressSuggestion(page: Page): Promise<void> {
       continue;
     }
     if (/^\d{5}$/.test(name) || /5th|suggested/i.test(name)) {
-      await button.click();
+      await page.keyboard.press("Escape").catch(() => {});
+      await button.evaluate((element) => {
+        (element as { click: () => void }).click();
+      });
       await page.waitForTimeout(1000);
       return;
     }
