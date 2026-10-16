@@ -108,6 +108,23 @@ describe("agent.coding.launch — deadlineMinutes", () => {
   });
 });
 
+/** The platform refusing a selection it can't attach (400). */
+function refusedConnectorsFetch(): typeof globalThis.fetch {
+  const body = {
+    statusCode: 400,
+    error: "connectors_unavailable",
+    message: "Not a ready connection this run can attach: nope.",
+    connectors: ["nope"],
+  };
+  return (async () =>
+    ({
+      ok: false,
+      status: 400,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    }) as unknown as Response) as unknown as typeof globalThis.fetch;
+}
+
 describe("agent.coding.launch — connectors", () => {
   it("sends the selected connection slugs as `connectors`", async () => {
     const capture: Capture = {};
@@ -116,7 +133,10 @@ describe("agent.coding.launch — connectors", () => {
       fetch: fakeLaunchFetch(capture),
     });
 
-    await sapiom.models.coding.launch({ task: "do a thing", connectors: ["linear"] });
+    await sapiom.models.coding.launch({
+      task: "do a thing",
+      connectors: ["linear"],
+    });
 
     expect(capture.body).toMatchObject({ connectors: ["linear"] });
   });
@@ -131,6 +151,25 @@ describe("agent.coding.launch — connectors", () => {
     await sapiom.models.coding.launch({ task: "do a thing", connectors: [] });
 
     expect(capture.body).toMatchObject({ connectors: [] });
+  });
+
+  it("surfaces the platform's refusal of an unattachable slug as a CodingRunHttpError", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: refusedConnectorsFetch(),
+    });
+
+    const launch = sapiom.models.coding.launch({
+      task: "do a thing",
+      connectors: ["nope"],
+    });
+
+    await expect(launch).rejects.toBeInstanceOf(CodingRunHttpError);
+    await expect(launch).rejects.toMatchObject({
+      status: 400,
+      code: "connectors_unavailable",
+      body: { connectors: ["nope"] },
+    });
   });
 
   it("omits the key when no selection is given, so every connection attaches", async () => {

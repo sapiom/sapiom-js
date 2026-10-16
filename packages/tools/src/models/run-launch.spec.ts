@@ -97,12 +97,32 @@ describe("agent.launch — deadlineMinutes", () => {
   });
 });
 
+/** The platform refusing a selection it can't attach (400). */
+function refusedConnectorsFetch(): typeof globalThis.fetch {
+  const body = {
+    statusCode: 400,
+    error: "connectors_unavailable",
+    message: "Not a ready connection this run can attach: nope.",
+    connectors: ["nope"],
+  };
+  return (async () =>
+    ({
+      ok: false,
+      status: 400,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    }) as unknown as Response) as unknown as typeof globalThis.fetch;
+}
+
 describe("agent.launch — connectors", () => {
   it("sends the selected connection slugs as `connectors`", async () => {
     const capture: { body?: Record<string, unknown> } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
 
-    await sapiom.models.launch({ prompt: "say OK", connectors: ["linear", "notion"] });
+    await sapiom.models.launch({
+      prompt: "say OK",
+      connectors: ["linear", "notion"],
+    });
 
     expect(capture.body).toMatchObject({ connectors: ["linear", "notion"] });
   });
@@ -114,6 +134,17 @@ describe("agent.launch — connectors", () => {
     await sapiom.models.launch({ prompt: "say OK", connectors: [] });
 
     expect(capture.body).toMatchObject({ connectors: [] });
+  });
+
+  it("rejects with the platform's 400 connectors_unavailable for an unattachable slug", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: refusedConnectorsFetch(),
+    });
+
+    await expect(
+      sapiom.models.launch({ prompt: "say OK", connectors: ["nope"] }),
+    ).rejects.toThrow(/400.*connectors_unavailable/);
   });
 
   it("omits the key when no selection is given, so every connection attaches", async () => {
