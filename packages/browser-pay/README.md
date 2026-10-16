@@ -1,88 +1,89 @@
 # @sapiom/browser-pay
 
-Browser-side payment interceptor for a card checkout in the agent's own Chromium.
+Browser-side payment interceptor. The agent types a governance placeholder into checkout. This package pauses that request over CDP and hands it to the relay. The browser is fulfilled with the processor's response, or the request fails. The placeholder is never continued.
 
-The agent types a placeholder card into the checkout. This module attaches over CDP, pauses the request whose body contains that placeholder, and sends it to the relay. The relay's response fulfills the paused request. The browser never sees a real card value.
+## Sequence
 
-M0 pauses page and iframe requests and inspects the body and the URL. Pass `pauseOnlyUrls` to pause only matching targets, which leaves a checkout page free for a captcha solver. GET and HEAD requests with no body are continued as soon as the URL is checked, so captcha and other subresources are not held for a remote round trip. A URL that contains the held number is failed. Captcha widgets, extension pages, and workers are left running so a session captcha solver is not held on the debugger. One CDP session is kept per target. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, unreadable body, or network error fails the paused request; the placeholder is never sent on. `detach()` fails paused requests that are still undecided or mid-relay before it turns Fetch off. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames and client-side-encrypted card payloads are not visible to this check, and worklet targets are not paused.
+1. The agent creates a checkout (UCP `create_checkout`).
+2. Governance arms a placeholder and returns it with `continue_url`.
+3. The agent opens a browser session and drives checkout, typing the placeholder.
+4. `attachInterceptor` pauses the card request, including inside a payment iframe.
+5. A match is `POST /v1/transactions/{transactionId}/payment/relay`.
+6. The page receives the processor status, headers, and body. A refusal or a relay error fails the paused request.
 
-## Attach
+## What David implements
 
-`attachInterceptor` opens its own CDP connection. Pass a websocket URL, or a Playwright/Puppeteer browser or page that exposes one. The same function is what a later hosted-attach mode would call.
+`POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key` and `idempotency-key`.
 
-An agent platform that already uses Sapiom for the browser creates a session, then attaches. Captcha solving is the browser capability's `captchaSolver` flag. The provider turns that solver off unless `proxy` is also set; `stealth` and `headless: false` match the headful residential session the solver expects. This package does not solve captchas.
+Request JSON:
+
+```json
+{
+  "transactionId": "tx_…",
+  "injectionRef": "inj_…",
+  "merchantOrigin": "https://shop.example",
+  "url": "https://checkout.pci.shopifyinc.com/sessions",
+  "method": "POST",
+  "headers": [["content-type", "application/json"], ["cookie", "…"]],
+  "body": "<paused request body, placeholder included>",
+  "idempotencyKey": "<sha256 hex of method, url, and body>"
+}
+```
+
+`merchantOrigin` is the top-level page origin. `headers` is `[name, value][]` so repeated `Set-Cookie` values on the way back survive. `idempotencyKey` is also the `idempotency-key` header. Shopify's card iframe retries share one key. The body can contain the placeholder number. Do not log or persist `headers` (they can include HttpOnly cookies) or the body.
+
+Success:
+
+```json
+{
+  "kind": "relayed",
+  "status": 200,
+  "headers": [["content-type", "application/json"], ["set-cookie", "a=1"]],
+  "body": "<processor body>",
+  "bodyEncoding": "utf8"
+}
+```
+
+`bodyEncoding` is optional and defaults to `utf8`. Use `base64` when the processor body is not UTF-8 text.
+
+Refusal, nothing forwarded:
+
+```json
+{ "kind": "refused", "reason": "already_relayed" }
+```
+
+Reasons this client accepts: `already_relayed`, `total_changed`, `key_rotated`, `card_removed`, `expired`, `closed`, `refused`, `unknown`. Any other string is reported as `unknown`. A transport error, a redirect, or an unreadable body fails the paused browser request. It is not fulfilled with the refusal JSON.
+
+The same `idempotencyKey` after a successful forward should return the stored processor response. A new key after the placeholder was consumed is `already_relayed`.
+
+The page is fulfilled with `status`, `headers`, and `body`. `content-length`, `content-encoding`, and other hop-by-hop headers are dropped because CDP sends the body bytes itself. Return the body the page should read, not a gzip wrapper. If that fulfill fails, the paused request is failed and the placeholder is not continued. The agent event is `relayed_unfulfilled`.
+
+## What an agent does
 
 ```typescript
-import { randomUUID } from "node:crypto";
-import { createClient } from "@sapiom/tools";
 import { attachInterceptor, httpPaymentRelay } from "@sapiom/browser-pay";
 
-const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
-const session = await sapiom.browserAutomation.sessions.createManaged({
-  idempotencyKey: randomUUID(),
-  recording: false,
-  captchaSolver: true,
-  proxy: true,
-  stealth: true,
-  headless: false,
-});
-const handle = await attachInterceptor(session.cdpUrl, {
+const handle = await attachInterceptor(cdpUrl, {
   relay: httpPaymentRelay({
     baseUrl: process.env.SAPIOM_BASE_URL ?? "https://api.sapiom.ai",
     apiKey: process.env.SAPIOM_API_KEY,
   }),
-  transactionId: process.env.TRANSACTION_ID!,
-  placeholder: {
-    number: process.env.PLACEHOLDER_NUMBER!,
-    expMonth: Number(process.env.PLACEHOLDER_EXP_MONTH),
-    expYear: Number(process.env.PLACEHOLDER_EXP_YEAR),
-    cvc: process.env.PLACEHOLDER_CVC!,
-    injectionRef: process.env.INJECTION_REF!,
-  },
-});
-handle.on((event) => {
-  // paused, relayed, relayed_unfulfilled, refused, failed.
-  // Card numbers are masked if one appears in a URL.
-});
-```
-
-A platform that already has a CDP URL skips session create:
-
-```typescript
-await attachInterceptor(process.env.CDP_URL!, {
-  relay,
   transactionId,
-  placeholder,
+  placeholder, // number, expMonth, expYear, cvc, injectionRef
+  pauseOnlyUrls: ["checkout.pci.shopifyinc.com"],
 });
 ```
 
-`examples/attach.ts` is that script. The HTTP relay calls `POST /v1/transactions/:id/payment/relay` with the `x-api-key` header. That route may not be deployed yet. Swap a demo relay in without changing the interceptor: both implement `PaymentRelay`.
+`pauseOnlyUrls` limits Fetch to the payment host so a captcha solver on the checkout page is not paused. Omit it to pause every page and iframe.
 
-`merchantOrigin` on the relay request is the top-level page origin (scheme + host). `frameOrigin` is the frame that sent the request. Pass `synthesizeBrowserHeaders: true` only when the processor needs Cookie and Sec-Fetch-\* copied out of the browser. Those headers can include HttpOnly cookies. The relay backend must not log or persist them.
+Matching is a Luhn check on the held number, then an exact search for that digit sequence anywhere in the raw body. Spaces, dashes, and their URL-encoded or JSON-escaped forms count. Expiry and CVC are not compared. A different Luhn-valid number is continued, not relayed.
 
-## Relay contract
+Identical in-flight retries (same method, URL, and body) share one relay call. A refusal is logged once. A transport failure drops the key so a later retry can resend.
 
-`RelayRequest` is version 1. `headers` is a list of `[name, value]` pairs so repeated `Set-Cookie` values survive. `bodyEncoding` is `"utf8"` or `"base64"` on the request and the success response. `idempotencyKey` is the CDP request id plus a nonce; the HTTP client also sends it as `idempotency-key`. The relay call takes an `AbortSignal`, and that signal is the only timeout when the interceptor owns it.
+Missing `Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Accept-Language`, and `Cookie` are filled the way Chrome would, without overriding a header the request already has. `Sec-Fetch-Site` uses the schemeful same-site check with the last two hostname labels as the registrable domain. This package has no public suffix list, so a multi-label suffix such as `co.uk` is classified too broadly. Shopify's card hosts are not in that set.
 
-A refusal is `{ ok: false, reason }` and does not echo the request. Reasons: `wrong_key`, `unknown_placeholder`, `closed_placeholder`, `expired_placeholder`, `off_profile_destination`, `replay`, `merchant_origin`, `changed_total`, `cancelled`. An unrecognized reason becomes `unknown`. Fixtures, including the Shopify card-session round trip, are exported from `@sapiom/browser-pay/testing`.
+Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` runs on each child session before it is resumed. An iframe already on the payment host is attached before `attachInterceptor` resolves. A paused request whose CDP session was never attached is failed.
 
-Placeholder detection matches the backend's placeholder-detection rules (separators, 13–19 digits, Luhn, then expiry and CVC when those fields are present). The held number is also searched for after separators are stripped, so a longer digit run cannot hide it. The rules are duplicated here so a browser bundle does not import the backend. They should move to a shared package. The interceptor does not fulfill a provider response that contains a different Luhn-valid card number.
+`detach()` fails in-flight paused requests before it disables Fetch. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames, client-side-encrypted card payloads, and worklet targets are not visible to this check.
 
-## Shopify dev-store script
-
-`examples/shopify-e2e.ts` is opt-in and is not part of `pnpm test`. It launches headless Chromium with a CDP port, or `BROWSER=sapiom` to create a Sapiom browser session (`captchaSolver`, `proxy`, `stealth`, and `headless: false`) and attach to the returned CDP URL. A second Playwright connection drives the dev store. The store is `https://1a2uh3-r7.myshopify.com`, variant `67652208394372`, Shopify Payments test mode.
-
-Demo relays live under `examples/relays/` and are not published:
-
-- `RELAY=bogus` substitutes Shopify Payments' published test card (Visa ending 4242, expiry 12/2030, any CVC) and forwards.
-- `RELAY=bt` vaults that test card in Basis Theory and sends the paused request through the ephemeral proxy with token expressions. `BT_PRIVATE_KEY` may be a private application key or a test-tenant management key. A management key cannot create tokens, so the script creates a private application for the run and deletes it afterwards. The card token is deleted too. `BT_TOKEN_ID` is not required.
-- `RELAY=http` uses `httpPaymentRelay` (`SAPIOM_BASE_URL` + `SAPIOM_API_KEY`).
-
-```bash
-cd packages/browser-pay
-RELAY=bogus npx tsx examples/shopify-e2e.ts
-BROWSER=sapiom RELAY=bt SAPIOM_API_KEY=… BT_PRIVATE_KEY=… npx tsx examples/shopify-e2e.ts
-MODE=refuse RELAY=bogus npx tsx examples/shopify-e2e.ts
-```
-
-`MODE=refuse` fails the card request closed so the placeholder is not forwarded and no order is confirmed. The script clicks pay once. With `BROWSER=sapiom` it waits for the session's captcha solver. It does not bypass a captcha itself, and it stops if one is still showing.
+`examples/attach.ts` is the agent-side script. It is not published.

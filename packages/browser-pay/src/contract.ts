@@ -1,29 +1,34 @@
 /**
- * T7, the interceptor-to-relay contract (W7 U0).
+ * T7, the body David's relay accepts on
+ * `POST /v1/transactions/{transactionId}/payment/relay`.
  *
- * The paused request body may contain the placeholder the agent typed. No field
- * on the response is a credential: a success body is the payment provider's
- * opaque response, and a refusal names a reason without echoing the request.
- * Real card values never travel back to the browser.
+ * The paused request body may contain the placeholder the agent typed.
+ * A success body is the payment provider's response. A refusal names a
+ * reason and does not echo the request. Real card values never travel
+ * back to the browser.
  *
- * `headers` may include browser cookies. The relay backend must not log or
- * persist them. The backend also scrubs provider response bodies and headers
- * before they are returned; the interceptor refuses to fulfill a response that
- * still contains a card number other than the held placeholder.
+ * `headers` may include browser cookies. The relay must not log or persist
+ * them. The backend scrubs provider response bodies before they return.
+ * This package also refuses to fulfill a response that still contains a
+ * Luhn-valid card number other than the held placeholder.
+ *
+ * Refusal reasons are the ones named on the relay: `already_relayed` and
+ * `total_changed` (SAP-4071, PR 5792), `key_rotated` and `card_removed`
+ * (PR 5754), and the checkPlaceholderUse answers `expired`, `closed`,
+ * `refused`, and `unknown` (PR 5758, updated in 5754). An unrecognized
+ * reason is reported as `unknown`.
  */
 
-export const RELAY_CONTRACT_VERSION = 1;
+import { createHash } from "node:crypto";
 
 export const RELAY_REFUSAL_REASONS = [
-  "wrong_key",
-  "unknown_placeholder",
-  "closed_placeholder",
-  "expired_placeholder",
-  "off_profile_destination",
-  "replay",
-  "merchant_origin",
-  "changed_total",
-  "cancelled",
+  "already_relayed",
+  "total_changed",
+  "key_rotated",
+  "card_removed",
+  "expired",
+  "closed",
+  "refused",
   "unknown",
 ] as const;
 
@@ -35,61 +40,67 @@ export type RelayBodyEncoding = "utf8" | "base64";
 export type RelayHeader = [name: string, value: string];
 
 /**
- * What the interceptor sends to the relay.
- * `merchantOrigin` is the top-level page origin (scheme + host), the payTo
- * value bound at authorization. It is never the card iframe's processor host.
- * `frameOrigin` is the origin of the frame that issued the request.
+ * What the interceptor sends. `merchantOrigin` is the top-level page origin
+ * (scheme + host), the payTo value bound at authorization.
+ * `idempotencyKey` is sha256(method, url, body). The HTTP client also sends
+ * it as the `idempotency-key` header. Shopify's card iframe retries share
+ * one key.
  */
 export interface RelayRequest {
-  version: typeof RELAY_CONTRACT_VERSION;
   transactionId: string;
   injectionRef: string;
   merchantOrigin: string;
-  frameOrigin?: string;
   url: string;
   method: string;
   headers: RelayHeader[];
   body: string;
-  bodyEncoding: RelayBodyEncoding;
-  /**
-   * CDP request id plus a nonce. The relay uses it to recognize a retry of
-   * the same paused request (`replay`).
-   */
   idempotencyKey: string;
 }
 
 /** Provider response to fulfill the paused browser request with. */
 export interface RelaySuccess {
-  ok: true;
-  /** Provider HTTP status. */
+  kind: "relayed";
   status: number;
   headers: RelayHeader[];
-  /**
-   * Provider response body. Must not contain a real card value.
-   * `bodyEncoding` says how `body` is encoded.
-   */
+  /** Provider response body. `bodyEncoding` says how `body` is encoded. */
   body: string;
   bodyEncoding: RelayBodyEncoding;
 }
 
 /** Verification failed. Nothing was forwarded. The request is not echoed. */
 export interface RelayRefusal {
-  ok: false;
+  kind: "refused";
   reason: RelayRefusalReason;
 }
 
 export type RelayResponse = RelaySuccess | RelayRefusal;
 
+/** Stable across retries of the same paused request. */
+export function paymentIdempotencyKey(
+  method: string,
+  url: string,
+  body: string,
+): string {
+  return createHash("sha256")
+    .update(method)
+    .update("\0")
+    .update(url)
+    .update("\0")
+    .update(body)
+    .digest("hex");
+}
+
 export function isRelayRefusalReason(
   value: string,
 ): value is RelayRefusalReason {
-  return (RELAY_REFUSAL_REASONS as readonly string[]).includes(value);
+  for (const reason of RELAY_REFUSAL_REASONS) {
+    if (reason === value) return true;
+  }
+  return false;
 }
 
-export function isRelayBodyEncoding(
-  value: unknown,
-): value is RelayBodyEncoding {
-  return value === "utf8" || value === "base64";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isRelayHeaderList(value: unknown): value is RelayHeader[] {
@@ -124,55 +135,82 @@ export function relayHeadersFromRecord(
 
 function headersFromUnknown(value: unknown): RelayHeader[] | undefined {
   if (isRelayHeaderList(value)) return value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([, entry]) => typeof entry === "string")) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  if (!Object.values(record).every((entry) => typeof entry === "string")) {
-    return undefined;
+  const record: Record<string, string> = {};
+  for (const [key, entry] of entries) {
+    if (typeof entry === "string") record[key] = entry;
   }
-  return relayHeadersFromRecord(record as Record<string, string>);
+  return relayHeadersFromRecord(record);
+}
+
+function isBodyEncoding(value: unknown): value is RelayBodyEncoding {
+  return value === "utf8" || value === "base64";
+}
+
+function readReason(value: unknown): RelayRefusalReason | undefined {
+  if (typeof value !== "string") return undefined;
+  return isRelayRefusalReason(value) ? value : "unknown";
 }
 
 /**
- * Accept a success payload or a typed refusal. An unknown refusal reason
- * becomes `unknown` so a newer backend does not look like a network error.
- * Anything else throws, and the message never includes the payload (it may
- * contain a card or a request echo).
+ * Accept `{ kind: "relayed", status, headers, body }` or
+ * `{ kind: "refused", reason }`. `bodyEncoding` defaults to utf8.
+ * The error never includes the payload.
  */
 export function parseRelayResponse(value: unknown): RelayResponse {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     throw new Error("Payment relay returned an unreadable response");
   }
-  const body = value as Record<string, unknown>;
-  if (body.ok === true) {
-    const headers = headersFromUnknown(body.headers);
+  if (value.kind === "refused") {
+    const reason = readReason(value.reason);
+    if (!reason) {
+      throw new Error("Payment relay returned an unreadable response");
+    }
+    return { kind: "refused", reason };
+  }
+  if (value.kind === "relayed") {
+    const headers = headersFromUnknown(value.headers);
     const bodyEncoding =
-      body.bodyEncoding === undefined ? "utf8" : body.bodyEncoding;
+      value.bodyEncoding === undefined ? "utf8" : value.bodyEncoding;
     if (
-      typeof body.status !== "number" ||
-      !Number.isInteger(body.status) ||
-      body.status < 100 ||
-      body.status > 599 ||
-      typeof body.body !== "string" ||
+      typeof value.status !== "number" ||
+      !Number.isInteger(value.status) ||
+      value.status < 100 ||
+      value.status > 599 ||
+      typeof value.body !== "string" ||
       !headers ||
-      !isRelayBodyEncoding(bodyEncoding)
+      !isBodyEncoding(bodyEncoding)
     ) {
       throw new Error("Payment relay returned an unreadable response");
     }
     return {
-      ok: true,
-      status: body.status,
+      kind: "relayed",
+      status: value.status,
       headers,
-      body: body.body,
+      body: value.body,
       bodyEncoding,
     };
   }
-  if (body.ok === false && typeof body.reason === "string") {
-    return {
-      ok: false,
-      reason: isRelayRefusalReason(body.reason) ? body.reason : "unknown",
-    };
-  }
   throw new Error("Payment relay returned an unreadable response");
+}
+
+export function isRelayRequest(value: unknown): value is RelayRequest {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.transactionId === "string" &&
+    value.transactionId.length > 0 &&
+    typeof value.injectionRef === "string" &&
+    value.injectionRef.length > 0 &&
+    typeof value.merchantOrigin === "string" &&
+    typeof value.url === "string" &&
+    typeof value.method === "string" &&
+    typeof value.body === "string" &&
+    typeof value.idempotencyKey === "string" &&
+    value.idempotencyKey.length > 0 &&
+    isRelayHeaderList(value.headers)
+  );
 }

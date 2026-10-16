@@ -12,15 +12,52 @@ import type { Duplex } from "node:stream";
 
 export interface CdpEvent {
   method: string;
-  params: Record<string, any>;
+  params: Record<string, unknown>;
   sessionId?: string;
 }
 
 type Pending = {
-  resolve: (value: any) => void;
+  resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCdpMessage(value: unknown):
+  | {
+      id?: number;
+      method?: string;
+      params: Record<string, unknown>;
+      sessionId?: string;
+      result?: unknown;
+      errorMessage?: string;
+    }
+  | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = typeof value.id === "number" ? value.id : undefined;
+  const method = typeof value.method === "string" ? value.method : undefined;
+  if (id === undefined && method === undefined) return undefined;
+  const params = isRecord(value.params) ? value.params : {};
+  const sessionId =
+    typeof value.sessionId === "string" ? value.sessionId : undefined;
+  let errorMessage: string | undefined;
+  if (isRecord(value.error) && typeof value.error.message === "string") {
+    errorMessage = value.error.message;
+  } else if (value.error) {
+    errorMessage = "CDP call failed";
+  }
+  return {
+    ...(id !== undefined ? { id } : {}),
+    ...(method !== undefined ? { method } : {}),
+    params,
+    ...(sessionId ? { sessionId } : {}),
+    result: value.result,
+    ...(errorMessage ? { errorMessage } : {}),
+  };
+}
 
 /** One CDP payload, including a large getRequestPostData body, stays under this. */
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
@@ -280,18 +317,21 @@ export class CdpConnection {
 
   private constructor(private readonly socket: WebSocketClient) {
     socket.onmessage = (data) => {
-      let message: any;
+      let parsed: unknown;
       try {
-        message = JSON.parse(data);
+        parsed = JSON.parse(data);
       } catch {
         return;
       }
-      if (message.id && this.pending.has(message.id)) {
-        const pending = this.pending.get(message.id)!;
+      const message = parseCdpMessage(parsed);
+      if (!message) return;
+      if (message.id !== undefined && this.pending.has(message.id)) {
+        const pending = this.pending.get(message.id);
+        if (!pending) return;
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
-        if (message.error) {
-          pending.reject(new Error(`CDP ${message.error.message}`));
+        if (message.errorMessage) {
+          pending.reject(new Error(`CDP ${message.errorMessage}`));
         } else {
           pending.resolve(message.result);
         }
@@ -300,7 +340,7 @@ export class CdpConnection {
       if (!message.method) return;
       const event: CdpEvent = {
         method: message.method,
-        params: message.params ?? {},
+        params: message.params,
         ...(message.sessionId ? { sessionId: message.sessionId } : {}),
       };
       for (const listener of this.listeners) listener(event);
@@ -327,14 +367,14 @@ export class CdpConnection {
     return new CdpConnection(await WebSocketClient.connect(url, timeoutMs));
   }
 
-  send<T = any>(
+  send(
     method: string,
     params: Record<string, unknown> = {},
     sessionId?: string,
     timeoutMs = 15_000,
-  ): Promise<T> {
+  ): Promise<unknown> {
     const id = ++this.nextId;
-    return new Promise<T>((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP ${method} timed out`));

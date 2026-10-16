@@ -14,10 +14,10 @@ export type {
 } from "./relay.js";
 
 export {
-  RELAY_CONTRACT_VERSION,
   RELAY_REFUSAL_REASONS,
   isRelayRefusalReason,
   parseRelayResponse,
+  paymentIdempotencyKey,
   relayHeadersFromRecord,
 } from "./contract.js";
 export type {
@@ -31,17 +31,16 @@ export type {
 } from "./contract.js";
 
 export {
-  cardNumberCandidate,
-  extractTypedCards,
-  luhnCheckDigit,
-  matchHeldPlaceholder,
+  luhnHeldPan,
   matchHeldPlaceholderInBody,
+  textHoldsPlaceholderNumber,
 } from "./detect.js";
-export type {
-  BodyPlaceholderMatch,
-  HeldPlaceholder,
-  HeldPlaceholderMatch,
-  TypedCard,
-} from "./detect.js";
+export type { BodyPlaceholderMatch, HeldPlaceholder } from "./detect.js";
+
+export type { PayLogger } from "./logger.js";
+export { silentLogger } from "./logger.js";
 
 export { maskCardNumber, redact } from "./redact.js";
+
+export { secFetchSite } from "./headers.js";
+export type { SecFetchSite } from "./headers.js";

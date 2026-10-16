@@ -1,4 +1,5 @@
 import {
+  isRelayRequest,
   parseRelayResponse,
   type RelayRequest,
   type RelayResponse,
@@ -11,7 +12,10 @@ export interface RelayCallOptions {
   signal?: AbortSignal;
 }
 
-/** Pluggable relay. The HTTP client and the in-memory stub both implement this. */
+/**
+ * Pluggable relay. `httpPaymentRelay` is the default HTTP client for David's
+ * route. A test double implements the same interface.
+ */
 export interface PaymentRelay {
   relay(
     request: RelayRequest,
@@ -31,35 +35,57 @@ export interface HttpRelayOptions {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-/**
- * David's route: `POST /v1/transactions/:id/payment/relay`.
- * The route may not be deployed yet. One attempt, no retry.
- */
-export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
+function requireHttpOptions(options: HttpRelayOptions): {
+  baseUrl: string;
+  apiKey: string;
+  timeoutMs: number;
+  fetchImpl: typeof fetch;
+} {
+  if (!options || typeof options.baseUrl !== "string" || !options.baseUrl) {
+    throw new Error("Payment relay baseUrl is required");
+  }
   const apiKey = options.apiKey ?? process.env.SAPIOM_API_KEY;
   if (!apiKey) {
     throw new Error(
       "SAPIOM_API_KEY is required for the payment relay HTTP client",
     );
   }
-  const baseUrl = options.baseUrl.replace(/\/$/, "");
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const fetchImpl = options.fetchImpl ?? fetch;
+  if (
+    options.timeoutMs !== undefined &&
+    (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)
+  ) {
+    throw new Error("Payment relay timeoutMs must be a positive number");
+  }
   return {
-    async relay(request, options) {
-      const url = `${baseUrl}/v1/transactions/${encodeURIComponent(request.transactionId)}/payment/relay`;
-      // The caller owns the deadline when it passes a signal. Otherwise this
-      // client is the only timeout.
-      const signal = options?.signal ?? AbortSignal.timeout(timeoutMs);
+    baseUrl: options.baseUrl.replace(/\/$/, ""),
+    apiKey,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchImpl: options.fetchImpl ?? fetch,
+  };
+}
+
+/**
+ * David's route: `POST /v1/transactions/{id}/payment/relay`.
+ * One attempt, no retry. A redirect fails closed.
+ */
+export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
+  const config = requireHttpOptions(options);
+  return {
+    async relay(request, call) {
+      if (!isRelayRequest(request)) {
+        throw new Error("Payment relay request is not a T7 body");
+      }
+      const url = `${config.baseUrl}/v1/transactions/${encodeURIComponent(request.transactionId)}/payment/relay`;
+      const signal = call?.signal ?? AbortSignal.timeout(config.timeoutMs);
       let response: Response;
       try {
-        response = await fetchImpl(url, {
+        response = await config.fetchImpl(url, {
           method: "POST",
           redirect: "manual",
           headers: {
             accept: "application/json",
             "content-type": "application/json",
-            "x-api-key": apiKey,
+            "x-api-key": config.apiKey,
             "idempotency-key": request.idempotencyKey,
           },
           body: JSON.stringify(request),
@@ -71,8 +97,6 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
         }
         throw new Error("Payment relay failed");
       }
-      // A redirect would be the provider (or an attacker) pointing the real
-      // card somewhere else. Fail closed without reading a Location header.
       if (response.status >= 300 && response.status < 400) {
         throw new Error("Payment relay refused a redirect");
       }
@@ -87,7 +111,7 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
         try {
           return parseRelayResponse(parsed);
         } catch {
-          // Fall through to a status-only error. Never include `text`.
+          // Fall through. Never include `text`.
         }
       }
       throw new Error(`Payment relay failed (HTTP ${response.status})`);
@@ -95,7 +119,7 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
   };
 }
 
-/** In-memory relay for tests and local demos. */
+/** In-memory relay for tests. */
 export function stubPaymentRelay(
   handler: (
     request: RelayRequest,
@@ -110,8 +134,6 @@ export function stubPaymentRelay(
 }
 
 function isTimeout(error: unknown): boolean {
-  // Jest runs this file in a vm, so a DOMException from Node's fetch is not
-  // an `instanceof Error` here. Read the fields instead.
   if (!error || typeof error !== "object") return false;
   const name = "name" in error ? String(error.name) : "";
   const message = "message" in error ? String(error.message) : "";

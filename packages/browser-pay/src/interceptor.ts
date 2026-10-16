@@ -1,13 +1,25 @@
-import crypto from "node:crypto";
 import { CdpConnection, type CdpEvent } from "./cdp.js";
-import { RELAY_CONTRACT_VERSION, type RelayHeader } from "./contract.js";
 import {
+  parseRelayResponse,
+  paymentIdempotencyKey,
+  type RelayHeader,
+  type RelayResponse,
+} from "./contract.js";
+import {
+  luhnHeldPan,
   matchHeldPlaceholderInBody,
   textContainsForeignCard,
   textHoldsPlaceholderNumber,
   type HeldPlaceholder,
 } from "./detect.js";
-import type { PaymentRelay, RelayResponse } from "./relay.js";
+import {
+  acceptLanguageHeader,
+  cookieHeader,
+  secFetchDest,
+  secFetchSite,
+} from "./headers.js";
+import { silentLogger, type PayLogger } from "./logger.js";
+import type { PaymentRelay } from "./relay.js";
 import { redact } from "./redact.js";
 
 export interface AttachOptions {
@@ -21,18 +33,13 @@ export interface AttachOptions {
    */
   timeoutMs?: number;
   /**
-   * When set, only targets whose URL contains one of these strings are paused.
-   * Other pages keep running, so a captcha solver is not held on their traffic.
-   * Omit it to pause every page and iframe.
+   * When set, Fetch pauses only URLs containing one of these strings.
+   * Other requests are not paused, so a captcha solver keeps running.
+   * Omit it to pause every page and iframe request.
    */
   pauseOnlyUrls?: string[];
-  /**
-   * Copy Cookie, Accept-Language, and Sec-Fetch-* from the browser onto the
-   * relay request. Off by default. Those headers can include HttpOnly cookies
-   * the relay backend must not log or persist. Shopify's card session needs
-   * them, so the dev-store script turns this on.
-   */
-  synthesizeBrowserHeaders?: boolean;
+  /** Defaults to a logger that discards every line. */
+  logger?: PayLogger;
 }
 
 export type InterceptorEvent =
@@ -72,17 +79,7 @@ export function canContinueWithoutReading(
   const verb = method.toUpperCase();
   if (verb !== "GET" && verb !== "HEAD") return false;
   if (hasBody) return false;
-  return !urlDigits(url).includes(placeholderNumber);
-}
-
-function urlDigits(url: string): string {
-  let decoded = url;
-  try {
-    decoded = decodeURIComponent(url);
-  } catch {
-    // Keep the raw URL when it is not valid percent-encoding.
-  }
-  return decoded.replace(/\D/g, "");
+  return !textHoldsPlaceholderNumber(url, placeholderNumber);
 }
 
 /**
@@ -112,6 +109,8 @@ export function isSolverTraffic(url: string): boolean {
   return parsed.pathname.toLowerCase().includes("/recaptcha/");
 }
 
+// CDP writes the body bytes itself. These headers would describe a different
+// representation (gzip, a length from the processor hop) than the bytes we fulfill.
 const RESPONSE_HOP = new Set([
   "connection",
   "keep-alive",
@@ -175,15 +174,20 @@ export async function attachInterceptor(
   target: InterceptorTarget,
   options: AttachOptions,
 ): Promise<InterceptorHandle> {
+  assertAttachOptions(options);
   const cdpUrl = resolveCdpUrl(target);
   const connection = await CdpConnection.connect(cdpUrl);
   const sessions = new Map<string, Session>();
   const seen = new Set<string>();
   const listeners = new Set<(event: InterceptorEvent) => void>();
   const inflight = new Map<string, Inflight>();
+  const relayFlights = new Map<string, Promise<RelayResponse>>();
   const relayAborts = new Set<AbortController>();
+  const loggedRefusals = new Set<string>();
+  const pendingArms: Promise<void>[] = [];
   let closed = false;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const logger = options.logger ?? silentLogger;
 
   const emit = (event: InterceptorEvent) => {
     for (const listener of listeners) {
@@ -209,21 +213,14 @@ export async function attachInterceptor(
     }
     seen.add(sessionId);
     const session = sessions.get(sessionId);
-    // A blank frame has not navigated yet. Holding it for Fetch.enable freezes
-    // a captcha widget that is about to load. Arm Fetch only once the URL is a
-    // page we might need to pause.
-    if (!session || !shouldPauseTarget(session, options.pauseOnlyUrls)) {
-      if (session?.fetchEnabled) {
-        session.fetchEnabled = false;
-        await connection.send("Fetch.disable", {}, sessionId).catch(() => {});
-      }
+    if (!session || isHandsOffTarget(session)) {
       await releaseTarget(connection, sessionId, waitingForDebugger);
       return;
     }
     // Fetch has to be on before the target runs, or the card iframe can post
     // before we are listening. Network has to be enabled before
     // Network.getCookies will return the jar the card session needs.
-    const armed = await armFetch(connection, session);
+    const armed = await armFetch(connection, session, options.pauseOnlyUrls);
     if (!armed) {
       emit({
         type: "failed",
@@ -239,14 +236,10 @@ export async function attachInterceptor(
   };
 
   const onAttached = (event: CdpEvent) => {
-    const params = event.params as {
-      sessionId?: string;
-      waitingForDebugger?: boolean;
-      targetInfo?: { targetId?: string; type?: string; url?: string };
-    };
+    const params = parseAttachedTarget(event.params);
+    if (!params) return;
     const sessionId = params.sessionId;
     const info = params.targetInfo;
-    if (!sessionId || !info?.type || !info.targetId) return;
     const duplicate = [...sessions.values()].some(
       (session) => session.targetId === info.targetId,
     );
@@ -271,34 +264,44 @@ export async function attachInterceptor(
       url: info.url ?? "",
       ...(event.sessionId ? { parentSessionId: event.sessionId } : {}),
     });
-    // Browser-level auto-attach covers pages. Child iframes attach only when
-    // the page (or parent frame) session asks for them. A second session for
-    // the same target is detached in onAttached.
-    if (info.type === "page" || info.type === "iframe") {
-      void connection
-        .send(
-          "Target.setAutoAttach",
-          {
-            autoAttach: true,
-            waitForDebuggerOnStart: false,
-            flatten: true,
-            filter: [{ type: "iframe" }],
-          },
-          sessionId,
-        )
-        .catch(() => {});
-    }
-    void enableSession(sessionId, params.waitingForDebugger === true);
+    const arm = (async () => {
+      // Child iframes pause on attach so Fetch.enable runs before they resume.
+      if (info.type === "page" || info.type === "iframe") {
+        await connection
+          .send(
+            "Target.setAutoAttach",
+            {
+              autoAttach: true,
+              waitForDebuggerOnStart: true,
+              flatten: true,
+              filter: [{ type: "iframe" }],
+            },
+            sessionId,
+          )
+          .catch(() => {});
+      }
+      await enableSession(sessionId, params.waitingForDebugger === true);
+    })();
+    pendingArms.push(arm);
+    void arm.finally(() => {
+      const index = pendingArms.indexOf(arm);
+      if (index >= 0) pendingArms.splice(index, 1);
+    });
   };
 
   const onPaused = (event: CdpEvent) => {
     const sessionId = event.sessionId;
-    const params = event.params as {
-      requestId?: string;
-      resourceType?: string;
-      request?: PausedRequest;
-    };
-    if (!sessionId || !params.requestId || !params.request) return;
+    const params = parsePaused(event.params);
+    if (!sessionId || !params) return;
+    if (!sessions.has(sessionId)) {
+      void failRequest(connection, sessionId, params.requestId);
+      emit({
+        type: "failed",
+        url: redact(params.request.url ?? ""),
+        reason: "unknown_session",
+      });
+      return;
+    }
     const url = params.request.url ?? "";
     const method = params.request.method ?? "GET";
     const hasBody = requestHasBody(params.request);
@@ -318,6 +321,9 @@ export async function attachInterceptor(
       timeoutMs,
       emit,
       inflight,
+      relayFlights,
+      loggedRefusals,
+      logger,
       relayAborts,
       isClosed: () => closed,
     };
@@ -372,13 +378,11 @@ export async function attachInterceptor(
     if (closed) return;
     if (event.method === "Target.attachedToTarget") onAttached(event);
     else if (event.method === "Target.detachedFromTarget") {
-      const sessionId = event.params.sessionId as string | undefined;
+      const sessionId = readStringField(event.params, "sessionId");
       if (sessionId) sessions.delete(sessionId);
     } else if (event.method === "Target.targetInfoChanged") {
-      const info = event.params.targetInfo as
-        | { targetId?: string; url?: string }
-        | undefined;
-      if (!info?.targetId || !info.url) return;
+      const info = parseTargetInfoChange(event.params);
+      if (!info) return;
       for (const session of sessions.values()) {
         if (session.targetId !== info.targetId) continue;
         session.url = info.url;
@@ -395,17 +399,19 @@ export async function attachInterceptor(
           continue;
         }
         if (!session.fetchEnabled) {
-          void armFetch(connection, session).then((armed) => {
-            if (armed || closed) return;
-            emit({
-              type: "failed",
-              url: redact(session.url || session.targetId),
-              reason: "intercept_unavailable",
-            });
-            void connection
-              .send("Target.closeTarget", { targetId: session.targetId })
-              .catch(() => {});
-          });
+          void armFetch(connection, session, options.pauseOnlyUrls).then(
+            (armed) => {
+              if (armed || closed) return;
+              emit({
+                type: "failed",
+                url: redact(session.url || session.targetId),
+                reason: "intercept_unavailable",
+              });
+              void connection
+                .send("Target.closeTarget", { targetId: session.targetId })
+                .catch(() => {});
+            },
+          );
         }
       }
     }
@@ -413,13 +419,17 @@ export async function attachInterceptor(
 
   await connection.send("Target.setAutoAttach", {
     autoAttach: true,
-    waitForDebuggerOnStart: false,
+    waitForDebuggerOnStart: true,
     flatten: true,
     filter: TARGET_FILTER,
   });
   await connection
     .send("Target.setDiscoverTargets", { discover: true })
     .catch(() => {});
+  await attachExistingPaymentFrames(connection, sessions, options, (session) =>
+    enableSession(session.sessionId, false),
+  );
+  await Promise.all([...pendingArms]);
 
   return {
     on(listener) {
@@ -473,6 +483,9 @@ interface PauseContext {
   timeoutMs: number;
   emit: (event: InterceptorEvent) => void;
   inflight: Map<string, Inflight>;
+  relayFlights: Map<string, Promise<RelayResponse>>;
+  loggedRefusals: Set<string>;
+  logger: PayLogger;
   relayAborts: Set<AbortController>;
   isClosed: () => boolean;
 }
@@ -564,10 +577,6 @@ async function handlePaused(
       ctx.options.placeholder,
     );
     if (match.kind === "not_held" && !urlHolds) {
-      if (ctx.isClosed()) {
-        await finishContinue(ctx, entry);
-        return;
-      }
       await finishContinue(ctx, entry);
       return;
     }
@@ -595,37 +604,36 @@ async function handlePaused(
       });
       return;
     }
-    const headers = ctx.options.synthesizeBrowserHeaders
-      ? await completeHeaders(
-          ctx.connection,
-          ctx.sessions,
-          entry.sessionId,
-          url,
-          resourceType,
-          request.headers,
-        )
-      : headerList(request.headers);
-    const frameOrigin = readFrameOrigin(ctx.sessions, entry.sessionId, url);
+    const headers = await completeHeaders(
+      ctx.connection,
+      ctx.sessions,
+      entry.sessionId,
+      url,
+      resourceType,
+      request.headers,
+    );
+    const idempotencyKey = paymentIdempotencyKey(method, url, read.body);
     const controller = new AbortController();
     ctx.relayAborts.add(controller);
     const timer = setTimeout(() => controller.abort(), ctx.timeoutMs);
     let response: RelayResponse;
     try {
-      response = await ctx.options.relay.relay(
-        {
-          version: RELAY_CONTRACT_VERSION,
-          transactionId: ctx.options.transactionId,
-          injectionRef: match.injectionRef,
-          merchantOrigin,
-          ...(frameOrigin ? { frameOrigin } : {}),
-          url,
-          method,
-          headers,
-          body: read.body,
-          bodyEncoding: "utf8",
-          idempotencyKey: `${entry.requestId}:${crypto.randomBytes(8).toString("hex")}`,
-        },
-        { signal: controller.signal },
+      response = parseRelayResponse(
+        await relayOnce(ctx, idempotencyKey, () =>
+          ctx.options.relay.relay(
+            {
+              transactionId: ctx.options.transactionId,
+              injectionRef: match.injectionRef,
+              merchantOrigin,
+              url,
+              method,
+              headers,
+              body: read.body,
+              idempotencyKey,
+            },
+            { signal: controller.signal },
+          ),
+        ),
       );
     } catch (error) {
       await finish(ctx, entry, "fail");
@@ -639,7 +647,13 @@ async function handlePaused(
       clearTimeout(timer);
       ctx.relayAborts.delete(controller);
     }
-    if (!response.ok) {
+    if (response.kind === "refused") {
+      if (!ctx.loggedRefusals.has(idempotencyKey)) {
+        ctx.loggedRefusals.add(idempotencyKey);
+        ctx.logger.warn("payment relay refused the paused request", {
+          reason: response.reason,
+        });
+      }
       await finish(ctx, entry, "fail");
       ctx.emit({ type: "refused", url: safeUrl, reason: response.reason });
       return;
@@ -666,6 +680,11 @@ async function handlePaused(
       }
     } catch {
       fulfilled = false;
+    }
+    // A failed fulfill must not leave the pause open. Chrome continues an
+    // open pause when the socket drops, which would deliver the placeholder.
+    if (!fulfilled && !entry.settled) {
+      await failRequest(ctx.connection, entry.sessionId, entry.requestId);
     }
     if (!entry.settled) {
       entry.settled = true;
@@ -763,15 +782,14 @@ async function readBodyResult(
     return { body, unreadable: false };
   }
   try {
-    const result = await connection.send<{ postData?: string }>(
+    const result = await connection.send(
       "Fetch.getRequestPostData",
       { requestId },
       sessionId,
     );
-    if (typeof result.postData !== "string" || result.postData.length === 0) {
-      return { body: "", unreadable: true };
-    }
-    return { body: result.postData, unreadable: false };
+    const postData = readStringField(result, "postData");
+    if (!postData) return { body: "", unreadable: true };
+    return { body: postData, unreadable: false };
   } catch {
     return { body: "", unreadable: true };
   }
@@ -792,7 +810,7 @@ async function readMerchantOrigin(
     if (fromPage) return fromPage;
   }
   const ancestors = await connection
-    .send<{ result?: { value?: unknown } }>(
+    .send(
       "Runtime.evaluate",
       {
         expression:
@@ -802,8 +820,8 @@ async function readMerchantOrigin(
       sessionId,
     )
     .catch(() => null);
-  const value = ancestors?.result?.value;
-  if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  const value = evaluatedString(ancestors);
+  if (value && /^https?:\/\//.test(value)) return value;
   return undefined;
 }
 
@@ -813,30 +831,18 @@ async function originFromSession(
   sessionId: string,
 ): Promise<string | undefined> {
   const evaluated = await connection
-    .send<{
-      result?: { value?: unknown };
-    }>("Runtime.evaluate", { expression: "location.origin", returnByValue: true }, sessionId)
+    .send(
+      "Runtime.evaluate",
+      { expression: "location.origin", returnByValue: true },
+      sessionId,
+    )
     .catch(() => null);
-  const value = evaluated?.result?.value;
-  if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  const value = evaluatedString(evaluated);
+  if (value && /^https?:\/\//.test(value)) return value;
   const url = sessions.get(sessionId)?.url;
   if (!url) return undefined;
   try {
     const origin = new URL(url).origin;
-    return /^https?:\/\//.test(origin) ? origin : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function readFrameOrigin(
-  sessions: Map<string, Session>,
-  sessionId: string,
-  requestUrl: string,
-): string | undefined {
-  const raw = sessions.get(sessionId)?.url || requestUrl;
-  try {
-    const origin = new URL(raw).origin;
     return /^https?:\/\//.test(origin) ? origin : undefined;
   } catch {
     return undefined;
@@ -866,9 +872,8 @@ function topPageSession(
 
 /**
  * At the Fetch Request stage Chrome has not yet added the headers its network
- * stack appends (Cookie, Sec-Fetch-*, Accept-Language). Shopify's card session
- * needs those. Never override a header the request already has. Only called
- * when `synthesizeBrowserHeaders` is set.
+ * stack appends. Fill the ones that are missing. Never override a header the
+ * request already has. Cookie values are not logged.
  */
 async function completeHeaders(
   connection: CdpConnection,
@@ -882,66 +887,73 @@ async function completeHeaders(
   const has = (name: string) =>
     headers.some(([key]) => key.toLowerCase() === name);
   const frameUrl = sessions.get(sessionId)?.url || requestUrl;
-  try {
-    const target = new URL(requestUrl);
-    const frame = new URL(frameUrl);
-    if (!has("sec-fetch-site")) {
-      const site = (value: URL) =>
-        value.hostname.split(".").slice(-2).join(".");
-      headers.push([
-        "Sec-Fetch-Site",
-        target.origin === frame.origin
-          ? "same-origin"
-          : site(target) === site(frame) && target.protocol === frame.protocol
-            ? "same-site"
-            : "cross-site",
-      ]);
+  const site = secFetchSite(requestUrl, frameUrl);
+  if (!has("sec-fetch-site") && site) {
+    headers.push(["Sec-Fetch-Site", site]);
+  }
+  const dest = secFetchDest(resourceType);
+  if (!has("sec-fetch-dest") && dest) {
+    headers.push(["Sec-Fetch-Dest", dest]);
+  }
+  if (!has("accept-language")) {
+    const languages = await readLanguages(connection, sessionId);
+    if (languages.length > 0) {
+      headers.push(["Accept-Language", acceptLanguageHeader(languages)]);
     }
-    if (!has("sec-fetch-dest") && /^(Fetch|XHR)$/.test(resourceType)) {
-      headers.push(["Sec-Fetch-Dest", "empty"]);
+  }
+  if (!has("cookie")) {
+    const cookies = await readCookies(connection, sessionId, requestUrl);
+    if (cookies.length > 0) {
+      headers.push(["Cookie", cookieHeader(cookies)]);
     }
-    if (!has("accept-language")) {
-      const languages = await connection
-        .send<{
-          result?: { value?: unknown };
-        }>("Runtime.evaluate", { expression: "navigator.languages", returnByValue: true }, sessionId)
-        .catch(() => null);
-      const list = languages?.result?.value;
-      if (
-        Array.isArray(list) &&
-        list.every((entry) => typeof entry === "string")
-      ) {
-        headers.push([
-          "Accept-Language",
-          list
-            .map((language, index) =>
-              index === 0
-                ? language
-                : `${language};q=${Math.max(0.1, 1 - index / 10).toFixed(1)}`,
-            )
-            .join(","),
-        ]);
-      }
-    }
-    if (!has("cookie")) {
-      const cookies = await connection
-        .send<{
-          cookies?: { name: string; value: string }[];
-        }>("Network.getCookies", { urls: [requestUrl] }, sessionId)
-        .catch(() => null);
-      if (cookies?.cookies?.length) {
-        headers.push([
-          "Cookie",
-          cookies.cookies
-            .map((cookie) => `${cookie.name}=${cookie.value}`)
-            .join("; "),
-        ]);
-      }
-    }
-  } catch {
-    // Keep the headers Chrome already gave us.
   }
   return headers;
+}
+
+async function readLanguages(
+  connection: CdpConnection,
+  sessionId: string,
+): Promise<string[]> {
+  const evaluated = await connection
+    .send(
+      "Runtime.evaluate",
+      { expression: "navigator.languages", returnByValue: true },
+      sessionId,
+    )
+    .catch(() => undefined);
+  return stringList(evaluated);
+}
+
+async function readCookies(
+  connection: CdpConnection,
+  sessionId: string,
+  requestUrl: string,
+): Promise<{ name: string; value: string }[]> {
+  const result = await connection
+    .send("Network.getCookies", { urls: [requestUrl] }, sessionId)
+    .catch(() => undefined);
+  if (!isRecord(result) || !Array.isArray(result.cookies)) return [];
+  const cookies: { name: string; value: string }[] = [];
+  for (const entry of result.cookies) {
+    if (!isRecord(entry)) continue;
+    if (typeof entry.name !== "string" || typeof entry.value !== "string") {
+      continue;
+    }
+    cookies.push({ name: entry.name, value: entry.value });
+  }
+  return cookies;
+}
+
+function stringList(value: unknown): string[] {
+  if (!isRecord(value) || !isRecord(value.result)) return [];
+  const list = value.result.value;
+  if (
+    !Array.isArray(list) ||
+    !list.every((entry) => typeof entry === "string")
+  ) {
+    return [];
+  }
+  return list.filter((entry): entry is string => typeof entry === "string");
 }
 
 function headerList(headers: unknown): RelayHeader[] {
@@ -949,31 +961,117 @@ function headerList(headers: unknown): RelayHeader[] {
   if (Array.isArray(headers)) {
     const out: RelayHeader[] = [];
     for (const entry of headers) {
-      if (Array.isArray(entry) && entry.length === 2) {
-        out.push([String(entry[0]), String(entry[1])]);
+      if (
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        typeof entry[0] === "string" &&
+        typeof entry[1] === "string"
+      ) {
+        out.push([entry[0], entry[1]]);
         continue;
       }
-      if (
-        entry &&
-        typeof entry === "object" &&
-        typeof (entry as { name?: unknown }).name === "string"
-      ) {
-        const named = entry as { name: string; value?: unknown };
-        out.push([named.name, String(named.value ?? "")]);
+      if (isRecord(entry) && typeof entry.name === "string") {
+        const value = entry.value;
+        out.push([entry.name, typeof value === "string" ? value : ""]);
       }
     }
     return out;
   }
-  if (typeof headers === "object") {
+  if (isRecord(headers)) {
     const out: RelayHeader[] = [];
-    for (const [key, value] of Object.entries(
-      headers as Record<string, unknown>,
-    )) {
+    for (const [key, value] of Object.entries(headers)) {
       if (typeof value === "string") out.push([key, value]);
     }
     return out;
   }
   return [];
+}
+
+function parseAttachedTarget(value: unknown):
+  | {
+      sessionId: string;
+      waitingForDebugger: boolean;
+      targetInfo: { targetId: string; type: string; url: string };
+    }
+  | undefined {
+  if (!isRecord(value) || typeof value.sessionId !== "string") return undefined;
+  if (!isRecord(value.targetInfo)) return undefined;
+  const info = value.targetInfo;
+  if (typeof info.targetId !== "string" || typeof info.type !== "string") {
+    return undefined;
+  }
+  return {
+    sessionId: value.sessionId,
+    waitingForDebugger: value.waitingForDebugger === true,
+    targetInfo: {
+      targetId: info.targetId,
+      type: info.type,
+      url: typeof info.url === "string" ? info.url : "",
+    },
+  };
+}
+
+function parsePaused(
+  value: unknown,
+):
+  | { requestId: string; resourceType: string; request: PausedRequest }
+  | undefined {
+  if (!isRecord(value) || typeof value.requestId !== "string") return undefined;
+  if (!isRecord(value.request)) return undefined;
+  const request = value.request;
+  return {
+    requestId: value.requestId,
+    resourceType:
+      typeof value.resourceType === "string" ? value.resourceType : "",
+    request: {
+      url: typeof request.url === "string" ? request.url : "",
+      method: typeof request.method === "string" ? request.method : "GET",
+      headers: request.headers,
+      postData:
+        typeof request.postData === "string" ? request.postData : undefined,
+      hasPostData: request.hasPostData === true,
+      postDataEntries: parsePostDataEntries(request.postDataEntries),
+    },
+  };
+}
+
+function parsePostDataEntries(
+  value: unknown,
+): { bytes?: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries: { bytes?: string }[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      entries.push({});
+      continue;
+    }
+    entries.push(typeof entry.bytes === "string" ? { bytes: entry.bytes } : {});
+  }
+  return entries;
+}
+
+function parseTargetInfoChange(
+  value: unknown,
+): { targetId: string; url: string } | undefined {
+  if (!isRecord(value) || !isRecord(value.targetInfo)) return undefined;
+  const info = value.targetInfo;
+  if (typeof info.targetId !== "string" || typeof info.url !== "string") {
+    return undefined;
+  }
+  return { targetId: info.targetId, url: info.url };
+}
+
+function evaluatedString(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.result)) return undefined;
+  return typeof value.result.value === "string"
+    ? value.result.value
+    : undefined;
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const field = value[key];
+  return typeof field === "string" ? field : undefined;
 }
 
 function requestHasBody(request: PausedRequest): boolean {
@@ -987,6 +1085,7 @@ function requestHasBody(request: PausedRequest): boolean {
 async function armFetch(
   connection: CdpConnection,
   session: Session | undefined,
+  pauseOnlyUrls: string[] | undefined,
 ): Promise<boolean> {
   if (!session || isHandsOffTarget(session)) return false;
   if (session.fetchEnabled) return true;
@@ -996,7 +1095,7 @@ async function armFetch(
   try {
     await connection.send(
       "Fetch.enable",
-      { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
+      { patterns: fetchPatterns(pauseOnlyUrls) },
       session.sessionId,
     );
   } catch {
@@ -1004,6 +1103,19 @@ async function armFetch(
   }
   session.fetchEnabled = true;
   return true;
+}
+
+function fetchPatterns(
+  pauseOnlyUrls: string[] | undefined,
+): { urlPattern: string; requestStage: "Request" }[] {
+  if (!pauseOnlyUrls || pauseOnlyUrls.length === 0) {
+    return [{ urlPattern: "*", requestStage: "Request" }];
+  }
+  const patterns: { urlPattern: string; requestStage: "Request" }[] = [];
+  for (const part of pauseOnlyUrls) {
+    patterns.push({ urlPattern: `*${part}*`, requestStage: "Request" });
+  }
+  return patterns;
 }
 
 async function releaseTarget(
@@ -1088,7 +1200,7 @@ async function fulfillRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  response: Extract<RelayResponse, { ok: true }>,
+  response: Extract<RelayResponse, { kind: "relayed" }>,
 ): Promise<void> {
   const responseHeaders = response.headers.flatMap(([name, value]) => {
     if (RESPONSE_HOP.has(name.toLowerCase())) return [];
@@ -1125,35 +1237,151 @@ function failureReason(error: unknown): string {
   return "network";
 }
 
+function relayOnce(
+  ctx: PauseContext,
+  key: string,
+  call: () => Promise<RelayResponse>,
+): Promise<RelayResponse> {
+  const existing = ctx.relayFlights.get(key);
+  if (existing) return existing;
+  const flight = call().finally(() => {
+    if (ctx.relayFlights.get(key) === flight) ctx.relayFlights.delete(key);
+  });
+  ctx.relayFlights.set(key, flight);
+  return flight;
+}
+
+async function attachExistingPaymentFrames(
+  connection: CdpConnection,
+  sessions: Map<string, Session>,
+  options: AttachOptions,
+  enable: (session: Session) => Promise<void>,
+): Promise<void> {
+  const listed = await connection
+    .send("Target.getTargets")
+    .catch(() => undefined);
+  for (const info of parseTargetInfos(listed)) {
+    if (info.type !== "iframe") continue;
+    if (!urlMatchesPause(info.url, options.pauseOnlyUrls)) continue;
+    const known = [...sessions.values()].some(
+      (session) => session.targetId === info.targetId,
+    );
+    if (known) continue;
+    const attached = await connection
+      .send("Target.attachToTarget", { targetId: info.targetId, flatten: true })
+      .catch(() => undefined);
+    const sessionId = readAttachedSessionId(attached);
+    if (!sessionId || sessions.has(sessionId)) continue;
+    const session: Session = {
+      sessionId,
+      targetId: info.targetId,
+      type: "iframe",
+      url: info.url,
+    };
+    sessions.set(sessionId, session);
+    await connection
+      .send(
+        "Target.setAutoAttach",
+        {
+          autoAttach: true,
+          waitForDebuggerOnStart: true,
+          flatten: true,
+          filter: [{ type: "iframe" }],
+        },
+        sessionId,
+      )
+      .catch(() => {});
+    await enable(session);
+  }
+}
+
+function urlMatchesPause(url: string, pauseOnlyUrls?: string[]): boolean {
+  if (!pauseOnlyUrls || pauseOnlyUrls.length === 0) return true;
+  return pauseOnlyUrls.some((part) => url.includes(part));
+}
+
+function parseTargetInfos(
+  value: unknown,
+): { targetId: string; type: string; url: string }[] {
+  if (!isRecord(value) || !Array.isArray(value.targetInfos)) return [];
+  const infos: { targetId: string; type: string; url: string }[] = [];
+  for (const entry of value.targetInfos) {
+    if (!isRecord(entry)) continue;
+    if (typeof entry.targetId !== "string" || typeof entry.type !== "string") {
+      continue;
+    }
+    infos.push({
+      targetId: entry.targetId,
+      type: entry.type,
+      url: typeof entry.url === "string" ? entry.url : "",
+    });
+  }
+  return infos;
+}
+
+function readAttachedSessionId(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.sessionId !== "string") return undefined;
+  return value.sessionId.length > 0 ? value.sessionId : undefined;
+}
+
+function assertAttachOptions(options: AttachOptions): void {
+  if (typeof options.relay?.relay !== "function") {
+    throw new Error("A payment relay is required");
+  }
+  if (!options.transactionId) {
+    throw new Error("transactionId is required");
+  }
+  if (
+    !options.placeholder?.injectionRef ||
+    !luhnHeldPan(options.placeholder.number)
+  ) {
+    throw new Error(
+      "placeholder.injectionRef and a Luhn-valid placeholder number are required",
+    );
+  }
+  const patterns = options.pauseOnlyUrls;
+  if (
+    patterns !== undefined &&
+    (!Array.isArray(patterns) ||
+      patterns.some((part) => typeof part !== "string"))
+  ) {
+    throw new Error("pauseOnlyUrls must be an array of strings");
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function resolveCdpUrl(target: InterceptorTarget): string {
   if (typeof target === "string") {
     if (!target) throw new Error("A CDP websocket URL is required");
     return target;
   }
-  if (
-    target &&
-    typeof (target as { wsEndpoint?: unknown }).wsEndpoint === "function"
-  ) {
-    const url = (target as { wsEndpoint(): string }).wsEndpoint();
-    if (url) return url;
-  }
-  const browserFromBrowser = (
-    target as { browser?: () => { wsEndpoint(): string } | null }
-  ).browser;
-  if (typeof browserFromBrowser === "function") {
-    const url = browserFromBrowser.call(target)?.wsEndpoint();
-    if (url) return url;
-  }
-  const context = (
-    target as {
-      context?: () => { browser(): { wsEndpoint(): string } | null } | null;
-    }
-  ).context;
-  if (typeof context === "function") {
-    const url = context.call(target)?.browser()?.wsEndpoint();
-    if (url) return url;
-  }
+  const direct = callString(target, "wsEndpoint");
+  if (direct) return direct;
+  const browser = callObject(target, "browser");
+  const fromBrowser = browser ? callString(browser, "wsEndpoint") : undefined;
+  if (fromBrowser) return fromBrowser;
+  const context = callObject(target, "context");
+  const nested = context ? callObject(context, "browser") : undefined;
+  const fromContext = nested ? callString(nested, "wsEndpoint") : undefined;
+  if (fromContext) return fromContext;
   throw new Error(
     "Pass a CDP websocket URL, or a Playwright/Puppeteer browser or page whose browser exposes wsEndpoint()",
   );
+}
+
+function callString(target: object, key: string): string | undefined {
+  const method = Reflect.get(target, key);
+  if (typeof method !== "function") return undefined;
+  const value: unknown = method.call(target);
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function callObject(target: object, key: string): object | undefined {
+  const method = Reflect.get(target, key);
+  if (typeof method !== "function") return undefined;
+  const value: unknown = method.call(target);
+  return typeof value === "object" && value !== null ? value : undefined;
 }

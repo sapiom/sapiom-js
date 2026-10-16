@@ -15,7 +15,17 @@ import {
   attachInterceptor,
   httpPaymentRelay,
   maskCardNumber,
+  type PayLogger,
 } from "../src/index.js";
+
+const log: PayLogger = {
+  info(message, fields) {
+    process.stdout.write(`${message} ${JSON.stringify(fields ?? {})}\n`);
+  },
+  warn(message, fields) {
+    process.stderr.write(`${message} ${JSON.stringify(fields ?? {})}\n`);
+  },
+};
 
 async function main(): Promise<void> {
   const apiKey = process.env.SAPIOM_API_KEY;
@@ -51,12 +61,16 @@ async function main(): Promise<void> {
       cvc: process.env.PLACEHOLDER_CVC ?? "",
       injectionRef,
     },
+    logger: log,
   });
-  console.log(`interceptor attached; placeholder ${maskCardNumber(number)}`);
+  log.info("interceptor attached", { placeholder: maskCardNumber(number) });
   handle.on((event) => {
-    if (event.type === "relayed") console.log(`relayed ${event.status}`);
-    else if (event.type === "refused") console.log(`refused ${event.reason}`);
-    else if (event.type === "failed") console.log(`failed ${event.reason}`);
+    if (event.type === "relayed") log.info("relayed", { status: event.status });
+    else if (event.type === "refused") {
+      log.warn("refused", { reason: event.reason });
+    } else if (event.type === "failed") {
+      log.warn("failed", { reason: event.reason });
+    }
   });
 
   const shutdown = async () => {
@@ -72,6 +86,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "attach failed");
+  const message = error instanceof Error ? error.message : "attach failed";
+  process.stderr.write(`${message}\n`);
   process.exit(1);
 });

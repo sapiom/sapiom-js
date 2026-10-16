@@ -312,7 +312,7 @@ describe("attachInterceptor on headless Chromium", () => {
   it("relays only the placeholder request while a second CDP client drives the page", async () => {
     const { events, calls, result, merchantOrigin } = await drive(
       stubPaymentRelay(async () => ({
-        ok: true,
+        kind: "relayed",
         status: 201,
         headers: [["content-type", "application/json"]],
         body: '{"id":"sess_test"}',
@@ -327,22 +327,21 @@ describe("attachInterceptor on headless Chromium", () => {
     expect(hits.find((hit) => hit.path === "/other")?.body).toBe(UNRELATED);
     expect(paths.filter((item) => item === "/sessions")).toEqual([]);
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      version: 1,
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({
       transactionId: "tx_integration",
       injectionRef: "inj_integration",
       merchantOrigin,
-      frameOrigin: `http://127.0.0.1:${card.port}`,
       method: "POST",
       url: `http://127.0.0.1:${card.port}/sessions`,
       body: CARD,
-      bodyEncoding: "utf8",
     });
-    expect(calls[0].idempotencyKey).toMatch(/:[0-9a-f]{16}$/);
-    expect(calls[0].merchantOrigin).not.toContain(String(card.port));
+    expect(calls[0].body).toBe(MISMATCH);
+    expect(calls[0].idempotencyKey).not.toBe(calls[1].idempotencyKey);
+    expect(calls[1].merchantOrigin).not.toContain(String(card.port));
     expect(header(calls[0].headers, "content-type")).toBe("application/json");
     expect(events.filter((event) => event.type === "paused")).toEqual([
+      expect.objectContaining({ type: "paused", targetType: "iframe" }),
       expect.objectContaining({ type: "paused", targetType: "iframe" }),
     ]);
 
@@ -352,21 +351,25 @@ describe("attachInterceptor on headless Chromium", () => {
         status: 200,
         text: JSON.stringify({ ok: true, via: "server" }),
       },
-      mismatch: { error: "TypeError" },
+      mismatch: { status: 201, text: '{"id":"sess_test"}' },
       card: { status: 201, text: '{"id":"sess_test"}' },
     });
     expect(events.map((event) => event.type)).toEqual([
-      "failed",
+      "paused",
+      "relayed",
       "paused",
       "relayed",
     ]);
-    expect(events[2]).toMatchObject({ type: "relayed", status: 201 });
+    expect(events[3]).toMatchObject({ type: "relayed", status: 201 });
     expect(JSON.stringify(events)).not.toContain(PLACEHOLDER.number);
   }, 60_000);
 
   it("fails a refused placeholder request and never delivers it", async () => {
     const { events, calls, result } = await drive(
-      stubPaymentRelay(async () => ({ ok: false, reason: "cancelled" })),
+      stubPaymentRelay(async () => ({
+        kind: "refused",
+        reason: "already_relayed",
+      })),
       { ping: PING, other: PING, mismatch: PING, card: CARD },
     );
     expect(hits.filter((hit) => hit.body.includes(PLACEHOLDER.number))).toEqual(
@@ -379,7 +382,7 @@ describe("attachInterceptor on headless Chromium", () => {
     expect(events[1]).toEqual({
       type: "refused",
       url: `http://127.0.0.1:${card.port}/sessions`,
-      reason: "cancelled",
+      reason: "already_relayed",
     });
     expect(JSON.stringify(events)).not.toContain(PLACEHOLDER.number);
   }, 60_000);
@@ -430,11 +433,11 @@ describe("attachInterceptor on headless Chromium", () => {
         relay: async (request) => {
           calls.push(request);
           return {
-            ok: true as const,
+            kind: "relayed",
             status: 201,
-            headers: [["content-type", "text/plain"] as RelayHeader],
+            headers: [["content-type", "text/plain"] satisfies RelayHeader],
             body: "ok",
-            bodyEncoding: "utf8" as const,
+            bodyEncoding: "utf8",
           };
         },
       },

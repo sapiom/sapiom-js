@@ -1,62 +1,87 @@
-import { parseRelayResponse, relayHeadersFromRecord } from "./contract";
+import {
+  paymentIdempotencyKey,
+  parseRelayResponse,
+  relayHeadersFromRecord,
+} from "./contract";
+
+describe("paymentIdempotencyKey", () => {
+  it("is sha256 of method, url, and body, stable for the same triple", () => {
+    const key = paymentIdempotencyKey("POST", "https://pay.example/s", "{}");
+    expect(key).toBe(
+      paymentIdempotencyKey("POST", "https://pay.example/s", "{}"),
+    );
+    expect(key).not.toBe(
+      paymentIdempotencyKey("POST", "https://pay.example/s", "{ }"),
+    );
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
 
 describe("parseRelayResponse", () => {
-  it("rejects a payload that is not a success or a refusal", () => {
+  it("rejects a payload that is not relayed or refused", () => {
     expect(() => parseRelayResponse(null)).toThrow(
       "Payment relay returned an unreadable response",
     );
-    expect(() => parseRelayResponse({ ok: false })).toThrow(
+    expect(() => parseRelayResponse({ kind: "refused" })).toThrow(
       "Payment relay returned an unreadable response",
     );
     expect(() =>
-      parseRelayResponse({ ok: true, status: 200, body: 1, headers: {} }),
+      parseRelayResponse({
+        kind: "relayed",
+        status: 200,
+        body: 1,
+        headers: {},
+      }),
     ).toThrow("Payment relay returned an unreadable response");
   });
 
   it("maps an unknown refusal reason and keeps a known one", () => {
     expect(
       parseRelayResponse({
-        ok: false,
+        kind: "refused",
         reason: "made_up",
         body: "4242424242424242",
       }),
-    ).toEqual({ ok: false, reason: "unknown" });
-    expect(parseRelayResponse({ ok: false, reason: "replay" })).toEqual({
-      ok: false,
-      reason: "replay",
-    });
+    ).toEqual({ kind: "refused", reason: "unknown" });
+    expect(
+      parseRelayResponse({ kind: "refused", reason: "already_relayed" }),
+    ).toEqual({ kind: "refused", reason: "already_relayed" });
+    expect(
+      parseRelayResponse({ kind: "refused", reason: "total_changed" }),
+    ).toEqual({ kind: "refused", reason: "total_changed" });
   });
 
   it("accepts header tuples, repeated Set-Cookie, and a base64 body", () => {
+    const body = Buffer.from('{"id":"s"}', "utf8").toString("base64");
     expect(
       parseRelayResponse({
-        ok: true,
+        kind: "relayed",
         status: 200,
         headers: [
           ["content-type", "application/json"],
           ["set-cookie", "a=1"],
           ["set-cookie", "b=2"],
         ],
-        body: Buffer.from('{"id":"s"}', "utf8").toString("base64"),
+        body,
         bodyEncoding: "base64",
       }),
     ).toEqual({
-      ok: true,
+      kind: "relayed",
       status: 200,
       headers: [
         ["content-type", "application/json"],
         ["set-cookie", "a=1"],
         ["set-cookie", "b=2"],
       ],
-      body: Buffer.from('{"id":"s"}', "utf8").toString("base64"),
+      body,
       bodyEncoding: "base64",
     });
   });
 
-  it("accepts a legacy header map and defaults body encoding to utf8", () => {
+  it("accepts a header map and defaults body encoding to utf8", () => {
     expect(
       parseRelayResponse({
-        ok: true,
+        kind: "relayed",
         status: 201,
         headers: {
           "content-type": "application/json",
@@ -65,7 +90,7 @@ describe("parseRelayResponse", () => {
         body: "{}",
       }),
     ).toEqual({
-      ok: true,
+      kind: "relayed",
       status: 201,
       headers: [
         ["content-type", "application/json"],

@@ -32,7 +32,7 @@ describe("T7 fixtures", () => {
       "body",
       "bodyEncoding",
       "headers",
-      "ok",
+      "kind",
       "status",
     ]);
     expect(response.headers.filter(([name]) => name === "set-cookie")).toEqual([
@@ -56,9 +56,12 @@ describe("T7 fixtures", () => {
       [...RELAY_REFUSAL_REASONS].sort(),
     );
     for (const reason of RELAY_REFUSAL_REASONS) {
-      expect(relayRefusalFixtures[reason]).toEqual({ ok: false, reason });
+      expect(relayRefusalFixtures[reason]).toEqual({
+        kind: "refused",
+        reason,
+      });
       expect(parseRelayResponse(relayRefusalFixtures[reason])).toEqual({
-        ok: false,
+        kind: "refused",
         reason,
       });
     }
@@ -111,11 +114,11 @@ describe("httpPaymentRelay", () => {
   it("returns a provider response and a typed refusal", async () => {
     const payloads = [
       shopifyCardSessionRoundTrip.response,
-      relayRefusalFixtures.cancelled,
+      relayRefusalFixtures.already_relayed,
     ];
     const server = await listen((_req, res) => {
       const payload = payloads.shift();
-      res.writeHead(payload && "ok" in payload && payload.ok ? 200 : 403, {
+      res.writeHead(payload && payload.kind === "relayed" ? 200 : 403, {
         "content-type": "application/json",
       });
       res.end(JSON.stringify(payload));
@@ -129,8 +132,8 @@ describe("httpPaymentRelay", () => {
         shopifyCardSessionRoundTrip.response,
       );
       await expect(relay.relay(REQUEST)).resolves.toEqual({
-        ok: false,
-        reason: "cancelled",
+        kind: "refused",
+        reason: "already_relayed",
       });
     } finally {
       await new Promise((resolve) => server.close(resolve));
@@ -187,10 +190,12 @@ describe("httpPaymentRelay", () => {
 
 describe("stubPaymentRelay", () => {
   it("returns the handler's response", async () => {
-    const relay = stubPaymentRelay(async () => relayRefusalFixtures.replay);
+    const relay = stubPaymentRelay(
+      async () => relayRefusalFixtures.already_relayed,
+    );
     await expect(relay.relay(REQUEST)).resolves.toEqual({
-      ok: false,
-      reason: "replay",
+      kind: "refused",
+      reason: "already_relayed",
     });
   });
 });

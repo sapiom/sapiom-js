@@ -2,4 +2,4 @@
 "@sapiom/browser-pay": minor
 ---
 
-Add `@sapiom/browser-pay`, the browser-side payment interceptor. It attaches over CDP, pauses a request whose body or URL carries the held placeholder card, and relays that request without ever continuing a placeholder to the payment provider. The relay contract is version 1: header pairs, body encoding, and an idempotency key.
+Add `@sapiom/browser-pay`. It pauses a held placeholder card over CDP and posts the T7 body to `POST /v1/transactions/{id}/payment/relay`. Matching is a Luhn gate plus the exact number anywhere in the raw body. The idempotency key is sha256 of method, URL, and body.

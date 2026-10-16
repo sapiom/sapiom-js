@@ -1,10 +1,8 @@
 {
   "request": {
-    "version": 1,
     "transactionId": "tx_fixture_shopify",
     "injectionRef": "inj_fixture_shopify",
     "merchantOrigin": "https://shop.example",
-    "frameOrigin": "https://checkout.pci.shopifyinc.com",
     "url": "https://checkout.pci.shopifyinc.com/sessions",
     "method": "POST",
     "headers": [
@@ -17,11 +15,10 @@
       ["shopify-identification-signature", "fixture-signature"]
     ],
     "body": "{\"credit_card\":{\"number\":\"4242424242424242\",\"month\":12,\"year\":2028,\"verification_value\":\"123\",\"name\":\"Fixture Buyer\"},\"payment_session_scope\":\"fixture_scope\"}",
-    "bodyEncoding": "utf8",
     "idempotencyKey": "req_fixture_shopify"
   },
   "response": {
-    "ok": true,
+    "kind": "relayed",
     "status": 200,
     "headers": [
       ["content-type", "application/json"],
