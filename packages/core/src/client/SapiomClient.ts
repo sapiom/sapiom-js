@@ -53,12 +53,8 @@ export interface SapiomClientConfig {
    */
   backgroundRefresh?: boolean;
 
-  /**
-   * Let the API key travel over plain http to a non-loopback host (a trusted
-   * private network). By default it only goes over https or to localhost, and
-   * `SAPIOM_ALLOW_INSECURE_HTTP=1` opts in too.
-   * @default false
-   */
+  /** Permit plaintext credentials only for a trusted private network.
+   * Explicit configuration overrides SAPIOM_ALLOW_INSECURE_HTTP. */
   allowInsecureHttp?: boolean;
 }
 

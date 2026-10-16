@@ -15,6 +15,9 @@ describe("credential header guard", () => {
     ["setHeader", `client.setHeader("x-api-key", k);`],
     ["Headers.set", `headers.set('x-api-key', k);`],
     ["Headers.append", "headers.append(`x-sapiom-api-key`, k);"],
+    ["a setter split over lines", `headers.set(\n  "x-api-key",\n  k,\n);`],
+    ["an assignment split over lines", `h[\n  "x-api-key"\n] = k;`],
+    ["an object key before a wrapped value", `({ "x-api-key":\n    key })`],
   ]) {
     it(`flags ${label}`, () => {
       assert.deepEqual(findCredentialHeaderSites(`ok\n${line}`), [2]);

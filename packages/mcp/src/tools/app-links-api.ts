@@ -84,8 +84,7 @@ export type AppLinksResponse =
  * The URL is concatenated, not `new URL(route, base)`: a custom `apiURL` carrying
  * a base path (a local proxy, a tunnel) would have it silently dropped by the
  * latter. A body-less method (`GET`, `DELETE`) sends no body and no content-type.
- * A channel the key may not use (plain http to a non-loopback host, unless
- * `SAPIOM_ALLOW_INSECURE_HTTP=1`) comes back as `network`, nothing sent.
+ * Refusals map to network; a refused redirect can follow an already-sent request.
  */
 export async function appLinksFetch(
   apiURL: string,

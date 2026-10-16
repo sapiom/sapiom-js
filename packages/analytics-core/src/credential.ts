@@ -4,10 +4,8 @@
  * `fetch` drops `authorization` on an origin change but keeps custom headers
  * such as `x-sapiom-api-key`.
  *
- * Every SDK client puts the key on a request through {@link credentialFetch},
- * never by setting the header itself; `pnpm credential-header:check` enforces
- * it in CI. The check reads literals only: a header name held in a variable,
- * or the key sent as `Authorization: Bearer`, is for review to catch.
+ * Clients send the key through {@link credentialFetch} so they share one policy;
+ * `pnpm credential-header:check` guards literal header writes (harness: SAP-4112).
  */
 import { createHash } from "node:crypto";
 
@@ -45,11 +43,8 @@ export function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
-/**
- * A refused channel. A TypeError like the ones `fetch` throws, so existing
- * catches still apply, but one a retry loop can tell apart from a failed
- * connection: retrying it cannot succeed.
- */
+/** Extend TypeError for existing catches while distinguishing permanent channel refusals.
+ * Retrying with the same URL and policy cannot resolve the refusal. */
 export class CredentialChannelError extends TypeError {
   constructor(message: string) {
     super(message);
@@ -57,7 +52,7 @@ export class CredentialChannelError extends TypeError {
   }
 }
 
-/** The non-throwing form of {@link assertCredentialMayTravel}. */
+/** Let analytics omit an unsafe credential without rejecting the initial batch request. */
 export function mayCarryCredential(
   url: URL,
   policy: CredentialPolicy,
@@ -69,11 +64,8 @@ export function mayCarryCredential(
   );
 }
 
-/**
- * Throws a {@link CredentialChannelError}, before anything is sent, when `url`
- * is not a channel the credential may use. It has no `cause`, unlike a failed
- * connection. Only the origin is echoed: a path or query can carry a secret.
- */
+/** Refuse unsafe credential channels before sending to them.
+ * Echo only origins because paths and queries may contain secrets. */
 export function assertCredentialMayTravel(
   url: URL,
   policy: CredentialPolicy,
@@ -215,11 +207,8 @@ async function assertIntegrity(
   );
 }
 
-/**
- * Each hop is its own fetch, so none can report what `follow` would: set it on
- * the final response and on every clone of it. An injected fetch may answer a
- * bare `{ ok, status }` with no `clone`.
- */
+/** Manual hops cannot preserve fetch's redirected flag, so mark final responses and clones.
+ * Injected minimal responses need not implement clone. */
 function markRedirected(response: Response): Response {
   if (typeof response.clone !== "function") {
     return Object.defineProperty(response, "redirected", { value: true });
@@ -311,18 +300,13 @@ export async function fetchKeepingCredential(
   }
 }
 
-/** The tenant key and the header it rides on. */
 export interface Credential {
   readonly header: "x-api-key" | "x-sapiom-api-key";
   readonly value: string;
 }
 
-/**
- * The one way an SDK client sends the tenant key: checks the channel, sets the
- * header after `init.headers` (which can neither override nor forge it), and
- * follows redirects through {@link fetchKeepingCredential}. Without a
- * credential, nothing is checked on the first URL; redirect hops still are.
- */
+/** Set the credential after caller headers so they cannot replace it.
+ * Apply shared channel checks and remove credentials when following origin changes. */
 export async function credentialFetch(
   fetchImpl: typeof globalThis.fetch,
   url: string,
@@ -330,8 +314,7 @@ export async function credentialFetch(
   credential: Credential | undefined,
   policy: CredentialPolicy,
 ): Promise<Response> {
-  // Merged as a plain object: callers pass records.
-  const callerHeaders = (init.headers ?? {}) as Record<string, string>;
+  const callerHeaders = headerRecord(init.headers);
   if (!credential) {
     return fetchKeepingCredential(fetchImpl, url, init, callerHeaders, policy);
   }
@@ -339,4 +322,12 @@ export async function credentialFetch(
   const headers = pick(callerHeaders, (name) => name !== credential.header);
   headers[credential.header] = credential.value;
   return fetchKeepingCredential(fetchImpl, url, init, headers, policy);
+}
+
+// Object.entries reads a Headers instance as empty and a tuple list by index.
+function headerRecord(headers: RequestInit["headers"]): Record<string, string> {
+  if (headers instanceof Headers || Array.isArray(headers)) {
+    return Object.fromEntries(new Headers(headers));
+  }
+  return { ...(headers as Record<string, string> | undefined) };
 }

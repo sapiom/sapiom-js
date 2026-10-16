@@ -305,6 +305,27 @@ describe("credentialFetch", () => {
     });
   });
 
+  it.each([
+    ["a Headers instance", new Headers({ "content-type": "application/json" })],
+    [
+      "a tuple list",
+      [["content-type", "application/json"]] as [string, string][],
+    ],
+  ])("reads caller headers given as %s", async (_label, headers) => {
+    const { calls, fetchImpl } = recorder(new Response("ok"));
+    await credentialFetch(
+      fetchImpl,
+      "https://api.example/x",
+      { headers },
+      KEY,
+      STRICT,
+    );
+    expect(calls[0].headers).toEqual({
+      "content-type": "application/json",
+      "x-api-key": "sk_real",
+    });
+  });
+
   it("refuses an untrusted channel before calling fetch", async () => {
     const { calls, fetchImpl } = recorder();
     await expect(

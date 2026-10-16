@@ -7,7 +7,7 @@
  *
  * It reads literals only: a header name held in a variable, or the key sent as
  * `Authorization: Bearer`, passes. An allowlist entry exempts one file by exact
- * path; an entry whose file no longer matches fails too, so the list only shrinks.
+ * path, and an entry whose file no longer matches fails, so a fixed file leaves it.
  */
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -20,30 +20,30 @@ const ALLOWLIST_PATH = path.join(
   "credential-header-allowlist.json",
 );
 
-/** The shared module itself: it is where the header is set. */
+/** Exempt the shared owner because it must attach credentials after checking the channel. */
 const OWNER = "packages/analytics-core/src/credential.ts";
 
 const HEADER = String.raw`["'\x60]x-(?:sapiom-)?api-key["'\x60]`;
 const FORBIDDEN = [
-  // { "x-api-key": key }
-  new RegExp(String.raw`${HEADER}\s*:`, "i"),
-  // headers["x-api-key"] = key
-  new RegExp(String.raw`\[\s*${HEADER}\s*\]\s*=(?!=)`, "i"),
-  // headers.set("x-api-key", key), req.setHeader(...), headers.append(...)
-  new RegExp(String.raw`\.(?:setHeader|set|append)\(\s*${HEADER}`, "i"),
+  new RegExp(String.raw`${HEADER}\s*:`, "gi"),
+  new RegExp(String.raw`\[\s*${HEADER}\s*\]\s*=(?!=)`, "gi"),
+  new RegExp(String.raw`\.(?:setHeader|set|append)\(\s*${HEADER}`, "gi"),
 ];
 
 const SCANNED = /\.(?:ts|tsx|mts|js|mjs)$/;
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const SKIPPED_DIRS = new Set(["node_modules", "dist", "__tests__"]);
 
-/** 1-based line numbers where `text` sets a credential header by hand. */
+/** Preserve source line numbers so CI diagnostics point directly to matched header sites. */
 export function findCredentialHeaderSites(text) {
-  const lines = [];
-  text.split("\n").forEach((line, i) => {
-    if (FORBIDDEN.some((re) => re.test(line))) lines.push(i + 1);
-  });
-  return lines;
+  const lines = new Set();
+  // Whole text, not line by line: a call's arguments may span lines.
+  for (const re of FORBIDDEN) {
+    for (const match of text.matchAll(re)) {
+      lines.add(text.slice(0, match.index).split("\n").length);
+    }
+  }
+  return [...lines].sort((a, b) => a - b);
 }
 
 async function collect(root, dir, out) {
@@ -59,7 +59,7 @@ async function collect(root, dir, out) {
   }
 }
 
-/** Every non-test source file under `packages/*\/src`. */
+/** Exclude the shared owner so the guard audits consumers of the credential policy. */
 export async function sourceFiles(root = REPOSITORY_ROOT) {
   const files = [];
   for (const pkg of await readdir(path.join(root, "packages"), {
@@ -76,10 +76,7 @@ export async function sourceFiles(root = REPOSITORY_ROOT) {
   return files.filter((file) => file !== OWNER).sort();
 }
 
-/**
- * `sources`: `{ path, content }[]`. `allowlist`: `{ id, path, ticket }[]`.
- * Returns the violations (`path:line`) and the stale allowlist entries.
- */
+/** Reject unapproved header sites and obsolete exceptions so exemptions remain tied to matching files. */
 export function audit(sources, allowlist) {
   const allowed = new Set(allowlist.map((entry) => entry.path));
   const matched = new Set();

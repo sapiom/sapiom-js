@@ -109,8 +109,8 @@ jobs:
       - name: Check Agent Studio visible terminology
         run: pnpm terminology:check
 
-      # Only credentialFetch (@sapiom/analytics-core/credential) may set the
-      # tenant key header; see scripts/credential-header-check.mjs.
+      # Keep literal tenant-key header writes in the shared owner, except for
+      # the exact-path exceptions in scripts/credential-header-allowlist.json.
       - name: Check tenant credential headers
         run: pnpm credential-header:check
 

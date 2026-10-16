@@ -47,10 +47,7 @@ export interface HttpClientConfig {
   allowInsecureHttp?: boolean;
 }
 
-/**
- * Core HTTP client for making API requests.
- * Uses native fetch for zero external dependencies.
- */
+/** Share credential transport policy so API and vault requests enforce the same channel constraints. */
 export class HttpClient {
   private readonly baseURL: string;
   private readonly timeout: number;
@@ -87,9 +84,6 @@ export class HttpClient {
     this.headers[key] = value;
   }
 
-  /**
-   * Replace the tenant key
-   */
   setCredential(credential: Credential): void {
     this.credential = credential;
   }

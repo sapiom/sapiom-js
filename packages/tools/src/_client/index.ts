@@ -52,7 +52,7 @@ import {
  */
 const CLIENT_MARKER = `sapiom-tools/${VERSION}`;
 
-/** How a refused channel names this package and its opt-in. */
+/** Shared-policy refusals must identify this package's public opt-in. */
 const POLICY_WORDING = {
   label: "@sapiom/tools",
   optIn: "createClient({ allowInsecureHttp: true })",

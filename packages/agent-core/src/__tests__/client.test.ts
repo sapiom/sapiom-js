@@ -238,8 +238,6 @@ describe('signal', () => {
   });
 });
 
-// ── Credential channel ────────────────────────────────────────────────────────
-
 describe('GatewayClient credential channel', () => {
   const ENV = 'SAPIOM_ALLOW_INSECURE_HTTP';
   const ORIGINAL = process.env[ENV];

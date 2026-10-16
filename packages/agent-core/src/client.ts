@@ -1,9 +1,5 @@
-/**
- * Configurable HTTP client for the Sapiom workflows backend API. All inputs are
- * passed explicitly (base URL + API key), with no global state and no
- * process.env read but the shared `SAPIOM_ALLOW_INSECURE_HTTP` opt-in, so the
- * client is usable from a CLI, an MCP tool, or a test harness.
- */
+/** Explicit credentials keep this client reusable by CLI, MCP, and test callers.
+ * The shared channel policy also reads SAPIOM_ALLOW_INSECURE_HTTP. */
 import {
   credentialFetch,
   resolveCredentialPolicy,
@@ -24,11 +20,8 @@ export interface ClientOptions {
   host?: string;
   /** API key sent as `x-api-key`. Must start with `sk_`. */
   apiKey: string;
-  /**
-   * Let the API key travel over plain http to a non-loopback host (a trusted
-   * private network). By default it only goes over https or to localhost, and
-   * `SAPIOM_ALLOW_INSECURE_HTTP=1` opts in too.
-   */
+  /** Permit plaintext credentials only for a trusted private network.
+   * Explicit configuration overrides SAPIOM_ALLOW_INSECURE_HTTP. */
   allowInsecureHttp?: boolean;
 }
 
@@ -128,7 +121,7 @@ export class GatewayClient {
 
     let res: Response;
     try {
-      // A refused channel lands in the same NETWORK error, its reason as the hint.
+      // Preserve the NETWORK boundary so callers can surface channel refusals through hint.
       res = await credentialFetch(
         fetch,
         url,
