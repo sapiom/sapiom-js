@@ -109,6 +109,11 @@ jobs:
       - name: Check Agent Studio visible terminology
         run: pnpm terminology:check
 
+      # Only credentialFetch (@sapiom/analytics-core/credential) may set the
+      # tenant key header; see scripts/credential-header-check.mjs.
+      - name: Check tenant credential headers
+        run: pnpm credential-header:check
+
       # Fixture tests for the gate itself: a typo'd declaration field must fail
       # rather than be silently stripped downstream. This glob also runs the
       # terminology guard's forbidden-copy, compatibility, and stale-allowlist

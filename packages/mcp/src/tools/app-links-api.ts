@@ -17,6 +17,10 @@
  * `AgentOperationError`, while every App Links tool throws `PreviewOperationError`
  * (the sandbox-preview family these tools belong to).
  */
+import {
+  credentialFetch,
+  resolveCredentialPolicy,
+} from "@sapiom/analytics-core/credential";
 import { PreviewOperationError } from "@sapiom/sandbox-preview";
 
 export type ToolResult = {
@@ -80,6 +84,8 @@ export type AppLinksResponse =
  * The URL is concatenated, not `new URL(route, base)`: a custom `apiURL` carrying
  * a base path (a local proxy, a tunnel) would have it silently dropped by the
  * latter. A body-less method (`GET`, `DELETE`) sends no body and no content-type.
+ * A channel the key may not use (plain http to a non-loopback host, unless
+ * `SAPIOM_ALLOW_INSECURE_HTTP=1`) comes back as `network`, nothing sent.
  */
 export async function appLinksFetch(
   apiURL: string,
@@ -91,14 +97,19 @@ export async function appLinksFetch(
   const url = `${apiURL.replace(/\/+$/, "")}${route}`;
   let res: Response;
   try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "x-api-key": apiKey,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
+    res = await credentialFetch(
+      fetch,
+      url,
+      {
+        method,
+        headers:
+          body === undefined ? {} : { "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+      { header: "x-api-key", value: apiKey },
+      // Per call: the env opt-in is read when the request is made.
+      resolveCredentialPolicy(undefined, { label: "@sapiom/mcp" }),
+    );
   } catch (cause) {
     return { kind: "network", url, cause };
   }

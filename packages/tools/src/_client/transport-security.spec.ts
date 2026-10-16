@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import { Transport, type TransportConfig } from "./index.js";
 import { capabilityCall } from "./capability-call.js";
-import { ALLOW_INSECURE_HTTP_ENV, MAX_REDIRECTS } from "./credential-policy.js";
+import {
+  ALLOW_INSECURE_HTTP_ENV,
+  MAX_REDIRECTS,
+} from "@sapiom/analytics-core/credential";
 
 interface Hop {
   url: string;

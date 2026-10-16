@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  CredentialChannelError,
+  credentialFetch,
+  resolveCredentialPolicy,
+  type Credential,
+  type CredentialPolicy,
+} from "@sapiom/analytics-core/credential";
+
 /**
  * Request configuration for the HTTP client
  */
@@ -33,6 +41,10 @@ export interface HttpClientConfig {
   headers: Record<string, string>;
   retry?: RetryConfig;
   versionPrefix?: string | null;
+  /** The tenant key. Sent by `credentialFetch`, never through `headers`. */
+  credential?: Credential;
+  /** Plain http to a non-loopback host may carry the credential. */
+  allowInsecureHttp?: boolean;
 }
 
 /**
@@ -45,9 +57,16 @@ export class HttpClient {
   private headers: Record<string, string>;
   private readonly retry: RetryConfig;
   private readonly versionPrefix: string | null;
+  private credential: Credential | undefined;
+  private readonly policy: CredentialPolicy;
 
   constructor(config: HttpClientConfig) {
     this.baseURL = config.baseURL;
+    this.credential = config.credential;
+    this.policy = resolveCredentialPolicy(config.allowInsecureHttp, {
+      label: "@sapiom/core",
+      optIn: "new SapiomClient({ allowInsecureHttp: true })",
+    });
     this.timeout = config.timeout;
     this.headers = { ...config.headers };
     const retry = config.retry ?? DEFAULT_RETRY;
@@ -69,12 +88,20 @@ export class HttpClient {
   }
 
   /**
+   * Replace the tenant key
+   */
+  setCredential(credential: Credential): void {
+    this.credential = credential;
+  }
+
+  /**
    * Get client defaults (for testing and compatibility)
    */
   getDefaults(): {
     baseURL: string;
     timeout: number;
     headers: Record<string, string>;
+    credential: Credential | undefined;
     retry: RetryConfig;
     versionPrefix: string | null;
   } {
@@ -82,6 +109,7 @@ export class HttpClient {
       baseURL: this.baseURL,
       timeout: this.timeout,
       headers: this.headers,
+      credential: this.credential,
       retry: this.retry,
       versionPrefix: this.versionPrefix,
     };
@@ -134,6 +162,9 @@ export class HttpClient {
   private isRetryable(error: unknown): boolean {
     if (!(error instanceof Error)) return false;
 
+    // A refused channel, first URL or redirect hop: it would be refused again
+    if (error instanceof CredentialChannelError) return false;
+
     // Timeouts are NOT safe to retry (server may have processed)
     if (error.message.includes("Request timeout")) return false;
 
@@ -161,12 +192,18 @@ export class HttpClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
-        method: config.method || "GET",
-        headers,
-        body: this.prepareRequestBody(config.body),
-        signal: controller.signal,
-      });
+      const response = await credentialFetch(
+        fetch,
+        url,
+        {
+          method: config.method || "GET",
+          headers,
+          body: this.prepareRequestBody(config.body),
+          signal: controller.signal,
+        },
+        this.credential,
+        this.policy,
+      );
 
       clearTimeout(timeoutId);
 

@@ -1,6 +1,7 @@
 import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
+import type { Credential } from "@sapiom/analytics-core/credential";
 import { IdentityManager } from "./IdentityManager.js";
 import { TransactionAPI } from "./TransactionAPI.js";
 import { VaultAPI } from "./VaultAPI.js";
@@ -51,6 +52,14 @@ export interface SapiomClientConfig {
    * @see IdentityManagerOptions.backgroundRefresh
    */
   backgroundRefresh?: boolean;
+
+  /**
+   * Let the API key travel over plain http to a non-loopback host (a trusted
+   * private network). By default it only goes over https or to localhost, and
+   * `SAPIOM_ALLOW_INSECURE_HTTP=1` opts in too.
+   * @default false
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /**
@@ -104,9 +113,10 @@ export class SapiomClient {
       timeout: config.timeout || 30000,
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": config.apiKey,
         ...config.headers,
       },
+      credential: { header: "x-api-key", value: config.apiKey },
+      allowInsecureHttp: config.allowInsecureHttp,
       retry: config.retry,
     });
 
@@ -115,9 +125,10 @@ export class SapiomClient {
       timeout: config.timeout || 30000,
       headers: {
         "Content-Type": "application/json",
-        "x-sapiom-api-key": config.apiKey,
         ...config.headers,
       },
+      credential: { header: "x-sapiom-api-key", value: config.apiKey },
+      allowInsecureHttp: config.allowInsecureHttp,
       retry: config.retry,
       versionPrefix: null,
     });
@@ -135,8 +146,11 @@ export class SapiomClient {
    * Update the API key
    */
   setApiKey(apiKey: string): void {
-    this.httpClient.setHeader("x-api-key", apiKey);
-    this.vaultHttpClient.setHeader("x-sapiom-api-key", apiKey);
+    this.httpClient.setCredential({ header: "x-api-key", value: apiKey });
+    this.vaultHttpClient.setCredential({
+      header: "x-sapiom-api-key",
+      value: apiKey,
+    });
   }
 
   /**
@@ -148,6 +162,7 @@ export class SapiomClient {
       baseURL: string;
       timeout: number;
       headers: Record<string, string>;
+      credential: Credential | undefined;
       retry: RetryConfig;
       versionPrefix: string | null;
     };

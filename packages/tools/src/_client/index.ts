@@ -24,7 +24,7 @@
  *
  * It is also where the credential's channel is enforced: https, or plain http
  * to loopback only, and never across a redirect to another origin. See
- * `./credential-policy.ts`.
+ * `@sapiom/analytics-core/credential`.
  */
 import {
   CAPABILITY_CALL_EVENT,
@@ -33,11 +33,10 @@ import {
   type AnalyticsHolder,
 } from "./analytics.js";
 import {
-  assertCredentialMayTravel,
-  fetchKeepingCredential,
+  credentialFetch,
   resolveCredentialPolicy,
   type CredentialPolicy,
-} from "./credential-policy.js";
+} from "@sapiom/analytics-core/credential";
 import { VERSION } from "../_generated/version.js";
 import {
   TransportHttpError,
@@ -52,6 +51,12 @@ import {
  * for logs. Survives the edge→gateway hop (not in the edge strip-list).
  */
 const CLIENT_MARKER = `sapiom-tools/${VERSION}`;
+
+/** How a refused channel names this package and its opt-in. */
+const POLICY_WORDING = {
+  label: "@sapiom/tools",
+  optIn: "createClient({ allowInsecureHttp: true })",
+};
 
 /**
  * Per-request attribution recorded with the gateway transaction. Every field is
@@ -236,7 +241,10 @@ export class Transport {
       config.resumeToken ??
       process.env.SAPIOM_CAPABILITY_RESUME_TOKEN ??
       undefined;
-    this.policy = resolveCredentialPolicy(config.allowInsecureHttp);
+    this.policy = resolveCredentialPolicy(
+      config.allowInsecureHttp,
+      POLICY_WORDING,
+    );
   }
 
   /**
@@ -298,7 +306,6 @@ export class Transport {
       );
     }
     const headers: Record<string, string> = {
-      [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,
       ...attributionToHeaders(this.attribution),
       // Merged as a plain object, as before: callers pass records.
@@ -309,12 +316,14 @@ export class Transport {
     try {
       // A malformed URL or a refused channel throws before anything is sent, and
       // is still counted as a failed call.
-      assertCredentialMayTravel(new URL(url), this.policy);
-      response = await fetchKeepingCredential(
+      response = await credentialFetch(
         this.fetchImpl,
         url,
-        init,
-        headers,
+        { ...init, headers },
+        {
+          header: options.authHeader ?? DEFAULT_AUTH_HEADER,
+          value: this.apiKey,
+        },
         this.policy,
       );
     } catch (error) {

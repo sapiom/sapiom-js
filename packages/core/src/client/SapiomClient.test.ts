@@ -52,7 +52,10 @@ describe("SapiomClient", () => {
 
       client.setApiKey("new-api-key");
       const httpClient = client.getHttpClient();
-      expect(httpClient.defaults.headers["x-api-key"]).toBe("new-api-key");
+      expect(httpClient.defaults.credential).toEqual({
+        header: "x-api-key",
+        value: "new-api-key",
+      });
     });
   });
 

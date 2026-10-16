@@ -485,7 +485,7 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     const events = await flushedEvents(transport);
     expect(events).toHaveLength(1);
     expect(events[0]!.data.ok).toBe(false);
-    expect(events[0]!.data.error).toBe("TypeError");
+    expect(events[0]!.data.error).toBe("CredentialChannelError");
   });
 
   it("never records query strings — a direct transport.fetch with a secret query stores a query-free url", async () => {

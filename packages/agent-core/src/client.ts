@@ -1,8 +1,15 @@
 /**
  * Configurable HTTP client for the Sapiom workflows backend API. All inputs are
- * passed explicitly (base URL + API key) — no process.env reads, no global
- * state — so the client is usable from a CLI, an MCP tool, or a test harness.
+ * passed explicitly (base URL + API key), with no global state and no
+ * process.env read but the shared `SAPIOM_ALLOW_INSECURE_HTTP` opt-in, so the
+ * client is usable from a CLI, an MCP tool, or a test harness.
  */
+import {
+  credentialFetch,
+  resolveCredentialPolicy,
+  type Credential,
+  type CredentialPolicy,
+} from '@sapiom/analytics-core/credential';
 import { AgentOperationError } from './errors.js';
 
 /**
@@ -17,6 +24,12 @@ export interface ClientOptions {
   host?: string;
   /** API key sent as `x-api-key`. Must start with `sk_`. */
   apiKey: string;
+  /**
+   * Let the API key travel over plain http to a non-loopback host (a trusted
+   * private network). By default it only goes over https or to localhost, and
+   * `SAPIOM_ALLOW_INSECURE_HTTP=1` opts in too.
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /** Result shape from a failed gateway request. */
@@ -42,12 +55,17 @@ export class GatewayClient {
   private readonly host: string;
   /** `${host}/v1/workflows` — what get/post/request/openStream paths are relative to. */
   private readonly base: string;
-  private readonly apiKey: string;
+  private readonly credential: Credential;
+  private readonly policy: CredentialPolicy;
 
   constructor(opts: ClientOptions) {
     this.host = stripTrailingSlashes(opts.host ?? DEFAULT_WORKFLOWS_HOST);
     this.base = `${this.host}/v1/workflows`;
-    this.apiKey = opts.apiKey;
+    this.credential = { header: 'x-api-key', value: opts.apiKey };
+    this.policy = resolveCredentialPolicy(opts.allowInsecureHttp, {
+      label: '@sapiom/agent-core',
+      optIn: 'createClient({ allowInsecureHttp: true })',
+    });
   }
 
   /** `path` is relative to `/v1/workflows`. */
@@ -110,12 +128,19 @@ export class GatewayClient {
 
     let res: Response;
     try {
-      res = await fetch(url, {
-        method,
-        headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json' },
-        body: payload,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      // A refused channel lands in the same NETWORK error, its reason as the hint.
+      res = await credentialFetch(
+        fetch,
+        url,
+        {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: payload,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+        this.credential,
+        this.policy,
+      );
     } catch (err) {
       throw networkError(url, err);
     }
@@ -160,10 +185,7 @@ export class GatewayClient {
     path: string,
     opts: { signal?: AbortSignal; lastEventId?: string } = {},
   ): Promise<Response> {
-    const headers: Record<string, string> = {
-      'x-api-key': this.apiKey,
-      accept: 'text/event-stream',
-    };
+    const headers: Record<string, string> = { accept: 'text/event-stream' };
     if (opts.lastEventId) {
       headers['last-event-id'] = opts.lastEventId;
     }
@@ -171,7 +193,13 @@ export class GatewayClient {
     const url = `${this.base}${path}`;
     let res: Response;
     try {
-      res = await fetch(url, { method: 'GET', headers, signal: opts.signal });
+      res = await credentialFetch(
+        fetch,
+        url,
+        { method: 'GET', headers, signal: opts.signal },
+        this.credential,
+        this.policy,
+      );
     } catch (err) {
       throw networkError(url, err);
     }
