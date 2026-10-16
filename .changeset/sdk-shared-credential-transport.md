@@ -24,5 +24,5 @@ subpath, is the only code that sets the key header.
   `x-api-key`, `x-sapiom-api-key` and every `x-sapiom-*` header.
 - `@sapiom/core`: `getHttpClient().defaults.headers` no longer carries the key;
   read `defaults.credential` instead.
-- `@sapiom/tools`: no behavior change; a refused call is now reported as a
-  `CredentialChannelError` (still a `TypeError`).
+- `@sapiom/tools`: no behavior change. A refused call now throws a
+  `CredentialChannelError`, a `TypeError` subclass that keeps `name: "TypeError"`.

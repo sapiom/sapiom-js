@@ -36,14 +36,9 @@ export function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
-/** Extend TypeError for existing catches while distinguishing permanent channel refusals.
+/** Extend TypeError, name included, so existing catches and recorded errors are unchanged.
  * Retrying with the same URL and policy cannot resolve the refusal. */
-export class CredentialChannelError extends TypeError {
-  constructor(message: string) {
-    super(message);
-    this.name = "CredentialChannelError";
-  }
-}
+export class CredentialChannelError extends TypeError {}
 
 /** Let analytics omit an unsafe credential without rejecting the initial batch request. */
 export function mayCarryCredential(

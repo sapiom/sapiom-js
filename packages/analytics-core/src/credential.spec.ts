@@ -112,7 +112,7 @@ describe("assertCredentialMayTravel", () => {
     }
     expect(thrown).toBeInstanceOf(CredentialChannelError);
     expect(thrown).toBeInstanceOf(TypeError);
-    expect((thrown as Error).name).toBe("CredentialChannelError");
+    expect((thrown as Error).name).toBe("TypeError");
     expect((thrown as { cause?: unknown }).cause).toBeUndefined();
     expect((thrown as Error).message).not.toMatch(/secret|token=abc/);
   });
