@@ -2,14 +2,16 @@
  * Opt-in Shopify dev-store checkout. Not part of CI.
  *
  *   RELAY=bogus npx tsx examples/shopify-e2e.ts
- *   RELAY=bt BT_PRIVATE_KEY=… BT_TOKEN_ID=… npx tsx examples/shopify-e2e.ts
+ *   BROWSER=sapiom RELAY=bt SAPIOM_API_KEY=… BT_PRIVATE_KEY=… \
+ *     npx tsx examples/shopify-e2e.ts
  *   RELAY=http SAPIOM_BASE_URL=… SAPIOM_API_KEY=… TRANSACTION_ID=… \
  *     INJECTION_REF=… PLACEHOLDER_NUMBER=… PLACEHOLDER_EXP_MONTH=… \
  *     PLACEHOLDER_EXP_YEAR=… PLACEHOLDER_CVC=… npx tsx examples/shopify-e2e.ts
  *   MODE=refuse RELAY=bogus npx tsx examples/shopify-e2e.ts
- *   BROWSER=sapiom SAPIOM_API_KEY=… RELAY=bogus npx tsx examples/shopify-e2e.ts
  *
- * One checkout per process. Pay is clicked once. A captcha is reported and not bypassed.
+ * One checkout per process. Pay is clicked once. RELAY=bt creates a Basis Theory
+ * card token at setup and deletes it afterwards. BROWSER=sapiom asks the Sapiom
+ * browser session to solve captchas. This script does not bypass them itself.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -19,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createClient, type Sapiom } from "@sapiom/tools";
-import { chromium, type Frame, type Page } from "playwright";
+import { chromium, type Browser, type Frame, type Page } from "playwright";
 import {
   attachInterceptor,
   httpPaymentRelay,
@@ -28,10 +30,16 @@ import {
   stubPaymentRelay,
   type HeldPlaceholder,
   type InterceptorEvent,
+  type InterceptorHandle,
   type PaymentRelay,
 } from "../src/index.js";
 import { bogusShopifyRelay } from "./relays/bogus.js";
-import { btProxyRelayFromEnv } from "./relays/bt-proxy.js";
+import {
+  btAccessFromKey,
+  btProxyRelay,
+  createShopifyPaymentsTestToken,
+} from "./relays/bt-proxy.js";
+import { SHOPIFY_PAYMENTS_TEST_CARD } from "./relays/shopify-payments-test-card.js";
 
 const CART_URL = "https://1a2uh3-r7.myshopify.com/cart/67652208394372:1";
 const SHOP_ORIGIN = "https://1a2uh3-r7.myshopify.com";
@@ -56,7 +64,7 @@ async function main(): Promise<void> {
   const mode = process.env.MODE === "refuse" ? "refuse" : "pay";
   const placeholder = loadPlaceholder(relayName);
   console.log(
-    `checkout ${mode} via RELAY=${relayName} BROWSER=${process.env.BROWSER ?? "local"} placeholder ${maskCardNumber(placeholder.number)}`,
+    `checkout ${mode} via RELAY=${relayName} BROWSER=${process.env.BROWSER ?? "local"} placeholder ${maskCardNumber(placeholder.number)} test card ${maskCardNumber(SHOPIFY_PAYMENTS_TEST_CARD.number)}`,
   );
 
   const events: InterceptorEvent[] = [];
@@ -64,35 +72,69 @@ async function main(): Promise<void> {
   let sessionsUrl = false;
   let merchantOrigin = "";
   let relayNote = "";
-  const selected =
-    mode === "refuse" ? refusingRelay() : selectRelay(relayName, placeholder);
-  const relay: PaymentRelay = {
-    async relay(request) {
-      relayCalls += 1;
-      sessionsUrl = request.url.includes(
-        "checkout.pci.shopifyinc.com/sessions",
-      );
-      merchantOrigin = request.merchantOrigin;
-      const result = await selected.relay(request);
-      relayNote = result.ok
-        ? `status ${result.status} body ${redact(result.body).slice(0, 180)}`
-        : `refused ${result.reason}`;
-      return result;
-    },
-  };
-
-  const browserSession = await openBrowser();
-  const handle = await attachInterceptor(browserSession.cdpUrl, {
-    relay,
-    placeholder,
-    transactionId:
-      relayName === "http" ? required("TRANSACTION_ID") : "tx_local_demo",
-    timeoutMs: 30_000,
-  });
-  handle.on((event) => events.push(event));
-  const driver = await chromium.connectOverCDP(browserSession.cdpUrl);
+  let releaseToken: (() => Promise<void>) | undefined;
+  let releaseAccess: (() => Promise<void>) | undefined;
+  let browserSession:
+    | { cdpUrl: string; close: () => Promise<void> }
+    | undefined;
+  let handle: InterceptorHandle | undefined;
+  let driver: Browser | undefined;
   let page: Page | undefined;
   try {
+    let btTokenId: string | undefined;
+    let btApiKey: string | undefined;
+    if (relayName === "bt" && mode === "pay") {
+      const access = await btAccessFromKey({
+        apiKey: required("BT_PRIVATE_KEY"),
+      });
+      releaseAccess = access.release;
+      btApiKey = access.apiKey;
+      console.log(
+        access.createdApplication
+          ? "Basis Theory management key; created a private application for this run"
+          : "using the Basis Theory private key from the environment",
+      );
+      const created = await createShopifyPaymentsTestToken({
+        apiKey: access.apiKey,
+      });
+      releaseToken = created.release;
+      btTokenId = created.tokenId;
+      console.log(
+        "Basis Theory card token created for the Shopify Payments test card",
+      );
+    }
+    const selected =
+      mode === "refuse"
+        ? refusingRelay()
+        : selectRelay(relayName, placeholder, btApiKey, btTokenId);
+    const relay: PaymentRelay = {
+      async relay(request) {
+        relayCalls += 1;
+        sessionsUrl = request.url.includes(
+          "checkout.pci.shopifyinc.com/sessions",
+        );
+        merchantOrigin = request.merchantOrigin;
+        const result = await selected.relay(request);
+        const note = result.ok
+          ? `status ${result.status} body ${redact(result.body).slice(0, 180)}`
+          : `refused ${result.reason}`;
+        relayNote = btTokenId
+          ? note.split(btTokenId).join("tok_redacted")
+          : note;
+        return result;
+      },
+    };
+
+    browserSession = await openBrowser();
+    handle = await attachInterceptor(browserSession.cdpUrl, {
+      relay,
+      placeholder,
+      transactionId:
+        relayName === "http" ? required("TRANSACTION_ID") : "tx_local_demo",
+      timeoutMs: 30_000,
+    });
+    handle.on((event) => events.push(event));
+    driver = await chromium.connectOverCDP(browserSession.cdpUrl);
     const context = driver.contexts()[0] ?? (await driver.newContext());
     page = context.pages()[0] ?? (await context.newPage());
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -118,24 +160,60 @@ async function main(): Promise<void> {
       `relay calls ${relayCalls}; events ${events.map(summarize).join(", ") || "none"}; ${relayNote}`,
     );
   } catch (error) {
-    if (page) console.error(await diagnostics(page));
+    if (page) console.error(scrub(await diagnostics(page)));
     console.log(
       `relay calls ${relayCalls}; events ${events.map(summarize).join(", ") || "none"}; ${relayNote}`,
     );
     console.error(
-      error instanceof Error ? (error.stack ?? error.message) : error,
+      scrub(
+        error instanceof Error ? (error.stack ?? error.message) : String(error),
+      ),
     );
     throw error;
   } finally {
-    await page?.close().catch(() => {});
-    await handle.detach();
-    await browserSession.close();
+    await releaseToken?.().catch(() => {});
+    await releaseAccess?.().catch(() => {});
+    await settle(page?.close());
+    await settle(handle?.detach());
+    await settle(driver?.close());
+    await settle(browserSession?.close());
   }
 }
 
-function selectRelay(name: string, placeholder: HeldPlaceholder): PaymentRelay {
+function settle(op: Promise<unknown> | undefined): Promise<void> {
+  if (!op) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 15_000);
+    op.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
+function selectRelay(
+  name: string,
+  placeholder: HeldPlaceholder,
+  btApiKey?: string,
+  btTokenId?: string,
+): PaymentRelay {
   if (name === "bogus") return bogusShopifyRelay({ placeholder });
-  if (name === "bt") return btProxyRelayFromEnv(placeholder);
+  if (name === "bt") {
+    if (!btApiKey || !btTokenId) {
+      throw new CheckoutStopped("Basis Theory card token was not created", 1);
+    }
+    return btProxyRelay({
+      placeholder,
+      apiKey: btApiKey,
+      tokenId: btTokenId,
+    });
+  }
   return httpPaymentRelay({
     baseUrl: process.env.SAPIOM_BASE_URL ?? "https://api.sapiom.ai",
     apiKey: required("SAPIOM_API_KEY"),
@@ -156,8 +234,8 @@ function loadPlaceholder(relayName: string): HeldPlaceholder {
       injectionRef: required("INJECTION_REF"),
     };
   }
-  // A Luhn-valid stand-in. The bogus relay replaces it with card 1 before
-  // the request is forwarded. It is not sent as itself.
+  // A Luhn-valid stand-in. The relay replaces it before the request is
+  // forwarded. It is not sent as itself.
   return {
     number: "4123456789012349",
     expMonth: 11,
@@ -399,19 +477,71 @@ async function typeFrame(frame: Frame, text: string): Promise<void> {
 }
 
 async function clickPay(page: Page): Promise<void> {
+  await acceptAddressSuggestion(page);
+  await dismissCheckoutModal(page);
   const named = page.locator("#checkout-pay-button").first();
-  if (await named.isVisible().catch(() => false)) {
-    await named.click();
+  const target = (await named.isVisible().catch(() => false))
+    ? named
+    : page.getByRole("button", { name: /pay now/i }).first();
+  await target.click({ timeout: 15_000 });
+}
+
+async function acceptAddressSuggestion(page: Page): Promise<void> {
+  const prompt = page.getByText(/did you mean/i).first();
+  if (!(await prompt.isVisible().catch(() => false))) return;
+  const buttons = page.locator("button");
+  const count = await buttons.count();
+  for (let index = 0; index < count; index += 1) {
+    const label = (
+      await buttons
+        .nth(index)
+        .innerText()
+        .catch(() => "")
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!/^\d+\s+\S+/.test(label) || label.length > 80) continue;
+    if (/pay now|order summary/i.test(label)) continue;
+    console.log("accept address suggestion");
+    await buttons.nth(index).click();
+    await page.waitForTimeout(800);
     return;
   }
-  await page
-    .getByRole("button", { name: /pay now/i })
-    .first()
-    .click();
+}
+
+async function dismissCheckoutModal(page: Page): Promise<void> {
+  const keep = page
+    .getByRole("button", {
+      name: /use entered address|keep address|continue with entered/i,
+    })
+    .first();
+  if (await keep.isVisible().catch(() => false)) {
+    console.log("dismiss address suggestion");
+    await keep.click();
+    await page.waitForTimeout(400);
+  }
+  if (await detectChallenge(page)) return;
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.evaluate(() => {
+    const doc = globalThis as unknown as {
+      document: {
+        querySelectorAll: (selector: string) => Iterable<{
+          innerText?: string;
+          style: { setProperty: (name: string, value: string) => void };
+        }>;
+      };
+    };
+    for (const el of doc.document.querySelectorAll('[data-type="modal"]')) {
+      if (/captcha|verify you are human/i.test(el.innerText ?? "")) continue;
+      el.style.setProperty("pointer-events", "none");
+    }
+  });
 }
 
 async function waitForConfirmation(page: Page): Promise<void> {
-  const deadline = Date.now() + 60_000;
+  const deadline =
+    Date.now() +
+    ((process.env.BROWSER ?? "local") === "sapiom" ? 180_000 : 60_000);
   while (Date.now() < deadline) {
     await assertNoChallenge(page, "waiting for confirmation");
     if (/thank[-_]you/i.test(page.url())) return;
@@ -441,34 +571,56 @@ async function paymentAlert(page: Page): Promise<string | null> {
 }
 
 async function assertNoChallenge(page: Page, where: string): Promise<void> {
-  const challenge = await detectChallenge(page);
-  if (challenge) {
-    throw new CheckoutStopped(
-      `Shopify showed a captcha or bot challenge (${challenge}) ${where}. Not bypassing it.`,
-      3,
+  if (!(await detectChallenge(page))) return;
+  if ((process.env.BROWSER ?? "local") === "sapiom") {
+    console.log(
+      `captcha visible ${where}; waiting for the browser session's solver`,
     );
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      if (/thank[-_]you/i.test(page.url())) return;
+      if (!(await detectChallenge(page))) {
+        console.log(`captcha cleared ${where}`);
+        return;
+      }
+      await page.waitForTimeout(1000);
+    }
+    if (/thank[-_]you/i.test(page.url())) return;
   }
+  const challenge = (await detectChallenge(page)) ?? "visible";
+  throw new CheckoutStopped(
+    `Shopify showed a captcha or bot challenge (${challenge}) ${where}. Not bypassing it.`,
+    3,
+  );
 }
 
 async function detectChallenge(page: Page): Promise<string | null> {
   const url = page.url();
-  if (/hcaptcha|recaptcha|\/checkpoint|\/challenge/i.test(url)) return "url";
-  for (const frame of page.frames()) {
-    if (
-      /hcaptcha\.com|google\.com\/recaptcha|challenges\.cloudflare/i.test(
-        frame.url(),
-      )
-    ) {
-      return "frame";
-    }
-  }
+  if (/hcaptcha\.com|recaptcha|\/checkpoint/i.test(url)) return "url";
   const text = await page
     .locator("body")
     .innerText({ timeout: 2_000 })
     .catch(() => "");
-  if (/verify you are human|are you a human|checking your browser/i.test(text))
+  if (
+    /verify you are human|are you a human|checking your browser|solve the captcha/i.test(
+      text,
+    )
+  ) {
     return "text";
+  }
   if (/enter store password|opening soon/i.test(text)) return "store-password";
+  for (const frame of page.frames()) {
+    if (
+      !/hcaptcha\.com|google\.com\/recaptcha|challenges\.cloudflare/i.test(
+        frame.url(),
+      )
+    ) {
+      continue;
+    }
+    const element = await frame.frameElement().catch(() => null);
+    const box = element ? await element.boundingBox().catch(() => null) : null;
+    if (box && box.width >= 120 && box.height >= 40) return "frame";
+  }
   return null;
 }
 
@@ -587,11 +739,34 @@ async function openBrowser(): Promise<{
       recording: false,
       captchaSolver: true,
     });
+    const fields = session as {
+      sessionId?: string;
+      session_id?: string;
+      cdpUrl?: string;
+      cdp_url?: string;
+    };
+    const sessionId = fields.sessionId || fields.session_id;
+    const cdpUrl = fields.cdpUrl || fields.cdp_url;
+    if (!sessionId || !cdpUrl || !/^wss?:\/\//.test(cdpUrl)) {
+      if (sessionId) {
+        await sapiom.browserAutomation.sessions
+          .closeManaged(sessionId)
+          .catch(() => {});
+      }
+      await sapiom.shutdown().catch(() => {});
+      throw new CheckoutStopped(
+        `Sapiom browser session did not include a CDP websocket (fields: ${Object.keys(session).sort().join(",")})`,
+        1,
+      );
+    }
+    console.log(
+      "Sapiom browser session created (captchaSolver requested; CDP websocket present)",
+    );
     return {
-      cdpUrl: session.cdpUrl,
+      cdpUrl,
       close: async () => {
         await sapiom.browserAutomation.sessions
-          .closeManaged(session.sessionId)
+          .closeManaged(sessionId)
           .catch(() => {});
         await sapiom.shutdown().catch(() => {});
       },
@@ -673,11 +848,17 @@ function required(name: string): string {
   return value;
 }
 
+function scrub(value: string): string {
+  return redact(value).replace(/wss?:\/\/\S+/gi, "wss://redacted");
+}
+
 main().catch((error: unknown) => {
   if (error instanceof CheckoutStopped) {
     console.error(error.message);
     process.exit(error.code);
   }
-  console.error(error instanceof Error ? error.message : "checkout failed");
+  console.error(
+    scrub(error instanceof Error ? error.message : "checkout failed"),
+  );
   process.exit(2);
 });

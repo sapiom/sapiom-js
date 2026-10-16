@@ -1,4 +1,5 @@
 import type { HeldPlaceholder, PaymentRelay } from "../../src/index.js";
+import { SHOPIFY_PAYMENTS_TEST_CARD } from "./shopify-payments-test-card.js";
 import {
   forwardRequestHeaders,
   providerResponseHeaders,
@@ -6,16 +7,11 @@ import {
 } from "./replace-card.js";
 
 /**
- * Demo relay for the Shopify Bogus Gateway. Not part of the published SDK.
- * Substitutes the gateway's success test card and forwards the paused request.
- * Test data only: number "1", expiry 12/2030, cvc 111.
+ * Demo relay that forwards the paused request with Shopify Payments' published
+ * test card in place of the placeholder. Not part of the published SDK.
+ * The dev store rejects the old Bogus Gateway success value ("1").
  */
-export const BOGUS_CARD = {
-  number: "1",
-  expMonth: 12,
-  expYear: 2030,
-  cvc: "111",
-} as const;
+export const BOGUS_CARD = SHOPIFY_PAYMENTS_TEST_CARD;
 
 export function bogusShopifyRelay(options: {
   placeholder: HeldPlaceholder;

@@ -1,8 +1,9 @@
 import type { HeldPlaceholder, RelayRequest } from "../../src/index.js";
 import { bogusShopifyRelay } from "./bogus.js";
+import { SHOPIFY_PAYMENTS_TEST_CARD } from "./shopify-payments-test-card.js";
 
 const PLACEHOLDER: HeldPlaceholder = {
-  number: "4242424242424242",
+  number: "4123456789012349",
   expMonth: 11,
   expYear: 2029,
   cvc: "321",
@@ -11,7 +12,7 @@ const PLACEHOLDER: HeldPlaceholder = {
 
 const BODY = JSON.stringify({
   credit_card: {
-    number: "4242-4242-4242-4242",
+    number: "4123-4567-8901-2349",
     name: "Test Buyer",
     month: 11,
     year: 2029,
@@ -38,7 +39,7 @@ function request(body = BODY): RelayRequest {
 }
 
 describe("bogusShopifyRelay", () => {
-  it("substitutes the Bogus Gateway success card and forwards once", async () => {
+  it("substitutes the Shopify Payments test card and forwards once", async () => {
     const seen: { url?: string; init?: RequestInit } = {};
     const fetchImpl = (async (
       url: string | URL | Request,
@@ -66,11 +67,11 @@ describe("bogusShopifyRelay", () => {
     const forwarded = JSON.parse(String(seen.init?.body));
     expect(forwarded).toEqual({
       credit_card: {
-        number: "1",
+        number: SHOPIFY_PAYMENTS_TEST_CARD.number,
         name: "Test Buyer",
-        month: 12,
-        year: 2030,
-        verification_value: "111",
+        month: SHOPIFY_PAYMENTS_TEST_CARD.expMonth,
+        year: SHOPIFY_PAYMENTS_TEST_CARD.expYear,
+        verification_value: SHOPIFY_PAYMENTS_TEST_CARD.cvc,
       },
       payment_session_scope: "scope",
     });

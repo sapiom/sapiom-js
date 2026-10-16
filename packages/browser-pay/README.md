@@ -45,7 +45,11 @@ handle.on((event) => {
 A platform that already has a CDP URL skips session create:
 
 ```typescript
-await attachInterceptor(process.env.CDP_URL!, { relay, transactionId, placeholder });
+await attachInterceptor(process.env.CDP_URL!, {
+  relay,
+  transactionId,
+  placeholder,
+});
 ```
 
 `examples/attach.ts` is that script. The HTTP relay calls `POST /v1/transactions/:id/payment/relay` with the `x-api-key` header. That route may not be deployed yet. Swap a demo relay in without changing the interceptor: both implement `PaymentRelay`.
@@ -60,19 +64,19 @@ Placeholder detection matches the backend's placeholder-detection rules (separat
 
 ## Shopify dev-store script
 
-`examples/shopify-e2e.ts` is opt-in and is not part of `pnpm test`. It launches headless Chromium with a CDP port (or `BROWSER=sapiom` to create a Sapiom browser session), attaches the interceptor, and drives the dev store through a second Playwright connection. The store is `https://1a2uh3-r7.myshopify.com`, variant `67652208394372`, Bogus Gateway test mode.
+`examples/shopify-e2e.ts` is opt-in and is not part of `pnpm test`. It launches headless Chromium with a CDP port, or `BROWSER=sapiom` to create a Sapiom browser session (`captchaSolver: true`) and attach to the returned CDP URL. A second Playwright connection drives the dev store. The store is `https://1a2uh3-r7.myshopify.com`, variant `67652208394372`, Shopify Payments test mode.
 
 Demo relays live under `examples/relays/` and are not published:
 
-- `RELAY=bogus` substitutes the Bogus Gateway success card (`1`, `12/2030`, `111`) and forwards.
-- `RELAY=bt` sends the paused request through Basis Theory's ephemeral proxy. Set `BT_PRIVATE_KEY` and `BT_TOKEN_ID`.
+- `RELAY=bogus` substitutes Shopify Payments' published test card (Visa ending 4242, expiry 12/2030, any CVC) and forwards.
+- `RELAY=bt` vaults that test card in Basis Theory and sends the paused request through the ephemeral proxy with token expressions. `BT_PRIVATE_KEY` may be a private application key or a test-tenant management key. A management key cannot create tokens, so the script creates a private application for the run and deletes it afterwards. The card token is deleted too. `BT_TOKEN_ID` is not required.
 - `RELAY=http` uses `httpPaymentRelay` (`SAPIOM_BASE_URL` + `SAPIOM_API_KEY`).
 
 ```bash
 cd packages/browser-pay
 RELAY=bogus npx tsx examples/shopify-e2e.ts
-RELAY=bt BT_PRIVATE_KEY=… BT_TOKEN_ID=… npx tsx examples/shopify-e2e.ts
+BROWSER=sapiom RELAY=bt SAPIOM_API_KEY=… BT_PRIVATE_KEY=… npx tsx examples/shopify-e2e.ts
 MODE=refuse RELAY=bogus npx tsx examples/shopify-e2e.ts
 ```
 
-`MODE=refuse` fails the card request closed so the placeholder is not forwarded and no order is confirmed. The script clicks pay once. If Shopify shows a captcha, it stops and says so.
+`MODE=refuse` fails the card request closed so the placeholder is not forwarded and no order is confirmed. The script clicks pay once. With `BROWSER=sapiom` it waits for the session's captcha solver. It does not bypass a captcha itself, and it stops if one is still showing.

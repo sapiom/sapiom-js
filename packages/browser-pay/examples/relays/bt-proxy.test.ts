@@ -1,5 +1,10 @@
 import type { HeldPlaceholder, RelayRequest } from "../../src/index.js";
-import { btProxyRelay } from "./bt-proxy.js";
+import {
+  btAccessFromKey,
+  btProxyRelay,
+  createShopifyPaymentsTestToken,
+} from "./bt-proxy.js";
+import { SHOPIFY_PAYMENTS_TEST_CARD } from "./shopify-payments-test-card.js";
 
 const PLACEHOLDER: HeldPlaceholder = {
   number: "4242424242424242",
@@ -104,6 +109,152 @@ describe("btProxyRelay", () => {
     });
     await expect(relay.relay(REQUEST)).rejects.toThrow(
       "Payment relay failed (HTTP 401)",
+    );
+  });
+});
+
+describe("createShopifyPaymentsTestToken", () => {
+  it("vaults the Shopify Payments test card and deletes the token afterwards", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetchImpl = (async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      calls.push({ url: String(url), init });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(
+        JSON.stringify({
+          id: "tok_created_1",
+          data: { number: SHOPIFY_PAYMENTS_TEST_CARD.number },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const created = await createShopifyPaymentsTestToken({
+      apiKey: API_KEY,
+      fetchImpl,
+    });
+    expect(created.tokenId).toBe("tok_created_1");
+    const create = calls[0];
+    expect(create?.url).toBe("https://api.basistheory.com/tokens");
+    expect(create?.init?.method).toBe("POST");
+    const headers = create?.init?.headers as Record<string, string>;
+    expect(headers["BT-API-KEY"]).toBe(API_KEY);
+    expect(JSON.parse(String(create?.init?.body))).toEqual({
+      type: "card",
+      data: {
+        number: SHOPIFY_PAYMENTS_TEST_CARD.number,
+        expiration_month: SHOPIFY_PAYMENTS_TEST_CARD.expMonth,
+        expiration_year: SHOPIFY_PAYMENTS_TEST_CARD.expYear,
+        cvc: SHOPIFY_PAYMENTS_TEST_CARD.cvc,
+      },
+    });
+    await created.release();
+    expect(calls[1]?.url).toBe(
+      "https://api.basistheory.com/tokens/tok_created_1",
+    );
+    expect(calls[1]?.init?.method).toBe("DELETE");
+  });
+
+  it("does not echo the card number when token create fails", async () => {
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          title: "bad",
+          echo: SHOPIFY_PAYMENTS_TEST_CARD.number,
+        }),
+        { status: 400 },
+      )) as typeof fetch;
+    await expect(
+      createShopifyPaymentsTestToken({ apiKey: API_KEY, fetchImpl }),
+    ).rejects.toThrow("Basis Theory token create failed (HTTP 400: bad)");
+    try {
+      await createShopifyPaymentsTestToken({ apiKey: API_KEY, fetchImpl });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain(SHOPIFY_PAYMENTS_TEST_CARD.number);
+      expect(message).not.toContain(API_KEY);
+    }
+  });
+});
+
+describe("btAccessFromKey", () => {
+  it("uses a private key without creating an application", async () => {
+    const fetchImpl = jest.fn(async () =>
+      Response.json({ type: "private" }),
+    ) as unknown as typeof fetch;
+    const access = await btAccessFromKey({ apiKey: API_KEY, fetchImpl });
+    expect(access.createdApplication).toBe(false);
+    expect(access.apiKey).toBe(API_KEY);
+    await access.release();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a private application from a management key and deletes it", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const createdKey = "key_test_private_created";
+    const fetchImpl = (async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      calls.push({ url: String(url), init });
+      if (!init || init.method === "GET" || init.method === undefined) {
+        return Response.json({ type: "management" });
+      }
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      return Response.json({
+        id: "app_demo_1",
+        keys: [{ key: createdKey }],
+      });
+    }) as typeof fetch;
+    const access = await btAccessFromKey({
+      apiKey: "key_test_management",
+      fetchImpl,
+    });
+    expect(access.createdApplication).toBe(true);
+    expect(access.apiKey).toBe(createdKey);
+    const create = calls[1];
+    expect(create?.url).toBe("https://api.basistheory.com/applications");
+    expect(JSON.parse(String(create?.init?.body))).toEqual({
+      name: "browser-pay demo",
+      type: "private",
+      permissions: [
+        "token:create",
+        "token:delete",
+        "token:use",
+        "proxy:invoke",
+      ],
+    });
+    await access.release();
+    expect(calls[2]?.url).toBe(
+      "https://api.basistheory.com/applications/app_demo_1",
+    );
+    expect(calls[2]?.init?.method).toBe("DELETE");
+    const deleteHeaders = calls[2]?.init?.headers as Record<string, string>;
+    expect(deleteHeaders["BT-API-KEY"]).toBe("key_test_management");
+  });
+
+  it("does not include the created key when application create fails", async () => {
+    const fetchImpl = (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      if (!init || init.method === undefined || init.method === "GET") {
+        return Response.json({ type: "management" });
+      }
+      return Response.json(
+        {
+          title: "missing_permission",
+          detail: "Missing permission: application:create",
+          key: "key_test_should_not_leak",
+        },
+        { status: 403 },
+      );
+    }) as typeof fetch;
+    await expect(
+      btAccessFromKey({ apiKey: "key_test_management", fetchImpl }),
+    ).rejects.toThrow(
+      "Basis Theory application create failed (HTTP 403: missing_permission: Missing permission: application:create)",
     );
   });
 });
