@@ -11,7 +11,8 @@
  *
  * One checkout per process. Pay is clicked once. RELAY=bt creates a Basis Theory
  * card token at setup and deletes it afterwards. BROWSER=sapiom asks the Sapiom
- * browser session to solve captchas. This script does not bypass them itself.
+ * browser session to solve captchas, with the proxy and stealth that session
+ * requires. This script does not bypass them itself.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -875,10 +876,15 @@ async function openBrowser(): Promise<{
     if (!apiKey)
       throw new CheckoutStopped("BROWSER=sapiom requires SAPIOM_API_KEY", 1);
     const sapiom: Sapiom = createClient({ apiKey });
+    // Anchor disables captcha solving unless the session proxy is active.
+    // extra stealth uses the same proxy. headless false keeps the browser headful.
     const session = await sapiom.browserAutomation.sessions.createManaged({
       idempotencyKey: randomUUID(),
       recording: false,
       captchaSolver: true,
+      proxy: true,
+      stealth: true,
+      headless: false,
     });
     const fields = session as {
       sessionId?: string;
@@ -901,7 +907,7 @@ async function openBrowser(): Promise<{
       );
     }
     console.log(
-      "Sapiom browser session created (captchaSolver requested; CDP websocket present)",
+      "Sapiom browser session created (captchaSolver, proxy, and stealth requested; CDP websocket present)",
     );
     return {
       cdpUrl,

@@ -4,13 +4,13 @@ Browser-side payment interceptor for a card checkout in the agent's own Chromium
 
 The agent types a placeholder card into the checkout. This module attaches over CDP, pauses the request whose body contains that placeholder, and sends it to the relay. The relay's response fulfills the paused request. The browser never sees a real card value.
 
-M0 pauses every request and inspects the body. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, or network error fails the paused request; the placeholder is never sent on.
+M0 pauses page and iframe requests and inspects the body. Captcha widgets, extension pages, and workers are left running so a session captcha solver is not held on the debugger. Injection profiles (which URLs to pause) are deferred. A request without the placeholder is continued. A match is relayed once. A mismatch, refusal, timeout, or network error fails the paused request; the placeholder is never sent on.
 
 ## Attach
 
 `attachInterceptor` opens its own CDP connection. Pass a websocket URL, or a Playwright/Puppeteer browser or page that exposes one. The same function is what a later hosted-attach mode would call.
 
-An agent platform that already uses Sapiom for the browser creates a session, then attaches. Captcha solving, when the caller wants it, is the browser capability's `captchaSolver` flag. This package does not solve captchas.
+An agent platform that already uses Sapiom for the browser creates a session, then attaches. Captcha solving is the browser capability's `captchaSolver` flag. The provider turns that solver off unless `proxy` is also set; `stealth` and `headless: false` match the headful residential session the solver expects. This package does not solve captchas.
 
 ```typescript
 import { randomUUID } from "node:crypto";
@@ -22,6 +22,9 @@ const session = await sapiom.browserAutomation.sessions.createManaged({
   idempotencyKey: randomUUID(),
   recording: false,
   captchaSolver: true,
+  proxy: true,
+  stealth: true,
+  headless: false,
 });
 const handle = await attachInterceptor(session.cdpUrl, {
   relay: httpPaymentRelay({
@@ -64,7 +67,7 @@ Placeholder detection matches the backend's placeholder-detection rules (separat
 
 ## Shopify dev-store script
 
-`examples/shopify-e2e.ts` is opt-in and is not part of `pnpm test`. It launches headless Chromium with a CDP port, or `BROWSER=sapiom` to create a Sapiom browser session (`captchaSolver: true`) and attach to the returned CDP URL. A second Playwright connection drives the dev store. The store is `https://1a2uh3-r7.myshopify.com`, variant `67652208394372`, Shopify Payments test mode.
+`examples/shopify-e2e.ts` is opt-in and is not part of `pnpm test`. It launches headless Chromium with a CDP port, or `BROWSER=sapiom` to create a Sapiom browser session (`captchaSolver`, `proxy`, `stealth`, and `headless: false`) and attach to the returned CDP URL. A second Playwright connection drives the dev store. The store is `https://1a2uh3-r7.myshopify.com`, variant `67652208394372`, Shopify Payments test mode.
 
 Demo relays live under `examples/relays/` and are not published:
 

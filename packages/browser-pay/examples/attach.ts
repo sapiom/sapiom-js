@@ -34,6 +34,9 @@ async function main(): Promise<void> {
     idempotencyKey: randomUUID(),
     recording: false,
     captchaSolver: true,
+    proxy: true,
+    stealth: true,
+    headless: false,
   });
   const handle = await attachInterceptor(session.cdpUrl, {
     relay: httpPaymentRelay({

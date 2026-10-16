@@ -39,15 +39,36 @@ export type InterceptorTarget =
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-const TARGET_FILTER = [
-  { type: "page" },
-  { type: "iframe" },
-  { type: "worker" },
-  { type: "shared_worker" },
-  { type: "service_worker" },
-];
+const TARGET_FILTER = [{ type: "page" }, { type: "iframe" }];
 
 const RELEVANT_TYPES = new Set(TARGET_FILTER.map((entry) => entry.type));
+
+/**
+ * Captcha widgets and the session solver. Their requests are not the card
+ * post. Holding them on Fetch or the debugger stalls the solver past its
+ * own timeout. A POST is still scanned so a placeholder is never continued.
+ */
+export function isSolverTraffic(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === "hcaptcha.com" ||
+    host.endsWith(".hcaptcha.com") ||
+    host === "recaptcha.net" ||
+    host.endsWith(".recaptcha.net") ||
+    host === "challenges.cloudflare.com" ||
+    host === "anchorbrowser.io" ||
+    host.endsWith(".anchorbrowser.io")
+  ) {
+    return true;
+  }
+  return parsed.pathname.toLowerCase().includes("/recaptcha/");
+}
 
 const RESPONSE_HOP = new Set([
   "connection",
@@ -66,16 +87,32 @@ interface Session {
   type: string;
   url: string;
   parentSessionId?: string;
+  fetchEnabled?: boolean;
+}
+
+/** Workers and extension pages belong to the captcha solver. Leave them alone. */
+function isHandsOffTarget(session: Session): boolean {
+  if (
+    session.type === "worker" ||
+    session.type === "shared_worker" ||
+    session.type === "service_worker"
+  ) {
+    return true;
+  }
+  if (session.url.startsWith("chrome-extension:")) return true;
+  return isSolverTraffic(session.url);
 }
 
 /**
  * Attach the payment interceptor to a browser.
  *
- * Every request is paused. Bodies that do not contain the held placeholder are
- * continued immediately. A match is sent to the relay and the paused request
- * is fulfilled with the provider response. A mismatch, refusal, timeout, or
- * network error fails the paused request. The placeholder is never continued:
- * it is a random number in a real BIN range.
+ * Page and iframe requests are paused. Captcha widgets, extension pages, and
+ * workers are not: pausing them stalls the session's captcha solver. A paused
+ * body that does not contain the held placeholder is continued. A match is
+ * sent to the relay and the paused request is fulfilled with the provider
+ * response. A mismatch, refusal, timeout, or network error fails the paused
+ * request. The placeholder is never continued: it is a random number in a
+ * real BIN range.
  */
 export async function attachInterceptor(
   target: InterceptorTarget,
@@ -112,19 +149,18 @@ export async function attachInterceptor(
       return;
     }
     seen.add(sessionId);
+    const session = sessions.get(sessionId);
+    // A captcha frame or the solver's own target must run without Fetch.
+    // Pausing its requests keeps the widget up past the solver's timeout.
+    if (session && isHandsOffTarget(session)) {
+      await releaseTarget(connection, sessionId, waitingForDebugger);
+      return;
+    }
     // Fetch has to be on before the target runs, or the card iframe can post
     // before we are listening. waitForDebuggerOnStart holds it until then.
     // Network has to be enabled before Network.getCookies will return the
     // jar the card session needs.
-    await connection.send("Network.enable", {}, sessionId).catch(() => {});
-    await connection
-      .send(
-        "Fetch.enable",
-        { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
-        sessionId,
-      )
-      .catch(() => {});
-    const session = sessions.get(sessionId);
+    await armFetch(connection, session);
     if (session && RELEVANT_TYPES.has(session.type)) {
       await connection
         .send(
@@ -139,11 +175,7 @@ export async function attachInterceptor(
         )
         .catch(() => {});
     }
-    if (waitingForDebugger) {
-      await connection
-        .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
-        .catch(() => {});
-    }
+    await releaseTarget(connection, sessionId, waitingForDebugger);
   };
 
   const onAttached = (event: CdpEvent) => {
@@ -180,6 +212,20 @@ export async function attachInterceptor(
       };
     };
     if (!sessionId || !params.requestId || !params.request) return;
+    const url = params.request.url ?? "";
+    const session = sessions.get(sessionId);
+    if (isSolverTraffic(url) || (session ? isHandsOffTarget(session) : false)) {
+      void continueSolverRequest(
+        connection,
+        options,
+        emit,
+        sessionId,
+        params.requestId,
+        url,
+        params.request,
+      );
+      return;
+    }
     void handlePaused(
       connection,
       sessions,
@@ -206,7 +252,16 @@ export async function attachInterceptor(
         | undefined;
       if (!info?.targetId || !info.url) return;
       for (const session of sessions.values()) {
-        if (session.targetId === info.targetId) session.url = info.url;
+        if (session.targetId !== info.targetId) continue;
+        session.url = info.url;
+        if (!isHandsOffTarget(session)) continue;
+        session.fetchEnabled = false;
+        void connection
+          .send("Fetch.disable", {}, session.sessionId)
+          .catch(() => {});
+        void connection
+          .send("Runtime.runIfWaitingForDebugger", {}, session.sessionId)
+          .catch(() => {});
       }
     } else if (event.method === "Fetch.requestPaused") onPaused(event);
   });
@@ -408,7 +463,11 @@ async function readMerchantOrigin(
   const evaluated = await connection
     .send<{
       result?: { value?: unknown };
-    }>("Runtime.evaluate", { expression: "location.origin", returnByValue: true }, pageSessionId)
+    }>(
+      "Runtime.evaluate",
+      { expression: "location.origin", returnByValue: true },
+      pageSessionId,
+    )
     .catch(() => null);
   const value = evaluated?.result?.value;
   if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
@@ -476,7 +535,11 @@ async function completeHeaders(
       const languages = await connection
         .send<{
           result?: { value?: unknown };
-        }>("Runtime.evaluate", { expression: "navigator.languages", returnByValue: true }, sessionId)
+        }>(
+          "Runtime.evaluate",
+          { expression: "navigator.languages", returnByValue: true },
+          sessionId,
+        )
         .catch(() => null);
       const list = languages?.result?.value;
       if (
@@ -531,6 +594,80 @@ function headerRecord(headers: unknown): Record<string, string> {
     return out;
   }
   return {};
+}
+
+function requestHasBody(request: {
+  postData?: string;
+  hasPostData?: boolean;
+  postDataEntries?: { bytes?: string }[];
+}): boolean {
+  if (request.hasPostData) return true;
+  if (typeof request.postData === "string" && request.postData.length > 0) {
+    return true;
+  }
+  return Boolean(request.postDataEntries && request.postDataEntries.length > 0);
+}
+
+async function armFetch(
+  connection: CdpConnection,
+  session: Session | undefined,
+): Promise<void> {
+  if (!session || session.fetchEnabled || isHandsOffTarget(session)) return;
+  await connection
+    .send("Network.enable", {}, session.sessionId)
+    .catch(() => {});
+  await connection
+    .send(
+      "Fetch.enable",
+      { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
+      session.sessionId,
+    )
+    .catch(() => {});
+  session.fetchEnabled = true;
+}
+
+async function releaseTarget(
+  connection: CdpConnection,
+  sessionId: string,
+  waitingForDebugger: boolean,
+): Promise<void> {
+  if (!waitingForDebugger) return;
+  await connection
+    .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
+    .catch(() => {});
+}
+
+async function continueSolverRequest(
+  connection: CdpConnection,
+  options: AttachOptions,
+  emit: (event: InterceptorEvent) => void,
+  sessionId: string,
+  requestId: string,
+  url: string,
+  request: {
+    postData?: string;
+    hasPostData?: boolean;
+    postDataEntries?: { bytes?: string }[];
+  },
+): Promise<void> {
+  if (requestHasBody(request)) {
+    try {
+      const body = await readBody(connection, sessionId, requestId, request);
+      const match = matchHeldPlaceholderInBody(body, options.placeholder);
+      if (match.kind !== "not_held") {
+        await failRequest(connection, sessionId, requestId);
+        emit({
+          type: "failed",
+          url: redact(url),
+          reason: "placeholder_mismatch",
+        });
+        return;
+      }
+    } catch {
+      // An unreadable captcha body is not the card post. Continue it.
+    }
+  }
+  await continueRequest(connection, sessionId, requestId);
 }
 
 async function continueRequest(
