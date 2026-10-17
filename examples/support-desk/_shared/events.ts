@@ -33,8 +33,28 @@ export const SlackMessage = z.object({
   event_ts: z.string().optional(),
   subtype: z.string().optional(),
   bot_id: z.string().optional(),
+  /** Set on a `file_share` message: what was attached, so a message with no text still says so. */
+  files: z.array(z.looseObject({ name: z.string().optional() })).optional(),
 });
 export type SlackMessage = z.infer<typeof SlackMessage>;
+
+/**
+ * Subtypes a person posts as a new message: a file with or without a comment, and `/me`. Every other
+ * subtype (edits, deletes, joins, bot posts) is not one. `thread_broadcast` is left out: Slack
+ * describes it as a pointer to a thread reply that may also arrive on its own, and recording both
+ * would store one reply twice.
+ */
+export const PERSON_SUBTYPES: ReadonlySet<string> = new Set([
+  "file_share",
+  "me_message",
+]);
+
+/** A message's text, or a note naming its attachments when it has none (a bare screenshot). */
+export function messageText(m: Pick<SlackMessage, "text" | "files">): string {
+  if (m.text.trim() || !m.files?.length) return m.text;
+  const names = m.files.map((f) => f.name).filter(Boolean);
+  return names.length ? `(attached ${names.join(", ")})` : "(attached a file)";
+}
 
 export const SlackReaction = z.object({
   type: z.literal("reaction_added"),
