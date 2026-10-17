@@ -33,6 +33,7 @@ interface Command {
 interface StubOptions {
   failFetch?: boolean;
   failFulfill?: boolean;
+  holdFulfill?: boolean;
   postData?: string;
   postDataError?: boolean;
   targets?: { targetId: string; type: string; url: string }[];
@@ -144,6 +145,9 @@ async function startStub(options: StubOptions = {}): Promise<{
     }
     if (message.method === "Fetch.fulfillRequest" && options.failFulfill) {
       reply(message.id, undefined, { message: "request is gone" });
+      return;
+    }
+    if (message.method === "Fetch.fulfillRequest" && options.holdFulfill) {
       return;
     }
     reply(message.id, {});
@@ -1412,6 +1416,168 @@ describe("interceptor CDP decisions", () => {
             command.sessionId === "captcha-1",
         ),
       ).toBe(false);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("delivers an arm failure that happened before the handle was returned", async () => {
+    const stub = await startStub({
+      failFetch: true,
+      targets: [
+        {
+          targetId: "iframe-existing",
+          type: "iframe",
+          url: "https://checkout.example/card",
+        },
+      ],
+    });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      expect(
+        stub.commands.some((command) => command.method === "Target.closeTarget"),
+      ).toBe(true);
+      handle.on((event) => events.push(event));
+      expect(events).toContainEqual({
+        type: "failed",
+        url: "https://checkout.example/card",
+        reason: "intercept_unavailable",
+      });
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("does not fail a request that detach observes during fulfill", async () => {
+    const stub = await startStub({ holdFulfill: true });
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-fulfill-race",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: CARD,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Fetch.fulfillRequest",
+          ),
+        "fulfill",
+      );
+      await handle.detach();
+      expect(
+        stub.commands.filter(
+          (command) => command.method === "Fetch.fulfillRequest",
+        ),
+      ).toHaveLength(1);
+      expect(
+        stub.commands.some((command) => command.method === "Fetch.failRequest"),
+      ).toBe(false);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("keeps Fetch armed on a blank iframe across target info changes", async () => {
+    const stub = await startStub();
+    const calls: RelayRequest[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "iframe-blank",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-blank",
+            type: "iframe",
+            url: "about:blank",
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Fetch.enable" &&
+              command.sessionId === "iframe-blank",
+          ),
+        "arm blank iframe",
+      );
+      stub.emit({
+        method: "Target.targetInfoChanged",
+        params: {
+          targetInfo: { targetId: "target-blank", url: "about:blank" },
+        },
+      });
+      stub.emit({
+        method: "Target.targetInfoChanged",
+        params: {
+          targetInfo: {
+            targetId: "target-blank",
+            url: "https://checkout.example/card",
+          },
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(
+        stub.commands.some(
+          (command) =>
+            command.method === "Fetch.disable" &&
+            command.sessionId === "iframe-blank",
+        ),
+      ).toBe(false);
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "iframe-blank",
+        params: {
+          requestId: "req-blank-nav",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: CARD,
+          },
+        },
+      });
+      await waitFor(() => calls.length === 1, "relay after blank navigation");
+      expect(
+        stub.commands.filter(
+          (command) =>
+            command.method === "Fetch.enable" &&
+            command.sessionId === "iframe-blank",
+        ),
+      ).toHaveLength(1);
       await handle.detach();
     } finally {
       await stub.close();

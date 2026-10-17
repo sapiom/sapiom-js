@@ -211,6 +211,38 @@ describe("httpPaymentRelay", () => {
     }
   });
 
+  it("does not read an outcome from a non-2xx body", async () => {
+    const payloads = [
+      { status: 401, body: { outcome: "unknown" } },
+      {
+        status: 500,
+        body: { outcome: "refused", reason: "already_relayed" },
+      },
+    ];
+    const server = await listen((_req, res) => {
+      const payload = payloads.shift();
+      res.writeHead(payload?.status ?? 500, {
+        "content-type": "application/json",
+      });
+      res.end(JSON.stringify(payload?.body));
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      await expect(relay.relay(REQUEST)).rejects.toThrow(
+        "Payment relay failed (HTTP 401)",
+      );
+      await expect(relay.relay(REQUEST)).rejects.toThrow(
+        "Payment relay failed (HTTP 500)",
+      );
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("refuses a redirect", async () => {
     const server = await listen((_req, res) => {
       res.writeHead(302, { location: "https://evil.example/steal" });
