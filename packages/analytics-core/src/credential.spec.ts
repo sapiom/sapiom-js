@@ -349,6 +349,40 @@ describe("credentialFetch", () => {
     ]);
   });
 
+  it("without a credential, follows a plain http redirect but still refuses another scheme", async () => {
+    const { calls, fetchImpl } = recorder(
+      new Response(null, { status: 308, headers: { location: "/c/" } }),
+      new Response("ok"),
+    );
+    await credentialFetch(
+      fetchImpl,
+      "http://collector.internal/c",
+      {},
+      undefined,
+      STRICT,
+    );
+    expect(calls.map((c) => c.url)).toEqual([
+      "http://collector.internal/c",
+      "http://collector.internal/c/",
+    ]);
+
+    const refused = recorder(
+      new Response(null, {
+        status: 307,
+        headers: { location: "file:///etc/passwd" },
+      }),
+    );
+    await expect(
+      credentialFetch(
+        refused.fetchImpl,
+        "http://collector.internal/c",
+        {},
+        undefined,
+        STRICT,
+      ),
+    ).rejects.toBeInstanceOf(CredentialChannelError);
+  });
+
   it("returns a minimal redirect with no headers as is, after one call", async () => {
     const minimal = { ok: false, status: 307 };
     const { calls, fetchImpl } = recorder(minimal);

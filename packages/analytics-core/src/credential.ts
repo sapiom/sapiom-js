@@ -308,7 +308,9 @@ export async function credentialFetch(
 ): Promise<Response> {
   const callerHeaders = headerRecord(init.headers);
   if (!credential) {
-    return fetchKeepingCredential(fetchImpl, url, init, callerHeaders, policy);
+    // No key to protect: plain http hops are fine, only the http/https scheme check remains.
+    const keyless = { ...policy, allowInsecureHttp: true };
+    return fetchKeepingCredential(fetchImpl, url, init, callerHeaders, keyless);
   }
   assertCredentialMayTravel(new URL(url), policy);
   const headers = pick(callerHeaders, (name) => name !== credential.header);
