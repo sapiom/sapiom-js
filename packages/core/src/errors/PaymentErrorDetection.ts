@@ -102,7 +102,10 @@ function isX402Response(data: unknown): data is X402PaymentResponse {
 
   // V2 requires resource object with url
   if (obj.x402Version === 2) {
-    if (!("resource" in obj) || typeof obj.resource !== "object") {
+    // `typeof null === "object"`, so null has to be excluded explicitly.
+    // Otherwise the `.url` read below throws out of a type guard that callers
+    // rely on to be total for any server-supplied body.
+    if (obj.resource === null || typeof obj.resource !== "object") {
       return false;
     }
     const resource = obj.resource as Record<string, unknown>;
