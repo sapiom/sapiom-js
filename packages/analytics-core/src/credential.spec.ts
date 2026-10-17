@@ -402,6 +402,53 @@ describe("credentialFetch", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("without a credential, refuses an https detour back to plain http", async () => {
+    const { calls, fetchImpl } = recorder(
+      new Response(null, {
+        status: 307,
+        headers: { location: "https://collector.internal/c" },
+      }),
+      new Response(null, {
+        status: 307,
+        headers: { location: "http://collector.internal/c" },
+      }),
+    );
+    await expect(
+      credentialFetch(
+        fetchImpl,
+        "http://collector.internal/c",
+        { headers: { authorization: "Bearer caller" } },
+        undefined,
+        STRICT,
+      ),
+    ).rejects.toThrow(
+      /refusing a redirect from https:\/\/collector\.internal down to plaintext/,
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["a loopback host", "http://127.0.0.1:4318/c", STRICT],
+    ["an opted-in host", "http://collector.internal/c", OPTED_IN],
+  ])(
+    "without a credential, refuses a redirect from https down to %s",
+    async (_label, location, policy) => {
+      const { calls, fetchImpl } = recorder(
+        new Response(null, { status: 308, headers: { location } }),
+      );
+      await expect(
+        credentialFetch(
+          fetchImpl,
+          "https://api.example/c",
+          {},
+          undefined,
+          policy,
+        ),
+      ).rejects.toBeInstanceOf(CredentialChannelError);
+      expect(calls).toHaveLength(1);
+    },
+  );
+
   it("returns a minimal redirect with no headers as is, after one call", async () => {
     const minimal = { ok: false, status: 307 };
     const { calls, fetchImpl } = recorder(minimal);

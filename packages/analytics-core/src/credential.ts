@@ -226,6 +226,7 @@ export async function fetchKeepingCredential(
   init: RequestInit,
   headers: Record<string, string>,
   policy: CredentialPolicy,
+  { refuseDowngrade = false }: { refuseDowngrade?: boolean } = {},
 ): Promise<Response> {
   if (init.redirect === "manual" || init.redirect === "error") {
     return fetchImpl(url, { ...init, headers });
@@ -259,6 +260,15 @@ export async function fetchKeepingCredential(
 
     const next = new URL(location, current);
     assertCredentialMayTravel(next, policy, current);
+    if (
+      refuseDowngrade &&
+      current.protocol === "https:" &&
+      next.protocol === "http:"
+    ) {
+      throw new CredentialChannelError(
+        `${policy.label}: refusing a redirect from ${current.origin} down to plaintext ${next.origin}`,
+      );
+    }
     if (redirects === MAX_REDIRECTS) {
       throw new TypeError(
         `${policy.label}: more than ${MAX_REDIRECTS} redirects from ${start.origin}`,
@@ -308,18 +318,14 @@ export async function credentialFetch(
 ): Promise<Response> {
   const callerHeaders = headerRecord(init.headers);
   if (!credential) {
-    // A request that started on plain http has no TLS to lose, so its http hops are allowed;
-    // one that started on https keeps the policy, so caller headers are never downgraded.
-    const hopPolicy =
-      new URL(url).protocol === "http:"
-        ? { ...policy, allowInsecureHttp: true }
-        : policy;
+    // No key: plain http hops are fine, but a hop never drops TLS once a request reached https.
     return fetchKeepingCredential(
       fetchImpl,
       url,
       init,
       callerHeaders,
-      hopPolicy,
+      { ...policy, allowInsecureHttp: true },
+      { refuseDowngrade: true },
     );
   }
   assertCredentialMayTravel(new URL(url), policy);
