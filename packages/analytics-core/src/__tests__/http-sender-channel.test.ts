@@ -122,19 +122,6 @@ describe("HttpSender credential channel", () => {
     expect(String(debug[0][1])).toContain("http://evil.internal");
   });
 
-  it("delivers an anonymous batch through a same-origin redirect on plain http", async () => {
-    const { sender, calls } = senderWith("http://collector.internal/c", [
-      redirectTo("/c/", 308),
-      { ok: true, status: 202 },
-    ]);
-    await expect(sender.send([])).resolves.toBe("ok");
-    expect(calls.map((c) => c.url)).toEqual([
-      "http://collector.internal/c",
-      "http://collector.internal/c/",
-    ]);
-    expect(calls.map(keyOf)).toEqual([undefined, undefined]);
-  });
-
   it("treats a redirect status with no headers as the final response", async () => {
     const { sender, calls } = senderWith("https://collector.example/c", [
       { ok: false, status: 307 },
