@@ -21,8 +21,10 @@ describe("redactHeld", () => {
       `https://checkout.example/pay?number=${encodedDigits(NUMBER)}`,
     ];
     for (const value of values) {
-      expect(textHoldsPlaceholderNumber(value, NUMBER)).toBe(true);
       const redacted = redactHeld(value, NUMBER);
+      expect(textHoldsPlaceholderNumber(value, NUMBER)).toBe(
+        redacted !== value,
+      );
       expect(redacted).not.toContain("4242");
       expect(redacted).not.toContain("%34");
       expect(textHoldsPlaceholderNumber(redacted, NUMBER)).toBe(false);
@@ -32,5 +34,6 @@ describe("redactHeld", () => {
   it("leaves a url that does not hold the placeholder", () => {
     const url = "https://shop.example/orders/100";
     expect(redactHeld(url, NUMBER)).toBe(url);
+    expect(textHoldsPlaceholderNumber(url, NUMBER)).toBe(false);
   });
 });

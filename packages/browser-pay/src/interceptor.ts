@@ -1,12 +1,21 @@
 import { CdpConnection, type CdpEvent } from "./cdp.js";
-import { paymentIdempotencyKey, type RelayResponse } from "./contract.js";
+import {
+  paymentIdempotencyKey,
+  type RelayedHttpResponse,
+  type RelayResponse,
+} from "./contract.js";
 import {
   redactHeld,
   textHoldsPlaceholderNumber,
   type HeldPlaceholder,
 } from "./detect.js";
+import { isRecord } from "./guards.js";
 import { silentLogger, type PayLogger } from "./logger.js";
-import type { PaymentRelay } from "./relay.js";
+import {
+  isRelayTimeout,
+  RelayTimeoutError,
+  type PaymentRelay,
+} from "./relay.js";
 
 export interface AttachOptions {
   relay: PaymentRelay;
@@ -17,18 +26,31 @@ export interface AttachOptions {
   /**
    * How long to wait for the relay before failing the paused request.
    * The relay is not retried. `outcome: "unknown"` is not sent again.
+   * A relay that ignores the abort signal still fails here. One waiter's
+   * timeout does not abort a shared flight that another waiter still holds.
    */
   timeoutMs?: number;
   /** Defaults to a logger that discards every line. */
   logger?: PayLogger;
 }
 
+export type FailureReason =
+  | "intercept_unavailable"
+  | "unknown_session"
+  | "unreadable_body"
+  | "detached"
+  | "page_origin"
+  | "unknown"
+  | "timeout"
+  | "network"
+  | "response_credential";
+
 export type InterceptorEvent =
   | { type: "paused"; url: string; method: string; targetType: string }
   | { type: "relayed"; url: string; status: number }
   | { type: "relayed_unfulfilled"; url: string; status: number }
   | { type: "refused"; url: string; reason: string }
-  | { type: "failed"; url: string; reason: string };
+  | { type: "failed"; url: string; reason: FailureReason };
 
 export interface InterceptorHandle {
   detach(): Promise<void>;
@@ -49,6 +71,7 @@ export type InterceptorTarget =
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 const TARGET_FILTER = [{ type: "page" }, { type: "iframe" }];
+const CHILD_FILTER = [{ type: "iframe" }];
 
 /** GET/HEAD with no body and no held number in the URL. Safe to continue immediately. */
 function canContinueWithoutReading(
@@ -108,16 +131,15 @@ interface Session {
   type: string;
   url: string;
   parentSessionId?: string;
-  fetchEnabled?: boolean;
+  fetchEnabled: boolean;
 }
 
-function isBlankTarget(url: string): boolean {
-  return url === "" || url === "about:blank" || url === "about:srcdoc";
+// Blank frames stay armed. Disarming about:blank and arming again on the
+// next URL drops the navigation that leaves the blank document.
+function shouldArm(session: Session): boolean {
+  return !isHandsOffTarget(session);
 }
 
-function shouldPauseTarget(session: Session): boolean {
-  return !isHandsOffTarget(session) && !isBlankTarget(session.url);
-}
 function isHandsOffTarget(session: Session): boolean {
   if (
     session.type === "worker" ||
@@ -130,293 +152,21 @@ function isHandsOffTarget(session: Session): boolean {
   return isSolverTraffic(session.url);
 }
 
-export async function attachInterceptor(
-  target: InterceptorTarget,
-  options: AttachOptions,
-): Promise<InterceptorHandle> {
-  assertAttachOptions(options);
-  const cdpUrl = resolveCdpUrl(target);
-  const connection = await CdpConnection.connect(cdpUrl);
-  const sessions = new Map<string, Session>();
-  const seen = new Set<string>();
-  const listeners = new Set<(event: InterceptorEvent) => void>();
-  const inflight = new Map<string, Inflight>();
-  const relayFlights = new Map<string, Flight>();
-  const relayAborts = new Set<AbortController>();
-  const consumed = new Set<string>();
-  const loggedRefusals = new Set<string>();
-  const pendingArms: Promise<void>[] = [];
-  let closed = false;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const logger = options.logger ?? silentLogger;
-
-  const emit = (event: InterceptorEvent) => {
-    for (const listener of listeners) {
-      try {
-        listener(event);
-      } catch {
-        // A listener must not break interception.
-      }
-    }
-  };
-
-  const enableSession = async (
-    sessionId: string,
-    waitingForDebugger: boolean,
-  ) => {
-    if (seen.has(sessionId)) {
-      if (waitingForDebugger) {
-        await connection
-          .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
-          .catch(() => {});
-      }
-      return;
-    }
-    seen.add(sessionId);
-    const session = sessions.get(sessionId);
-    if (!session || isHandsOffTarget(session)) {
-      await releaseTarget(connection, sessionId, waitingForDebugger);
-      return;
-    }
-    // Fetch has to be on before the target runs, or the card iframe can post
-    // before we are listening.
-    const armed = await armFetch(connection, session);
-    if (!armed) {
-      emit({
-        type: "failed",
-        url: redactHeld(
-          session.url || session.targetId,
-          options.placeholder.number,
-        ),
-        reason: "intercept_unavailable",
-      });
-      await connection
-        .send("Target.closeTarget", { targetId: session.targetId })
-        .catch(() => {});
-      return;
-    }
-    await releaseTarget(connection, sessionId, waitingForDebugger);
-  };
-
-  const onAttached = (event: CdpEvent) => {
-    const params = parseAttachedTarget(event.params);
-    if (!params) return;
-    const sessionId = params.sessionId;
-    const info = params.targetInfo;
-    const duplicate = [...sessions.values()].some(
-      (session) => session.targetId === info.targetId,
-    );
-    if (duplicate) {
-      // setAutoAttach already owns this target. A second session would pause
-      // every request twice.
-      void releaseTarget(
-        connection,
-        sessionId,
-        params.waitingForDebugger === true,
-      ).then(() =>
-        connection
-          .send("Target.detachFromTarget", { sessionId })
-          .catch(() => {}),
-      );
-      return;
-    }
-    sessions.set(sessionId, {
-      sessionId,
-      targetId: info.targetId,
-      type: info.type,
-      url: info.url ?? "",
-      ...(event.sessionId ? { parentSessionId: event.sessionId } : {}),
-    });
-    const arm = (async () => {
-      // Child iframes pause on attach so Fetch.enable runs before they resume.
-      if (info.type === "page" || info.type === "iframe") {
-        await connection
-          .send(
-            "Target.setAutoAttach",
-            {
-              autoAttach: true,
-              waitForDebuggerOnStart: true,
-              flatten: true,
-              filter: [{ type: "iframe" }],
-            },
-            sessionId,
-          )
-          .catch(() => {});
-      }
-      await enableSession(sessionId, params.waitingForDebugger === true);
-    })();
-    pendingArms.push(arm);
-    void arm.finally(() => {
-      const index = pendingArms.indexOf(arm);
-      if (index >= 0) pendingArms.splice(index, 1);
-    });
-  };
-
-  const onPaused = (event: CdpEvent) => {
-    const sessionId = event.sessionId;
-    const params = parsePaused(event.params);
-    if (!sessionId || !params) return;
-    if (!sessions.has(sessionId)) {
-      void failRequest(connection, sessionId, params.requestId);
-      emit({
-        type: "failed",
-        url: redactHeld(params.request.url ?? "", options.placeholder.number),
-        reason: "unknown_session",
-      });
-      return;
-    }
-    const url = params.request.url ?? "";
-    const method = params.request.method ?? "GET";
-    const hasBody = requestHasBody(params.request);
-    const key = inflightKey(sessionId, params.requestId);
-    if (inflight.has(key)) return;
-    const entry: Inflight = {
-      key,
-      sessionId,
-      requestId: params.requestId,
-      settled: false,
-    };
-    inflight.set(key, entry);
-    const ctx: PauseContext = {
-      connection,
-      sessions,
-      options,
-      timeoutMs,
-      emit,
-      inflight,
-      relayFlights,
-      loggedRefusals,
-      logger,
-      relayAborts,
-      consumed,
-      isClosed: () => closed,
-    };
-    if (
-      canContinueWithoutReading(
-        method,
-        url,
-        hasBody,
-        options.placeholder.number,
-      )
-    ) {
-      entry.continuing = continueRequest(
-        connection,
-        sessionId,
-        params.requestId,
-      ).finally(() => {
-        entry.settled = true;
-        inflight.delete(key);
-      });
-      return;
-    }
-    if (closed) {
-      void settleClosed(ctx, entry, url, params.request);
-      return;
-    }
-    void handlePaused(ctx, entry, params.request);
-  };
-
-  connection.onEvent((event) => {
-    if (event.method === "Fetch.requestPaused") {
-      onPaused(event);
-      return;
-    }
-    if (closed) return;
-    if (event.method === "Target.attachedToTarget") onAttached(event);
-    else if (event.method === "Target.detachedFromTarget") {
-      const sessionId = readStringField(event.params, "sessionId");
-      if (sessionId) sessions.delete(sessionId);
-    } else if (event.method === "Target.targetInfoChanged") {
-      const info = parseTargetInfoChange(event.params);
-      if (!info) return;
-      for (const session of sessions.values()) {
-        if (session.targetId !== info.targetId) continue;
-        session.url = info.url;
-        if (!shouldPauseTarget(session)) {
-          if (session.fetchEnabled) {
-            session.fetchEnabled = false;
-            void connection
-              .send("Fetch.disable", {}, session.sessionId)
-              .catch(() => {});
-          }
-          void connection
-            .send("Runtime.runIfWaitingForDebugger", {}, session.sessionId)
-            .catch(() => {});
-          continue;
-        }
-        if (!session.fetchEnabled) {
-          void armFetch(connection, session).then((armed) => {
-            if (armed || closed) return;
-            emit({
-              type: "failed",
-              url: redactHeld(
-                session.url || session.targetId,
-                options.placeholder.number,
-              ),
-              reason: "intercept_unavailable",
-            });
-            void connection
-              .send("Target.closeTarget", { targetId: session.targetId })
-              .catch(() => {});
-          });
-        }
-      }
-    }
-  });
-
-  await connection.send("Target.setAutoAttach", {
-    autoAttach: true,
-    waitForDebuggerOnStart: true,
-    flatten: true,
-    filter: TARGET_FILTER,
-  });
-  await connection
-    .send("Target.setDiscoverTargets", { discover: true })
-    .catch(() => {});
-  await attachExistingPaymentFrames(connection, sessions, (session) =>
-    enableSession(session.sessionId, false),
-  );
-  await Promise.all([...pendingArms]);
-
-  return {
-    on(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    async detach() {
-      if (closed) return;
-      closed = true;
-      for (const controller of relayAborts) controller.abort();
-      await drainInflight(connection, inflight);
-      for (const sessionId of sessions.keys()) {
-        await connection.send("Fetch.disable", {}, sessionId).catch(() => {});
-      }
-      // A pause delivered while disable was in flight is still failed or
-      // continued here, before the socket goes away.
-      await drainInflight(connection, inflight);
-      await connection
-        .send("Target.setAutoAttach", {
-          autoAttach: false,
-          waitForDebuggerOnStart: false,
-          flatten: true,
-        })
-        .catch(() => {});
-      connection.close();
-    },
-  };
-}
+type InflightPhase =
+  | { status: "open" }
+  | { status: "continuing"; done: Promise<void> }
+  | { status: "done" };
 
 interface Inflight {
   key: string;
   sessionId: string;
   requestId: string;
-  settled: boolean;
-  continuing?: Promise<void>;
+  phase: InflightPhase;
 }
 
 interface PausedRequest {
-  url?: string;
-  method?: string;
+  url: string;
+  method: string;
   headers?: unknown;
   postData?: string;
   hasPostData?: boolean;
@@ -430,264 +180,627 @@ interface Flight {
   waiters: number;
 }
 
-interface PauseContext {
-  connection: CdpConnection;
-  sessions: Map<string, Session>;
-  options: AttachOptions;
-  timeoutMs: number;
-  emit: (event: InterceptorEvent) => void;
-  inflight: Map<string, Inflight>;
-  relayFlights: Map<string, Flight>;
-  loggedRefusals: Set<string>;
-  logger: PayLogger;
-  relayAborts: Set<AbortController>;
-  consumed: Set<string>;
-  isClosed: () => boolean;
+type HeldRead =
+  | { kind: "unreadable" }
+  | { kind: "miss" }
+  | { kind: "held"; body: string };
+
+type Decision =
+  | { action: "continue" }
+  | { action: "fail"; reason: FailureReason }
+  | { action: "refused"; reason: string }
+  | { action: "relayed"; response: RelayedHttpResponse };
+
+type SettleAction = "continue" | "fail" | { fulfill: RelayedHttpResponse };
+
+type Listener = (event: InterceptorEvent) => void;
+
+export async function attachInterceptor(
+  target: InterceptorTarget,
+  options: AttachOptions,
+): Promise<InterceptorHandle> {
+  assertAttachOptions(options);
+  const connection = await CdpConnection.connect(resolveCdpUrl(target));
+  return new PaymentInterceptor(connection, options).start();
 }
 
-function inflightKey(sessionId: string, requestId: string): string {
-  return `${sessionId}\n${requestId}`;
-}
+class PaymentInterceptor {
+  private readonly sessions = new Map<string, Session>();
+  private readonly byTarget = new Map<string, Session>();
+  private readonly enabledSessions = new Set<string>();
+  private readonly listeners = new Set<Listener>();
+  private readonly inflight = new Map<string, Inflight>();
+  private readonly relayFlights = new Map<string, Flight>();
+  private readonly unknownKeys = new Set<string>();
+  private readonly loggedRefusals = new Set<string>();
+  private readonly pendingArms = new Set<Promise<void>>();
+  private readonly timeoutMs: number;
+  private readonly logger: PayLogger;
+  private backlog: InterceptorEvent[] | null = [];
+  private closed = false;
 
-async function drainInflight(
-  connection: CdpConnection,
-  inflight: Map<string, Inflight>,
-): Promise<void> {
-  const entries = [...inflight.values()];
-  await Promise.all(
-    entries.map(async (entry) => {
-      if (entry.settled) return;
-      if (entry.continuing) {
-        await entry.continuing;
-        return;
-      }
-      entry.settled = true;
-      inflight.delete(entry.key);
-      await failRequest(connection, entry.sessionId, entry.requestId);
-    }),
-  );
-}
-
-async function finish(
-  ctx: PauseContext,
-  entry: Inflight,
-  action: "fail" | "continue",
-): Promise<boolean> {
-  if (entry.settled) return false;
-  entry.settled = true;
-  ctx.inflight.delete(entry.key);
-  if (action === "continue") {
-    await continueRequest(ctx.connection, entry.sessionId, entry.requestId);
-  } else {
-    await failRequest(ctx.connection, entry.sessionId, entry.requestId);
+  constructor(
+    private readonly connection: CdpConnection,
+    private readonly options: AttachOptions,
+  ) {
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.logger = options.logger ?? silentLogger;
   }
-  return true;
-}
 
-async function finishContinue(
-  ctx: PauseContext,
-  entry: Inflight,
-): Promise<void> {
-  if (entry.settled) return;
-  const promise = continueRequest(
-    ctx.connection,
-    entry.sessionId,
-    entry.requestId,
-  ).finally(() => {
-    entry.settled = true;
-    ctx.inflight.delete(entry.key);
-  });
-  entry.continuing = promise;
-  await promise;
-}
+  private get number(): string {
+    return this.options.placeholder.number;
+  }
 
-async function handlePaused(
-  ctx: PauseContext,
-  entry: Inflight,
-  request: PausedRequest,
-): Promise<void> {
-  const url = request.url ?? "";
-  const method = request.method ?? "GET";
-  const number = ctx.options.placeholder.number;
-  const safeUrl = redactHeld(url, number);
-  const targetType = ctx.sessions.get(entry.sessionId)?.type ?? "";
-  try {
-    const read = await readBodyResult(ctx.connection, entry.sessionId, request);
-    if (read.unreadable) {
-      await finish(ctx, entry, "fail");
-      ctx.emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
+  async start(): Promise<InterceptorHandle> {
+    this.connection.onEvent((event) => this.dispatch(event));
+    await this.connection.send("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      filter: TARGET_FILTER,
+    });
+    await this.connection
+      .send("Target.setDiscoverTargets", { discover: true })
+      .catch(() => {});
+    await this.attachExistingFrames();
+    await Promise.all([...this.pendingArms]);
+    return {
+      on: (listener) => this.subscribe(listener),
+      detach: () => this.detach(),
+    };
+  }
+
+  private dispatch(event: CdpEvent): void {
+    if (event.method === "Fetch.requestPaused") {
+      this.onPaused(event);
       return;
     }
-    const held =
-      textHoldsPlaceholderNumber(url, number) ||
-      textHoldsPlaceholderNumber(read.body, number);
-    if (!held) {
-      await finishContinue(ctx, entry);
+    if (this.closed) return;
+    if (event.method === "Target.attachedToTarget") this.onAttached(event);
+    else if (event.method === "Target.detachedFromTarget")
+      this.onDetached(event);
+    else if (event.method === "Target.targetInfoChanged") {
+      this.onTargetInfoChanged(event);
+    }
+  }
+
+  private onAttached(event: CdpEvent): void {
+    const params = parseAttachedTarget(event.params);
+    if (!params) return;
+    const sessionId = params.sessionId;
+    const info = params.targetInfo;
+    if (this.byTarget.has(info.targetId)) {
+      // setAutoAttach already owns this target. A second session would pause
+      // every request twice.
+      void this.resumeIfWaiting(sessionId, params.waitingForDebugger).then(() =>
+        this.connection
+          .send("Target.detachFromTarget", { sessionId })
+          .catch(() => {}),
+      );
       return;
     }
-    if (ctx.isClosed()) {
-      await finish(ctx, entry, "fail");
-      ctx.emit({ type: "failed", url: safeUrl, reason: "detached" });
+    const session = this.trackSession({
+      sessionId,
+      targetId: info.targetId,
+      type: info.type,
+      url: info.url,
+      fetchEnabled: false,
+      ...(event.sessionId ? { parentSessionId: event.sessionId } : {}),
+    });
+    const arm = (async () => {
+      if (info.type === "page" || info.type === "iframe") {
+        await this.autoAttachChildren(sessionId);
+      }
+      await this.enableSession(session.sessionId, params.waitingForDebugger);
+    })();
+    this.pendingArms.add(arm);
+    void arm.finally(() => {
+      this.pendingArms.delete(arm);
+    });
+  }
+
+  private onDetached(event: CdpEvent): void {
+    const sessionId = readStringField(event.params, "sessionId");
+    if (!sessionId) return;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    this.sessions.delete(sessionId);
+    this.enabledSessions.delete(sessionId);
+    if (this.byTarget.get(session.targetId) === session) {
+      this.byTarget.delete(session.targetId);
+    }
+  }
+
+  private onTargetInfoChanged(event: CdpEvent): void {
+    const info = parseTargetInfoChange(event.params);
+    if (!info) return;
+    const session = this.byTarget.get(info.targetId);
+    if (!session) return;
+    session.url = info.url;
+    if (!shouldArm(session)) {
+      this.disarm(session);
       return;
     }
-    ctx.emit({ type: "paused", url: safeUrl, method, targetType });
-    const pageOrigin = await readPageOrigin(
-      ctx.connection,
-      ctx.sessions,
-      entry.sessionId,
-    );
-    if (!pageOrigin || ctx.isClosed()) {
-      await finish(ctx, entry, "fail");
-      ctx.emit({
+    if (!session.fetchEnabled) void this.armOrClose(session);
+  }
+
+  private disarm(session: Session): void {
+    if (session.fetchEnabled) {
+      session.fetchEnabled = false;
+      void this.connection
+        .send("Fetch.disable", {}, session.sessionId)
+        .catch(() => {});
+    }
+    void this.resumeIfWaiting(session.sessionId, true);
+  }
+
+  private async enableSession(
+    sessionId: string,
+    waitingForDebugger: boolean,
+  ): Promise<void> {
+    if (this.enabledSessions.has(sessionId)) {
+      await this.resumeIfWaiting(sessionId, waitingForDebugger);
+      return;
+    }
+    this.enabledSessions.add(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session || !shouldArm(session)) {
+      await this.resumeIfWaiting(sessionId, waitingForDebugger);
+      return;
+    }
+    // Fetch has to be on before the target runs, or the card iframe can post
+    // before we are listening.
+    const armed = await this.armOrClose(session);
+    if (!armed) return;
+    await this.resumeIfWaiting(sessionId, waitingForDebugger);
+  }
+
+  private async armOrClose(session: Session): Promise<boolean> {
+    const armed = await armFetch(this.connection, session);
+    if (armed) return true;
+    if (this.closed) return false;
+    this.emit({
+      type: "failed",
+      url: this.safe(session.url || session.targetId),
+      reason: "intercept_unavailable",
+    });
+    await this.connection
+      .send("Target.closeTarget", { targetId: session.targetId })
+      .catch(() => {});
+    return false;
+  }
+
+  private async autoAttachChildren(sessionId: string): Promise<void> {
+    await this.connection
+      .send(
+        "Target.setAutoAttach",
+        {
+          autoAttach: true,
+          waitForDebuggerOnStart: true,
+          flatten: true,
+          filter: CHILD_FILTER,
+        },
+        sessionId,
+      )
+      .catch(() => {});
+  }
+
+  private async resumeIfWaiting(
+    sessionId: string,
+    waitingForDebugger: boolean,
+  ): Promise<void> {
+    if (!waitingForDebugger) return;
+    await this.connection
+      .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
+      .catch(() => {});
+  }
+
+  private async attachExistingFrames(): Promise<void> {
+    const listed = await this.connection
+      .send("Target.getTargets")
+      .catch(() => undefined);
+    for (const info of parseTargetInfos(listed)) {
+      if (info.type !== "iframe") continue;
+      if (this.byTarget.has(info.targetId)) continue;
+      const attached = await this.connection
+        .send("Target.attachToTarget", {
+          targetId: info.targetId,
+          flatten: true,
+        })
+        .catch(() => undefined);
+      const sessionId = readAttachedSessionId(attached);
+      if (!sessionId || this.sessions.has(sessionId)) continue;
+      const session = this.trackSession({
+        sessionId,
+        targetId: info.targetId,
+        type: "iframe",
+        url: info.url,
+        fetchEnabled: false,
+      });
+      await this.autoAttachChildren(sessionId);
+      await this.enableSession(session.sessionId, false);
+    }
+  }
+
+  private trackSession(session: Session): Session {
+    this.sessions.set(session.sessionId, session);
+    this.byTarget.set(session.targetId, session);
+    return session;
+  }
+
+  private onPaused(event: CdpEvent): void {
+    const sessionId = event.sessionId;
+    const parsed = parsePaused(event.params);
+    if (!sessionId || !parsed) return;
+    const { requestId, request } = parsed;
+    if (!this.sessions.has(sessionId)) {
+      void failRequest(this.connection, sessionId, requestId);
+      this.emit({
         type: "failed",
-        url: safeUrl,
-        reason: pageOrigin ? "detached" : "page_origin",
+        url: this.safe(request.url),
+        reason: "unknown_session",
       });
       return;
     }
-    const idempotencyKey = paymentIdempotencyKey(method, url, read.body);
-    if (ctx.consumed.has(idempotencyKey)) {
-      await finish(ctx, entry, "fail");
-      ctx.emit({ type: "failed", url: safeUrl, reason: "unknown" });
+    const key = inflightKey(sessionId, requestId);
+    if (this.inflight.has(key)) return;
+    const entry: Inflight = {
+      key,
+      sessionId,
+      requestId,
+      phase: { status: "open" },
+    };
+    this.inflight.set(key, entry);
+    if (
+      canContinueWithoutReading(
+        request.method,
+        request.url,
+        postDataPlan(request) !== "empty",
+        this.number,
+      )
+    ) {
+      void this.settle(entry, "continue");
       return;
     }
-    const flight = relayOnce(ctx, idempotencyKey, (signal) =>
-      ctx.options.relay.relay(
+    void this.handlePaused(entry, request);
+  }
+
+  private async handlePaused(
+    entry: Inflight,
+    request: PausedRequest,
+  ): Promise<void> {
+    const safeUrl = this.safe(request.url);
+    try {
+      const decision = await this.decide(entry, request, safeUrl);
+      await this.apply(entry, safeUrl, decision);
+    } catch {
+      await this.settle(entry, "fail");
+      this.emit({ type: "failed", url: safeUrl, reason: "network" });
+    }
+  }
+
+  private async decide(
+    entry: Inflight,
+    request: PausedRequest,
+    safeUrl: string,
+  ): Promise<Decision> {
+    const read = await this.readHeld(entry.sessionId, request);
+    if (read.kind === "unreadable") {
+      return { action: "fail", reason: "unreadable_body" };
+    }
+    if (read.kind === "miss") return { action: "continue" };
+    if (this.closed) return { action: "fail", reason: "detached" };
+    const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
+    this.emit({
+      type: "paused",
+      url: safeUrl,
+      method: request.method,
+      targetType,
+    });
+    const pageOrigin = await readPageOrigin(
+      this.connection,
+      this.sessions,
+      entry.sessionId,
+    );
+    if (!pageOrigin || this.closed) {
+      return {
+        action: "fail",
+        reason: pageOrigin ? "detached" : "page_origin",
+      };
+    }
+    const idempotencyKey = paymentIdempotencyKey(
+      request.method,
+      request.url,
+      read.body,
+    );
+    if (this.unknownKeys.has(idempotencyKey)) {
+      return { action: "fail", reason: "unknown" };
+    }
+    const relayed = await this.callRelay(
+      request,
+      read.body,
+      pageOrigin,
+      idempotencyKey,
+    );
+    if (relayed.action === "fail") return relayed;
+    return this.decisionForOutcome(relayed.response, idempotencyKey);
+  }
+
+  private async readHeld(
+    sessionId: string,
+    request: PausedRequest,
+  ): Promise<HeldRead> {
+    const urlHeld = textHoldsPlaceholderNumber(request.url, this.number);
+    if (urlHeld && this.closed) return { kind: "held", body: "" };
+    if (postDataPlan(request) === "empty") {
+      return urlHeld ? { kind: "held", body: "" } : { kind: "miss" };
+    }
+    const body = await readBody(this.connection, sessionId, request);
+    if (body === undefined) return { kind: "unreadable" };
+    if (urlHeld || textHoldsPlaceholderNumber(body, this.number)) {
+      return { kind: "held", body };
+    }
+    return { kind: "miss" };
+  }
+
+  private async callRelay(
+    request: PausedRequest,
+    body: string,
+    pageOrigin: string,
+    idempotencyKey: string,
+  ): Promise<
+    | { action: "ok"; response: RelayResponse }
+    | { action: "fail"; reason: FailureReason }
+  > {
+    const flight = this.relayOnce(idempotencyKey, (signal) =>
+      this.options.relay.relay(
         {
-          injectionRef: ctx.options.placeholder.injectionRef,
-          profileId: ctx.options.profileId,
+          injectionRef: this.options.placeholder.injectionRef,
+          profileId: this.options.profileId,
           pageOrigin,
           request: {
-            method,
-            url,
+            method: request.method,
+            url: request.url,
             headers: forwardedHeaders(request.headers),
-            body: read.body,
+            body,
           },
           idempotencyKey,
         },
         { signal },
       ),
     );
-    let response: RelayResponse;
     try {
-      response = await failAfter(flight.promise, ctx.timeoutMs);
+      const response = await failAfter(flight.promise, this.timeoutMs);
+      this.releaseWaiter(flight);
+      return { action: "ok", response };
     } catch (error) {
-      releaseWaiter(ctx, flight);
-      await finish(ctx, entry, "fail");
-      ctx.emit({
-        type: "failed",
-        url: safeUrl,
-        reason: ctx.isClosed() ? "detached" : failureReason(error),
-      });
-      return;
+      this.releaseWaiter(flight);
+      return {
+        action: "fail",
+        reason: this.closed ? "detached" : failureReason(error),
+      };
     }
-    releaseWaiter(ctx, flight);
+  }
+
+  private decisionForOutcome(
+    response: RelayResponse,
+    idempotencyKey: string,
+  ): Decision {
     if (response.outcome === "unknown") {
-      ctx.consumed.add(idempotencyKey);
-      await finish(ctx, entry, "fail");
-      ctx.emit({ type: "failed", url: safeUrl, reason: "unknown" });
-      return;
+      this.unknownKeys.add(idempotencyKey);
+      return { action: "fail", reason: "unknown" };
     }
     if (response.outcome === "refused") {
-      if (!ctx.loggedRefusals.has(idempotencyKey)) {
-        ctx.loggedRefusals.add(idempotencyKey);
-        ctx.logger.warn("payment relay refused the paused request", {
-          reason: response.reason,
-        });
-      }
-      await finish(ctx, entry, "fail");
-      ctx.emit({ type: "refused", url: safeUrl, reason: response.reason });
+      this.logRefusalOnce(idempotencyKey, response.reason);
+      return { action: "refused", reason: response.reason };
+    }
+    if (textHoldsPlaceholderNumber(response.response.body, this.number)) {
+      return { action: "fail", reason: "response_credential" };
+    }
+    return { action: "relayed", response: response.response };
+  }
+
+  private logRefusalOnce(idempotencyKey: string, reason: string): void {
+    if (this.loggedRefusals.has(idempotencyKey)) return;
+    this.loggedRefusals.add(idempotencyKey);
+    this.logger.warn("payment relay refused the paused request", { reason });
+  }
+
+  private async apply(
+    entry: Inflight,
+    safeUrl: string,
+    decision: Decision,
+  ): Promise<void> {
+    if (decision.action === "continue") {
+      await this.settle(entry, "continue");
       return;
     }
-    if (textHoldsPlaceholderNumber(response.response.body, number)) {
-      await finish(ctx, entry, "fail");
-      ctx.emit({ type: "failed", url: safeUrl, reason: "response_credential" });
+    if (decision.action === "fail") {
+      await this.settle(entry, "fail");
+      this.emit({ type: "failed", url: safeUrl, reason: decision.reason });
       return;
     }
-    let fulfilled = false;
-    try {
-      if (!entry.settled) {
-        await fulfillRequest(
-          ctx.connection,
-          entry.sessionId,
-          entry.requestId,
-          response.response,
-        );
-        fulfilled = true;
-      }
-    } catch {
-      fulfilled = false;
+    if (decision.action === "refused") {
+      await this.settle(entry, "fail");
+      this.emit({ type: "refused", url: safeUrl, reason: decision.reason });
+      return;
     }
-    if (!fulfilled && !entry.settled) {
-      await failRequest(ctx.connection, entry.sessionId, entry.requestId);
-    }
-    if (!entry.settled) {
-      entry.settled = true;
-      ctx.inflight.delete(entry.key);
-    }
-    ctx.emit(
+    const fulfilled = await this.settle(entry, { fulfill: decision.response });
+    this.emit(
       fulfilled
-        ? {
-            type: "relayed",
-            url: safeUrl,
-            status: response.response.status,
-          }
+        ? { type: "relayed", url: safeUrl, status: decision.response.status }
         : {
             type: "relayed_unfulfilled",
             url: safeUrl,
-            status: response.response.status,
+            status: decision.response.status,
           },
     );
-  } catch {
-    await finish(ctx, entry, "fail");
-    ctx.emit({ type: "failed", url: safeUrl, reason: "network" });
+  }
+
+  private async settle(
+    entry: Inflight,
+    action: SettleAction,
+  ): Promise<boolean> {
+    if (entry.phase.status !== "open") return false;
+    if (action === "continue") {
+      const done = continueRequest(
+        this.connection,
+        entry.sessionId,
+        entry.requestId,
+      ).finally(() => {
+        entry.phase = { status: "done" };
+        this.inflight.delete(entry.key);
+      });
+      entry.phase = { status: "continuing", done };
+      await done;
+      return true;
+    }
+    entry.phase = { status: "done" };
+    this.inflight.delete(entry.key);
+    if (action === "fail") {
+      await failRequest(this.connection, entry.sessionId, entry.requestId);
+      return true;
+    }
+    try {
+      await fulfillRequest(
+        this.connection,
+        entry.sessionId,
+        entry.requestId,
+        action.fulfill,
+      );
+      return true;
+    } catch {
+      await failRequest(this.connection, entry.sessionId, entry.requestId);
+      return false;
+    }
+  }
+
+  private async drainInflight(): Promise<void> {
+    const entries = [...this.inflight.values()];
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (entry.phase.status === "continuing") {
+          await entry.phase.done;
+          return;
+        }
+        if (entry.phase.status === "open") await this.settle(entry, "fail");
+      }),
+    );
+  }
+
+  private relayOnce(
+    key: string,
+    start: (signal: AbortSignal) => Promise<RelayResponse>,
+  ): Flight {
+    const existing = this.relayFlights.get(key);
+    if (existing && !existing.controller.signal.aborted) {
+      existing.waiters += 1;
+      return existing;
+    }
+    const controller = new AbortController();
+    const promise = start(controller.signal).finally(() => {
+      const current = this.relayFlights.get(key);
+      if (current?.controller === controller) this.relayFlights.delete(key);
+    });
+    void promise.catch(() => {});
+    const flight: Flight = { controller, waiters: 1, promise };
+    this.relayFlights.set(key, flight);
+    return flight;
+  }
+
+  private releaseWaiter(flight: Flight): void {
+    flight.waiters -= 1;
+    if (flight.waiters > 0) return;
+    flight.controller.abort();
+  }
+
+  private async detach(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    for (const flight of this.relayFlights.values()) flight.controller.abort();
+    await this.drainInflight();
+    for (const sessionId of this.sessions.keys()) {
+      await this.connection
+        .send("Fetch.disable", {}, sessionId)
+        .catch(() => {});
+    }
+    // A pause delivered while disable was in flight is still failed or
+    // continued here, before the socket goes away.
+    await this.drainInflight();
+    await this.connection
+      .send("Target.setAutoAttach", {
+        autoAttach: false,
+        waitForDebuggerOnStart: false,
+        flatten: true,
+      })
+      .catch(() => {});
+    this.connection.close();
+  }
+
+  private subscribe(listener: Listener): () => void {
+    const missed = this.backlog;
+    this.backlog = null;
+    this.listeners.add(listener);
+    if (missed) {
+      for (const event of missed) this.deliver(listener, event);
+    }
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private emit(event: InterceptorEvent): void {
+    if (this.backlog) {
+      this.backlog.push(event);
+      return;
+    }
+    for (const listener of this.listeners) this.deliver(listener, event);
+  }
+
+  private deliver(listener: Listener, event: InterceptorEvent): void {
+    try {
+      listener(event);
+    } catch {
+      // A listener must not break interception.
+    }
+  }
+
+  private safe(value: string): string {
+    return redactHeld(value, this.number);
   }
 }
 
-async function settleClosed(
-  ctx: PauseContext,
-  entry: Inflight,
-  url: string,
-  request: PausedRequest,
-): Promise<void> {
-  const safeUrl = redactHeld(url, ctx.options.placeholder.number);
-  try {
-    let holds = textHoldsPlaceholderNumber(url, ctx.options.placeholder.number);
-    let unreadable = false;
-    if (!holds && requestHasBody(request)) {
-      const read = await readBodyResult(
-        ctx.connection,
-        entry.sessionId,
-        request,
-      );
-      unreadable = read.unreadable;
-      holds =
-        unreadable ||
-        textHoldsPlaceholderNumber(read.body, ctx.options.placeholder.number);
-    }
-    if (holds) {
-      await finish(ctx, entry, "fail");
-      ctx.emit({
-        type: "failed",
-        url: safeUrl,
-        reason: unreadable ? "unreadable_body" : "placeholder_mismatch",
-      });
-      return;
-    }
-    await finishContinue(ctx, entry);
-  } catch {
-    await finish(ctx, entry, "fail");
-    ctx.emit({ type: "failed", url: safeUrl, reason: "unreadable_body" });
-  }
+function inflightKey(sessionId: string, requestId: string): string {
+  return `${sessionId}\n${requestId}`;
+}
+
+function failureReason(error: unknown): FailureReason {
+  return isRelayTimeout(error) ? "timeout" : "network";
+}
+
+function failAfter<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new RelayTimeoutError());
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(
+          error instanceof Error ? error : new Error("Payment relay failed"),
+        );
+      },
+    );
+  });
 }
 
 type PostDataPlan = "inline" | "entries" | "fetch" | "empty";
 
-function postDataPlan(request: {
-  postData?: string;
-  hasPostData?: boolean;
-  postDataEntries?: { bytes?: string }[];
-}): PostDataPlan {
+function postDataPlan(request: PausedRequest): PostDataPlan {
   if (typeof request.postData === "string" && request.postData.length > 0) {
     return "inline";
   }
@@ -701,26 +814,22 @@ function postDataPlan(request: {
   return "empty";
 }
 
-async function readBodyResult(
+async function readBody(
   connection: CdpConnection,
   sessionId: string,
   request: PausedRequest,
-): Promise<{ body: string; unreadable: boolean }> {
+): Promise<string | undefined> {
   const plan = postDataPlan(request);
-  if (plan === "empty") return { body: "", unreadable: false };
-  if (plan === "inline")
-    return { body: request.postData ?? "", unreadable: false };
+  if (plan === "empty") return "";
+  if (plan === "inline") return request.postData ?? "";
   if (plan === "entries") {
-    const body = Buffer.concat(
+    return Buffer.concat(
       (request.postDataEntries ?? []).map((entry) =>
         Buffer.from(entry.bytes ?? "", "base64"),
       ),
     ).toString("utf8");
-    return { body, unreadable: false };
   }
-  if (!request.networkId || isMultipart(request.headers)) {
-    return { body: "", unreadable: true };
-  }
+  if (!request.networkId || isMultipart(request.headers)) return undefined;
   try {
     const result = await connection.send(
       "Network.getRequestPostData",
@@ -728,16 +837,13 @@ async function readBodyResult(
       sessionId,
     );
     const postData = readStringField(result, "postData");
-    if (!postData) return { body: "", unreadable: true };
+    if (!postData) return undefined;
     if (isRecord(result) && result.base64Encoded === true) {
-      return {
-        body: Buffer.from(postData, "base64").toString("utf8"),
-        unreadable: false,
-      };
+      return Buffer.from(postData, "base64").toString("utf8");
     }
-    return { body: postData, unreadable: false };
+    return postData;
   } catch {
-    return { body: "", unreadable: true };
+    return undefined;
   }
 }
 
@@ -800,9 +906,9 @@ function topPageSession(
   sessionId: string,
 ): string | undefined {
   let current: string | undefined = sessionId;
-  const seen = new Set<string>();
-  while (current && !seen.has(current)) {
-    seen.add(current);
+  const visited = new Set<string>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
     const session = sessions.get(current);
     if (!session) break;
     if (session.type === "page") return current;
@@ -980,19 +1086,10 @@ function isMultipart(headers: unknown): boolean {
     .includes("multipart/");
 }
 
-function requestHasBody(request: PausedRequest): boolean {
-  if (request.hasPostData) return true;
-  if (typeof request.postData === "string" && request.postData.length > 0) {
-    return true;
-  }
-  return Boolean(request.postDataEntries && request.postDataEntries.length > 0);
-}
-
 async function armFetch(
   connection: CdpConnection,
-  session: Session | undefined,
+  session: Session,
 ): Promise<boolean> {
-  if (!session || isHandsOffTarget(session)) return false;
   if (session.fetchEnabled) return true;
   try {
     await connection
@@ -1008,17 +1105,6 @@ async function armFetch(
   }
   session.fetchEnabled = true;
   return true;
-}
-
-async function releaseTarget(
-  connection: CdpConnection,
-  sessionId: string,
-  waitingForDebugger: boolean,
-): Promise<void> {
-  if (!waitingForDebugger) return;
-  await connection
-    .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
-    .catch(() => {});
 }
 
 async function continueRequest(
@@ -1051,7 +1137,7 @@ async function fulfillRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  response: { status: number; headers: Record<string, string>; body: string },
+  response: RelayedHttpResponse,
 ): Promise<void> {
   const responseHeaders = Object.entries(response.headers).flatMap(
     ([name, value]) => {
@@ -1069,113 +1155,6 @@ async function fulfillRequest(
     },
     sessionId,
   );
-}
-
-function failureReason(error: unknown): string {
-  if (!error || typeof error !== "object") return "network";
-  const name = "name" in error ? String(error.name) : "";
-  const message = "message" in error ? String(error.message) : "";
-  if (
-    name === "TimeoutError" ||
-    name === "AbortError" ||
-    message === "Payment relay timed out" ||
-    /timeout/i.test(message)
-  ) {
-    return "timeout";
-  }
-  return "network";
-}
-
-function relayOnce(
-  ctx: PauseContext,
-  key: string,
-  start: (signal: AbortSignal) => Promise<RelayResponse>,
-): Flight {
-  const existing = ctx.relayFlights.get(key);
-  if (existing && !existing.controller.signal.aborted) {
-    existing.waiters += 1;
-    return existing;
-  }
-  const controller = new AbortController();
-  ctx.relayAborts.add(controller);
-  const promise = start(controller.signal).finally(() => {
-    ctx.relayAborts.delete(controller);
-    const current = ctx.relayFlights.get(key);
-    if (current?.controller === controller) ctx.relayFlights.delete(key);
-  });
-  void promise.catch(() => {});
-  const flight = { controller, waiters: 1, promise };
-  ctx.relayFlights.set(key, flight);
-  return flight;
-}
-
-function releaseWaiter(ctx: PauseContext, flight: Flight): void {
-  flight.waiters -= 1;
-  if (flight.waiters > 0) return;
-  flight.controller.abort();
-  ctx.relayAborts.delete(flight.controller);
-}
-
-function failAfter<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error("Payment relay timed out"));
-    }, ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(
-          error instanceof Error ? error : new Error("Payment relay failed"),
-        );
-      },
-    );
-  });
-}
-
-async function attachExistingPaymentFrames(
-  connection: CdpConnection,
-  sessions: Map<string, Session>,
-  enable: (session: Session) => Promise<void>,
-): Promise<void> {
-  const listed = await connection
-    .send("Target.getTargets")
-    .catch(() => undefined);
-  for (const info of parseTargetInfos(listed)) {
-    if (info.type !== "iframe") continue;
-    const known = [...sessions.values()].some(
-      (session) => session.targetId === info.targetId,
-    );
-    if (known) continue;
-    const attached = await connection
-      .send("Target.attachToTarget", { targetId: info.targetId, flatten: true })
-      .catch(() => undefined);
-    const sessionId = readAttachedSessionId(attached);
-    if (!sessionId || sessions.has(sessionId)) continue;
-    const session: Session = {
-      sessionId,
-      targetId: info.targetId,
-      type: "iframe",
-      url: info.url,
-    };
-    sessions.set(sessionId, session);
-    await connection
-      .send(
-        "Target.setAutoAttach",
-        {
-          autoAttach: true,
-          waitForDebuggerOnStart: true,
-          flatten: true,
-          filter: [{ type: "iframe" }],
-        },
-        sessionId,
-      )
-      .catch(() => {});
-    await enable(session);
-  }
 }
 
 function parseTargetInfos(
@@ -1215,10 +1194,6 @@ function assertAttachOptions(options: AttachOptions): void {
       "placeholder.injectionRef and placeholder.number are required",
     );
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveCdpUrl(target: InterceptorTarget): string {

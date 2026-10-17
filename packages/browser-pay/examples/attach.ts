@@ -6,7 +6,7 @@
  * A raw CDP URL works the same way: `attachInterceptor(process.env.CDP_URL, …)`.
  *
  *   SAPIOM_API_KEY=… TRANSACTION_ID=… INJECTION_REF=… PROFILE_ID=shopify-card-vault \
- *   PLACEHOLDER_NUMBER=… PLACEHOLDER_EXP_MONTH=… PLACEHOLDER_EXP_YEAR=… PLACEHOLDER_CVC=… \
+ *   PLACEHOLDER_NUMBER=… \
  *   npx tsx examples/attach.ts
  */
 import { randomUUID } from "node:crypto";
@@ -15,14 +15,13 @@ import {
   attachInterceptor,
   httpPaymentRelay,
   type InterceptorHandle,
-  type PayLogger,
 } from "../src/index.js";
 
-const log: PayLogger = {
-  info(message, fields) {
+const log = {
+  info(message: string, fields?: Readonly<Record<string, string | number>>) {
     process.stdout.write(`${message} ${JSON.stringify(fields ?? {})}\n`);
   },
-  warn(message, fields) {
+  warn(message: string, fields?: Readonly<Record<string, string | number>>) {
     process.stderr.write(`${message} ${JSON.stringify(fields ?? {})}\n`);
   },
 };
@@ -67,9 +66,6 @@ async function main(): Promise<void> {
       profileId,
       placeholder: {
         number,
-        expMonth: Number(process.env.PLACEHOLDER_EXP_MONTH),
-        expYear: Number(process.env.PLACEHOLDER_EXP_YEAR),
-        cvc: process.env.PLACEHOLDER_CVC ?? "",
         injectionRef,
       },
       logger: log,

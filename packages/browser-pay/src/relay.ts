@@ -4,8 +4,6 @@ import {
   type RelayResponse,
 } from "./contract.js";
 
-export type { RelayRequest, RelayResponse };
-
 export interface RelayCallOptions {
   signal?: AbortSignal;
 }
@@ -21,11 +19,28 @@ export interface HttpRelayOptions {
   baseUrl: string;
   apiKey?: string;
   transactionId: string;
-  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+export class RelayTimeoutError extends Error {
+  constructor() {
+    super("Payment relay timed out");
+    this.name = "RelayTimeoutError";
+  }
+}
+
+export function isRelayTimeout(error: unknown): boolean {
+  return error instanceof RelayTimeoutError || isAbortError(error);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
 
 function assertBaseUrl(baseUrl: string): void {
   let url: URL;
@@ -63,7 +78,6 @@ function requireHttpOptions(options: HttpRelayOptions): {
   baseUrl: string;
   apiKey: string;
   transactionId: string;
-  timeoutMs: number;
   fetchImpl: typeof fetch;
 } {
   if (!options || typeof options.baseUrl !== "string" || !options.baseUrl) {
@@ -79,37 +93,22 @@ function requireHttpOptions(options: HttpRelayOptions): {
       "SAPIOM_API_KEY is required for the payment relay HTTP client",
     );
   }
-  if (
-    options.timeoutMs !== undefined &&
-    (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)
-  ) {
-    throw new Error("Payment relay timeoutMs must be a positive number");
-  }
   return {
     baseUrl: options.baseUrl.replace(/\/$/, ""),
     apiKey,
     transactionId: options.transactionId,
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     fetchImpl: options.fetchImpl ?? fetch,
   };
 }
 
-function combinedSignal(
-  timeoutMs: number,
-  caller?: AbortSignal,
-): { signal: AbortSignal; dispose: () => void } {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const onAbort = () => controller.abort();
-  if (caller?.aborted) controller.abort();
-  else caller?.addEventListener("abort", onAbort);
-  return {
-    signal: controller.signal,
-    dispose() {
-      clearTimeout(timer);
-      caller?.removeEventListener("abort", onAbort);
-    },
-  };
+function transportError(error: unknown, signal?: AbortSignal): Error {
+  if (error instanceof RelayTimeoutError) return error;
+  if (signal?.aborted || isAbortError(error)) return new RelayTimeoutError();
+  return new Error("Payment relay failed");
+}
+
+async function discardBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }
 
 export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
@@ -117,14 +116,9 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
   return {
     async relay(request, call) {
       const url = `${config.baseUrl}/v1/transactions/${encodeURIComponent(config.transactionId)}/payment/relay`;
-      const { signal, dispose } = combinedSignal(
-        config.timeoutMs,
-        call?.signal,
-      );
-      let text: string;
-      let status = 0;
+      let response: Response;
       try {
-        const response = await config.fetchImpl(url, {
+        response = await config.fetchImpl(url, {
           method: "POST",
           redirect: "manual",
           headers: {
@@ -133,26 +127,23 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
             "x-api-key": config.apiKey,
           },
           body: JSON.stringify(request),
-          signal,
+          signal: call?.signal,
         });
-        status = response.status;
-        if (status >= 300 && status < 400) {
+      } catch (error) {
+        throw transportError(error, call?.signal);
+      }
+      if (response.status < 200 || response.status >= 300) {
+        await discardBody(response);
+        if (response.status >= 300 && response.status < 400) {
           throw new Error("Payment relay refused a redirect");
         }
+        throw new Error(`Payment relay failed (HTTP ${response.status})`);
+      }
+      let text: string;
+      try {
         text = await response.text();
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === "Payment relay refused a redirect"
-        ) {
-          throw error;
-        }
-        if (signal.aborted || isTimeout(error)) {
-          throw new Error("Payment relay timed out");
-        }
-        throw new Error("Payment relay failed");
-      } finally {
-        dispose();
+        throw transportError(error, call?.signal);
       }
       let parsed: unknown;
       try {
@@ -167,28 +158,7 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
           // The thrown error must not include the response text.
         }
       }
-      throw new Error(`Payment relay failed (HTTP ${status})`);
+      throw new Error(`Payment relay failed (HTTP ${response.status})`);
     },
   };
-}
-
-export function stubPaymentRelay(
-  handler: (
-    request: RelayRequest,
-    options?: RelayCallOptions,
-  ) => RelayResponse | Promise<RelayResponse>,
-): PaymentRelay {
-  return {
-    relay(request, options) {
-      return Promise.resolve(handler(request, options));
-    },
-  };
-}
-
-function isTimeout(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const name = "name" in error ? String(error.name) : "";
-  const message = "message" in error ? String(error.message) : "";
-  if (name === "TimeoutError" || name === "AbortError") return true;
-  return /timeout/i.test(message);
 }

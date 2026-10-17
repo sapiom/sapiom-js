@@ -7,20 +7,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
-import {
-  stubPaymentRelay,
-  type PaymentRelay,
-  type RelayCallOptions,
-} from "./relay";
+import type { PaymentRelay, RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest } from "./index";
+import { stubPaymentRelay } from "../test/stub-relay";
 
 const nodeRequire = createRequire(__filename);
 
+const NUMBER = "4242424242424242";
+const EXP_MONTH = 12;
+const EXP_YEAR = 2028;
+const CVC = "123";
+
 const PLACEHOLDER: HeldPlaceholder = {
-  number: "4242424242424242",
-  expMonth: 12,
-  expYear: 2028,
-  cvc: "123",
+  number: NUMBER,
   injectionRef: "inj_integration",
 };
 
@@ -35,18 +34,18 @@ const UNRELATED = JSON.stringify({
 });
 const MISMATCH = JSON.stringify({
   credit_card: {
-    number: PLACEHOLDER.number,
-    month: PLACEHOLDER.expMonth,
-    year: PLACEHOLDER.expYear,
+    number: NUMBER,
+    month: EXP_MONTH,
+    year: EXP_YEAR,
     verification_value: "999",
   },
 });
 const CARD = JSON.stringify({
   credit_card: {
-    number: PLACEHOLDER.number,
-    month: PLACEHOLDER.expMonth,
-    year: PLACEHOLDER.expYear,
-    verification_value: PLACEHOLDER.cvc,
+    number: NUMBER,
+    month: EXP_MONTH,
+    year: EXP_YEAR,
+    verification_value: CVC,
   },
 });
 

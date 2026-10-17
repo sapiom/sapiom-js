@@ -1,8 +1,5 @@
 export interface HeldPlaceholder {
   number: string;
-  expMonth: number;
-  expYear: number;
-  cvc: string;
   injectionRef: string;
 }
 
@@ -10,83 +7,6 @@ function placeholderDigits(number: string): string | undefined {
   const digits = number.replace(/[\s-]/g, "");
   if (digits.length === 0 || !/^\d+$/.test(digits)) return undefined;
   return digits;
-}
-
-function separatorLength(text: string, index: number): number {
-  const code = text.charCodeAt(index);
-  if (code === 32 || code === 9 || code === 45 || code === 43) return 1;
-  if (
-    text.startsWith("%20", index) ||
-    text.startsWith("%2D", index) ||
-    text.startsWith("%2d", index)
-  ) {
-    return 3;
-  }
-  if (
-    text.startsWith("\\u0020", index) ||
-    text.startsWith("\\u002D", index) ||
-    text.startsWith("\\u002d", index)
-  ) {
-    return 6;
-  }
-  return 0;
-}
-
-function separatorRun(text: string, index: number): number {
-  let cursor = index;
-  while (cursor < text.length) {
-    const skip = separatorLength(text, cursor);
-    if (skip === 0) break;
-    cursor += skip;
-  }
-  return cursor - index;
-}
-
-function holdsDigits(text: string, digits: string): boolean {
-  const last = text.length - digits.length;
-  for (let start = 0; start <= last; start++) {
-    if (text[start] !== digits[0]) continue;
-    let index = start + 1;
-    let matched = true;
-    for (let digit = 1; digit < digits.length; digit++) {
-      const skip = separatorRun(text, index);
-      if (skip > 0 && text[index + skip] === digits[digit]) index += skip;
-      if (text[index] !== digits[digit]) {
-        matched = false;
-        break;
-      }
-      index += 1;
-    }
-    if (matched) return true;
-  }
-  return false;
-}
-
-function decodeForSearch(text: string): string {
-  const withUnicode = text.replace(
-    /\\u([0-9a-fA-F]{4})/g,
-    (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
-  );
-  const plus = withUnicode.replace(/\+/g, " ");
-  try {
-    return decodeURIComponent(plus);
-  } catch {
-    return plus;
-  }
-}
-
-export function textHoldsPlaceholderNumber(
-  text: string,
-  number: string,
-): boolean {
-  if (number.length === 0 || text.length === 0) return false;
-  if (text.includes(number)) return true;
-  const digits = placeholderDigits(number);
-  if (!digits) return false;
-  if (holdsDigits(text, digits)) return true;
-  const decoded = decodeForSearch(text);
-  if (decoded === text) return false;
-  return decoded.includes(number) || holdsDigits(decoded, digits);
 }
 
 function isSeparatorChar(char: string): boolean {
@@ -149,6 +69,24 @@ function heldSpanEnd(
     index = raw.next;
   }
   return index;
+}
+
+function holdsDigits(text: string, digits: string): boolean {
+  for (let start = 0; start < text.length; start++) {
+    if (heldSpanEnd(text, digits, start) !== undefined) return true;
+  }
+  return false;
+}
+
+export function textHoldsPlaceholderNumber(
+  text: string,
+  number: string,
+): boolean {
+  if (number.length === 0 || text.length === 0) return false;
+  if (text.includes(number)) return true;
+  const digits = placeholderDigits(number);
+  if (!digits) return false;
+  return holdsDigits(text, digits);
 }
 
 function maskHeldSpans(text: string, digits: string): string {

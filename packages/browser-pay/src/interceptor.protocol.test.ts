@@ -3,15 +3,12 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
-import type { PayLogger } from "./logger";
-import { stubPaymentRelay, type RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest, RelayResponse } from "./index";
+import { stubPaymentRelay } from "../test/stub-relay";
+import type { RelayCallOptions } from "./relay";
 
 const HELD: HeldPlaceholder = {
   number: "4242424242424242",
-  expMonth: 12,
-  expYear: 2028,
-  cvc: "123",
   injectionRef: "inj_protocol",
 };
 
@@ -959,9 +956,8 @@ describe("interceptor CDP decisions", () => {
       release = resolve;
     });
     const warnings: string[] = [];
-    const logger: PayLogger = {
-      info() {},
-      warn(message) {
+    const logger = {
+      warn(message: string) {
         warnings.push(message);
       },
     };
@@ -1441,7 +1437,9 @@ describe("interceptor CDP decisions", () => {
         profileId: "shopify-card-vault",
       });
       expect(
-        stub.commands.some((command) => command.method === "Target.closeTarget"),
+        stub.commands.some(
+          (command) => command.method === "Target.closeTarget",
+        ),
       ).toBe(true);
       handle.on((event) => events.push(event));
       expect(events).toContainEqual({
@@ -1514,6 +1512,16 @@ describe("interceptor CDP decisions", () => {
         placeholder: HELD,
         profileId: "shopify-card-vault",
       });
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Fetch.enable" &&
+              command.sessionId === "page-1",
+          ),
+        "arm page",
+      );
       stub.emit({
         method: "Target.attachedToTarget",
         params: {

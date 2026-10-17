@@ -63,7 +63,7 @@ No answer after the send:
 
 The injection is consumed. The paused request fails and the same body is not sent again.
 
-A transport error, a redirect, or an unreadable body fails the paused browser request. It is not fulfilled with the error JSON. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
+A transport error, a redirect, a non-2xx HTTP status, or an unreadable body fails the paused browser request. David's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
 
 ## What an agent does
 
@@ -77,17 +77,19 @@ const handle = await attachInterceptor(cdpUrl, {
     transactionId,
   }),
   profileId: "shopify-card-vault",
-  placeholder, // number, expMonth, expYear, cvc, injectionRef
+  placeholder,
 });
 ```
 
-A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. Expiry and CVC are not compared. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
+Call `handle.on` after `attachInterceptor` resolves. Events emitted while attach was running, including a target that could not arm Fetch, are delivered to that first subscriber.
+
+A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
-Identical in-flight retries (same method, URL, and body) share one relay call. A refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
+Identical in-flight retries (same method, URL, and body) share one relay call. `AttachOptions.timeoutMs` is the only deadline on that call. It defaults to 20 seconds. A relay that ignores abort still fails when the deadline passes, and one waiter's timeout does not abort a later waiter of the same flight. A refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
 
-Captcha widgets, extension pages, and workers are not paused. A placeholder that shows up on any other page or iframe is relayed.
+Captcha widgets, extension pages, and workers are not paused. A blank iframe, including `about:blank`, stays paused so a navigation onto the card URL cannot slip through. A placeholder that shows up on any other page or iframe is relayed.
 
 Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` runs on each child session before it is resumed. An iframe that already exists is attached before `attachInterceptor` resolves. A paused request whose CDP session was never attached is failed.
 

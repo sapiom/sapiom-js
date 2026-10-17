@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
+import { isRecord } from "./guards.js";
 
 /**
  * A small CDP client so the interceptor can open its own connection to a
@@ -21,10 +22,6 @@ type Pending = {
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseCdpMessage(value: unknown):
   | {
@@ -335,9 +332,9 @@ export class CdpConnection {
       }
       const message = parseCdpMessage(parsed);
       if (!message) return;
-      if (message.id !== undefined && this.pending.has(message.id)) {
-        const pending = this.pending.get(message.id);
-        if (!pending) return;
+      const pending =
+        message.id !== undefined ? this.pending.get(message.id) : undefined;
+      if (pending && message.id !== undefined) {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if (message.errorMessage) {

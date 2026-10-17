@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isRecord } from "./guards.js";
 
 export interface RelayHttpRequest {
   method: string;
@@ -38,10 +39,6 @@ export function paymentIdempotencyKey(
     .update("\0")
     .update(body)
     .digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function stringRecord(value: unknown): Record<string, string> | undefined {

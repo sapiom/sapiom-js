@@ -100,7 +100,6 @@ describe("httpPaymentRelay", () => {
         baseUrl: origin(server),
         apiKey: "test-key",
         transactionId: "tx_fixture_shopify",
-        timeoutMs: 1000,
       });
       await expect(relay.relay(REQUEST)).rejects.toThrow(
         "Payment relay failed (HTTP 500)",
@@ -157,7 +156,7 @@ describe("httpPaymentRelay", () => {
     }
   });
 
-  it("aborts when the caller signal fires before timeoutMs", async () => {
+  it("aborts when the caller signal fires", async () => {
     let arrived: () => void = () => {};
     const requestArrived = new Promise<void>((resolve) => {
       arrived = resolve;
@@ -172,7 +171,6 @@ describe("httpPaymentRelay", () => {
         baseUrl: origin(server),
         apiKey: "test-key",
         transactionId: "tx_fixture_shopify",
-        timeoutMs: 30_000,
       });
       const pending = relay.relay(REQUEST, { signal: controller.signal });
       await requestArrived;
@@ -181,30 +179,6 @@ describe("httpPaymentRelay", () => {
       );
       controller.abort();
       await expectation;
-    } finally {
-      server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
-    }
-  });
-
-  it("times out on its own timeoutMs while the caller signal stays open", async () => {
-    const server = await listen(() => {
-      // Never respond.
-    });
-    const controller = new AbortController();
-    try {
-      const relay = httpPaymentRelay({
-        baseUrl: origin(server),
-        apiKey: "test-key",
-        transactionId: "tx_fixture_shopify",
-        timeoutMs: 50,
-      });
-      const started = Date.now();
-      await expect(
-        relay.relay(REQUEST, { signal: controller.signal }),
-      ).rejects.toThrow("Payment relay timed out");
-      expect(Date.now() - started).toBeLessThan(2_000);
-      expect(controller.signal.aborted).toBe(false);
     } finally {
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
@@ -262,28 +236,12 @@ describe("httpPaymentRelay", () => {
     }
   });
 
-  it("times out when headers arrive and the body stays open", async () => {
-    const relay = httpPaymentRelay({
-      baseUrl: "https://relay.example",
-      apiKey: "test-key",
-      transactionId: "tx_fixture_shopify",
-      timeoutMs: 50,
-      fetchImpl: stalledBody,
-    });
-    const started = Date.now();
-    await expect(relay.relay(REQUEST)).rejects.toThrow(
-      "Payment relay timed out",
-    );
-    expect(Date.now() - started).toBeLessThan(2_000);
-  });
-
   it("aborts a stalled body when the caller signal fires after headers", async () => {
     const controller = new AbortController();
     const relay = httpPaymentRelay({
       baseUrl: "https://relay.example",
       apiKey: "test-key",
       transactionId: "tx_fixture_shopify",
-      timeoutMs: 30_000,
       fetchImpl: stalledBody,
     });
     const pending = relay.relay(REQUEST, { signal: controller.signal });

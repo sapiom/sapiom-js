@@ -1,6 +1,7 @@
 export { attachInterceptor } from "./interceptor.js";
 export type {
   AttachOptions,
+  FailureReason,
   InterceptorEvent,
   InterceptorHandle,
   InterceptorTarget,
