@@ -201,7 +201,12 @@ export async function attachInterceptor(
 ): Promise<InterceptorHandle> {
   assertAttachOptions(options);
   const connection = await CdpConnection.connect(resolveCdpUrl(target));
-  return new PaymentInterceptor(connection, options).start();
+  try {
+    return await new PaymentInterceptor(connection, options).start();
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
 }
 
 class PaymentInterceptor {
@@ -217,6 +222,7 @@ class PaymentInterceptor {
   private readonly timeoutMs: number;
   private readonly logger: PayLogger;
   private backlog: InterceptorEvent[] | null = [];
+  private buffering = true;
   private closed = false;
 
   constructor(
@@ -244,6 +250,7 @@ class PaymentInterceptor {
       .catch(() => {});
     await this.attachExistingFrames();
     await Promise.all([...this.pendingArms]);
+    this.buffering = false;
     return {
       on: (listener) => this.subscribe(listener),
       detach: () => this.detach(),
@@ -656,12 +663,11 @@ class PaymentInterceptor {
       return true;
     }
     entry.phase = { status: "done" };
-    this.inflight.delete(entry.key);
-    if (action === "fail") {
-      await failRequest(this.connection, entry.sessionId, entry.requestId);
-      return true;
-    }
     try {
+      if (action === "fail") {
+        await failRequest(this.connection, entry.sessionId, entry.requestId);
+        return true;
+      }
       await fulfillRequest(
         this.connection,
         entry.sessionId,
@@ -672,6 +678,8 @@ class PaymentInterceptor {
     } catch {
       await failRequest(this.connection, entry.sessionId, entry.requestId);
       return false;
+    } finally {
+      this.inflight.delete(entry.key);
     }
   }
 
@@ -717,6 +725,8 @@ class PaymentInterceptor {
   private async detach(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.buffering = false;
+    this.backlog = null;
     for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {
@@ -750,7 +760,7 @@ class PaymentInterceptor {
   }
 
   private emit(event: InterceptorEvent): void {
-    if (this.backlog) {
+    if (this.buffering && this.backlog) {
       this.backlog.push(event);
       return;
     }
@@ -829,7 +839,7 @@ async function readBody(
       ),
     ).toString("utf8");
   }
-  if (!request.networkId || isMultipart(request.headers)) return undefined;
+  if (!request.networkId) return undefined;
   try {
     const result = await connection.send(
       "Network.getRequestPostData",
@@ -838,10 +848,14 @@ async function readBody(
     );
     const postData = readStringField(result, "postData");
     if (!postData) return undefined;
-    if (isRecord(result) && result.base64Encoded === true) {
-      return Buffer.from(postData, "base64").toString("utf8");
+    const body =
+      isRecord(result) && result.base64Encoded === true
+        ? Buffer.from(postData, "base64").toString("utf8")
+        : postData;
+    if (isMultipart(request.headers) && multipartOmitsFileBytes(body)) {
+      return undefined;
     }
-    return postData;
+    return body;
   } catch {
     return undefined;
   }
@@ -1084,6 +1098,11 @@ function isMultipart(headers: unknown): boolean {
   return headerValue(headers, "content-type")
     .toLowerCase()
     .includes("multipart/");
+}
+
+// The retrieved body keeps a file part's filename header and drops its bytes.
+function multipartOmitsFileBytes(body: string): boolean {
+  return /content-disposition:[^\r\n]*[;\s]filename\s*\*?=/i.test(body);
 }
 
 async function armFetch(
