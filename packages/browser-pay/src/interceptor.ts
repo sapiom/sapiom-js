@@ -718,7 +718,9 @@ async function readBodyResult(
     ).toString("utf8");
     return { body, unreadable: false };
   }
-  if (!request.networkId) return { body: "", unreadable: true };
+  if (!request.networkId || isMultipart(request.headers)) {
+    return { body: "", unreadable: true };
+  }
   try {
     const result = await connection.send(
       "Network.getRequestPostData",
@@ -936,6 +938,46 @@ function readStringField(value: unknown, key: string): string | undefined {
   if (!isRecord(value)) return undefined;
   const field = value[key];
   return typeof field === "string" ? field : undefined;
+}
+
+function headerValue(headers: unknown, name: string): string {
+  const wanted = name.toLowerCase();
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      if (
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        typeof entry[0] === "string" &&
+        typeof entry[1] === "string" &&
+        entry[0].toLowerCase() === wanted
+      ) {
+        return entry[1];
+      }
+      if (
+        isRecord(entry) &&
+        typeof entry.name === "string" &&
+        entry.name.toLowerCase() === wanted &&
+        typeof entry.value === "string"
+      ) {
+        return entry.value;
+      }
+    }
+    return "";
+  }
+  if (isRecord(headers)) {
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() === wanted && typeof value === "string") {
+        return value;
+      }
+    }
+  }
+  return "";
+}
+
+function isMultipart(headers: unknown): boolean {
+  return headerValue(headers, "content-type")
+    .toLowerCase()
+    .includes("multipart/");
 }
 
 function requestHasBody(request: PausedRequest): boolean {

@@ -378,6 +378,68 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
+  it("fails closed when a multipart body would omit file bytes", async () => {
+    const stub = await startStub({
+      postData: `--b\r\nContent-Disposition: form-data; name="note"\r\n\r\nhello\r\n`,
+    });
+    const calls: RelayRequest[] = [];
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-file",
+          networkId: "net-file",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            headers: {
+              "content-type": "multipart/form-data; boundary=b",
+            },
+            hasPostData: true,
+          },
+        },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "failed",
+      );
+      expect(calls).toHaveLength(0);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: "failed", reason: "unreadable_body" }),
+      );
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Fetch.continueRequest",
+        ),
+      ).toBe(false);
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Network.getRequestPostData",
+        ),
+      ).toBe(false);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("fails a paused request when the body cannot be read", async () => {
     const stub = await startStub({ postDataError: true });
     const calls: RelayRequest[] = [];

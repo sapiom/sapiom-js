@@ -64,12 +64,16 @@ describe("httpPaymentRelay", () => {
     ).toThrow(
       "Payment relay baseUrl must be https (http is only allowed on loopback)",
     );
-    expect(() =>
-      httpPaymentRelay({
-        ...options,
-        baseUrl: "https://api.sapiom.ai#/payment/relay",
-      }),
-    ).toThrow("Payment relay baseUrl must not contain a fragment");
+    for (const baseUrl of [
+      "https://api.sapiom.ai#/payment/relay",
+      "https://api.sapiom.ai/#",
+      "https://api.sapiom.ai?",
+      "https://api.sapiom.ai?x=1",
+    ]) {
+      expect(() => httpPaymentRelay({ ...options, baseUrl })).toThrow(
+        "Payment relay baseUrl must not contain a query or fragment",
+      );
+    }
   });
 
   it("POSTs David's body to the transaction path and does not retry", async () => {

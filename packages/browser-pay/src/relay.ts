@@ -36,8 +36,15 @@ function assertBaseUrl(baseUrl: string): void {
       "Payment relay baseUrl must be https (http is only allowed on loopback)",
     );
   }
-  if (url.hash) {
-    throw new Error("Payment relay baseUrl must not contain a fragment");
+  if (
+    baseUrl.includes("#") ||
+    baseUrl.includes("?") ||
+    url.hash ||
+    url.search
+  ) {
+    throw new Error(
+      "Payment relay baseUrl must not contain a query or fragment",
+    );
   }
   const host = url.hostname;
   if (url.protocol === "https:") return;
