@@ -17,6 +17,10 @@
  * `AgentOperationError`, while every App Links tool throws `PreviewOperationError`
  * (the sandbox-preview family these tools belong to).
  */
+import {
+  credentialFetch,
+  resolveCredentialPolicy,
+} from "@sapiom/analytics-core/credential";
 import { PreviewOperationError } from "@sapiom/sandbox-preview";
 
 export type ToolResult = {
@@ -73,14 +77,8 @@ export type AppLinksResponse =
   | { kind: "response"; status: number; ok: boolean; data: unknown }
   | { kind: "network"; url: string; cause: unknown };
 
-/**
- * One JSON call against the backend's App Links REST API, authenticated with the
- * cached `sapiom_authenticate` credential as `x-api-key`.
- *
- * The URL is concatenated, not `new URL(route, base)`: a custom `apiURL` carrying
- * a base path (a local proxy, a tunnel) would have it silently dropped by the
- * latter. A body-less method (`GET`, `DELETE`) sends no body and no content-type.
- */
+/** Concatenate routes so a configured proxy base path is preserved.
+ * Refusals map to network; a refused redirect can follow an already-sent request. */
 export async function appLinksFetch(
   apiURL: string,
   apiKey: string,
@@ -91,14 +89,19 @@ export async function appLinksFetch(
   const url = `${apiURL.replace(/\/+$/, "")}${route}`;
   let res: Response;
   try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "x-api-key": apiKey,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
+    res = await credentialFetch(
+      fetch,
+      url,
+      {
+        method,
+        headers:
+          body === undefined ? {} : { "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+      { header: "x-api-key", value: apiKey },
+      // Per call: the env opt-in is read when the request is made.
+      resolveCredentialPolicy(undefined, { label: "@sapiom/mcp" }),
+    );
   } catch (cause) {
     return { kind: "network", url, cause };
   }

@@ -1,3 +1,11 @@
+import {
+  CredentialChannelError,
+  credentialFetch,
+  mayCarryCredential,
+  resolveCredentialPolicy,
+  type Credential,
+  type CredentialPolicy,
+} from "./credential.js";
 import type { DebugHook, Envelope, FetchLike } from "./types.js";
 
 /**
@@ -59,7 +67,13 @@ export interface HttpSenderOptions {
  * Never rejects — every failure maps to a {@link SendOutcome}.
  */
 export class HttpSender {
-  constructor(private readonly options: HttpSenderOptions) {}
+  private readonly policy: CredentialPolicy;
+
+  constructor(private readonly options: HttpSenderOptions) {
+    this.policy = resolveCredentialPolicy(undefined, {
+      label: "@sapiom/analytics-core",
+    });
+  }
 
   async send(events: Envelope[]): Promise<SendOutcome> {
     try {
@@ -74,29 +88,53 @@ export class HttpSender {
         return "drop";
       }
 
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-      };
-      if (this.options.apiKey) {
-        headers["x-sapiom-api-key"] = this.options.apiKey;
-      }
-
-      const response = await fetchImpl(this.options.endpoint, {
-        method: "POST",
-        headers,
-        body,
-        signal: createTimeoutSignal(
-          this.options.timeoutMs ?? REQUEST_TIMEOUT_MS,
-        ),
-      });
+      const response = await credentialFetch(
+        // Only `{ ok, status }` is read, and `credentialFetch` tolerates a
+        // response that has nothing more.
+        fetchImpl as unknown as typeof fetch,
+        this.options.endpoint,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          signal: createTimeoutSignal(
+            this.options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+          ),
+        },
+        this.credentialFor(this.options.endpoint),
+        this.policy,
+      );
       if (response.ok) return "ok";
       if (response.status === 429 || response.status >= 500) return "retry";
       // Anything else (400 not-JSON, 413 too large, …): retrying cannot help.
       return "drop";
     } catch (error) {
+      if (error instanceof CredentialChannelError) {
+        // A redirect to a channel the key may not use: resending lands there again.
+        this.options.debug("collector redirect refused; batch dropped", error);
+        return "drop";
+      }
       this.options.debug("collector request failed", error);
       return "retry";
     }
+  }
+
+  /**
+   * Analytics never fails the host over its channel: on an endpoint the key
+   * may not use, the batch still goes out, anonymous.
+   */
+  private credentialFor(endpoint: string): Credential | undefined {
+    const { apiKey } = this.options;
+    if (!apiKey) return undefined;
+    const url = new URL(endpoint);
+    if (mayCarryCredential(url, this.policy)) {
+      return { header: "x-sapiom-api-key", value: apiKey };
+    }
+    this.options.debug(
+      "endpoint is not https or loopback; batch sent without the API key",
+      url.origin,
+    );
+    return undefined;
   }
 
   private resolveFetch(): FetchLike | null {

@@ -21,6 +21,10 @@ Authentication is optional and does exactly one thing: a **valid**
 to the events (see [Server-stamped fields](#server-stamped-fields-never-client-trusted)).
 An invalid or missing key never causes a rejection.
 
+The key is only sent over https or to a loopback host (or with
+`SAPIOM_ALLOW_INSECURE_HTTP=1`); on any other endpoint the batch goes out
+without it. A redirect to another origin drops the key.
+
 This URL is exported by `@sapiom/analytics-core` as the constant
 `SAPIOM_COLLECTOR_ENDPOINT` and is the emitter's **default endpoint**: an
 emitter with no explicit `endpoint` configured delivers here, unless the

@@ -238,6 +238,90 @@ describe('signal', () => {
   });
 });
 
+describe('GatewayClient credential channel', () => {
+  const ENV = 'SAPIOM_ALLOW_INSECURE_HTTP';
+  const ORIGINAL = process.env[ENV];
+  beforeEach(() => {
+    delete process.env[ENV];
+  });
+  afterAll(() => {
+    if (ORIGINAL === undefined) delete process.env[ENV];
+    else process.env[ENV] = ORIGINAL;
+  });
+
+  const sentKey = (spy: jest.SpyInstance, call: number) =>
+    (spy.mock.calls[call][1] as RequestInit & { headers: Record<string, string> }).headers[
+      'x-api-key'
+    ];
+
+  it.each([
+    ['get', (c: GatewayClient) => c.get('/foo')],
+    ['post', (c: GatewayClient) => c.post('/foo', { a: 1 })],
+    ['postAtHostRoot', (c: GatewayClient) => c.postAtHostRoot('/v1/studio-feedback', {})],
+    ['openStream', (c: GatewayClient) => c.openStream('/executions/e1/stream')],
+  ])('%s refuses plaintext to a non-loopback host as NETWORK, before sending', async (_m, call) => {
+    const spy = mockFetch([{ status: 200, body: {} }]);
+    const client = createClient({ host: 'http://gw.internal', apiKey: 'sk_live' });
+    await expect(call(client)).rejects.toMatchObject({
+      code: 'NETWORK',
+      hint: expect.stringContaining('@sapiom/agent-core: refusing plaintext HTTP to http://gw.internal'),
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('names its own opt-in in the refusal', async () => {
+    mockFetch([{ status: 200, body: {} }]);
+    const client = createClient({ host: 'http://gw.internal', apiKey: 'sk_live' });
+    await expect(client.get('/foo')).rejects.toMatchObject({
+      hint: expect.stringContaining(
+        'createClient({ allowInsecureHttp: true }) or SAPIOM_ALLOW_INSECURE_HTTP=1',
+      ),
+    });
+  });
+
+  it.each([
+    ['a loopback host', { host: 'http://localhost:3000' }, undefined],
+    ['the client option', { host: 'http://gw.internal', allowInsecureHttp: true }, undefined],
+    ['the env var', { host: 'http://gw.internal' }, '1'],
+  ])('sends over plain http to %s', async (_label, options, env) => {
+    if (env) process.env[ENV] = env;
+    const spy = mockFetch([{ status: 200, body: {} }]);
+    await createClient({ apiKey: 'sk_live', ...options }).get('/foo');
+    expect(sentKey(spy, 0)).toBe('sk_live');
+  });
+
+  it('drops x-api-key on a redirect to another origin (get)', async () => {
+    const spy = jest
+      .spyOn(global, 'fetch' as any)
+      .mockResolvedValueOnce(
+        new Response(null, { status: 307, headers: { location: 'https://other.example/foo' } }),
+      )
+      .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+    const client = createClient({ host: 'https://example.com', apiKey: 'sk_live' });
+    await expect(client.get('/foo')).resolves.toEqual({ ok: true });
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([
+      'https://example.com/v1/workflows/foo',
+      'https://other.example/foo',
+    ]);
+    expect([sentKey(spy, 0), sentKey(spy, 1)]).toEqual(['sk_live', undefined]);
+  });
+
+  it('drops x-api-key on a redirect to another origin (openStream), keeping the body open', async () => {
+    const spy = jest
+      .spyOn(global, 'fetch' as any)
+      .mockResolvedValueOnce(
+        new Response(null, { status: 307, headers: { location: 'https://other.example/s' } }),
+      )
+      .mockResolvedValueOnce(new Response('data: 1\n\n', { status: 200 }));
+    const client = createClient({ host: 'https://example.com', apiKey: 'sk_live' });
+    const res = await client.openStream('/executions/e1/stream');
+    expect(spy.mock.calls[1][0]).toBe('https://other.example/s');
+    expect([sentKey(spy, 0), sentKey(spy, 1)]).toEqual(['sk_live', undefined]);
+    expect(res.bodyUsed).toBe(false);
+    expect(await res.text()).toBe('data: 1\n\n');
+  });
+});
+
 // ── emitEvent ─────────────────────────────────────────────────────────────────
 
 describe('emitEvent', () => {

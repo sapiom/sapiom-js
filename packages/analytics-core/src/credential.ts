@@ -1,9 +1,5 @@
-/**
- * Where the tenant credential may travel: over https, or plain http to a
- * loopback host. Redirects are followed here rather than by `fetch`, because
- * `fetch` drops `authorization` on an origin change but keeps custom headers
- * such as `x-sapiom-api-key`.
- */
+/** Centralize channel and redirect checks so clients share one tenant-credential policy.
+ * Harness exceptions to the literal-header guard are tracked in SAP-4112. */
 import { createHash } from "node:crypto";
 
 export const ALLOW_INSECURE_HTTP_ENV = "SAPIOM_ALLOW_INSECURE_HTTP";
@@ -11,14 +7,22 @@ export const ALLOW_INSECURE_HTTP_ENV = "SAPIOM_ALLOW_INSECURE_HTTP";
 export interface CredentialPolicy {
   /** Plain http to a non-loopback host is allowed (trusted private network). */
   readonly allowInsecureHttp: boolean;
+  /** Prefix of every error message: the package the caller uses. */
+  readonly label: string;
+  /** The client's own opt-in, named in a refusal next to the env var. */
+  readonly optIn?: string;
 }
 
 /** Explicit config wins, then `SAPIOM_ALLOW_INSECURE_HTTP=1` (or `true`). */
 export function resolveCredentialPolicy(
   explicit: boolean | undefined,
+  wording: { label: string; optIn?: string },
 ): CredentialPolicy {
   const env = process.env[ALLOW_INSECURE_HTTP_ENV]?.trim().toLowerCase();
-  return { allowInsecureHttp: explicit ?? (env === "1" || env === "true") };
+  return {
+    allowInsecureHttp: explicit ?? (env === "1" || env === "true"),
+    ...wording,
+  };
 }
 
 /** `localhost`, `*.localhost` (RFC 6761, used by the local services stack), 127/8, `[::1]`. */
@@ -32,31 +36,43 @@ export function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
-/**
- * Throws, before anything is sent, when `url` is not a channel the credential
- * may use. A TypeError with no `cause`, unlike a failed connection. Only the
- * origin is echoed: a path or query can carry a secret.
- */
+/** Extend TypeError, name included, so existing catches and recorded errors are unchanged.
+ * Retrying with the same URL and policy cannot resolve the refusal. */
+export class CredentialChannelError extends TypeError {}
+
+/** Let analytics omit an unsafe credential without rejecting the initial batch request. */
+export function mayCarryCredential(
+  url: URL,
+  policy: CredentialPolicy,
+): boolean {
+  if (url.protocol === "https:") return true;
+  return (
+    url.protocol === "http:" &&
+    (policy.allowInsecureHttp || isLoopbackHostname(url.hostname))
+  );
+}
+
+/** Refuse unsafe credential channels before sending to them.
+ * Echo only origins because paths and queries may contain secrets. */
 export function assertCredentialMayTravel(
   url: URL,
   policy: CredentialPolicy,
   redirectedFrom?: URL,
 ): void {
-  if (url.protocol === "https:") return;
+  if (mayCarryCredential(url, policy)) return;
   const from = redirectedFrom
     ? ` (redirected from ${redirectedFrom.origin})`
     : "";
   if (url.protocol !== "http:") {
-    throw new TypeError(
-      `@sapiom/tools: cannot request '${url.protocol}' URLs, expected http or https${from}`,
+    throw new CredentialChannelError(
+      `${policy.label}: cannot request '${url.protocol}' URLs, expected http or https${from}`,
     );
   }
-  if (policy.allowInsecureHttp || isLoopbackHostname(url.hostname)) return;
-  throw new TypeError(
-    `@sapiom/tools: refusing plaintext HTTP to ${url.origin}${from}. The tenant API key only ` +
+  const optIn = policy.optIn ? `${policy.optIn} or ` : "";
+  throw new CredentialChannelError(
+    `${policy.label}: refusing plaintext HTTP to ${url.origin}${from}. The tenant API key only ` +
       `travels over https or to a loopback host (localhost, *.localhost, 127.0.0.1, [::1]). ` +
-      `For a trusted private network, opt in with createClient({ allowInsecureHttp: true }) ` +
-      `or ${ALLOW_INSECURE_HTTP_ENV}=1.`,
+      `For a trusted private network, opt in with ${optIn}${ALLOW_INSECURE_HTTP_ENV}=1.`,
   );
 }
 
@@ -129,8 +145,12 @@ function isStreamBody(body: RequestInit["body"]): boolean {
 const SRI_ALGORITHMS = ["sha256", "sha384", "sha512"];
 
 /** base64url and a missing `=` pad compare equal, as in Node's `fetch`. */
-const normalizeDigest = (digest: string): string =>
-  digest.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+function normalizeDigest(digest: string): string {
+  // A scan, not `/=+$/`: that regex is quadratic on a long run of `=` in the metadata.
+  let end = digest.length;
+  while (end > 0 && digest.charCodeAt(end - 1) === 61 /* '=' */) end -= 1;
+  return digest.slice(0, end).replace(/-/g, "+").replace(/_/g, "/");
+}
 
 /**
  * Subresource Integrity, as `fetch` applies `integrity`: unknown algorithms and
@@ -162,6 +182,7 @@ async function assertIntegrity(
   response: Response,
   metadata: string,
   url: URL,
+  policy: CredentialPolicy,
 ): Promise<void> {
   if (
     response.body !== null &&
@@ -174,15 +195,16 @@ async function assertIntegrity(
   }
   await response.body?.cancel().catch(() => undefined);
   throw new TypeError(
-    `@sapiom/tools: the response from ${url.origin} does not match the request's integrity metadata`,
+    `${policy.label}: the response from ${url.origin} does not match the request's integrity metadata`,
   );
 }
 
-/**
- * Each hop is its own fetch, so none can report what `follow` would: set it on
- * the final response and on every clone of it.
- */
+/** Manual hops cannot preserve fetch's redirected flag, so mark final responses and clones.
+ * Injected minimal responses need not implement clone. */
 function markRedirected(response: Response): Response {
+  if (typeof response.clone !== "function") {
+    return Object.defineProperty(response, "redirected", { value: true });
+  }
   const clone = response.clone.bind(response);
   return Object.defineProperties(response, {
     redirected: { value: true },
@@ -223,11 +245,13 @@ export async function fetchKeepingCredential(
       headers: hopHeaders,
       redirect: "manual",
     });
+    // A response without `headers` (a minimal injected fetch) cannot be followed.
     const location = REDIRECT_STATUSES.has(response.status)
-      ? response.headers.get("location")
+      ? ((response.headers as Headers | undefined)?.get?.("location") ?? null)
       : null;
     if (location === null) {
-      if (integrity) await assertIntegrity(response, integrity, current);
+      if (integrity)
+        await assertIntegrity(response, integrity, current, policy);
       return redirects > 0 ? markRedirected(response) : response;
     }
     // Never handed to the caller: free the connection, even if we refuse the hop.
@@ -237,17 +261,17 @@ export async function fetchKeepingCredential(
     assertCredentialMayTravel(next, policy, current);
     if (redirects === MAX_REDIRECTS) {
       throw new TypeError(
-        `@sapiom/tools: more than ${MAX_REDIRECTS} redirects from ${start.origin}`,
+        `${policy.label}: more than ${MAX_REDIRECTS} redirects from ${start.origin}`,
       );
     }
     if (init.mode === "same-origin" && next.origin !== start.origin) {
       throw new TypeError(
-        `@sapiom/tools: a "same-origin" request to ${start.origin} was redirected to ${next.origin}`,
+        `${policy.label}: a "same-origin" request to ${start.origin} was redirected to ${next.origin}`,
       );
     }
     if (response.status !== 303 && isStreamBody(body)) {
       throw new TypeError(
-        `@sapiom/tools: cannot resend a streamed request body after a ${response.status} from ${current.origin}`,
+        `${policy.label}: cannot resend a streamed request body after a ${response.status} from ${current.origin}`,
       );
     }
     const verb = (method ?? "GET").toUpperCase();
@@ -266,4 +290,36 @@ export async function fetchKeepingCredential(
     current = next;
     href = next.href;
   }
+}
+
+export interface Credential {
+  readonly header: "x-api-key" | "x-sapiom-api-key";
+  readonly value: string;
+}
+
+/** Set the credential after caller headers so they cannot replace it.
+ * Apply shared channel checks and remove credentials when following origin changes. */
+export async function credentialFetch(
+  fetchImpl: typeof globalThis.fetch,
+  url: string,
+  init: RequestInit,
+  credential: Credential | undefined,
+  policy: CredentialPolicy,
+): Promise<Response> {
+  const callerHeaders = headerRecord(init.headers);
+  if (!credential) {
+    return fetchKeepingCredential(fetchImpl, url, init, callerHeaders, policy);
+  }
+  assertCredentialMayTravel(new URL(url), policy);
+  const headers = pick(callerHeaders, (name) => name !== credential.header);
+  headers[credential.header] = credential.value;
+  return fetchKeepingCredential(fetchImpl, url, init, headers, policy);
+}
+
+// Object.entries reads a Headers instance as empty and a tuple list by index.
+function headerRecord(headers: RequestInit["headers"]): Record<string, string> {
+  if (headers instanceof Headers || Array.isArray(headers)) {
+    return Object.fromEntries(new Headers(headers));
+  }
+  return { ...(headers as Record<string, string> | undefined) };
 }

@@ -109,6 +109,11 @@ jobs:
       - name: Check Agent Studio visible terminology
         run: pnpm terminology:check
 
+      # Keep literal tenant-key header writes in the shared owner, except for
+      # the exact-path exceptions in scripts/credential-header-allowlist.json.
+      - name: Check tenant credential headers
+        run: pnpm credential-header:check
+
       # Fixture tests for the gate itself: a typo'd declaration field must fail
       # rather than be silently stripped downstream. This glob also runs the
       # terminology guard's forbidden-copy, compatibility, and stale-allowlist

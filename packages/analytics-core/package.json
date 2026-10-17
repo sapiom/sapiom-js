@@ -22,12 +22,20 @@
       "types": "./dist/cjs/testing/index.d.ts",
       "import": "./dist/esm/testing/index.js",
       "require": "./dist/cjs/testing/index.js"
+    },
+    "./credential": {
+      "types": "./dist/cjs/credential.d.ts",
+      "import": "./dist/esm/credential.js",
+      "require": "./dist/cjs/credential.js"
     }
   },
   "typesVersions": {
     "*": {
       "testing": [
         "./dist/cjs/testing/index.d.ts"
+      ],
+      "credential": [
+        "./dist/cjs/credential.d.ts"
       ]
     }
   },

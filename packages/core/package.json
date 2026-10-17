@@ -52,7 +52,9 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "prepublishOnly": "pnpm build"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@sapiom/analytics-core": "workspace:^"
+  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",

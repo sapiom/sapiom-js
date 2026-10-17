@@ -17,6 +17,8 @@ export type EventSource =
 export interface FetchResponseLike {
   ok: boolean;
   status: number;
+  /** Read only on a redirect, to follow its `location`. */
+  headers?: { get(name: string): string | null };
 }
 
 /** Request options the sender passes to `fetch` (or an injected replacement). */
@@ -25,6 +27,8 @@ export interface FetchRequestInit {
   headers: Record<string, string>;
   body: string;
   signal?: AbortSignal;
+  /** Redirects are followed by the sender, which checks each hop. */
+  redirect?: "manual";
 }
 
 /**

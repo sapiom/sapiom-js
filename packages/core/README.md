@@ -138,6 +138,9 @@ new SapiomClient(config: SapiomClientConfig)
 - `servicesDomain?: string` - Optional: Services domain for gateway clients (default: services.sapiom.ai)
 - `timeout?: number` - Optional: Request timeout in ms (default: 30000)
 - `headers?: Record<string, string>` - Optional: Additional headers
+- `allowInsecureHttp?: boolean` - Optional: Let the API key travel over plain `http://` to a non-loopback host, for a trusted private network (default: false)
+
+The API key only travels over `https://`, or plain `http://` to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` `baseURL` or `servicesDomain` (a Docker service name, a LAN IP) makes every request fail with a `CredentialChannelError` before anything is sent. On a trusted private network, opt in with `allowInsecureHttp: true` or `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects to another origin never carry the key.
 
 #### Methods
 
@@ -225,6 +228,7 @@ All integrations automatically read from environment:
 - `SAPIOM_API_KEY` (required)
 - `SAPIOM_BASE_URL` or `SAPIOM_API_URL` (optional)
 - `SAPIOM_TIMEOUT` (optional, in milliseconds)
+- `SAPIOM_ALLOW_INSECURE_HTTP=1` (optional) - let the API key travel over plain `http://` to a non-loopback host
 
 ## Error Handling
 

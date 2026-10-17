@@ -59,6 +59,11 @@ Both resolve from built-in presets, so no config file is required. A custom
 target can be defined in `~/.sapiom/credentials.json` (the server prints the
 expected shape if it encounters an unknown environment name).
 
+The API key only travels over `https://`, or plain `http://` to a loopback host
+(`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). A custom target on any other
+`http://` host is refused before the request is sent. On a trusted private
+network, set `SAPIOM_ALLOW_INSECURE_HTTP=1` in the server's `env`.
+
 ## Authentication
 
 The first networked call (`link`, `deploy`, `run`, `inspect`, `signal`) needs a
