@@ -383,6 +383,25 @@ describe("credentialFetch", () => {
     ).rejects.toBeInstanceOf(CredentialChannelError);
   });
 
+  it("without a credential, refuses a redirect from https down to plain http", async () => {
+    const { calls, fetchImpl } = recorder(
+      new Response(null, {
+        status: 307,
+        headers: { location: "http://other.internal/x" },
+      }),
+    );
+    await expect(
+      credentialFetch(
+        fetchImpl,
+        "https://api.example/x",
+        { headers: { authorization: "Bearer caller" } },
+        undefined,
+        STRICT,
+      ),
+    ).rejects.toBeInstanceOf(CredentialChannelError);
+    expect(calls).toHaveLength(1);
+  });
+
   it("returns a minimal redirect with no headers as is, after one call", async () => {
     const minimal = { ok: false, status: 307 };
     const { calls, fetchImpl } = recorder(minimal);
