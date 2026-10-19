@@ -9,10 +9,10 @@
   },
   "dependencies": {
     "@sapiom/langchain": "latest",
-    "@langchain/anthropic": "^0.3.0",
-    "@langchain/core": "^0.3.0",
+    "@langchain/anthropic": "~1.5.12",
+    "@langchain/core": "~1.2.1",
     "dotenv": "^16.4.5",
-    "langchain": "^0.3.0",
+    "langchain": "~1.5.3",
     "zod": "^3.22.4"
   },
   "devDependencies": {
