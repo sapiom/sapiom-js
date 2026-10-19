@@ -51,7 +51,7 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  *
  * const model = new SapiomChatAnthropic(
  *   {
- *     model: "claude-sonnet-5-5",
+ *     model: "claude-sonnet-4-5",
  *     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
  *   },
  *   {
@@ -465,7 +465,7 @@ export class SapiomChatAnthropic<
  * import { wrapChatAnthropic } from "@sapiom/langchain-classic";
  *
  * // Existing model
- * const model = new ChatAnthropic({ model: "claude-sonnet-5-5" });
+ * const model = new ChatAnthropic({ model: "claude-sonnet-4-5" });
  *
  * // Wrap with Sapiom tracking - one line change
  * const tracked = wrapChatAnthropic(model, {

@@ -172,7 +172,7 @@ import { ChatAnthropic } from '@langchain/anthropic';
 const agent = await createSapiomReactAgent(
   {
     llm: new ChatOpenAI({ model: 'gpt-4' }),
-    // or: llm: new ChatAnthropic({ model: 'claude-sonnet-5-5' }),
+    // or: llm: new ChatAnthropic({ model: 'claude-sonnet-4-5' }),
     tools: [...yourTools]
   },
   {
@@ -208,10 +208,12 @@ const openai = new SapiomChatOpenAI(
 
 // Anthropic
 const anthropic = new SapiomChatAnthropic(
-  { model: 'claude-sonnet-5-5', anthropicApiKey: process.env.ANTHROPIC_API_KEY },
+  { model: 'claude-sonnet-4-5', anthropicApiKey: process.env.ANTHROPIC_API_KEY },
   { apiKey: process.env.SAPIOM_API_KEY }
 );
 ```
+
+> **Note:** On LangChain 0.3, `@langchain/anthropic` sends `thinking: { type: "disabled" }` on every request by default, and Claude 5.5-generation models reject disabled thinking with a 400. For those models, use [`@sapiom/langchain`](../langchain) with LangChain v1.
 
 #### Tools
 
