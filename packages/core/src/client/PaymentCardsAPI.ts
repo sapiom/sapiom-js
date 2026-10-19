@@ -8,6 +8,7 @@ import type { HttpClient } from "./HttpClient.js";
 export class PaymentCardsAPI {
   constructor(private readonly httpClient: HttpClient) {}
 
+  /** Read a card's versioned spending limits and current usage. Requires org.read. */
   async getSpendingLimits(cardId: string): Promise<CardSpendingLimitsSummary> {
     return this.httpClient.request({
       method: "GET",
