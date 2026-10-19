@@ -1,12 +1,8 @@
 import { SapiomClient } from "./SapiomClient";
-import type {
-  CardSpendingLimitsSettings,
-  RefundConfirmationRequest,
-} from "../types/payment-card";
+import type { CardSpendingLimitsSettings } from "../types/payment-card";
 
 describe("Card-limit management through the public client", () => {
   const cardId = "11111111-1111-4111-8111-111111111111";
-  const transactionId = "22222222-2222-4222-8222-222222222222";
   let client: SapiomClient;
   let fetchMock: jest.Mock;
   const originalFetch = global.fetch;
@@ -64,39 +60,5 @@ describe("Card-limit management through the public client", () => {
       client.paymentCards.setSpendingLimits(cardId, settings),
     ).rejects.toThrow(/409.*RULE_VERSION_CONFLICT/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-  it("preserves refund identity, evidence and idempotency through transport retries", async () => {
-    const receipt: RefundConfirmationRequest = {
-      paymentTransactionId: transactionId,
-      externalRefundId: "refund-1",
-      amount: "10.00",
-      currency: "USD",
-      confirmedAt: "2026-10-18T12:00:00Z",
-      idempotencyKey: "refund-1",
-      evidence: {
-        source: "trusted_platform",
-        sourceReference: "verified-receipt-1",
-        merchantOrderId: "order-1",
-      },
-    };
-    fetchMock
-      .mockResolvedValueOnce(json({ message: "temporary" }, 503))
-      .mockResolvedValueOnce(json({ id: "receipt-1", state: "applied" }));
-    expect(
-      (
-        await client.transactions.recordRefundConfirmation(
-          transactionId,
-          receipt,
-        )
-      ).state,
-    ).toBe("applied");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const [url, request] of fetchMock.mock.calls) {
-      expect(String(url)).toBe(
-        `https://api.test/v1/transactions/${transactionId}/refund-confirmations`,
-      );
-      expect(request.method).toBe("POST");
-      expect(JSON.parse(request.body)).toEqual(receipt);
-    }
   });
 });

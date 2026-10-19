@@ -19,68 +19,50 @@ Core SDK for Sapiom API providing HTTP client adapters, transaction management, 
 
 ## Installation
 
-### Card spending limits (unreleased)
+### Card spending limits
 
-The working-tree client adds management methods for platforms integrating saved-card purchases.
-Use a backend credential with `org.read` to read limits and `org.write` to change them or record
-verified refunds. Keep that credential outside the purchasing agent. These methods require the
-matching backend deployment and SDK release.
+Use a trusted platform credential with `org.read` / `org.write` to manage a card's common spending rules. Keep write permissions outside the purchasing agent. These methods require the corresponding backend deployment.
 
 ```typescript
-const saved = await client.paymentCards.getSpendingLimits(cardId);
-const updated = await client.paymentCards.setSpendingLimits(cardId, {
-  version: saved.version,
+const current = await client.paymentCards.getSpendingLimits(cardId);
+const saved = await client.paymentCards.setSpendingLimits(cardId, {
+  version: current.version,
   purchaseLimit: { amount: "100.00", currency: "USD" },
   recurringLimit: { amount: "500.00", currency: "USD", period: "month" },
   customLimit: null,
 });
-console.log(updated.usage.recurringLimit?.remaining);
+console.log(saved.usage.recurringLimit?.remaining);
 ```
 
-All three nullable slots are required. Custom limits use inclusive UTC `YYYY-MM-DD` start/end
-dates; recurring periods are UTC calendar weeks (Monday start), months or years. An unchanged
-save retains usage; a changed cumulative budget starts a fresh allowance. Handle a version
-conflict by reading again and resolving the edit. Removing all limits blocks purchasing.
+The helper owns one ordinary `payment_spending_limit` rule scoped to this card. Other Rules remain independent and appear in `additionalLimits`; transaction-specific conditions still require the full purchase context. A rule grouped by `paymentCardId` gives every card its own allowance. An ungrouped rule can share a budget across cards.
 
-`client.transactions.recordRefundConfirmation(transactionId, receipt)` records a refund your
-platform has already verified. Supply the original payment ID, external refund ID, amount and
-currency, confirmation time, idempotency key and source/order references. It never initiates
-a merchant refund. A refund credits the purchase's original allowance; an older-period refund
-does not increase today's allowance. A receipt awaiting purchase confirmation remains pending.
+Periods are UTC calendar weeks (Monday), months, years, or inclusive custom dates. A custom-date budget applies only within its dates. No rule means no spending-limit prerequisite. Other applicable Rules and card readiness checks still apply.
 
-The reusable example is [examples/card-spending-limits.ts](examples/card-spending-limits.ts).
+Pending payments reserve capacity. Releasing the raw card credential books the full payment amount once; later merchant failures or cancellation do not restore it. M0 does not infer charges or refunds from merchant outcomes and exposes no refund-confirmation API.
 
-### Install the published package
-
-```bash
-npm install @sapiom/core
-# or
-pnpm add @sapiom/core
-# or
-yarn add @sapiom/core
-```
+Unchanged saves preserve version and usage. Changing a cumulative budget starts a fresh allowance for that slot; other slots retain usage. Submit the latest version to avoid conflicting updates. Quantities are null when accounting is unavailable. `configurationActive` describes this helper's configuration, not permission to purchase.
 
 ## Quick Start
 
 ### Direct API Client
 
 ```typescript
-import { SapiomClient } from '@sapiom/core';
+import { SapiomClient } from "@sapiom/core";
 
 const client = new SapiomClient({
   apiKey: process.env.SAPIOM_API_KEY,
-  baseURL: 'https://api.sapiom.ai' // optional
+  baseURL: "https://api.sapiom.ai", // optional
 });
 
 // Create a transaction
 const transaction = await client.transactions.create({
-  service: 'api',
-  action: 'call',
-  resource: 'completion',
+  service: "api",
+  action: "call",
+  resource: "completion",
   qualifiers: {
-    model: 'gpt-4',
-    tokens: 1000
-  }
+    model: "gpt-4",
+    tokens: 1000,
+  },
 });
 
 // Check transaction status
@@ -96,17 +78,20 @@ npm install @sapiom/axios axios
 ```
 
 ```typescript
-import axios from 'axios';
-import { withSapiom } from '@sapiom/axios';
+import axios from "axios";
+import { withSapiom } from "@sapiom/axios";
 
-const client = withSapiom(axios.create({
-  baseURL: 'https://api.example.com'
-}), {
-  apiKey: process.env.SAPIOM_API_KEY
-});
+const client = withSapiom(
+  axios.create({
+    baseURL: "https://api.example.com",
+  }),
+  {
+    apiKey: process.env.SAPIOM_API_KEY,
+  },
+);
 
 // Automatically handles 402 payment flows
-const response = await client.get('/premium-endpoint');
+const response = await client.get("/premium-endpoint");
 ```
 
 See [@sapiom/axios](../axios/README.md) for complete documentation.
@@ -120,14 +105,14 @@ npm install @sapiom/fetch
 ```
 
 ```typescript
-import { createFetch } from '@sapiom/fetch';
+import { createFetch } from "@sapiom/fetch";
 
 const safeFetch = createFetch({
-  apiKey: process.env.SAPIOM_API_KEY
+  apiKey: process.env.SAPIOM_API_KEY,
 });
 
 // Drop-in replacement for native fetch
-const response = await safeFetch('https://api.example.com/data');
+const response = await safeFetch("https://api.example.com/data");
 ```
 
 See [@sapiom/fetch](../fetch/README.md) for complete documentation.
@@ -141,15 +126,15 @@ npm install @sapiom/node-http
 ```
 
 ```typescript
-import { createClient } from '@sapiom/node-http';
+import { createClient } from "@sapiom/node-http";
 
 const client = createClient({
-  apiKey: process.env.SAPIOM_API_KEY
+  apiKey: process.env.SAPIOM_API_KEY,
 });
 
 const response = await client.request({
-  method: 'GET',
-  url: 'https://api.example.com/data'
+  method: "GET",
+  url: "https://api.example.com/data",
 });
 ```
 
@@ -166,6 +151,7 @@ new SapiomClient(config: SapiomClientConfig)
 ```
 
 **Config options:**
+
 - `apiKey: string` - Required: Your Sapiom API key
 - `baseURL?: string` - Optional: API base URL (default: https://api.sapiom.ai)
 - `servicesDomain?: string` - Optional: Services domain for gateway clients (default: services.sapiom.ai)
@@ -206,21 +192,21 @@ client.transactions.getPaymentDetails(transaction): PaymentDetails | null
 
 ```typescript
 // Store one secret under an external ref
-await client.vault.set('agent-123', 'OPENAI_API_KEY', {
-  value: 'sk-...'
+await client.vault.set("agent-123", "OPENAI_API_KEY", {
+  value: "sk-...",
 });
 
 // Read one secret. Missing keys return null.
-const openaiKey = await client.vault.get('agent-123', 'OPENAI_API_KEY');
+const openaiKey = await client.vault.get("agent-123", "OPENAI_API_KEY");
 
 // Read a subset of secrets from the same ref
-const secrets = await client.vault.getMany('agent-123', [
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY'
+const secrets = await client.vault.getMany("agent-123", [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
 ]);
 
 // Remove one key
-await client.vault.deleteKey('agent-123', 'OPENAI_API_KEY');
+await client.vault.deleteKey("agent-123", "OPENAI_API_KEY");
 ```
 
 ## HTTP Integrations
@@ -280,7 +266,11 @@ try {
 ### Custom HTTP Adapter
 
 ```typescript
-import type { HttpClientAdapter, HttpRequest, HttpResponse } from '@sapiom/core';
+import type {
+  HttpClientAdapter,
+  HttpRequest,
+  HttpResponse,
+} from "@sapiom/core";
 
 class MyCustomAdapter implements HttpClientAdapter {
   async request(config: HttpRequest): Promise<HttpResponse> {
@@ -292,11 +282,11 @@ class MyCustomAdapter implements HttpClientAdapter {
 ### Payment Error Detection
 
 ```typescript
-import { isPaymentRequiredError, extractX402Response } from '@sapiom/core';
+import { isPaymentRequiredError, extractX402Response } from "@sapiom/core";
 
 if (isPaymentRequiredError(error)) {
   const x402Response = extractX402Response(error);
-  console.log('Payment required:', x402Response);
+  console.log("Payment required:", x402Response);
 }
 ```
 
@@ -311,7 +301,7 @@ import type {
   HttpResponse,
   X402Response,
   X402PaymentRequirement,
-} from '@sapiom/core';
+} from "@sapiom/core";
 ```
 
 ## License

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add trusted-platform card spending-limit read/write methods and confirmed-refund recording, with versioned settings and explicit evidence/idempotency types. Requires the corresponding backend deployment; package publication is pending.
+- Add trusted-platform card spending-limit read/write helpers over ordinary payment Rules, with versioned settings, shared payment usage and additional applicable limits. Card spending is booked at credential release; no refund-confirmation API is provided. Requires the corresponding backend deployment; package publication is pending.
 
 ## 0.5.0
 

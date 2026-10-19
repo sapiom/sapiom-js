@@ -23,8 +23,7 @@ export type {
   CardSpendingLimitsSettings,
   CardAllowanceUsage,
   CardSpendingLimitsSummary,
-  RefundConfirmationRequest,
-  RefundConfirmationReceipt,
+  PaymentLimitSummary,
 } from "./types/payment-card.js";
 export { VaultAPI } from "./client/VaultAPI.js";
 
