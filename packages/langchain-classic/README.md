@@ -172,7 +172,7 @@ import { ChatAnthropic } from '@langchain/anthropic';
 const agent = await createSapiomReactAgent(
   {
     llm: new ChatOpenAI({ model: 'gpt-4' }),
-    // or: llm: new ChatAnthropic({ model: 'claude-3-5-sonnet-20241022' }),
+    // or: llm: new ChatAnthropic({ model: 'claude-sonnet-5-5' }),
     tools: [...yourTools]
   },
   {
@@ -208,7 +208,7 @@ const openai = new SapiomChatOpenAI(
 
 // Anthropic
 const anthropic = new SapiomChatAnthropic(
-  { model: 'claude-3-5-sonnet-20241022', anthropicApiKey: process.env.ANTHROPIC_API_KEY },
+  { model: 'claude-sonnet-5-5', anthropicApiKey: process.env.ANTHROPIC_API_KEY },
   { apiKey: process.env.SAPIOM_API_KEY }
 );
 ```

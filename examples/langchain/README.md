@@ -34,7 +34,7 @@ import { createSapiomMiddleware } from "@sapiom/langchain";
 
 // Create agent with Sapiom middleware
 const agent = createAgent({
-  model: "anthropic:claude-3-5-haiku-latest",
+  model: "anthropic:claude-haiku-4-5",
   tools: [weatherTool, calculatorTool],
   middleware: [
     createSapiomMiddleware({
