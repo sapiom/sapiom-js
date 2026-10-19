@@ -5,6 +5,7 @@
  */
 import { createClient } from "../index.js";
 import {
+  LlmRefusalError,
   LlmStructuredOutputMissingError,
   LlmStructuredOutputTruncatedError,
   structuredOf,
@@ -96,11 +97,12 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     required: ["name", "age"],
   };
 
-  it("injects the tool + forces tool_choice, appended to any caller-declared tools", async () => {
+  it("injects the tool and requests it under tool_choice auto, appended to any caller-declared tools", async () => {
     const cap: Captured = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, TOOL_CALL_RESPONSE) });
     await sapiom.llm.run({
       request: {
+        system: "You extract people from text.",
         messages: [{ role: "user", content: "extract the person" }],
         max_tokens: 256,
         tools: [{ name: "unrelated_tool", input_schema: { type: "object" } }],
@@ -112,7 +114,33 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
       { name: "unrelated_tool", input_schema: { type: "object" } },
       { name: "record_person", input_schema: SCHEMA },
     ]);
-    expect(body.tool_choice).toEqual({ type: "tool", name: "record_person" });
+    // A forced tool_choice ({ type: "tool" } / "any") is a 400 on current Claude models.
+    expect(body.tool_choice).toEqual({ type: "auto" });
+    expect(body.system).toBe(
+      "You extract people from text.\n\nReturn your final answer by calling the `record_person` tool exactly once.",
+    );
+  });
+
+  it("asks for the tool in a block-array system prompt, and when there is none", async () => {
+    const cap: Captured = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, TOOL_CALL_RESPONSE) });
+    const cached = { type: "text", text: "Stable prefix.", cache_control: { type: "ephemeral" } };
+    await sapiom.llm.run({
+      request: { system: [cached], messages: [{ role: "user", content: "extract" }], max_tokens: 256 },
+      output: { name: "record_person", schema: SCHEMA },
+    });
+    expect(JSON.parse(cap.body ?? "{}").system).toEqual([
+      cached,
+      { type: "text", text: "Return your final answer by calling the `record_person` tool exactly once." },
+    ]);
+
+    await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "extract" }], max_tokens: 256 },
+      output: { name: "record_person", schema: SCHEMA },
+    });
+    expect(JSON.parse(cap.body ?? "{}").system).toBe(
+      "Return your final answer by calling the `record_person` tool exactly once.",
+    );
   });
 
   it("does not mutate the caller's original request object", async () => {
@@ -122,6 +150,7 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     await sapiom.llm.run({ request, output: { name: "record_person", schema: SCHEMA } });
     expect(request).not.toHaveProperty("tools");
     expect(request).not.toHaveProperty("tool_choice");
+    expect(request).not.toHaveProperty("system");
   });
 
   it("leaves the request untouched, and the response type unchanged, when output is omitted", async () => {
@@ -598,6 +627,52 @@ describe("llm.run — a structured call truncated before its tool call", () => {
       request: { messages: [{ role: "user", content: "write" }], max_tokens: 64 },
     });
     expect(textOf(res)).toBe("partial…");
+  });
+});
+
+describe("llm.run — a refused request", () => {
+  const REFUSED = {
+    id: "msg_refused",
+    type: "message",
+    model: "smart",
+    served_class: "large",
+    stop_reason: "refusal",
+    stop_details: { type: "refusal", category: "cyber", explanation: "Declined by policy." },
+    content: [],
+  };
+
+  it("throws LlmRefusalError instead of returning the refused turn", async () => {
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, REFUSED) });
+    const error = await sapiom.llm
+      .run({ request: { messages: [{ role: "user", content: "hi" }], max_tokens: 4096 } })
+      .catch((err: unknown) => err as LlmRefusalError);
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    expect(error.name).toBe("LlmRefusalError");
+    expect(error.category).toBe("cyber");
+    expect(error.explanation).toBe("Declined by policy.");
+    expect(error.servedClass).toBe("large");
+    expect(error.message).toContain("stop_reason: refusal; category: cyber");
+    expect(error.response).toBe(REFUSED);
+  });
+
+  it("reports the refusal, not a missing structured call, when output was set", async () => {
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, REFUSED) });
+    await expect(
+      sapiom.llm.run({
+        request: { messages: [{ role: "user", content: "extract" }], max_tokens: 4096 },
+        output: { name: "record_person", schema: { type: "object" } },
+      }),
+    ).rejects.toBeInstanceOf(LlmRefusalError);
+  });
+
+  it("reads a refusal with no stop_details as category null", async () => {
+    const bare = { content: [], stop_reason: "refusal" };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, bare) });
+    const error = await sapiom.llm
+      .run({ request: { messages: [{ role: "user", content: "hi" }], max_tokens: 4096 } })
+      .catch((err: unknown) => err as LlmRefusalError);
+    expect(error.category).toBeNull();
+    expect(error.explanation).toBeNull();
   });
 });
 

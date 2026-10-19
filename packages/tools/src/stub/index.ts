@@ -737,7 +737,7 @@ function stubVideoResult(input: VideoCreateInput): VideoGenerationResult {
 
 /**
  * Build a placeholder value satisfying a `LlmRunSpec.output` JSON Schema, so the
- * stubbed forced tool call answers in the shape the caller declared.
+ * stubbed requested tool call answers in the shape the caller declared.
  *
  * Deliberately minimal — required properties only, one element per array, the
  * first `enum` member, `minimum`/`minItems` respected — and every string is
@@ -1448,7 +1448,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             type: "message",
             role: "assistant",
             model: spec.model ?? "smart",
-            // `output` forces a tool call on the real surface, so the stub has
+            // `output` requests a tool call on the real surface, so the stub has
             // to answer in the same shape — otherwise `structuredOf` reads
             // `undefined` locally for code that would get a value in
             // production, and every caller that (rightly) refuses to invent a

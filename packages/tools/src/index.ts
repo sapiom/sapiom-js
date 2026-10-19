@@ -141,11 +141,16 @@ export {
 // raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
 export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
-// Thrown by `llm.run` when a forced structured-output tool call never arrived:
+// Thrown by `llm.run` when a requested structured-output tool call never arrived:
 // `Truncated` when the turn hit `max_tokens` first, `Missing` when it ended for
-// any other reason without calling the tool — top-level so a step can catch it by
-// name without reaching into the `llm` namespace.
-export { LlmStructuredOutputMissingError, LlmStructuredOutputTruncatedError } from "./llm/index.js";
+// any other reason without calling the tool; `Refusal` when the model declined the
+// request (`stop_reason: "refusal"`) — top-level so a step can catch each by name
+// without reaching into the `llm` namespace.
+export {
+  LlmRefusalError,
+  LlmStructuredOutputMissingError,
+  LlmStructuredOutputTruncatedError,
+} from "./llm/index.js";
 export type { LlmTruncationReason } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
