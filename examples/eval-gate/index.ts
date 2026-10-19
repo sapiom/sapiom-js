@@ -193,7 +193,7 @@ const draft = defineStep({
     const res = await ctx.sapiom.llm.run({
       request: {
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 500,
+        max_tokens: 4096, // thinking is spent from this budget too
       },
       model: ctx.shared.get("model"),
     });
