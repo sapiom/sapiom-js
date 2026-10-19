@@ -10,9 +10,25 @@ import {
   TransactionCostResponse,
 } from "../types/transaction.js";
 import type { HttpClient } from "./HttpClient.js";
+import type {
+  RefundConfirmationRequest,
+  RefundConfirmationReceipt,
+} from "../types/payment-card.js";
 
 export class TransactionAPI {
   constructor(private readonly httpClient: HttpClient) {}
+
+  /** Record a refund already verified by the trusted platform. Requires org.write; does not initiate a merchant refund. */
+  async recordRefundConfirmation(
+    transactionId: string,
+    receipt: RefundConfirmationRequest,
+  ): Promise<RefundConfirmationReceipt> {
+    return this.httpClient.request({
+      method: "POST",
+      url: `/transactions/${encodeURIComponent(transactionId)}/refund-confirmations`,
+      body: receipt,
+    });
+  }
 
   /**
    * Create a new transaction

@@ -1,5 +1,9 @@
 # @sapiom/core
 
+## Unreleased
+
+- Add trusted-platform card spending-limit read/write methods and confirmed-refund recording, with versioned settings and explicit evidence/idempotency types. Requires the corresponding backend deployment; package publication is pending.
+
 ## 0.5.0
 
 ### Minor Changes

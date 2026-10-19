@@ -3,6 +3,7 @@ import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
 import { IdentityManager } from "./IdentityManager.js";
 import { TransactionAPI } from "./TransactionAPI.js";
+import { PaymentCardsAPI } from "./PaymentCardsAPI.js";
 import { VaultAPI } from "./VaultAPI.js";
 
 const DEFAULT_SERVICES_DOMAIN = "services.sapiom.ai";
@@ -92,6 +93,7 @@ export class SapiomClient {
   public readonly apiKeys: ApiKeyAPI;
   public readonly identity: IdentityManager;
   public readonly transactions: TransactionAPI;
+  public readonly paymentCards: PaymentCardsAPI;
   public readonly vault: VaultAPI;
 
   constructor(config: SapiomClientConfig) {
@@ -128,6 +130,7 @@ export class SapiomClient {
       backgroundRefresh: config.backgroundRefresh,
     });
     this.transactions = new TransactionAPI(this.httpClient);
+    this.paymentCards = new PaymentCardsAPI(this.httpClient);
     this.vault = new VaultAPI(this.vaultHttpClient);
   }
 

@@ -19,6 +19,39 @@ Core SDK for Sapiom API providing HTTP client adapters, transaction management, 
 
 ## Installation
 
+### Card spending limits (unreleased)
+
+The working-tree client adds management methods for platforms integrating saved-card purchases.
+Use a backend credential with `org.read` to read limits and `org.write` to change them or record
+verified refunds. Keep that credential outside the purchasing agent. These methods require the
+matching backend deployment and SDK release.
+
+```typescript
+const saved = await client.paymentCards.getSpendingLimits(cardId);
+const updated = await client.paymentCards.setSpendingLimits(cardId, {
+  version: saved.version,
+  purchaseLimit: { amount: "100.00", currency: "USD" },
+  recurringLimit: { amount: "500.00", currency: "USD", period: "month" },
+  customLimit: null,
+});
+console.log(updated.usage.recurringLimit?.remaining);
+```
+
+All three nullable slots are required. Custom limits use inclusive UTC `YYYY-MM-DD` start/end
+dates; recurring periods are UTC calendar weeks (Monday start), months or years. An unchanged
+save retains usage; a changed cumulative budget starts a fresh allowance. Handle a version
+conflict by reading again and resolving the edit. Removing all limits blocks purchasing.
+
+`client.transactions.recordRefundConfirmation(transactionId, receipt)` records a refund your
+platform has already verified. Supply the original payment ID, external refund ID, amount and
+currency, confirmation time, idempotency key and source/order references. It never initiates
+a merchant refund. A refund credits the purchase's original allowance; an older-period refund
+does not increase today's allowance. A receipt awaiting purchase confirmation remains pending.
+
+The reusable example is [examples/card-spending-limits.ts](examples/card-spending-limits.ts).
+
+### Install the published package
+
 ```bash
 npm install @sapiom/core
 # or

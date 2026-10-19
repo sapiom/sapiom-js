@@ -15,6 +15,17 @@ export { IdentityManager } from "./client/IdentityManager.js";
 export type { IdentityManagerOptions } from "./client/IdentityManager.js";
 export { ApiKeyAPI } from "./client/ApiKeyAPI.js";
 export { TransactionAPI } from "./client/TransactionAPI.js";
+export { PaymentCardsAPI } from "./client/PaymentCardsAPI.js";
+export type {
+  CardMoneyLimit,
+  CardRecurringLimit,
+  CardCustomLimit,
+  CardSpendingLimitsSettings,
+  CardAllowanceUsage,
+  CardSpendingLimitsSummary,
+  RefundConfirmationRequest,
+  RefundConfirmationReceipt,
+} from "./types/payment-card.js";
 export { VaultAPI } from "./client/VaultAPI.js";
 
 // Payment Error Detection
