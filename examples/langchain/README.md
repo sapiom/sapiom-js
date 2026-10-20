@@ -25,6 +25,7 @@ npm start
 - Use `createSapiomMiddleware()` with LangChain's `createAgent()`
 - All model calls and tool invocations are tracked automatically
 - No need to wrap individual tools - middleware handles everything
+- Requires LangChain v1 (`langchain` 1.5 or later), which `@sapiom/langchain` peers on
 
 ## Key Code
 
