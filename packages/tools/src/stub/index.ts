@@ -2468,7 +2468,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             messages: [
               {
                 type: "message",
-                ts: "1700000000.000100",
+                // Not postMessage's stub ts: this is another user's message, not the bot's.
+                ts: "1700000000.000050",
                 user: "U0STUBUSER",
                 text: "stub channel message",
               },
