@@ -1110,18 +1110,31 @@ describe("interceptor CDP decisions", () => {
         ...paused,
         params: { ...paused.params, requestId: "req-b" },
       });
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      expect(calls).toBe(1);
-      release();
       await waitFor(
         () =>
           stub.commands.filter(
-            (command) => command.method === "Fetch.failRequest",
+            (command) =>
+              command.method === "Runtime.evaluate" &&
+              command.params.expression === "location.origin",
           ).length >= 2,
-        "both failed",
+        "second origin",
+      );
+      // The stub writes this reply before the command is visible. setImmediate
+      // runs after the poll that applies it, which is when req-b joins.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toBe(1);
+      release();
+      await waitFor(
+        () => events.filter((event) => event.type === "refused").length >= 2,
+        "both refused",
       );
       expect(calls).toBe(1);
       expect(warnings).toEqual(["payment relay refused the paused request"]);
+      expect(
+        stub.commands.filter(
+          (command) => command.method === "Fetch.failRequest",
+        ),
+      ).toHaveLength(2);
       expect(events.filter((event) => event.type === "refused")).toHaveLength(
         2,
       );
