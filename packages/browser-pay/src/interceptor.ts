@@ -24,10 +24,12 @@ export interface AttachOptions {
   /** Relay profile, for example `shopify-card-vault`. */
   profileId: string;
   /**
-   * How long to wait for the relay before failing the paused request.
-   * The relay is not retried. `outcome: "unknown"` is not sent again.
-   * A relay that ignores the abort signal still fails here. One waiter's
-   * timeout does not abort a shared flight that another waiter still holds.
+   * How long to wait for a terminal relay outcome before failing the paused
+   * request. `relay_in_progress` is posted again with the same idempotency
+   * key until this deadline. Any other refusal fails the request.
+   * `outcome: "unknown"` is not sent again. A relay that ignores the abort
+   * signal still fails here. One waiter's timeout does not abort a shared
+   * flight that another waiter still holds.
    */
   timeoutMs?: number;
   /** Defaults to a logger that discards every line. */
@@ -69,6 +71,8 @@ export type InterceptorTarget =
   | { context(): { browser(): { wsEndpoint(): string } | null } | null };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
+const RELAY_POLL_INITIAL_MS = 200;
+const RELAY_POLL_MAX_MS = 2_000;
 
 const TARGET_FILTER = [{ type: "page" }, { type: "iframe" }];
 const CHILD_FILTER = [{ type: "iframe" }];
@@ -523,14 +527,37 @@ class PaymentInterceptor {
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
-    const relayed = await this.callRelay(
-      request,
-      read.body,
-      pageOrigin,
-      idempotencyKey,
-    );
-    if (relayed.action === "fail") return relayed;
-    return this.decisionForOutcome(relayed.response, idempotencyKey);
+    return this.awaitRelay(request, read.body, pageOrigin, idempotencyKey);
+  }
+
+  private async awaitRelay(
+    request: PausedRequest,
+    body: string,
+    pageOrigin: string,
+    idempotencyKey: string,
+  ): Promise<Decision> {
+    const deadline = Date.now() + this.timeoutMs;
+    let poll = 0;
+    for (;;) {
+      if (this.closed) return { action: "fail", reason: "detached" };
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { action: "fail", reason: "timeout" };
+      const relayed = await this.callRelay(
+        request,
+        body,
+        pageOrigin,
+        idempotencyKey,
+        remaining,
+      );
+      if (relayed.action === "fail") return relayed;
+      if (!isRelayInProgress(relayed.response)) {
+        return this.decisionForOutcome(relayed.response, idempotencyKey);
+      }
+      poll += 1;
+      const waitMs = Math.min(relayPollDelayMs(poll), deadline - Date.now());
+      if (waitMs <= 0) return { action: "fail", reason: "timeout" };
+      await sleep(waitMs);
+    }
   }
 
   private async readHeld(
@@ -555,6 +582,7 @@ class PaymentInterceptor {
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
+    budgetMs: number,
   ): Promise<
     | { action: "ok"; response: RelayResponse }
     | { action: "fail"; reason: FailureReason }
@@ -577,7 +605,7 @@ class PaymentInterceptor {
       ),
     );
     try {
-      const response = await failAfter(flight.promise, this.timeoutMs);
+      const response = await failAfter(flight.promise, budgetMs);
       this.releaseWaiter(flight);
       return { action: "ok", response };
     } catch (error) {
@@ -782,6 +810,23 @@ class PaymentInterceptor {
 
 function inflightKey(sessionId: string, requestId: string): string {
   return `${sessionId}\n${requestId}`;
+}
+
+function isRelayInProgress(response: RelayResponse): boolean {
+  return (
+    response.outcome === "refused" && response.reason === "relay_in_progress"
+  );
+}
+
+function relayPollDelayMs(attempt: number): number {
+  const shift = Math.min(Math.max(attempt, 1) - 1, 10);
+  return Math.min(RELAY_POLL_INITIAL_MS * 2 ** shift, RELAY_POLL_MAX_MS);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function failureReason(error: unknown): FailureReason {

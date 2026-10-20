@@ -9,7 +9,7 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 3. The agent opens a browser session and drives checkout, typing the placeholder.
 4. `attachInterceptor` pauses the card request, including inside a payment iframe.
 5. A match is `POST /v1/transactions/{transactionId}/payment/relay`.
-6. The page receives the processor status, headers, and body. A refusal, an unknown outcome, or a relay error fails the paused request.
+6. The page receives the processor status, headers, and body. A terminal refusal, an unknown outcome, or a relay error fails the paused request. `relay_in_progress` keeps the request paused and asks again with the same idempotency key.
 
 ## Relay contract
 
@@ -53,7 +53,7 @@ Refusal, nothing forwarded:
 { "outcome": "refused", "reason": "already_relayed" }
 ```
 
-The reason string is passed through. Reasons David returns include `already_relayed`, `total_changed`, `key_rotated`, `card_removed`, `unknown_injection`, `injection_expired`, `payment_released`, `relay_in_progress`, `payment_not_authorized`, `destination_not_allowed`, `card_fields_invalid`, `merchant_mismatch`, and `provider_unavailable`.
+The reason string is passed through. Reasons David returns include `already_relayed`, `total_changed`, `key_rotated`, `card_removed`, `unknown_injection`, `injection_expired`, `payment_released`, `relay_in_progress`, `payment_not_authorized`, `destination_not_allowed`, `card_fields_invalid`, `merchant_mismatch`, and `provider_unavailable`. `relay_in_progress` is not terminal. The paused request stays open and the same idempotency key is posted again until the outcome is terminal or the deadline passes.
 
 No answer after the send:
 
@@ -87,7 +87,7 @@ A request is relayed when the held placeholder number appears in the URL or body
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
-Identical in-flight retries (same method, URL, and body) share one relay call. `AttachOptions.timeoutMs` is the only deadline on that call. It defaults to 20 seconds. A relay that ignores abort still fails when the deadline passes, and one waiter's timeout does not abort a later waiter of the same flight. A refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
+Identical in-flight retries (same method, URL, and body) share one relay call. `AttachOptions.timeoutMs` is the deadline for a terminal outcome. It defaults to 20 seconds. While the relay answers `relay_in_progress`, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. A relay that ignores abort still fails when the deadline passes, and one waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
 
 Captcha widgets, extension pages, and workers are not paused. A blank iframe, including `about:blank`, stays paused so a navigation onto the card URL cannot slip through. A placeholder that shows up on any other page or iframe is relayed.
 
