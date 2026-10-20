@@ -63,7 +63,7 @@ No answer after the send:
 
 The injection is consumed. The paused request fails and the same body is not sent again.
 
-A transport error, a redirect, a non-2xx HTTP status, or an unreadable body fails the paused browser request. David's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
+A redirect, an HTTP 401 or 500, or an unreadable body fails the paused browser request. David's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
 
 ## What an agent does
 
@@ -87,7 +87,7 @@ A request is relayed when the held placeholder number appears in the URL or body
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
-Identical in-flight retries (same method, URL, and body) share one relay call. `AttachOptions.timeoutMs` is the deadline for a terminal outcome. It defaults to 20 seconds. While the relay answers `relay_in_progress`, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. A relay that ignores abort still fails when the deadline passes, and one waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
+Identical in-flight retries (same method, URL, and body) share one relay call. `AttachOptions.timeoutMs` is the deadline for a terminal outcome. It defaults to 55 seconds, enough for two attempts inside a handler budget under 30 seconds. `AttachOptions.attemptTimeoutMs` is one POST. It defaults to 25 seconds so the client aborts before a router cuts the socket at 30 seconds. While the relay answers `relay_in_progress`, or an attempt times out, or the transport fails, or the router returns 502, 503, or 504, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. One waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. `outcome: "unknown"` is not sent again.
 
 Captcha widgets, extension pages, and workers are not paused. A blank iframe, including `about:blank`, stays paused so a navigation onto the card URL cannot slip through. A placeholder that shows up on any other page or iframe is relayed.
 

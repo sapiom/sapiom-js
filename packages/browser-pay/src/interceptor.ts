@@ -13,6 +13,7 @@ import { isRecord } from "./guards.js";
 import { silentLogger, type PayLogger } from "./logger.js";
 import {
   isRelayTimeout,
+  isRetryableRelayError,
   RelayTimeoutError,
   type PaymentRelay,
 } from "./relay.js";
@@ -25,13 +26,19 @@ export interface AttachOptions {
   profileId: string;
   /**
    * How long to wait for a terminal relay outcome before failing the paused
-   * request. `relay_in_progress` is posted again with the same idempotency
-   * key until this deadline. Any other refusal fails the request.
-   * `outcome: "unknown"` is not sent again. A relay that ignores the abort
-   * signal still fails here. One waiter's timeout does not abort a shared
-   * flight that another waiter still holds.
+   * request. Defaults to 55 seconds. `relay_in_progress`, a per-attempt
+   * timeout, a transport error, and HTTP 502, 503, and 504 are posted again
+   * with the same idempotency key until this deadline. Any other refusal
+   * fails the request. `outcome: "unknown"` is not sent again. One waiter's
+   * timeout does not abort a shared flight that another waiter still holds.
    */
   timeoutMs?: number;
+  /**
+   * How long one relay POST may run before it is aborted and tried again.
+   * Defaults to 25 seconds, under the 30 second router limit. The total
+   * wait is `timeoutMs`.
+   */
+  attemptTimeoutMs?: number;
   /** Defaults to a logger that discards every line. */
   logger?: PayLogger;
 }
@@ -70,7 +77,8 @@ export type InterceptorTarget =
   | { browser(): { wsEndpoint(): string } | null }
   | { context(): { browser(): { wsEndpoint(): string } | null } | null };
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 25_000;
+const DEFAULT_TIMEOUT_MS = 55_000;
 const RELAY_POLL_INITIAL_MS = 200;
 const RELAY_POLL_MAX_MS = 2_000;
 
@@ -224,6 +232,7 @@ class PaymentInterceptor {
   private readonly loggedRefusals = new Set<string>();
   private readonly pendingArms = new Set<Promise<void>>();
   private readonly timeoutMs: number;
+  private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
   private backlog: InterceptorEvent[] | null = [];
   private buffering = true;
@@ -234,6 +243,8 @@ class PaymentInterceptor {
     private readonly options: AttachOptions,
   ) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.attemptTimeoutMs =
+      options.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
     this.logger = options.logger ?? silentLogger;
   }
 
@@ -547,12 +558,12 @@ class PaymentInterceptor {
         body,
         pageOrigin,
         idempotencyKey,
-        remaining,
+        Math.min(this.attemptTimeoutMs, remaining),
       );
-      if (relayed.action === "fail") return relayed;
-      if (!isRelayInProgress(relayed.response)) {
+      if (relayed.action === "ok" && !isRelayInProgress(relayed.response)) {
         return this.decisionForOutcome(relayed.response, idempotencyKey);
       }
+      if (relayed.action === "fail" && !relayed.retryable) return relayed;
       poll += 1;
       const waitMs = Math.min(relayPollDelayMs(poll), deadline - Date.now());
       if (waitMs <= 0) return { action: "fail", reason: "timeout" };
@@ -585,7 +596,7 @@ class PaymentInterceptor {
     budgetMs: number,
   ): Promise<
     | { action: "ok"; response: RelayResponse }
-    | { action: "fail"; reason: FailureReason }
+    | { action: "fail"; reason: FailureReason; retryable: boolean }
   > {
     const flight = this.relayOnce(idempotencyKey, (signal) =>
       this.options.relay.relay(
@@ -609,10 +620,15 @@ class PaymentInterceptor {
       this.releaseWaiter(flight);
       return { action: "ok", response };
     } catch (error) {
-      this.releaseWaiter(flight);
+      const aborted = this.releaseWaiter(flight);
+      if (this.closed) {
+        return { action: "fail", reason: "detached", retryable: false };
+      }
       return {
         action: "fail",
-        reason: this.closed ? "detached" : failureReason(error),
+        reason: failureReason(error),
+        retryable:
+          isRetryableRelayError(error) && (!isRelayTimeout(error) || aborted),
       };
     }
   }
@@ -744,10 +760,11 @@ class PaymentInterceptor {
     return flight;
   }
 
-  private releaseWaiter(flight: Flight): void {
+  private releaseWaiter(flight: Flight): boolean {
     flight.waiters -= 1;
-    if (flight.waiters > 0) return;
+    if (flight.waiters > 0) return false;
     flight.controller.abort();
+    return true;
   }
 
   private async detach(): Promise<void> {

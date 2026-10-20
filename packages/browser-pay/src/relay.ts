@@ -33,6 +33,30 @@ export function isRelayTimeout(error: unknown): boolean {
   return error instanceof RelayTimeoutError || isAbortError(error);
 }
 
+const ROUTER_STATUS = new Set([502, 503, 504]);
+
+export class RelayHttpError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Payment relay failed (HTTP ${status})`);
+    this.name = "RelayHttpError";
+    this.status = status;
+  }
+}
+
+export class RelayTransportError extends Error {
+  constructor() {
+    super("Payment relay failed");
+    this.name = "RelayTransportError";
+  }
+}
+
+export function isRetryableRelayError(error: unknown): boolean {
+  if (isRelayTimeout(error)) return true;
+  if (error instanceof RelayTransportError) return true;
+  return error instanceof RelayHttpError && ROUTER_STATUS.has(error.status);
+}
+
 function isAbortError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -104,7 +128,7 @@ function requireHttpOptions(options: HttpRelayOptions): {
 function transportError(error: unknown, signal?: AbortSignal): Error {
   if (error instanceof RelayTimeoutError) return error;
   if (signal?.aborted || isAbortError(error)) return new RelayTimeoutError();
-  return new Error("Payment relay failed");
+  return new RelayTransportError();
 }
 
 async function discardBody(response: Response): Promise<void> {
@@ -137,7 +161,7 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
         if (response.status >= 300 && response.status < 400) {
           throw new Error("Payment relay refused a redirect");
         }
-        throw new Error(`Payment relay failed (HTTP ${response.status})`);
+        throw new RelayHttpError(response.status);
       }
       let text: string;
       try {

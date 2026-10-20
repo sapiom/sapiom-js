@@ -1,7 +1,11 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { RelayRequest } from "./contract";
-import { httpPaymentRelay } from "./relay";
+import {
+  httpPaymentRelay,
+  isRetryableRelayError,
+  RelayHttpError,
+} from "./relay";
 
 const REQUEST: RelayRequest = {
   injectionRef: "inj_fixture_shopify",
@@ -250,6 +254,34 @@ describe("httpPaymentRelay", () => {
     );
     controller.abort();
     await expectation;
+  });
+
+  it("retries only router gateway statuses", async () => {
+    const statuses = [502, 503, 504, 500, 401];
+    const server = await listen((_req, res) => {
+      const status = statuses.shift() ?? 500;
+      res.writeHead(status);
+      res.end();
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      for (const status of [502, 503, 504, 500, 401]) {
+        const error = await relay
+          .relay(REQUEST)
+          .catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(RelayHttpError);
+        expect((error as RelayHttpError).status).toBe(status);
+        expect(isRetryableRelayError(error)).toBe(
+          status === 502 || status === 503 || status === 504,
+        );
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 
