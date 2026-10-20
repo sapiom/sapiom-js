@@ -18,6 +18,7 @@ export interface CdpEvent {
 }
 
 type Pending = {
+  method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -78,16 +79,20 @@ class WebSocketClient {
       this.closed = true;
       this.notifyClose();
     });
-    socket.on("error", (error: Error) => {
-      this.fail(
-        error instanceof Error ? error : new Error("CDP websocket error"),
-      );
+    socket.on("error", () => {
+      this.fail(new Error("CDP websocket error"));
     });
   }
 
   static connect(url: string, timeoutMs: number): Promise<WebSocketClient> {
     return new Promise((resolve, reject) => {
-      const target = new URL(url);
+      let target: URL;
+      try {
+        target = new URL(url);
+      } catch {
+        reject(new Error("CDP websocket URL is invalid"));
+        return;
+      }
       const key = crypto.randomBytes(16).toString("base64");
       const transport = target.protocol === "wss:" ? https : http;
       const request = transport.request({
@@ -130,7 +135,9 @@ class WebSocketClient {
       request.on("timeout", () =>
         fail(new Error("CDP websocket connect timeout")),
       );
-      request.on("error", fail);
+      request.on("error", () =>
+        fail(new Error("CDP websocket connect failed")),
+      );
       request.end();
     });
   }
@@ -338,7 +345,7 @@ export class CdpConnection {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if (message.errorMessage) {
-          pending.reject(new Error(`CDP ${message.errorMessage}`));
+          pending.reject(new Error(`CDP ${pending.method} failed`));
         } else {
           pending.resolve(message.result);
         }
@@ -392,6 +399,7 @@ export class CdpConnection {
         reject(new Error(`CDP ${method} timed out`));
       }, timeoutMs);
       this.pending.set(id, {
+        method,
         resolve,
         reject,
         timer,

@@ -310,7 +310,7 @@ describe("interceptor CDP decisions", () => {
           placeholder: HELD,
           profileId: "shopify-card-vault",
         }),
-      ).rejects.toThrow("CDP auto-attach refused");
+      ).rejects.toThrow("CDP Target.setAutoAttach failed");
       await waitFor(() => stub.sawClose(), "websocket close");
     } finally {
       await stub.close();
@@ -346,7 +346,7 @@ describe("interceptor CDP decisions", () => {
       );
       expect(events).toContainEqual({
         type: "failed",
-        url: "https://shop.example/checkout",
+        url: "https://shop.example",
         reason: "intercept_unavailable",
       });
       await handle.detach();
@@ -1557,7 +1557,7 @@ describe("interceptor CDP decisions", () => {
       handle.on((event) => events.push(event));
       expect(events).toContainEqual({
         type: "failed",
-        url: "https://checkout.example/card",
+        url: "https://checkout.example",
         reason: "intercept_unavailable",
       });
       await handle.detach();

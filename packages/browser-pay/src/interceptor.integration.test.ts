@@ -463,7 +463,7 @@ if (!chromeBin) {
       expect(events.map((event) => event.type)).toEqual(["paused", "refused"]);
       expect(events[1]).toEqual({
         type: "refused",
-        url: `http://127.0.0.1:${card.port}/sessions`,
+        url: `http://127.0.0.1:${card.port}`,
         reason: "already_relayed",
       });
       expect(JSON.stringify(events)).not.toContain(PLACEHOLDER.number);
