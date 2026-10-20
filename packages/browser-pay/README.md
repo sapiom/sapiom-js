@@ -87,7 +87,7 @@ A request is relayed when the held placeholder number appears in the URL or body
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
-Identical in-flight retries (same method, URL, and body) share one relay call. `AttachOptions.timeoutMs` is the deadline for a terminal outcome. It defaults to 20 seconds. While the relay answers `relay_in_progress`, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. A relay that ignores abort still fails when the deadline passes, and one waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
+Identical in-flight retries (same method, URL, and body) share one relay poll, including the backoff between `relay_in_progress` answers. `AttachOptions.timeoutMs` is the deadline for a terminal outcome. It defaults to 20 seconds. While the relay answers `relay_in_progress`, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. A relay that ignores abort still fails when the deadline passes, and one waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. A transport failure drops the key so a later retry can resend. `outcome: "unknown"` does not.
 
 Captcha widgets, extension pages, and workers are not paused. A blank iframe, including `about:blank`, stays paused so a navigation onto the card URL cannot slip through. A placeholder that shows up on any other page or iframe is relayed.
 

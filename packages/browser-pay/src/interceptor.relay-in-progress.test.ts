@@ -53,6 +53,7 @@ interface SeenPost {
   method: string;
   url: string;
   idempotencyKey: string;
+  requestBody: string;
 }
 
 function serverFrame(text: string): Buffer {
@@ -228,6 +229,7 @@ function startRelay(script: RelayResponse[] = [IN_PROGRESS, RELAYED]): Promise<{
         method: req.method ?? "",
         url: req.url ?? "",
         idempotencyKey: body.idempotencyKey,
+        requestBody: body.request.body,
       });
       const payload = script[Math.min(posts.length, script.length) - 1];
       res.writeHead(200, { "content-type": "application/json" });
@@ -322,8 +324,18 @@ describe("relay_in_progress", () => {
         },
       }).toEqual({
         relayPosts: [
-          { method: "POST", url: RELAY_PATH, idempotencyKey },
-          { method: "POST", url: RELAY_PATH, idempotencyKey },
+          {
+            method: "POST",
+            url: RELAY_PATH,
+            idempotencyKey,
+            requestBody: CARD,
+          },
+          {
+            method: "POST",
+            url: RELAY_PATH,
+            idempotencyKey,
+            requestBody: CARD,
+          },
         ],
         fetch: {
           failRequest: 0,
@@ -331,6 +343,13 @@ describe("relay_in_progress", () => {
           continueRequest: 0,
         },
       });
+      const fulfilled = cdp.commands.find(
+        (command) => command.method === "Fetch.fulfillRequest",
+      );
+      expect(fulfilled?.params.responseCode).toBe(201);
+      expect(fulfilled?.params.body).toBe(
+        Buffer.from(RELAYED.response.body, "utf8").toString("base64"),
+      );
     } finally {
       await handle.detach();
       await cdp.close();
@@ -389,6 +408,7 @@ describe("relay_in_progress", () => {
         "timeout",
       );
       expect(relay.posts.length).toBeGreaterThanOrEqual(2);
+      expect(relay.posts.length).toBeLessThanOrEqual(6);
       expect(
         relay.posts.every((post) => post.idempotencyKey === idempotencyKey),
       ).toBe(true);
@@ -457,8 +477,18 @@ describe("relay_in_progress", () => {
         "refused",
       );
       expect(relay.posts).toEqual([
-        { method: "POST", url: RELAY_PATH, idempotencyKey },
-        { method: "POST", url: RELAY_PATH, idempotencyKey },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
       ]);
       expect(count(cdp.commands, "Fetch.failRequest")).toBe(1);
       expect(count(cdp.commands, "Fetch.fulfillRequest")).toBe(0);
@@ -539,8 +569,18 @@ describe("relay_in_progress", () => {
         "second fail",
       );
       expect(relay.posts).toEqual([
-        { method: "POST", url: RELAY_PATH, idempotencyKey },
-        { method: "POST", url: RELAY_PATH, idempotencyKey },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
       ]);
       expect(count(cdp.commands, "Fetch.fulfillRequest")).toBe(0);
       expect(events).toContainEqual(
@@ -552,4 +592,184 @@ describe("relay_in_progress", () => {
       await relay.close();
     }
   });
+
+  it("shares one poll when a second pause arrives during backoff", async () => {
+    const idempotencyKey = paymentIdempotencyKey("POST", CHECKOUT_URL, CARD);
+    const cdp = await startCdp();
+    const relay = await startRelay();
+    const handle = await attachInterceptor(cdp.url, {
+      relay: httpPaymentRelay({
+        baseUrl: relay.origin,
+        apiKey: "test-key",
+        transactionId: TRANSACTION_ID,
+      }),
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+    });
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-first");
+      await waitFor(() => relay.posts.length === 1, "first post");
+      emitPaused(cdp, "req-second");
+      await waitFor(
+        () => count(cdp.commands, "Fetch.fulfillRequest") === 2,
+        "both fulfilled",
+      );
+      expect(relay.posts).toEqual([
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+      ]);
+      expect(count(cdp.commands, "Fetch.failRequest")).toBe(0);
+    } finally {
+      await handle.detach();
+      await cdp.close();
+      await relay.close();
+    }
+  });
+
+  it("does not post a key again after an overlapping pause sees unknown", async () => {
+    const idempotencyKey = paymentIdempotencyKey("POST", CHECKOUT_URL, CARD);
+    const cdp = await startCdp();
+    const relay = await startRelay([IN_PROGRESS, { outcome: "unknown" }]);
+    const events: InterceptorEvent[] = [];
+    const handle = await attachInterceptor(cdp.url, {
+      relay: httpPaymentRelay({
+        baseUrl: relay.origin,
+        apiKey: "test-key",
+        transactionId: TRANSACTION_ID,
+      }),
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+    });
+    handle.on((event) => events.push(event));
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-unknown-a");
+      await waitFor(() => relay.posts.length === 1, "first post");
+      emitPaused(cdp, "req-unknown-b");
+      await waitFor(
+        () =>
+          events.filter(
+            (event) => event.type === "failed" && event.reason === "unknown",
+          ).length === 2,
+        "both unknown",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(relay.posts).toEqual([
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+      ]);
+      expect(count(cdp.commands, "Fetch.failRequest")).toBe(2);
+      expect(count(cdp.commands, "Fetch.fulfillRequest")).toBe(0);
+    } finally {
+      await handle.detach();
+      await cdp.close();
+      await relay.close();
+    }
+  });
+
+  it("stops polling when detach happens during backoff", async () => {
+    const cdp = await startCdp();
+    const relay = await startRelay([IN_PROGRESS]);
+    const events: InterceptorEvent[] = [];
+    const handle = await attachInterceptor(cdp.url, {
+      relay: httpPaymentRelay({
+        baseUrl: relay.origin,
+        apiKey: "test-key",
+        transactionId: TRANSACTION_ID,
+      }),
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+    });
+    handle.on((event) => events.push(event));
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-detach");
+      await waitFor(() => relay.posts.length === 1, "first post");
+      const started = Date.now();
+      await handle.detach();
+      await waitFor(
+        () =>
+          events.some(
+            (event) => event.type === "failed" && event.reason === "detached",
+          ),
+        "detached",
+      );
+      expect(Date.now() - started).toBeLessThan(150);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(relay.posts).toHaveLength(1);
+    } finally {
+      await handle.detach();
+      await cdp.close();
+      await relay.close();
+    }
+  });
 });
+
+function armPage(cdp: {
+  emit: (event: Record<string, unknown>) => void;
+}): void {
+  cdp.emit({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "page-1",
+      waitingForDebugger: true,
+      targetInfo: {
+        targetId: "target-page",
+        type: "page",
+        url: "https://shop.example/checkout",
+      },
+    },
+  });
+}
+
+function emitPaused(
+  cdp: { emit: (event: Record<string, unknown>) => void },
+  requestId: string,
+): void {
+  cdp.emit({
+    method: "Fetch.requestPaused",
+    sessionId: "page-1",
+    params: {
+      requestId,
+      request: {
+        url: CHECKOUT_URL,
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        postData: CARD,
+      },
+    },
+  });
+}

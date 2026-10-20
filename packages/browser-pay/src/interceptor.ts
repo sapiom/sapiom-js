@@ -26,10 +26,11 @@ export interface AttachOptions {
   /**
    * How long to wait for a terminal relay outcome before failing the paused
    * request. `relay_in_progress` is posted again with the same idempotency
-   * key until this deadline. Any other refusal fails the request.
-   * `outcome: "unknown"` is not sent again. A relay that ignores the abort
-   * signal still fails here. One waiter's timeout does not abort a shared
-   * flight that another waiter still holds.
+   * key until this deadline. Identical pauses share that poll, including the
+   * backoff. Any other refusal fails the request. `outcome: "unknown"` is
+   * not sent again. A relay that ignores the abort signal still fails here.
+   * One waiter's timeout does not abort a shared flight that another waiter
+   * still holds.
    */
   timeoutMs?: number;
   /** Defaults to a logger that discards every line. */
@@ -536,27 +537,56 @@ class PaymentInterceptor {
     pageOrigin: string,
     idempotencyKey: string,
   ): Promise<Decision> {
-    const deadline = Date.now() + this.timeoutMs;
+    const flight = this.relayOnce(idempotencyKey, (signal) =>
+      this.pollRelay(request, body, pageOrigin, idempotencyKey, signal),
+    );
+    try {
+      const response = await failAfter(flight.promise, this.timeoutMs);
+      this.releaseWaiter(flight);
+      return this.decisionForOutcome(response, idempotencyKey);
+    } catch (error) {
+      this.releaseWaiter(flight);
+      return {
+        action: "fail",
+        reason: this.closed ? "detached" : failureReason(error),
+      };
+    }
+  }
+
+  private async pollRelay(
+    request: PausedRequest,
+    body: string,
+    pageOrigin: string,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ): Promise<RelayResponse> {
     let poll = 0;
     for (;;) {
-      if (this.closed) return { action: "fail", reason: "detached" };
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) return { action: "fail", reason: "timeout" };
-      const relayed = await this.callRelay(
-        request,
-        body,
-        pageOrigin,
-        idempotencyKey,
-        remaining,
-      );
-      if (relayed.action === "fail") return relayed;
-      if (!isRelayInProgress(relayed.response)) {
-        return this.decisionForOutcome(relayed.response, idempotencyKey);
+      if (signal.aborted || this.closed) throw abortError(signal);
+      if (this.unknownKeys.has(idempotencyKey)) {
+        return { outcome: "unknown" };
       }
+      const response = await this.options.relay.relay(
+        {
+          injectionRef: this.options.placeholder.injectionRef,
+          profileId: this.options.profileId,
+          pageOrigin,
+          request: {
+            method: request.method,
+            url: request.url,
+            headers: forwardedHeaders(request.headers),
+            body,
+          },
+          idempotencyKey,
+        },
+        { signal },
+      );
+      if (response.outcome === "unknown") {
+        this.unknownKeys.add(idempotencyKey);
+      }
+      if (!isRelayInProgress(response)) return response;
       poll += 1;
-      const waitMs = Math.min(relayPollDelayMs(poll), deadline - Date.now());
-      if (waitMs <= 0) return { action: "fail", reason: "timeout" };
-      await sleep(waitMs);
+      await sleep(relayPollDelayMs(poll), signal);
     }
   }
 
@@ -575,46 +605,6 @@ class PaymentInterceptor {
       return { kind: "held", body };
     }
     return { kind: "miss" };
-  }
-
-  private async callRelay(
-    request: PausedRequest,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
-    budgetMs: number,
-  ): Promise<
-    | { action: "ok"; response: RelayResponse }
-    | { action: "fail"; reason: FailureReason }
-  > {
-    const flight = this.relayOnce(idempotencyKey, (signal) =>
-      this.options.relay.relay(
-        {
-          injectionRef: this.options.placeholder.injectionRef,
-          profileId: this.options.profileId,
-          pageOrigin,
-          request: {
-            method: request.method,
-            url: request.url,
-            headers: forwardedHeaders(request.headers),
-            body,
-          },
-          idempotencyKey,
-        },
-        { signal },
-      ),
-    );
-    try {
-      const response = await failAfter(flight.promise, budgetMs);
-      this.releaseWaiter(flight);
-      return { action: "ok", response };
-    } catch (error) {
-      this.releaseWaiter(flight);
-      return {
-        action: "fail",
-        reason: this.closed ? "detached" : failureReason(error),
-      };
-    }
   }
 
   private decisionForOutcome(
@@ -823,9 +813,28 @@ function relayPollDelayMs(attempt: number): number {
   return Math.min(RELAY_POLL_INITIAL_MS * 2 ** shift, RELAY_POLL_MAX_MS);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
