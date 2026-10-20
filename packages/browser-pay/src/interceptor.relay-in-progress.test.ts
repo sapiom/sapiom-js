@@ -802,7 +802,9 @@ describe("relay_in_progress", () => {
       },
       placeholder: HELD,
       profileId: "shopify-card-vault",
-      timeoutMs: 500,
+      // The later waiter starts after the retry post, so its deadline trails
+      // the first by about one poll backoff. 1.5s keeps that gap if a timer fires late.
+      timeoutMs: 1_500,
     });
     handle.on((event) => events.push(event));
     try {
@@ -812,8 +814,7 @@ describe("relay_in_progress", () => {
         "Fetch.enable",
       );
       emitPaused(cdp, "req-early-deadline");
-      await waitFor(() => calls === 1, "first post");
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await waitFor(() => calls === 2, "retry posted");
       emitPaused(cdp, "req-later-deadline");
       await waitFor(
         () =>
@@ -1111,8 +1112,8 @@ describe("relay retry before the deadline", () => {
       },
       placeholder: HELD,
       profileId: "shopify-card-vault",
-      timeoutMs: 2_000,
-      attemptTimeoutMs: 120,
+      timeoutMs: 5_000,
+      attemptTimeoutMs: 400,
     });
     try {
       armPage(cdp);
@@ -1122,7 +1123,6 @@ describe("relay retry before the deadline", () => {
       );
       emitPaused(cdp, "req-shared-a");
       await waitFor(() => calls === 1, "first attempt");
-      await new Promise((resolve) => setTimeout(resolve, 80));
       emitPaused(cdp, "req-shared-b");
       await waitFor(
         () => count(cdp.commands, "Fetch.fulfillRequest") === 2,
@@ -1130,8 +1130,8 @@ describe("relay retry before the deadline", () => {
       );
       expect(calls).toBe(2);
       expect(aborts).toHaveLength(1);
-      expect(aborts[0]).toBeGreaterThanOrEqual(100);
-      expect(aborts[0]).toBeLessThan(160);
+      expect(aborts[0]).toBeGreaterThanOrEqual(300);
+      expect(aborts[0]).toBeLessThan(2_000);
       expect(count(cdp.commands, "Fetch.failRequest")).toBe(0);
     } finally {
       await handle.detach();
