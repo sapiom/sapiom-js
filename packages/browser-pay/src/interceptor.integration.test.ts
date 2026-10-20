@@ -138,7 +138,7 @@ async function waitForDebugger(
   userDataDir: string,
   proc: ChildProcess,
 ): Promise<string> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (proc.exitCode !== null || proc.signalCode !== null) {
       throw new Error(
@@ -150,6 +150,87 @@ async function waitForDebugger(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("CDP endpoint did not come up (DevToolsActivePort missing)");
+}
+
+function chromeArgs(userDataDir: string): string[] {
+  return [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--site-per-process",
+    "--remote-debugging-port=0",
+    "--remote-allow-origins=*",
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "about:blank",
+  ];
+}
+
+async function killChrome(
+  proc: ChildProcess | undefined,
+  exited: boolean,
+): Promise<void> {
+  if (
+    !proc?.pid ||
+    exited ||
+    proc.exitCode !== null ||
+    proc.signalCode !== null
+  ) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 2_000);
+    proc.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    try {
+      process.kill(-proc.pid!, "SIGKILL");
+    } catch {
+      proc.kill("SIGKILL");
+    }
+  });
+}
+
+/**
+ * GitHub runners sometimes leave Chrome alive without writing
+ * DevToolsActivePort. One fresh profile is enough when that happens.
+ * stderr is kept so a second miss says why.
+ */
+async function launchChrome(bin: string): Promise<{
+  proc: ChildProcess;
+  userDataDir: string;
+  endpoint: string;
+}> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const userDataDir = await mkdtemp(path.join(os.tmpdir(), "browser-pay-"));
+    const stderr: string[] = [];
+    const proc = spawn(bin, chromeArgs(userDataDir), {
+      detached: true,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    proc.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr.push(String(chunk));
+      if (stderr.length > 40) stderr.shift();
+    });
+    try {
+      const endpoint = await waitForDebugger(userDataDir, proc);
+      return { proc, userDataDir, endpoint };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "chrome failed";
+      const tail = stderr.join("").trim().slice(-600);
+      lastError = new Error(tail ? `${detail}\n${tail}` : detail);
+      await killChrome(
+        proc,
+        proc.exitCode !== null || proc.signalCode !== null,
+      );
+      await rm(userDataDir, { recursive: true, force: true });
+    }
+  }
+  throw lastError ?? new Error("Chrome did not start");
 }
 
 async function readDebuggerEndpoint(
@@ -187,48 +268,23 @@ if (!chromeBin) {
     const hits: Hit[] = [];
 
     beforeAll(async () => {
-      userDataDir = await mkdtemp(path.join(os.tmpdir(), "browser-pay-"));
-      chrome = spawn(
-        chromeBin ?? "chrome-missing",
-        [
-          "--headless=new",
-          "--no-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--site-per-process",
-          "--remote-debugging-port=0",
-          "--remote-allow-origins=*",
-          `--user-data-dir=${userDataDir}`,
-          "--no-first-run",
-          "--no-default-browser-check",
-          "about:blank",
-        ],
-        { detached: true, stdio: "ignore" },
-      );
+      const launched = await launchChrome(chromeBin ?? "chrome-missing");
+      chrome = launched.proc;
+      userDataDir = launched.userDataDir;
+      cdpUrl = launched.endpoint;
       chrome.on("exit", () => {
         chromeExited = true;
       });
-      cdpUrl = await waitForDebugger(userDataDir, chrome);
       card = await startServer(hits, FRAME_HTML, "127.0.0.1");
       merchant = await startServer(
         hits,
         `<!doctype html><title>merchant</title><iframe src="http://127.0.0.1:${card.port}/frame.html"></iframe>`,
         "localhost",
       );
-    }, 30_000);
+    }, 50_000);
 
     afterAll(async () => {
-      if (chrome?.pid && !chromeExited) {
-        const done = new Promise<void>((resolve) => {
-          chrome.once("exit", () => resolve());
-        });
-        try {
-          if (!chromeExited) process.kill(-chrome.pid, "SIGKILL");
-        } catch {
-          chrome.kill("SIGKILL");
-        }
-        if (!chromeExited) await done;
-      }
+      await killChrome(chrome, chromeExited);
       await new Promise((resolve) => {
         if (merchant) merchant.server.close(() => resolve(undefined));
         else resolve(undefined);
