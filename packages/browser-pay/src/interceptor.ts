@@ -552,10 +552,9 @@ class PaymentInterceptor {
     const flight = this.relayOnce(idempotencyKey, (signal) =>
       this.pollRelay(request, body, pageOrigin, idempotencyKey, signal),
     );
+    let response: RelayResponse;
     try {
-      const response = await failAfter(flight.promise, this.timeoutMs);
-      this.releaseWaiter(flight);
-      return this.decisionForOutcome(response, idempotencyKey);
+      response = await failAfter(flight.promise, this.timeoutMs);
     } catch (error) {
       this.releaseWaiter(flight);
       return {
@@ -563,6 +562,9 @@ class PaymentInterceptor {
         reason: this.closed ? "detached" : failureReason(error),
       };
     }
+    this.releaseWaiter(flight);
+    if (this.closed) return { action: "fail", reason: "detached" };
+    return this.decisionForOutcome(response, idempotencyKey);
   }
 
   private async pollRelay(
