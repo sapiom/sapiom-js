@@ -179,6 +179,7 @@ if (!chromeBin) {
   "attachInterceptor on headless Chromium",
   () => {
     let chrome: ChildProcess;
+    let chromeExited = false;
     let userDataDir: string;
     let cdpUrl: string;
     let merchant: { server: http.Server; port: number };
@@ -204,6 +205,9 @@ if (!chromeBin) {
         ],
         { detached: true, stdio: "ignore" },
       );
+      chrome.on("exit", () => {
+        chromeExited = true;
+      });
       cdpUrl = await waitForDebugger(userDataDir, chrome);
       card = await startServer(hits, FRAME_HTML, "127.0.0.1");
       merchant = await startServer(
@@ -214,19 +218,16 @@ if (!chromeBin) {
     }, 30_000);
 
     afterAll(async () => {
-      if (chrome?.pid) {
-        const exited =
-          chrome.exitCode !== null || chrome.signalCode !== null
-            ? Promise.resolve()
-            : new Promise<void>((resolve) => {
-                chrome.once("exit", () => resolve());
-              });
+      if (chrome?.pid && !chromeExited) {
+        const done = new Promise<void>((resolve) => {
+          chrome.once("exit", () => resolve());
+        });
         try {
-          process.kill(-chrome.pid, "SIGKILL");
+          if (!chromeExited) process.kill(-chrome.pid, "SIGKILL");
         } catch {
           chrome.kill("SIGKILL");
         }
-        await exited;
+        if (!chromeExited) await done;
       }
       await new Promise((resolve) => {
         if (merchant) merchant.server.close(() => resolve(undefined));
