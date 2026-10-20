@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { paymentIdempotencyKey, type RelayRequest, type RelayResponse } from "./contract";
+import {
+  paymentIdempotencyKey,
+  type RelayRequest,
+  type RelayResponse,
+} from "./contract";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
 import { httpPaymentRelay } from "./relay";
 
@@ -207,9 +211,7 @@ async function startCdp(): Promise<{
   };
 }
 
-function startRelay(
-  script: RelayResponse[] = [IN_PROGRESS, RELAYED],
-): Promise<{
+function startRelay(script: RelayResponse[] = [IN_PROGRESS, RELAYED]): Promise<{
   origin: string;
   posts: SeenPost[];
   close: () => Promise<void>;
@@ -387,9 +389,9 @@ describe("relay_in_progress", () => {
         "timeout",
       );
       expect(relay.posts.length).toBeGreaterThanOrEqual(2);
-      expect(relay.posts.every((post) => post.idempotencyKey === idempotencyKey)).toBe(
-        true,
-      );
+      expect(
+        relay.posts.every((post) => post.idempotencyKey === idempotencyKey),
+      ).toBe(true);
       expect(count(cdp.commands, "Fetch.failRequest")).toBe(1);
       expect(count(cdp.commands, "Fetch.fulfillRequest")).toBe(0);
       expect(events).toContainEqual(
