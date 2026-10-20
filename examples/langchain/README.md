@@ -25,6 +25,7 @@ npm start
 - Use `createSapiomMiddleware()` with LangChain's `createAgent()`
 - All model calls and tool invocations are tracked automatically
 - No need to wrap individual tools - middleware handles everything
+- Requires LangChain v1 (`langchain` 1.5 or later), which `@sapiom/langchain` peers on
 
 ## Key Code
 
@@ -34,7 +35,7 @@ import { createSapiomMiddleware } from "@sapiom/langchain";
 
 // Create agent with Sapiom middleware
 const agent = createAgent({
-  model: "anthropic:claude-haiku-4-5",
+  model: "anthropic:claude-sonnet-5-5",
   tools: [weatherTool, calculatorTool],
   middleware: [
     createSapiomMiddleware({
