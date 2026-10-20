@@ -58,11 +58,12 @@
  * label may emit a `thinking` block before its answer, and those tokens are spent
  * out of the same budget — so a cap sized for the answer alone can be exhausted
  * mid-deliberation, ending the turn before the answer (or, with `output`, before
- * the forced tool call) is ever emitted. Size it for thinking plus output: a few
- * thousand tokens, not a few hundred. Billing settles on the tokens actually
- * produced, so a cap with headroom does not bill for tokens the model never
- * emitted — but it is not free either: the gateway's admission weight scales with
- * `max_tokens`, so size the cap for the work rather than padding it (SAP-3280).
+ * the forced tool call) is ever emitted. Size it for thinking plus
+ * output: a few thousand tokens, not a few hundred. Billing settles on the tokens
+ * actually produced, so a cap with headroom does not bill for tokens the model
+ * never emitted — but it is not free either: the gateway's admission weight
+ * scales with `max_tokens`, so size the cap for the work rather than padding it
+ * (SAP-3280).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -140,11 +141,14 @@ export interface LlmRunSpec {
   /**
    * Structured-output convenience — the blessed pattern (a forced tool call),
    * automated: setting this appends a tool named `name` (schema `schema`) to
-   * `request.tools` and forces `tool_choice` onto it. {@link run}'s return
-   * type is unchanged either way (still the verbatim response); read the
-   * parsed value with {@link structuredOf}. Omit and build `request.tools` /
-   * `tool_choice` yourself for anything this convenience doesn't cover (e.g.
-   * more than one candidate tool).
+   * `request.tools` and forces `tool_choice` onto it. Some current Claude
+   * models (Opus 5.5, Sonnet 5.5, Fable 5.1) reject a forced `tool_choice`
+   * with a 400; for structured output, route to a model that accepts it —
+   * e.g. the `opus` label (Claude Opus 4.7). {@link run}'s return type is
+   * unchanged either way (still the verbatim response); read the parsed value
+   * with {@link structuredOf}. Omit and build `request.tools` / `tool_choice`
+   * yourself for anything this convenience doesn't cover (e.g. more than one
+   * candidate tool).
    *
    * Because the tool call is forced, the model has to reach it — and finish it — inside
    * `request.max_tokens`, thinking included. When the cap cuts it off, {@link run} throws
@@ -550,12 +554,10 @@ export class LlmStructuredOutputMissingError extends Error {
   readonly response: unknown;
 
   constructor(outputName: string, response: unknown) {
-    const body = (response ?? {}) as { stop_reason?: unknown; model?: unknown };
+    const body = (response ?? {}) as { stop_reason?: unknown };
     const stopReason = typeof body.stop_reason === "string" ? body.stop_reason : undefined;
-    const model = typeof body.model === "string" ? body.model : undefined;
-    const servedClass = readDisclosure(response).servedClass;
+    const { servedClass, model, label: served } = servedByOf(response);
     const blockTypes = contentBlocksOf(response).map((block) => block.type);
-    const served = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
     super(
       `Structured output "${outputName}" was not produced: the model did not call the "${outputName}" tool ` +
         `(stop_reason: ${stopReason ?? "none"}; content blocks: ${blockTypes.length ? blockTypes.join(", ") : "none"}` +
@@ -571,6 +573,62 @@ export class LlmStructuredOutputMissingError extends Error {
     this.blockTypes = blockTypes;
     this.response = response;
   }
+}
+
+/**
+ * {@link run} got `stop_reason: "refusal"`: the routed model's safety classifiers declined
+ * the request. A refusal arrives as an HTTP 200, so without this check it would come back as
+ * an ordinary response — with no text, or a partial one cut off at the decline — and a step
+ * would carry on as if it had an answer. `category` and `explanation` are read from the
+ * response's `stop_details` when the deployment sends them.
+ *
+ * Retrying the identical request rarely changes the answer, and the engine re-runs a step
+ * whose error escapes it, billing each attempt. Catch this in a step declared
+ * `canFail: true` and return `fail(error.message)`, or change the request.
+ */
+export class LlmRefusalError extends Error {
+  /** `stop_details.category` (e.g. `"cyber"`), or `undefined` when the response named none. */
+  readonly category: string | undefined;
+  /** `stop_details.explanation`, or `undefined` when absent. */
+  readonly explanation: string | undefined;
+  /** The class that served the call, from the response disclosure, or `null` when absent. */
+  readonly servedClass: string | null;
+  /** The model the response reports, or `undefined` when it carried none. */
+  readonly model: string | undefined;
+  /** The verbatim response, for programmatic inspection. */
+  readonly response: unknown;
+
+  constructor(response: unknown) {
+    const body = (response ?? {}) as { stop_details?: unknown };
+    const details: Record<string, unknown> = isRecord(body.stop_details) ? body.stop_details : {};
+    const category = typeof details.category === "string" ? details.category : undefined;
+    const explanation = typeof details.explanation === "string" ? details.explanation : undefined;
+    const { servedClass, model, label: served } = servedByOf(response);
+    super(
+      `The model declined the request (stop_reason: refusal${category ? `; category: ${category}` : ""}` +
+        `${served ? `; served by ${served}` : ""}).` +
+        (explanation ? ` ${explanation}` : "") +
+        ` Retrying the same request is unlikely to change the answer: catch this and fail() the step, or change the request.`,
+    );
+    this.name = "LlmRefusalError";
+    this.category = category;
+    this.explanation = explanation;
+    this.servedClass = servedClass;
+    this.model = model;
+    this.response = response;
+  }
+}
+
+/**
+ * Who served a response, for the error classes above: the disclosed class, the reported
+ * model, and both joined as `label` (`"class large, model smart"`; `""` when neither is set).
+ */
+function servedByOf(response: unknown): { servedClass: string | null; model: string | undefined; label: string } {
+  const body = (response ?? {}) as { model?: unknown };
+  const model = typeof body.model === "string" ? body.model : undefined;
+  const servedClass = readDisclosure(response).servedClass;
+  const label = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
+  return { servedClass, model, label };
 }
 
 /** `max_tokens` off a caller's verbatim request body, when it declared a numeric one. */
@@ -772,16 +830,18 @@ function withStructuredOutput(request: Record<string, unknown>, output: LlmStruc
  * @throws {LlmStructuredOutputTruncatedError} when `spec.output` was set and the
  * turn hit `max_tokens` before the forced tool call was emitted, or partway through
  * its input — the cap has to cover thinking as well as output.
- *
- * @throws {LlmStructuredOutputMissingError} when `spec.output` was set and the turn ended
- * (any other `stop_reason`) without a `tool_use` block for `spec.output.name`.
- *
  * This one is not worth retrying, and the engine does not know that: it is not a member
  * of the platform's non-retryable set, so left to escape a step it is re-run with the
  * identical under-capped request (up to the runner's per-step attempt limit), billing the
  * thinking each time and failing the same way. Catch it in a step declared `canFail: true`
  * and return `fail(error.message)` — the shape `CodingRunHttpError` already uses. Raising
  * the cap is the actual fix.
+ *
+ * @throws {LlmStructuredOutputMissingError} when `spec.output` was set and the turn ended
+ * (any other `stop_reason`) without a `tool_use` block for `spec.output.name`.
+ *
+ * @throws {LlmRefusalError} when the response's `stop_reason` is `"refusal"`, with or
+ * without `spec.output`: a declined request is never handed back as an answer.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,
@@ -801,6 +861,10 @@ export async function run<T = Record<string, unknown>>(
     body: JSON.stringify(request),
     headers,
   });
+  // A refusal is an HTTP 200, so it has to be read off the body; never return one as an answer.
+  if ((response as { stop_reason?: unknown } | null | undefined)?.stop_reason === "refusal") {
+    throw new LlmRefusalError(response);
+  }
   // Only when the caller forced a tool call: a plain-text turn that hit the cap is
   // truncated but still readable, and it is the caller's to judge.
   const truncation = spec.output ? truncationOf(response, spec.output) : undefined;

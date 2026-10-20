@@ -729,7 +729,9 @@ reply comes back as a typed `tool_use` block. `structuredOf` reads it, and retur
 `LlmStructuredOutputMissingError` when the model ends a turn without calling the tool, and
 `LlmStructuredOutputTruncatedError` when it hit `max_tokens` first, so a response `run` returns
 always carries the call; catch the missing-call error to retry a bounded number of times or
-`fail()` the step. For a plain text reply,
+`fail()` the step. With or without `output`, `run` also throws `LlmRefusalError` when the
+model declines the request (`stop_reason: "refusal"`); retrying the same request rarely
+changes the answer, so catch it by name and `fail()` the step. For a plain text reply,
 `textOf` — never `content[0]`, which can be a `thinking` block. When the answer is one of
 a fixed set you can name up front — a yes/no gate, a pick-one label, a rubric level — call
 `ctx.sapiom.decisions.evaluate` instead of an `output` schema: it returns calibrated probabilities
