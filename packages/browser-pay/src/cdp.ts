@@ -18,7 +18,6 @@ export interface CdpEvent {
 }
 
 type Pending = {
-  method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -345,7 +344,7 @@ export class CdpConnection {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if (message.errorMessage) {
-          pending.reject(new Error(`CDP ${pending.method} failed`));
+          pending.reject(new Error("CDP command failed"));
         } else {
           pending.resolve(message.result);
         }
@@ -396,10 +395,9 @@ export class CdpConnection {
       }
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`CDP ${method} timed out`));
+        reject(new Error("CDP command timed out"));
       }, timeoutMs);
       this.pending.set(id, {
-        method,
         resolve,
         reject,
         timer,
@@ -413,12 +411,10 @@ export class CdpConnection {
             ...(sessionId ? { sessionId } : {}),
           }),
         );
-      } catch (error) {
+      } catch {
         clearTimeout(timer);
         this.pending.delete(id);
-        reject(
-          error instanceof Error ? error : new Error("CDP connection closed"),
-        );
+        reject(new Error("CDP connection closed"));
       }
     });
   }

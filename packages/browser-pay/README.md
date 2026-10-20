@@ -55,7 +55,7 @@ Refusal, nothing forwarded:
 
 The `refused` event and logger pass through only these known reasons: `unknown_injection`, `injection_expired`, `payment_released`, `key_rotated`, `already_relayed`, `relay_in_progress`, `card_removed`, `payment_not_authorized`, `total_changed`, `destination_not_allowed`, `card_fields_invalid`, `merchant_mismatch`, and `provider_unavailable`. Any other reason becomes `unrecognized`. `relay_in_progress` is not terminal. The paused request stays open and the same idempotency key is posted again until the outcome is terminal or the deadline passes.
 
-Event `url` is origin-only (`scheme://host[:port]`), with any held placeholder masked. An opaque origin uses its scheme (for example, `about:`); an unparseable URL is `""`. Paths, queries, fragments, and userinfo are never included. Attach errors use fixed messages and do not include transport details.
+Event `url` is origin-only (`scheme://host[:port]`), with any held placeholder masked. An opaque origin uses its scheme (for example, `about:`); an unparseable URL is `""`. Paths, queries, fragments, and userinfo are never included. Attach errors use fixed messages and do not include transport details. CDP command failures and timeouts use the generic messages `CDP command failed` and `CDP command timed out`.
 
 No answer after the send:
 

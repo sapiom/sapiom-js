@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { CdpConnection } from "./cdp.js";
 import { textHoldsPlaceholderNumber } from "./detect";
 import type { PayLogger } from "./logger";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
@@ -45,6 +46,7 @@ interface StubOptions {
   failFetch?: boolean;
   failFulfill?: boolean;
   errorOnMethod?: { method: string; message: string };
+  noReplyOnMethod?: string;
   attachOnAutoAttach?: { targetId: string; url: string };
 }
 
@@ -144,6 +146,7 @@ async function startCdp(options: StubOptions = {}): Promise<{
       reply(message.id, undefined, { message: options.errorOnMethod.message });
       return;
     }
+    if (options.noReplyOnMethod === message.method) return;
     if (
       message.method === "Target.setAutoAttach" &&
       !message.sessionId &&
@@ -722,10 +725,44 @@ describe("interceptor event redaction", () => {
           attachOptions(stubPaymentRelay(async () => success())),
         ),
       );
-      expect(protocolError.message).toBe("CDP Target.setAutoAttach failed");
+      expect(protocolError.message).toBe("CDP command failed");
       assertSafeError(protocolError);
     } finally {
       await stub.close();
+    }
+  });
+
+  it("uses generic errors for secret-bearing CDP methods", async () => {
+    const method = "Synthetic.method?token=SYNTHETIC_METHOD_SECRET_1";
+    const errorStub = await startCdp({
+      errorOnMethod: {
+        method,
+        message: "SYNTHETIC_METHOD_SECRET_1 peer rejected command",
+      },
+    });
+    const errorConnection = await CdpConnection.connect(errorStub.url);
+    try {
+      const error = await captureError(
+        errorConnection.send(method, {}, undefined, 1_000),
+      );
+      expect(error.message).toBe("CDP command failed");
+      expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+    } finally {
+      errorConnection.close();
+      await errorStub.close();
+    }
+
+    const timeoutStub = await startCdp({ noReplyOnMethod: method });
+    const timeoutConnection = await CdpConnection.connect(timeoutStub.url);
+    try {
+      const error = await captureError(
+        timeoutConnection.send(method, {}, undefined, 10),
+      );
+      expect(error.message).toBe("CDP command timed out");
+      expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+    } finally {
+      timeoutConnection.close();
+      await timeoutStub.close();
     }
   });
 });

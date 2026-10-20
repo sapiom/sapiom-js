@@ -310,7 +310,7 @@ describe("interceptor CDP decisions", () => {
           placeholder: HELD,
           profileId: "shopify-card-vault",
         }),
-      ).rejects.toThrow("CDP Target.setAutoAttach failed");
+      ).rejects.toThrow("CDP command failed");
       await waitFor(() => stub.sawClose(), "websocket close");
     } finally {
       await stub.close();
