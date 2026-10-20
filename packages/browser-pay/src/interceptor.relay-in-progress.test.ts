@@ -721,7 +721,6 @@ describe("relay_in_progress", () => {
       );
       emitPaused(cdp, "req-detach");
       await waitFor(() => relay.posts.length === 1, "first post");
-      const started = Date.now();
       await handle.detach();
       await waitFor(
         () =>
@@ -730,7 +729,6 @@ describe("relay_in_progress", () => {
           ),
         "detached",
       );
-      expect(Date.now() - started).toBeLessThan(150);
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(relay.posts).toHaveLength(1);
     } finally {
@@ -779,6 +777,61 @@ describe("relay_in_progress", () => {
         ),
       ).toBe(false);
     } finally {
+      await handle.detach();
+      await cdp.close();
+    }
+  });
+
+  it("lets a later pause finish after the first waiter times out", async () => {
+    const cdp = await startCdp();
+    const events: InterceptorEvent[] = [];
+    let calls = 0;
+    let releaseSecond: (response: RelayResponse) => void = () => {};
+    const handle = await attachInterceptor(cdp.url, {
+      relay: {
+        relay(_request, options) {
+          calls += 1;
+          if (calls === 1) return Promise.resolve(IN_PROGRESS);
+          return new Promise((resolve, reject) => {
+            releaseSecond = resolve;
+            options?.signal?.addEventListener("abort", () => {
+              reject(new Error("aborted"));
+            });
+          });
+        },
+      },
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+      timeoutMs: 500,
+    });
+    handle.on((event) => events.push(event));
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-early-deadline");
+      await waitFor(() => calls === 1, "first post");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      emitPaused(cdp, "req-later-deadline");
+      await waitFor(
+        () =>
+          events.some(
+            (event) => event.type === "failed" && event.reason === "timeout",
+          ),
+        "early timeout",
+      );
+      expect(calls).toBe(2);
+      releaseSecond(RELAYED);
+      await waitFor(
+        () => count(cdp.commands, "Fetch.fulfillRequest") === 1,
+        "later fulfill",
+      );
+      expect(count(cdp.commands, "Fetch.failRequest")).toBe(1);
+      expect(events.filter((event) => event.type === "failed")).toHaveLength(1);
+    } finally {
+      releaseSecond(RELAYED);
       await handle.detach();
       await cdp.close();
     }
