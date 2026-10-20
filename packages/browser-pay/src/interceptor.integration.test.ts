@@ -204,14 +204,6 @@ if (!chromeBin) {
         ],
         { detached: true, stdio: "ignore" },
       );
-      process.once("exit", () => {
-        if (!chrome.pid) return;
-        try {
-          process.kill(-chrome.pid, "SIGKILL");
-        } catch {
-          return;
-        }
-      });
       cdpUrl = await waitForDebugger(userDataDir, chrome);
       card = await startServer(hits, FRAME_HTML, "127.0.0.1");
       merchant = await startServer(
