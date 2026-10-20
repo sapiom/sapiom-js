@@ -602,7 +602,7 @@ class PaymentInterceptor {
     }
   }
 
-  private postAttempt(
+  private async postAttempt(
     request: PausedRequest,
     body: string,
     pageOrigin: string,
@@ -610,15 +610,19 @@ class PaymentInterceptor {
     signal: AbortSignal,
   ): Promise<RelayResponse> {
     const attempt = new AbortController();
-    const onAbort = () => attempt.abort(signal.reason);
-    if (signal.aborted) attempt.abort(signal.reason);
-    else signal.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(
-      () => attempt.abort(new RelayTimeoutError()),
-      this.attemptTimeoutMs,
-    );
-    return this.options.relay
-      .relay(
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      attempt.abort(new RelayTimeoutError());
+    }, this.attemptTimeoutMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      attempt.abort(signal.reason);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort);
+    try {
+      return await this.options.relay.relay(
         {
           injectionRef: this.options.placeholder.injectionRef,
           profileId: this.options.profileId,
@@ -632,11 +636,14 @@ class PaymentInterceptor {
           idempotencyKey,
         },
         { signal: attempt.signal },
-      )
-      .finally(() => {
-        clearTimeout(timer);
-        signal.removeEventListener("abort", onAbort);
-      });
+      );
+    } catch (error) {
+      if (timedOut && !signal.aborted) throw new RelayTimeoutError();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   private async readHeld(
@@ -783,11 +790,10 @@ class PaymentInterceptor {
     return flight;
   }
 
-  private releaseWaiter(flight: Flight): boolean {
+  private releaseWaiter(flight: Flight): void {
     flight.waiters -= 1;
-    if (flight.waiters > 0) return false;
+    if (flight.waiters > 0) return;
     flight.controller.abort();
-    return true;
   }
 
   private async detach(): Promise<void> {
@@ -1304,9 +1310,11 @@ function readAttachedSessionId(value: unknown): string | undefined {
   return value.sessionId.length > 0 ? value.sessionId : undefined;
 }
 
+const MAX_TIMER_MS = 2_147_483_647;
+
 function assertPositiveDuration(name: string, value: number | undefined): void {
   if (value === undefined) return;
-  if (!Number.isFinite(value) || value <= 0) {
+  if (!Number.isFinite(value) || value <= 0 || value > MAX_TIMER_MS) {
     throw new Error(`${name} must be a finite positive number`);
   }
 }

@@ -1038,18 +1038,18 @@ describe("relay retry before the deadline", () => {
   it("aborts one shared attempt and fulfills both pauses", async () => {
     const cdp = await startCdp();
     let calls = 0;
+    let attemptStarted = 0;
     const aborts: number[] = [];
-    const started = Date.now();
     const handle = await attachInterceptor(cdp.url, {
       relay: {
         relay(_request, options) {
           calls += 1;
           if (calls === 1) {
+            attemptStarted = Date.now();
             return new Promise((_resolve, reject) => {
               options?.signal?.addEventListener("abort", () => {
-                aborts.push(Date.now() - started);
-                const reason = options.signal?.reason;
-                reject(reason instanceof Error ? reason : new Error("aborted"));
+                aborts.push(Date.now() - attemptStarted);
+                reject(new Error("aborted"));
               });
             });
           }
@@ -1069,7 +1069,7 @@ describe("relay retry before the deadline", () => {
       );
       emitPaused(cdp, "req-shared-a");
       await waitFor(() => calls === 1, "first attempt");
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await new Promise((resolve) => setTimeout(resolve, 80));
       emitPaused(cdp, "req-shared-b");
       await waitFor(
         () => count(cdp.commands, "Fetch.fulfillRequest") === 2,
@@ -1078,7 +1078,7 @@ describe("relay retry before the deadline", () => {
       expect(calls).toBe(2);
       expect(aborts).toHaveLength(1);
       expect(aborts[0]).toBeGreaterThanOrEqual(100);
-      expect(aborts[0]).toBeLessThan(400);
+      expect(aborts[0]).toBeLessThan(160);
       expect(count(cdp.commands, "Fetch.failRequest")).toBe(0);
     } finally {
       await handle.detach();
@@ -1099,6 +1099,9 @@ describe("relay retry before the deadline", () => {
     await expect(
       attachInterceptor("ws://127.0.0.1:9", { ...base, attemptTimeoutMs: 0 }),
     ).rejects.toThrow(/attemptTimeoutMs/);
+    await expect(
+      attachInterceptor("ws://127.0.0.1:9", { ...base, timeoutMs: 2 ** 31 }),
+    ).rejects.toThrow(/timeoutMs/);
   });
 });
 
