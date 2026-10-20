@@ -1110,15 +1110,19 @@ describe("interceptor CDP decisions", () => {
         ...paused,
         params: { ...paused.params, requestId: "req-b" },
       });
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await waitFor(
+        () => events.filter((event) => event.type === "paused").length >= 2,
+        "both paused",
+      );
       expect(calls).toBe(1);
       release();
       await waitFor(
         () =>
           stub.commands.filter(
             (command) => command.method === "Fetch.failRequest",
-          ).length >= 2,
-        "both failed",
+          ).length >= 2 &&
+          events.filter((event) => event.type === "refused").length >= 2,
+        "both refused",
       );
       expect(calls).toBe(1);
       expect(warnings).toEqual(["payment relay refused the paused request"]);
