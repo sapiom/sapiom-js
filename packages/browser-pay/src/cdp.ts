@@ -30,7 +30,7 @@ function parseCdpMessage(value: unknown):
       params: Record<string, unknown>;
       sessionId?: string;
       result?: unknown;
-      errorMessage?: string;
+      failed?: true;
     }
   | undefined {
   if (!isRecord(value)) return undefined;
@@ -40,19 +40,14 @@ function parseCdpMessage(value: unknown):
   const params = isRecord(value.params) ? value.params : {};
   const sessionId =
     typeof value.sessionId === "string" ? value.sessionId : undefined;
-  let errorMessage: string | undefined;
-  if (isRecord(value.error) && typeof value.error.message === "string") {
-    errorMessage = value.error.message;
-  } else if (value.error) {
-    errorMessage = "CDP call failed";
-  }
+  // The remote error text is dropped here so it can never reach a caller.
   return {
     ...(id !== undefined ? { id } : {}),
     ...(method !== undefined ? { method } : {}),
     params,
     ...(sessionId ? { sessionId } : {}),
     result: value.result,
-    ...(errorMessage ? { errorMessage } : {}),
+    ...(value.error ? { failed: true as const } : {}),
   };
 }
 
@@ -343,7 +338,7 @@ export class CdpConnection {
       if (pending && message.id !== undefined) {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
-        if (message.errorMessage) {
+        if (message.failed) {
           pending.reject(new Error("CDP command failed"));
         } else {
           pending.resolve(message.result);

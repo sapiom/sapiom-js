@@ -5,6 +5,7 @@ export type {
   InterceptorEvent,
   InterceptorHandle,
   InterceptorTarget,
+  RefusalReason,
 } from "./interceptor.js";
 
 export { httpPaymentRelay } from "./relay.js";

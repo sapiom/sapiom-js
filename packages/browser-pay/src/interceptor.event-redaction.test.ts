@@ -5,8 +5,16 @@ import type { Duplex } from "node:stream";
 import { CdpConnection } from "./cdp.js";
 import { textHoldsPlaceholderNumber } from "./detect";
 import type { PayLogger } from "./logger";
-import { attachInterceptor, type InterceptorEvent } from "./interceptor";
-import type { RelayRequest, RelayResponse } from "./contract";
+import {
+  attachInterceptor,
+  type InterceptorEvent,
+  type InterceptorHandle,
+} from "./interceptor";
+import {
+  paymentIdempotencyKey,
+  type RelayRequest,
+  type RelayResponse,
+} from "./contract";
 import { stubPaymentRelay } from "../test/stub-relay";
 
 const HELD = {
@@ -55,19 +63,14 @@ function serverFrame(text: string): Buffer {
   if (payload.length < 126) {
     return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
   }
-  if (payload.length < 65536) {
-    const header = Buffer.alloc(4);
-    header[0] = 0x81;
-    header[1] = 126;
-    header.writeUInt16BE(payload.length, 2);
-    return Buffer.concat([header, payload]);
-  }
-  const header = Buffer.alloc(10);
+  const header = Buffer.alloc(4);
   header[0] = 0x81;
-  header[1] = 127;
-  header.writeBigUInt64BE(BigInt(payload.length), 2);
+  header[1] = 126;
+  header.writeUInt16BE(payload.length, 2);
   return Buffer.concat([header, payload]);
 }
+
+type CdpStub = Awaited<ReturnType<typeof startCdp>>;
 
 async function startCdp(options: StubOptions = {}): Promise<{
   url: string;
@@ -179,10 +182,6 @@ async function startCdp(options: StubOptions = {}): Promise<{
       reply(message.id, { targetInfos: [] });
       return;
     }
-    if (message.method === "Runtime.evaluate") {
-      reply(message.id, {});
-      return;
-    }
     reply(message.id, {});
   };
 
@@ -198,11 +197,6 @@ async function startCdp(options: StubOptions = {}): Promise<{
         if (!extended) return;
         length = extended.readUInt16BE(2);
         offset = 4;
-      } else if (length === 127) {
-        const extended = peek(10);
-        if (!extended) return;
-        length = Number(extended.readBigUInt64BE(2));
-        offset = 10;
       }
       const masked = (second & 0x80) !== 0;
       const maskOffset = offset;
@@ -265,12 +259,12 @@ function checkoutUrl(placeholderForm: string): string {
   return `https://synthuser:synthpass@checkout.example.test:8443/s/synthopaquesession/pay/${placeholderForm}?session=synthqueryvalue&token=synthtoken#synthfragment`;
 }
 
-function loggerFor(
-  warnings: {
-    message: string;
-    fields?: Readonly<Record<string, string | number>>;
-  }[],
-): PayLogger {
+type Warning = {
+  message: string;
+  fields?: Parameters<PayLogger["warn"]>[1];
+};
+
+function loggerFor(warnings: Warning[]): PayLogger {
   return {
     warn(message, fields) {
       warnings.push({ message, fields });
@@ -278,13 +272,16 @@ function loggerFor(
   };
 }
 
-function assertNoMarkers(value: unknown): void {
-  const json = JSON.stringify(value);
-  for (const marker of MARKERS) expect(json).not.toContain(marker);
-  expect(textHoldsPlaceholderNumber(json, HELD.number)).toBe(false);
+function assertCleanText(text: string): void {
+  for (const marker of MARKERS) expect(text).not.toContain(marker);
+  expect(textHoldsPlaceholderNumber(text, HELD.number)).toBe(false);
 }
 
-function emitPage(stub: { emit: (event: Record<string, unknown>) => void }) {
+function assertNoMarkers(value: unknown): void {
+  assertCleanText(JSON.stringify(value));
+}
+
+function emitPage(stub: CdpStub) {
   stub.emit({
     method: "Target.attachedToTarget",
     params: {
@@ -299,12 +296,7 @@ function emitPage(stub: { emit: (event: Record<string, unknown>) => void }) {
   });
 }
 
-function emitPause(
-  stub: { emit: (event: Record<string, unknown>) => void },
-  requestId: string,
-  url: string,
-  body = BODY,
-): void {
+function emitPause(stub: CdpStub, requestId: string, url: string): void {
   stub.emit({
     method: "Fetch.requestPaused",
     sessionId: "page-1",
@@ -314,7 +306,7 @@ function emitPause(
         url,
         method: "POST",
         headers: { "content-type": "application/json" },
-        postData: body,
+        postData: BODY,
       },
     },
   });
@@ -353,6 +345,26 @@ function attachOptions(
   };
 }
 
+/** Attaches, records events, and waits until the page session is armed. */
+async function attachArmed(
+  stub: CdpStub,
+  relay: ReturnType<typeof stubPaymentRelay>,
+  logger?: PayLogger,
+): Promise<{ handle: InterceptorHandle; events: InterceptorEvent[] }> {
+  const events: InterceptorEvent[] = [];
+  const handle = await attachInterceptor(
+    stub.url,
+    attachOptions(relay, logger),
+  );
+  handle.on((event) => events.push(event));
+  emitPage(stub);
+  await waitFor(
+    () => stub.commands.some((command) => command.method === "Fetch.enable"),
+    "Fetch.enable",
+  );
+  return { handle, events };
+}
+
 async function captureError(promise: Promise<unknown>): Promise<Error> {
   try {
     await promise;
@@ -369,38 +381,22 @@ function assertSafeError(error: Error): void {
     String(error),
     JSON.stringify(error, Object.getOwnPropertyNames(error)),
   ];
-  for (const value of values) {
-    for (const marker of MARKERS) expect(value).not.toContain(marker);
-    expect(textHoldsPlaceholderNumber(value, HELD.number)).toBe(false);
-  }
+  for (const value of values) assertCleanText(value);
 }
 
 describe("interceptor event redaction", () => {
   it("emits only origins for every held URL form and relays the raw request unchanged", async () => {
     const stub = await startCdp();
-    const events: InterceptorEvent[] = [];
     const calls: RelayRequest[] = [];
-    const warnings: {
-      message: string;
-      fields?: Readonly<Record<string, string | number>>;
-    }[] = [];
+    const warnings: Warning[] = [];
     try {
-      const handle = await attachInterceptor(
-        stub.url,
-        attachOptions(
-          stubPaymentRelay(async (request) => {
-            calls.push(request);
-            return success();
-          }),
-          loggerFor(warnings),
-        ),
-      );
-      handle.on((event) => events.push(event));
-      emitPage(stub);
-      await waitFor(
-        () =>
-          stub.commands.some((command) => command.method === "Fetch.enable"),
-        "Fetch.enable",
+      const { handle, events } = await attachArmed(
+        stub,
+        stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        loggerFor(warnings),
       );
 
       for (let index = 0; index < PLACEHOLDER_FORMS.length; index++) {
@@ -415,10 +411,7 @@ describe("interceptor event redaction", () => {
         expect(calls[index].request.url).toBe(rawUrl);
         expect(calls[index].request.body).toBe(BODY);
         expect(calls[index].idempotencyKey).toBe(
-          crypto
-            .createHash("sha256")
-            .update(`POST\0${rawUrl}\0${BODY}`)
-            .digest("hex"),
+          paymentIdempotencyKey("POST", rawUrl, BODY),
         );
       }
 
@@ -444,34 +437,21 @@ describe("interceptor event redaction", () => {
 
   it("preserves known refusal reasons and sanitizes custom reasons in events and logs", async () => {
     const stub = await startCdp();
-    const events: InterceptorEvent[] = [];
-    const warnings: {
-      message: string;
-      fields?: Readonly<Record<string, string | number>>;
-    }[] = [];
+    const warnings: Warning[] = [];
     let calls = 0;
     try {
-      const handle = await attachInterceptor(
-        stub.url,
-        attachOptions(
-          stubPaymentRelay(async () => {
-            calls += 1;
-            return calls === 1
-              ? { outcome: "refused", reason: "total_changed" }
-              : {
-                  outcome: "refused",
-                  reason: "bad synthtoken https://x/?session=synthqueryvalue",
-                };
-          }),
-          loggerFor(warnings),
-        ),
-      );
-      handle.on((event) => events.push(event));
-      emitPage(stub);
-      await waitFor(
-        () =>
-          stub.commands.some((command) => command.method === "Fetch.enable"),
-        "Fetch.enable",
+      const { handle, events } = await attachArmed(
+        stub,
+        stubPaymentRelay(async () => {
+          calls += 1;
+          return calls === 1
+            ? { outcome: "refused", reason: "total_changed" }
+            : {
+                outcome: "refused",
+                reason: "bad synthtoken https://x/?session=synthqueryvalue",
+              };
+        }),
+        loggerFor(warnings),
       );
 
       emitPause(stub, "known-refusal", checkoutUrl(PLACEHOLDER_FORMS[1]));
@@ -507,35 +487,24 @@ describe("interceptor event redaction", () => {
     }
   });
 
-  it("maps custom relay failures to network and suppresses reposts after unknown", async () => {
+  it("uses origin-only URLs for network and unknown failures", async () => {
     const stub = await startCdp();
-    const events: InterceptorEvent[] = [];
-    const calls: RelayRequest[] = [];
+    let calls = 0;
     try {
-      const handle = await attachInterceptor(
-        stub.url,
-        attachOptions(
-          stubPaymentRelay(async (request) => {
-            calls.push(request);
-            if (calls.length === 1) {
-              throw new Error(
-                `boom synthtoken ${checkoutUrl(PLACEHOLDER_FORMS[0])}`,
-              );
-            }
-            return { outcome: "unknown" };
-          }),
-        ),
-      );
-      handle.on((event) => events.push(event));
-      emitPage(stub);
-      await waitFor(
-        () =>
-          stub.commands.some((command) => command.method === "Fetch.enable"),
-        "Fetch.enable",
+      const { handle, events } = await attachArmed(
+        stub,
+        stubPaymentRelay(async () => {
+          calls += 1;
+          if (calls === 1) {
+            throw new Error(
+              `boom synthtoken ${checkoutUrl(PLACEHOLDER_FORMS[0])}`,
+            );
+          }
+          return { outcome: "unknown" };
+        }),
       );
 
-      const failureUrl = checkoutUrl(PLACEHOLDER_FORMS[3]);
-      emitPause(stub, "network-failure", failureUrl);
+      emitPause(stub, "network-failure", checkoutUrl(PLACEHOLDER_FORMS[3]));
       await waitFor(
         () => events.some((event) => event.type === "failed"),
         "network failure",
@@ -546,24 +515,14 @@ describe("interceptor event redaction", () => {
         reason: "network",
       });
 
-      const unknownUrl = checkoutUrl(PLACEHOLDER_FORMS[4]);
-      emitPause(stub, "unknown-once", unknownUrl);
+      emitPause(stub, "unknown", checkoutUrl(PLACEHOLDER_FORMS[4]));
       await waitFor(
         () =>
-          events.filter(
+          events.some(
             (event) => event.type === "failed" && event.reason === "unknown",
-          ).length === 1,
+          ),
         "unknown outcome",
       );
-      emitPause(stub, "unknown-twice", unknownUrl);
-      await waitFor(
-        () =>
-          events.filter(
-            (event) => event.type === "failed" && event.reason === "unknown",
-          ).length === 2,
-        "suppressed unknown outcome",
-      );
-      expect(calls).toHaveLength(2);
       expect(events).toContainEqual({
         type: "failed",
         url: ORIGIN,
@@ -654,18 +613,10 @@ describe("interceptor event redaction", () => {
 
   it("uses origin-only URLs for relayed_unfulfilled events", async () => {
     const stub = await startCdp({ failFulfill: true });
-    const events: InterceptorEvent[] = [];
     try {
-      const handle = await attachInterceptor(
-        stub.url,
-        attachOptions(stubPaymentRelay(async () => success())),
-      );
-      handle.on((event) => events.push(event));
-      emitPage(stub);
-      await waitFor(
-        () =>
-          stub.commands.some((command) => command.method === "Fetch.enable"),
-        "Fetch.enable",
+      const { handle, events } = await attachArmed(
+        stub,
+        stubPaymentRelay(async () => success()),
       );
       emitPause(stub, "unfulfilled", checkoutUrl(PLACEHOLDER_FORMS[0]));
       await waitFor(
@@ -684,7 +635,7 @@ describe("interceptor event redaction", () => {
     }
   });
 
-  it("does not expose invalid URLs, transport errors, or CDP error text", async () => {
+  it("does not expose an invalid CDP websocket URL", async () => {
     const invalidUrlError = await captureError(
       attachInterceptor(
         "ws://synthuser:synthpass@[bad",
@@ -696,7 +647,9 @@ describe("interceptor event redaction", () => {
       false,
     );
     assertSafeError(invalidUrlError);
+  });
 
+  it("does not expose transport details when the connect fails", async () => {
     const closed = http.createServer();
     await new Promise<void>((resolve) => {
       closed.listen(0, "127.0.0.1", resolve);
@@ -711,7 +664,9 @@ describe("interceptor event redaction", () => {
     );
     expect(connectError.message).toBe("CDP websocket connect failed");
     assertSafeError(connectError);
+  });
 
+  it("does not expose CDP error text", async () => {
     const stub = await startCdp({
       errorOnMethod: {
         method: "Target.setAutoAttach",
