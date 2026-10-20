@@ -59,10 +59,11 @@
  * out of the same budget — so a cap sized for the answer alone can be exhausted
  * mid-deliberation, ending the turn before the answer (or, with `output`, before
  * the structured-output tool call) is ever emitted. Size it for thinking plus
- * output: a few thousand tokens, not a few hundred. Billing settles on the tokens actually
- * produced, so a cap with headroom does not bill for tokens the model never
- * emitted — but it is not free either: the gateway's admission weight scales with
- * `max_tokens`, so size the cap for the work rather than padding it (SAP-3280).
+ * output: a few thousand tokens, not a few hundred. Billing settles on the tokens
+ * actually produced, so a cap with headroom does not bill for tokens the model
+ * never emitted — but it is not free either: the gateway's admission weight
+ * scales with `max_tokens`, so size the cap for the work rather than padding it
+ * (SAP-3280).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -148,8 +149,8 @@ export interface LlmRunSpec {
    * {@link structuredOf}. Omit and build `request.tools` yourself for anything
    * this convenience doesn't cover (e.g. more than one candidate tool).
    *
-   * The model has to reach the tool call — and finish it — inside
-   * `request.max_tokens`, thinking included. When the cap cuts it off, {@link run} throws
+   * The model has to reach the tool call — and finish it — inside `request.max_tokens`,
+   * thinking included. When the cap cuts it off, {@link run} throws
    * {@link LlmStructuredOutputTruncatedError} instead of handing back a response whose
    * `tool_use` block never arrived or stopped mid-input. When the turn ends for any other
    * reason without calling the tool (e.g. `end_turn` with only text), {@link run} throws
@@ -554,12 +555,10 @@ export class LlmStructuredOutputMissingError extends Error {
   readonly response: unknown;
 
   constructor(outputName: string, response: unknown) {
-    const body = (response ?? {}) as { stop_reason?: unknown; model?: unknown };
+    const body = (response ?? {}) as { stop_reason?: unknown };
     const stopReason = typeof body.stop_reason === "string" ? body.stop_reason : undefined;
-    const model = typeof body.model === "string" ? body.model : undefined;
-    const servedClass = readDisclosure(response).servedClass;
+    const { servedClass, model, label: served } = servedByOf(response);
     const blockTypes = contentBlocksOf(response).map((block) => block.type);
-    const served = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
     super(
       `Structured output "${outputName}" was not produced: the model did not call the "${outputName}" tool ` +
         `(stop_reason: ${stopReason ?? "none"}; content blocks: ${blockTypes.length ? blockTypes.join(", ") : "none"}` +
@@ -589,10 +588,10 @@ export class LlmStructuredOutputMissingError extends Error {
  * `canFail: true` and return `fail(error.message)`, or change the request.
  */
 export class LlmRefusalError extends Error {
-  /** `stop_details.category` (e.g. `"cyber"`), or `null` when the response named none. */
-  readonly category: string | null;
-  /** `stop_details.explanation`, or `null` when absent. */
-  readonly explanation: string | null;
+  /** `stop_details.category` (e.g. `"cyber"`), or `undefined` when the response named none. */
+  readonly category: string | undefined;
+  /** `stop_details.explanation`, or `undefined` when absent. */
+  readonly explanation: string | undefined;
   /** The class that served the call, from the response disclosure, or `null` when absent. */
   readonly servedClass: string | null;
   /** The model the response reports, or `undefined` when it carried none. */
@@ -601,16 +600,11 @@ export class LlmRefusalError extends Error {
   readonly response: unknown;
 
   constructor(response: unknown) {
-    const body = (response ?? {}) as { model?: unknown; stop_details?: unknown };
-    const details = (typeof body.stop_details === "object" && body.stop_details !== null
-      ? body.stop_details
-      : {}) as { category?: unknown; explanation?: unknown };
-    const category = typeof details.category === "string" && details.category ? details.category : null;
-    const explanation =
-      typeof details.explanation === "string" && details.explanation ? details.explanation : null;
-    const model = typeof body.model === "string" ? body.model : undefined;
-    const servedClass = readDisclosure(response).servedClass;
-    const served = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
+    const body = (response ?? {}) as { stop_details?: unknown };
+    const details: Record<string, unknown> = isRecord(body.stop_details) ? body.stop_details : {};
+    const category = typeof details.category === "string" ? details.category : undefined;
+    const explanation = typeof details.explanation === "string" ? details.explanation : undefined;
+    const { servedClass, model, label: served } = servedByOf(response);
     super(
       `The model declined the request (stop_reason: refusal${category ? `; category: ${category}` : ""}` +
         `${served ? `; served by ${served}` : ""}).` +
@@ -624,6 +618,18 @@ export class LlmRefusalError extends Error {
     this.model = model;
     this.response = response;
   }
+}
+
+/**
+ * Who served a response, for the error classes above: the disclosed class, the reported
+ * model, and both joined as `label` (`"class large, model smart"`; `""` when neither is set).
+ */
+function servedByOf(response: unknown): { servedClass: string | null; model: string | undefined; label: string } {
+  const body = (response ?? {}) as { model?: unknown };
+  const model = typeof body.model === "string" ? body.model : undefined;
+  const servedClass = readDisclosure(response).servedClass;
+  const label = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
+  return { servedClass, model, label };
 }
 
 /** `max_tokens` off a caller's verbatim request body, when it declared a numeric one. */
@@ -796,9 +802,8 @@ function truncationOf(
  * appends a tool named `output.name` (schema `output.schema`) to any
  * caller-declared tools, asks for that call by name at the end of the system
  * prompt, and sends `tool_choice: auto` — the blessed tool-calling pattern for
- * structured output, automated. Never a forced `tool_choice`: current Claude
- * models answer `{ type: "tool" }` / `{ type: "any" }` with a 400, so `run`
- * requests the call and then checks that it arrived
+ * structured output, automated. {@link LlmRunSpec.output} says why the call is
+ * requested rather than forced; `run` then checks that it arrived
  * ({@link LlmStructuredOutputMissingError}).
  */
 function withStructuredOutput(request: Record<string, unknown>, output: LlmStructuredOutputSpec): Record<string, unknown> {
@@ -842,19 +847,18 @@ function withToolRequest(system: unknown, name: string): unknown {
  * @throws {LlmStructuredOutputTruncatedError} when `spec.output` was set and the
  * turn hit `max_tokens` before the structured-output tool call was emitted, or partway
  * through its input — the cap has to cover thinking as well as output.
- *
- * @throws {LlmStructuredOutputMissingError} when `spec.output` was set and the turn ended
- * (any other `stop_reason`) without a `tool_use` block for `spec.output.name`.
- *
- * @throws {LlmRefusalError} when the response's `stop_reason` is `"refusal"`, with or
- * without `spec.output`: a declined request is never handed back as an answer.
- *
  * This one is not worth retrying, and the engine does not know that: it is not a member
  * of the platform's non-retryable set, so left to escape a step it is re-run with the
  * identical under-capped request (up to the runner's per-step attempt limit), billing the
  * thinking each time and failing the same way. Catch it in a step declared `canFail: true`
  * and return `fail(error.message)` — the shape `CodingRunHttpError` already uses. Raising
  * the cap is the actual fix.
+ *
+ * @throws {LlmStructuredOutputMissingError} when `spec.output` was set and the turn ended
+ * (any other `stop_reason`) without a `tool_use` block for `spec.output.name`.
+ *
+ * @throws {LlmRefusalError} when the response's `stop_reason` is `"refusal"`, with or
+ * without `spec.output`: a declined request is never handed back as an answer.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,

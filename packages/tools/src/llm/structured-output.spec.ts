@@ -96,6 +96,7 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     properties: { name: { type: "string" }, age: { type: "number" } },
     required: ["name", "age"],
   };
+  const TOOL_REQUEST = "Return your final answer by calling the `record_person` tool exactly once.";
 
   it("injects the tool and requests it under tool_choice auto, appended to any caller-declared tools", async () => {
     const cap: Captured = {};
@@ -116,9 +117,7 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     ]);
     // A forced tool_choice ({ type: "tool" } / "any") is a 400 on current Claude models.
     expect(body.tool_choice).toEqual({ type: "auto" });
-    expect(body.system).toBe(
-      "You extract people from text.\n\nReturn your final answer by calling the `record_person` tool exactly once.",
-    );
+    expect(body.system).toBe(`You extract people from text.\n\n${TOOL_REQUEST}`);
   });
 
   it("asks for the tool in a block-array system prompt, and when there is none", async () => {
@@ -131,16 +130,14 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     });
     expect(JSON.parse(cap.body ?? "{}").system).toEqual([
       cached,
-      { type: "text", text: "Return your final answer by calling the `record_person` tool exactly once." },
+      { type: "text", text: TOOL_REQUEST },
     ]);
 
     await sapiom.llm.run({
       request: { messages: [{ role: "user", content: "extract" }], max_tokens: 256 },
       output: { name: "record_person", schema: SCHEMA },
     });
-    expect(JSON.parse(cap.body ?? "{}").system).toBe(
-      "Return your final answer by calling the `record_person` tool exactly once.",
-    );
+    expect(JSON.parse(cap.body ?? "{}").system).toBe(TOOL_REQUEST);
   });
 
   it("does not mutate the caller's original request object", async () => {
@@ -230,7 +227,7 @@ describe("ctx.sapiom.llm.{structuredOf,textOf,readDisclosure} — reachable from
 
 /**
  * The silent failure this error exists to end (SAP-3280): a routed label emits a
- * `thinking` block before the forced tool call, thinking is spent out of `max_tokens`,
+ * `thinking` block before the tool call, thinking is spent out of `max_tokens`,
  * and a cap sized for the answer alone ends the turn before the tool call is emitted.
  * `structuredOf` then correctly returns `undefined` and the author sees a `TypeError`
  * from destructuring it — indistinguishable from a genuinely empty result.
@@ -618,7 +615,7 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     expect(error).toBeInstanceOf(LlmStructuredOutputMissingError);
   });
 
-  it("leaves a truncated PLAIN-TEXT call alone — no `output`, nothing forced", async () => {
+  it("leaves a truncated PLAIN-TEXT call alone — no `output`, no tool call requested", async () => {
     // A text turn that hit the cap is truncated but still readable, so it stays the
     // caller's call. Throwing there would break every deliberately-bounded reply.
     const completion = { stop_reason: "max_tokens", content: [{ type: "text", text: "partial…" }] };
@@ -641,11 +638,14 @@ describe("llm.run — a refused request", () => {
     content: [],
   };
 
+  const runWith = (response: Record<string, unknown>, output?: { name: string; schema: Record<string, unknown> }) =>
+    createClient({ apiKey: "k", fetch: fakeDirectFetch({}, response) }).llm.run({
+      request: { messages: [{ role: "user", content: "hi" }], max_tokens: 4096 },
+      ...(output ? { output } : {}),
+    });
+
   it("throws LlmRefusalError instead of returning the refused turn", async () => {
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, REFUSED) });
-    const error = await sapiom.llm
-      .run({ request: { messages: [{ role: "user", content: "hi" }], max_tokens: 4096 } })
-      .catch((err: unknown) => err as LlmRefusalError);
+    const error = await runWith(REFUSED).catch((err: unknown) => err as LlmRefusalError);
     expect(error).toBeInstanceOf(LlmRefusalError);
     expect(error.name).toBe("LlmRefusalError");
     expect(error.category).toBe("cyber");
@@ -656,23 +656,16 @@ describe("llm.run — a refused request", () => {
   });
 
   it("reports the refusal, not a missing structured call, when output was set", async () => {
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, REFUSED) });
-    await expect(
-      sapiom.llm.run({
-        request: { messages: [{ role: "user", content: "extract" }], max_tokens: 4096 },
-        output: { name: "record_person", schema: { type: "object" } },
-      }),
-    ).rejects.toBeInstanceOf(LlmRefusalError);
+    await expect(runWith(REFUSED, { name: "record_person", schema: { type: "object" } })).rejects.toBeInstanceOf(
+      LlmRefusalError,
+    );
   });
 
-  it("reads a refusal with no stop_details as category null", async () => {
-    const bare = { content: [], stop_reason: "refusal" };
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, bare) });
-    const error = await sapiom.llm
-      .run({ request: { messages: [{ role: "user", content: "hi" }], max_tokens: 4096 } })
-      .catch((err: unknown) => err as LlmRefusalError);
-    expect(error.category).toBeNull();
-    expect(error.explanation).toBeNull();
+  it("reads a refusal with no stop_details as having no category or explanation", async () => {
+    const error = await runWith({ content: [], stop_reason: "refusal" }).catch((err: unknown) => err as LlmRefusalError);
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    expect(error.category).toBeUndefined();
+    expect(error.explanation).toBeUndefined();
   });
 });
 

@@ -141,11 +141,11 @@ export {
 // raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
 export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
-// Thrown by `llm.run` when a requested structured-output tool call never arrived:
-// `Truncated` when the turn hit `max_tokens` first, `Missing` when it ended for
-// any other reason without calling the tool; `Refusal` when the model declined the
-// request (`stop_reason: "refusal"`) — top-level so a step can catch each by name
-// without reaching into the `llm` namespace.
+// Thrown by `llm.run`: `Refusal` when the model declined the request
+// (`stop_reason: "refusal"`); and when a requested structured-output tool call
+// never arrived, `Truncated` if the turn hit `max_tokens` first, `Missing` if it
+// ended for any other reason without calling the tool — top-level so a step can
+// catch each by name without reaching into the `llm` namespace.
 export {
   LlmRefusalError,
   LlmStructuredOutputMissingError,

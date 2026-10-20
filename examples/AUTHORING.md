@@ -723,7 +723,7 @@ const res = await ctx.sapiom.llm.run({
 const review = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
 ```
 
-`output` appends that tool to the request and forces `tool_choice` onto it, so the
+`output` appends that tool to the request and asks for it in the system prompt, so the
 reply comes back as a typed `tool_use` block. `structuredOf` reads it, and returns
 `undefined` rather than guessing when there is no such block. `llm.run` itself throws
 `LlmStructuredOutputMissingError` when the model ends a turn without calling the tool, and
@@ -737,7 +737,7 @@ over those answers (`res.answers.<key>.noul` / `.choice` + `.probabilities` / `.
 no tool, schema, or `structuredOf` step.
 
 **`max_tokens` covers thinking, not just output.** A routed label may emit a `thinking`
-block before the forced tool call, out of the same budget. If it runs out mid-deliberation
+block before the tool call, out of the same budget. If it runs out mid-deliberation
 the turn ends before the tool call is emitted and there is nothing to read — on the hardest
 inputs only, so a starved cap passes every easy case first. `llm.run` throws
 `LlmStructuredOutputTruncatedError` when that happens rather than handing back an
