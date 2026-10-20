@@ -417,6 +417,9 @@ describe("relay_in_progress", () => {
       expect(events).toContainEqual(
         expect.objectContaining({ type: "failed", reason: "timeout" }),
       );
+      const postsAtFailure = relay.posts.length;
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      expect(relay.posts).toHaveLength(postsAtFailure);
     } finally {
       await handle.detach();
       await cdp.close();
@@ -734,6 +737,50 @@ describe("relay_in_progress", () => {
       await handle.detach();
       await cdp.close();
       await relay.close();
+    }
+  });
+
+  it("reports detached when the relay resolves after detach", async () => {
+    const cdp = await startCdp();
+    const events: InterceptorEvent[] = [];
+    let release: (response: RelayResponse) => void = () => {};
+    const pending = new Promise<RelayResponse>((resolve) => {
+      release = resolve;
+    });
+    const handle = await attachInterceptor(cdp.url, {
+      relay: { relay: () => pending },
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+      timeoutMs: 5_000,
+    });
+    handle.on((event) => events.push(event));
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-detach-resolve");
+      await waitFor(
+        () => events.some((event) => event.type === "paused"),
+        "paused",
+      );
+      const detaching = handle.detach();
+      release(RELAYED);
+      await detaching;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: "failed", reason: "detached" }),
+      );
+      expect(
+        events.some(
+          (event) =>
+            event.type === "relayed" || event.type === "relayed_unfulfilled",
+        ),
+      ).toBe(false);
+    } finally {
+      await handle.detach();
+      await cdp.close();
     }
   });
 });
