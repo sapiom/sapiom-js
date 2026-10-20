@@ -623,7 +623,11 @@ export interface ModelRunSpec {
    * `wait()`'s default poll budget widens to cover the deadline you asked for.
    */
   deadlineMinutes?: number;
-  /** Max output tokens per turn. */
+  /**
+   * Max tokens per turn. The cap covers the turn's thinking as well as its
+   * visible output, so size it for both — a few thousand tokens, not a few
+   * hundred (the same rule as `llm`'s `max_tokens`).
+   */
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
   mcps?: ModelMcp[];
