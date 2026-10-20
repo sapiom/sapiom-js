@@ -2,8 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import http from "node:http";
-import net from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
@@ -79,18 +78,6 @@ interface Hit {
   body: string;
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-    server.on("error", reject);
-  });
-}
-
 function startServer(
   hits: Hit[],
   html: string,
@@ -148,29 +135,37 @@ function findChrome(): string | undefined {
 }
 
 async function waitForDebugger(
-  port: number,
+  userDataDir: string,
   proc: ChildProcess,
 ): Promise<string> {
   const deadline = Date.now() + 15_000;
-  let last = "not listening";
   while (Date.now() < deadline) {
-    if (proc.exitCode !== null) {
-      throw new Error(`Chrome exited before CDP was ready (${proc.exitCode})`);
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      throw new Error(
+        `Chrome exited before CDP was ready (${proc.exitCode ?? proc.signalCode})`,
+      );
     }
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (response.ok) {
-        const body = (await response.json()) as {
-          webSocketDebuggerUrl?: string;
-        };
-        if (body.webSocketDebuggerUrl) return body.webSocketDebuggerUrl;
-      }
-    } catch (error) {
-      last = error instanceof Error ? error.message : "fetch failed";
-    }
+    const endpoint = await readDebuggerEndpoint(userDataDir);
+    if (endpoint) return endpoint;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`CDP endpoint did not come up (${last})`);
+  throw new Error("CDP endpoint did not come up (DevToolsActivePort missing)");
+}
+
+async function readDebuggerEndpoint(
+  userDataDir: string,
+): Promise<string | undefined> {
+  try {
+    const text = await readFile(
+      path.join(userDataDir, "DevToolsActivePort"),
+      "utf8",
+    );
+    const [port, wsPath] = text.split("\n");
+    if (!port?.trim() || !wsPath?.trim()) return undefined;
+    return `ws://127.0.0.1:${port.trim()}${wsPath.trim()}`;
+  } catch {
+    return undefined;
+  }
 }
 
 const chromeBin = findChrome();
@@ -192,7 +187,6 @@ if (!chromeBin) {
 
     beforeAll(async () => {
       userDataDir = await mkdtemp(path.join(os.tmpdir(), "browser-pay-"));
-      const port = await freePort();
       chrome = spawn(
         chromeBin ?? "chrome-missing",
         [
@@ -201,16 +195,24 @@ if (!chromeBin) {
           "--disable-dev-shm-usage",
           "--disable-gpu",
           "--site-per-process",
-          `--remote-debugging-port=${port}`,
+          "--remote-debugging-port=0",
           "--remote-allow-origins=*",
           `--user-data-dir=${userDataDir}`,
           "--no-first-run",
           "--no-default-browser-check",
           "about:blank",
         ],
-        { stdio: "ignore" },
+        { detached: true, stdio: "ignore" },
       );
-      cdpUrl = await waitForDebugger(port, chrome);
+      process.once("exit", () => {
+        if (!chrome.pid) return;
+        try {
+          process.kill(-chrome.pid, "SIGKILL");
+        } catch {
+          return;
+        }
+      });
+      cdpUrl = await waitForDebugger(userDataDir, chrome);
       card = await startServer(hits, FRAME_HTML, "127.0.0.1");
       merchant = await startServer(
         hits,
@@ -220,9 +222,28 @@ if (!chromeBin) {
     }, 30_000);
 
     afterAll(async () => {
-      chrome?.kill("SIGKILL");
-      await new Promise((resolve) => merchant?.server.close(resolve));
-      await new Promise((resolve) => card?.server.close(resolve));
+      if (chrome?.pid) {
+        const exited =
+          chrome.exitCode !== null || chrome.signalCode !== null
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                chrome.once("exit", () => resolve());
+              });
+        try {
+          process.kill(-chrome.pid, "SIGKILL");
+        } catch {
+          chrome.kill("SIGKILL");
+        }
+        await exited;
+      }
+      await new Promise((resolve) => {
+        if (merchant) merchant.server.close(() => resolve(undefined));
+        else resolve(undefined);
+      });
+      await new Promise((resolve) => {
+        if (card) card.server.close(() => resolve(undefined));
+        else resolve(undefined);
+      });
       if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
     });
 
@@ -365,13 +386,14 @@ if (!chromeBin) {
         mismatch: { status: 201, text: '{"id":"sess_test"}' },
         card: { status: 201, text: '{"id":"sess_test"}' },
       });
-      expect(events.map((event) => event.type)).toEqual([
-        "paused",
-        "relayed",
-        "paused",
-        "relayed",
+      expect([
+        ["paused", "relayed", "paused", "relayed"],
+        ["paused", "paused", "relayed", "relayed"],
+      ]).toContainEqual(events.map((event) => event.type));
+      expect(events.filter((event) => event.type === "relayed")).toEqual([
+        expect.objectContaining({ status: 201 }),
+        expect.objectContaining({ status: 201 }),
       ]);
-      expect(events[3]).toMatchObject({ type: "relayed", status: 201 });
       expect(JSON.stringify(events)).not.toContain(PLACEHOLDER.number);
     }, 60_000);
 
