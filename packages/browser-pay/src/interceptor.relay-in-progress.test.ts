@@ -987,6 +987,72 @@ describe("relay retry before the deadline", () => {
       await relay.close();
     }
   });
+
+  it("aborts one shared attempt and fulfills both pauses", async () => {
+    const cdp = await startCdp();
+    let calls = 0;
+    const aborts: number[] = [];
+    const started = Date.now();
+    const handle = await attachInterceptor(cdp.url, {
+      relay: {
+        relay(_request, options) {
+          calls += 1;
+          if (calls === 1) {
+            return new Promise((_resolve, reject) => {
+              options?.signal?.addEventListener("abort", () => {
+                aborts.push(Date.now() - started);
+                const reason = options.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("aborted"));
+              });
+            });
+          }
+          return Promise.resolve(RELAYED);
+        },
+      },
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+      timeoutMs: 2_000,
+      attemptTimeoutMs: 120,
+    });
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-shared-a");
+      await waitFor(() => calls === 1, "first attempt");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      emitPaused(cdp, "req-shared-b");
+      await waitFor(
+        () => count(cdp.commands, "Fetch.fulfillRequest") === 2,
+        "both fulfilled",
+      );
+      expect(calls).toBe(2);
+      expect(aborts).toHaveLength(1);
+      expect(aborts[0]).toBeGreaterThanOrEqual(100);
+      expect(aborts[0]).toBeLessThan(400);
+      expect(count(cdp.commands, "Fetch.failRequest")).toBe(0);
+    } finally {
+      await handle.detach();
+      await cdp.close();
+    }
+  });
+
+  it("rejects a timeout that is not a finite positive number", async () => {
+    const relay = { relay: async () => RELAYED };
+    const base = {
+      relay,
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+    };
+    await expect(
+      attachInterceptor("ws://127.0.0.1:9", { ...base, timeoutMs: Number.NaN }),
+    ).rejects.toThrow(/timeoutMs/);
+    await expect(
+      attachInterceptor("ws://127.0.0.1:9", { ...base, attemptTimeoutMs: 0 }),
+    ).rejects.toThrow(/attemptTimeoutMs/);
+  });
 });
 
 function armPage(cdp: {

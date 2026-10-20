@@ -1345,6 +1345,7 @@ describe("interceptor CDP decisions", () => {
         placeholder: HELD,
         profileId: "shopify-card-vault",
         timeoutMs: 400,
+        attemptTimeoutMs: 1_000,
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);

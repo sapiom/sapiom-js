@@ -1302,10 +1302,19 @@ function readAttachedSessionId(value: unknown): string | undefined {
   return value.sessionId.length > 0 ? value.sessionId : undefined;
 }
 
+function assertPositiveDuration(name: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a finite positive number`);
+  }
+}
+
 function assertAttachOptions(options: AttachOptions): void {
   if (typeof options.relay?.relay !== "function") {
     throw new Error("A payment relay is required");
   }
+  assertPositiveDuration("timeoutMs", options.timeoutMs);
+  assertPositiveDuration("attemptTimeoutMs", options.attemptTimeoutMs);
   if (!options.profileId) {
     throw new Error("profileId is required");
   }
