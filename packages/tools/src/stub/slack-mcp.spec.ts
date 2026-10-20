@@ -24,6 +24,12 @@ describe("stub slack + mcp connectors", () => {
     expect(thread.messages[0]).toMatchObject({ ts: "1.1" });
     const info = await slack.userInfo({ user: "U9" });
     expect(info.user).toMatchObject({ id: "U9", is_bot: false });
+    const channel = await slack.history({ channel: "C1" });
+    expect(channel.messages).toHaveLength(1);
+    await expect(slack.whoAmI()).resolves.toMatchObject({
+      user_id: "U0STUBBOT",
+      bot_id: "B0STUBBOT",
+    });
   });
 
   it("returns and records a Slack override", async () => {
@@ -44,6 +50,32 @@ describe("stub slack + mcp connectors", () => {
       expect.objectContaining({
         capability: "connectors.slack.userInfo",
         args: [{ user: "U1" }],
+      }),
+    );
+  });
+
+  it("calls a whoAmI override with no arguments", async () => {
+    const calls: StubCallRecord[] = [];
+    const client = createStubClient({
+      calls,
+      overrides: {
+        "connectors.slack.whoAmI": (...args: unknown[]) => ({
+          ok: true,
+          user_id: "U7",
+          team_id: "T7",
+          argCount: args.length,
+        }),
+      },
+    });
+
+    await expect(client.connectors.slack.whoAmI()).resolves.toMatchObject({
+      user_id: "U7",
+      argCount: 0,
+    });
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        capability: "connectors.slack.whoAmI",
+        args: [],
       }),
     );
   });

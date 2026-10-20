@@ -202,6 +202,8 @@ import * as github from "./connectors/github/index.js";
 import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
 import * as slack from "./connectors/slack/index.js";
 import type {
+  SlackHistoryArgs,
+  SlackHistoryResult,
   SlackPostEphemeralArgs,
   SlackPostEphemeralResult,
   SlackPostMessageArgs,
@@ -214,6 +216,7 @@ import type {
   SlackUpdateResult,
   SlackUserInfoArgs,
   SlackUserInfoResult,
+  SlackWhoAmIResult,
 } from "./connectors/slack/index.js";
 import { mcp } from "./connectors/mcp/index.js";
 import type { McpConnector } from "./connectors/mcp/index.js";
@@ -632,6 +635,10 @@ export interface Sapiom {
       removeReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
       /** `conversations.replies`: a thread's parent message and replies, paginated. */
       replies(args: SlackRepliesArgs): Promise<SlackRepliesResult>;
+      /** `conversations.history`: a channel's top-level messages, paginated. */
+      history(args: SlackHistoryArgs): Promise<SlackHistoryResult>;
+      /** `auth.test`: the bot's own `user_id` and `bot_id`. */
+      whoAmI(): Promise<SlackWhoAmIResult>;
       /** `users.info`: look up a user by id. */
       userInfo(args: SlackUserInfoArgs): Promise<SlackUserInfoResult>;
     };
@@ -921,6 +928,8 @@ function bind(transport: Transport): Sapiom {
         addReaction: (args) => slack.addReaction(args, transport),
         removeReaction: (args) => slack.removeReaction(args, transport),
         replies: (args) => slack.replies(args, transport),
+        history: (args) => slack.history(args, transport),
+        whoAmI: () => slack.whoAmI(transport),
         userInfo: (args) => slack.userInfo(args, transport),
       },
       linear: mcp("linear", transport),

@@ -120,6 +120,18 @@ describe("slack methods", () => {
       "conversations.replies",
       { channel: "C1", ts: "1.1", cursor: "c2", limit: 50 },
     ],
+    [
+      "history",
+      "conversations.history",
+      {
+        channel: "C1",
+        cursor: "c2",
+        limit: 200,
+        oldest: "1.0",
+        latest: "2.0",
+        inclusive: true,
+      },
+    ],
     ["userInfo", "users.info", { user: "U1" }],
   ] as const)(
     "%s POSTs methods/%s with the args unchanged and returns Slack's body",
@@ -140,6 +152,17 @@ describe("slack methods", () => {
       expect(bodyOf(calls[0]!)).toEqual(args);
     },
   );
+
+  it("whoAmI POSTs methods/auth.test with an empty body and returns the bot identity", async () => {
+    const result = { ok: true, user_id: "U1", bot_id: "B1", team_id: "T1" };
+    const { transport, calls } = makeTransport([() => jsonResponse(result)]);
+
+    await expect(slack.whoAmI(transport)).resolves.toEqual(result);
+
+    expect(calls[0]!.url).toBe(`${BASE}/connectors/v1/slack/methods/auth.test`);
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(bodyOf(calls[0]!)).toEqual({});
+  });
 
   it("surfaces a 404 (no Slack connector for this tenant) with the connector_not_found body", async () => {
     const { transport } = makeTransport([

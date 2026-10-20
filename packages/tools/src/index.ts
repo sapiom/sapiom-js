@@ -260,6 +260,8 @@ export type {
 export type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
 export type {
   SlackBlock,
+  SlackHistoryArgs,
+  SlackHistoryResult,
   SlackMessage,
   SlackMessageContent,
   SlackPostEphemeralArgs,
@@ -275,6 +277,7 @@ export type {
   SlackUser,
   SlackUserInfoArgs,
   SlackUserInfoResult,
+  SlackWhoAmIResult,
 } from "./connectors/slack/index.js";
 export { McpRelayError } from "./connectors/mcp/index.js";
 export type {

@@ -156,12 +156,14 @@ import type {
 } from "../connectors/google/index.js";
 import type { GitHubRepo } from "../connectors/github/index.js";
 import type {
+  SlackHistoryResult,
   SlackPostEphemeralResult,
   SlackPostMessageResult,
   SlackReactionResult,
   SlackRepliesResult,
   SlackUpdateResult,
   SlackUserInfoResult,
+  SlackWhoAmIResult,
 } from "../connectors/slack/index.js";
 import type {
   McpCallToolResult,
@@ -1052,7 +1054,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     fallback: () => T,
   ): T => {
     const key = `connectors.slack.${method}`;
-    const result = r(key, [args], fallback);
+    // `undefined` is a no-arg method (`whoAmI`): its override is called with no arguments.
+    const result = r(key, args === undefined ? [] : [args], fallback);
     if (
       matchedOverride([key]) &&
       (result === null || typeof result !== "object" || Array.isArray(result))
@@ -2459,6 +2462,26 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             ],
             has_more: false,
           })) as SlackRepliesResult,
+        history: async (args) =>
+          stubSlack("history", args, () => ({
+            ok: true,
+            messages: [
+              {
+                type: "message",
+                ts: "1700000000.000100",
+                user: "U0STUBUSER",
+                text: "stub channel message",
+              },
+            ],
+            has_more: false,
+          })) as SlackHistoryResult,
+        whoAmI: async () =>
+          stubSlack("whoAmI", undefined, () => ({
+            ok: true,
+            user_id: "U0STUBBOT",
+            bot_id: "B0STUBBOT",
+            team_id: "T0STUBTEAM",
+          })) as SlackWhoAmIResult,
         userInfo: async (args) =>
           stubSlack("userInfo", args, () => ({
             ok: true,

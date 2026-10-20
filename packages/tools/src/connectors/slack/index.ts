@@ -121,6 +121,43 @@ export interface SlackRepliesResult {
   [key: string]: unknown;
 }
 
+export interface SlackHistoryArgs {
+  channel: string;
+  /** `response_metadata.next_cursor` from a previous page. */
+  cursor?: string;
+  /** Messages per page, 1-1000. */
+  limit?: number;
+  /** Only messages after this `ts`. */
+  oldest?: string;
+  /** Only messages before this `ts`. */
+  latest?: string;
+  /** Include messages whose `ts` equals `oldest` or `latest`. */
+  inclusive?: boolean;
+}
+
+export interface SlackHistoryResult {
+  ok: true;
+  /** Top-level messages, newest first. Thread replies are not included; read them with `replies`. */
+  messages: SlackMessage[];
+  has_more?: boolean;
+  response_metadata?: { next_cursor?: string };
+  [key: string]: unknown;
+}
+
+/** The bot's own identity, as `auth.test` returns it; fields beyond these pass through. */
+export interface SlackWhoAmIResult {
+  ok: true;
+  /** The bot user's id (`U…`): the `user` on messages it posts. */
+  user_id: string;
+  /** The bot's id (`B…`): the `bot_id` on messages it posts. */
+  bot_id?: string;
+  team_id: string;
+  team?: string;
+  user?: string;
+  url?: string;
+  [key: string]: unknown;
+}
+
 export interface SlackUserInfoArgs {
   user: string;
 }
@@ -209,6 +246,21 @@ export async function replies(
   transport: Transport = defaultTransport(),
 ): Promise<SlackRepliesResult> {
   return callMethod("conversations.replies", { ...args }, transport);
+}
+
+/** Read a channel's top-level messages, newest first, one page at a time. */
+export async function history(
+  args: SlackHistoryArgs,
+  transport: Transport = defaultTransport(),
+): Promise<SlackHistoryResult> {
+  return callMethod("conversations.history", { ...args }, transport);
+}
+
+/** The bot's own user id and bot id, to tell its own posts apart (`auth.test`). */
+export async function whoAmI(
+  transport: Transport = defaultTransport(),
+): Promise<SlackWhoAmIResult> {
+  return callMethod("auth.test", {}, transport);
 }
 
 /** Look up a user by id (name, display name, timezone, bot flag). */
