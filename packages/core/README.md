@@ -314,3 +314,36 @@ MIT © [Sapiom](../../LICENSE)
 - [GitHub](https://github.com/sapiom/sapiom-js)
 - [NPM](https://www.npmjs.com/package/@sapiom/core)
 - [Issues](https://github.com/sapiom/sapiom-js/issues)
+
+
+### Require approval for every card purchase
+
+Use a trusted backend key with `org.read` / `org.write` in the buyer's tenant scope. These methods manage one backing rule for the card. Other rules still apply. A purchasing key must not change its own governance.
+
+```ts
+const current = await client.paymentCards.getPurchaseApproval(cardId);
+const saved = await client.paymentCards.setPurchaseApproval(cardId, {
+  enabled: true,
+  version: current.version,
+});
+// Persist/render saved.enabled and saved.version. A stale write returns 409; reload before editing.
+```
+
+To let a cardholder choose the same setting while adding their card:
+
+```ts
+const setup = await client.paymentCards.createSetupLink({
+  returnUrl: "https://your-app.example/cards",
+  purchaseApproval: { enabled: false, allowChanges: true },
+});
+// Send the cardholder to setup.url. Treat its fragment as a bearer secret.
+// After return, retrieve the saved card and its actual approval setting:
+const completed = await client.paymentCards.getSetupLink(setup.id);
+if (completed.cardId) {
+  const approval = await client.paymentCards.getPurchaseApproval(completed.cardId);
+}
+```
+
+Setup-link creation requires `org.transactions.write`; supplying `purchaseApproval` additionally requires `org.write`. Omit it to keep the prior default (off, with no policy-editing grant), or use `allowChanges: false` to fix the initial choice. The first submitted choice is pinned across retries, and setup keeps the card unavailable until the policy is persisted. Enabling approval adds a human Approve/Deny decision to **every** purchase on this card, before the separate real-card CVV confirmation. The purchasing agent cannot resolve that approval.
+
+Requires the companion backend deployment and publication of the SDK version containing these helpers.

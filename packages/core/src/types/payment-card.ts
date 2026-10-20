@@ -56,3 +56,37 @@ export interface PaymentLimitSummary {
   groupBy: Array<"agent" | "trace" | "service" | "paymentCardId">;
   usage: CardAllowanceUsage | null;
 }
+
+/** A versioned setting owned by this saved card. Other matching policies still apply. */
+export interface CardPurchaseApprovalSettings {
+  /** Every card purchase needs an authorized human decision. CVV remains a separate step. */
+  enabled: boolean;
+  /** Use the current saved version; zero before this setting is first enabled. */
+  version: number;
+}
+
+/** An explicit org.write-authorized grant for the new card created by one setup link. */
+export interface SetupPurchaseApproval {
+  enabled: boolean;
+  /** Let the link holder change this initial choice before their first submission. */
+  allowChanges: boolean;
+}
+export interface CreateCardSetupLinkInput {
+  returnUrl?: string;
+  cardholderEmail?: string;
+  expiresInMinutes?: number;
+  /** Omitted: off, with no permission for the link holder to change purchase policy. */
+  purchaseApproval?: SetupPurchaseApproval;
+}
+export interface CardSetupLinkView {
+  id: string;
+  status: "open" | "completed" | "canceled" | "expired";
+  expiresAt: string;
+  returnUrl: string | null;
+  cardId: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  canceledAt: string | null;
+  /** Submitted choices are pinned: allowChanges becomes false after the first submission. */
+  purchaseApproval: SetupPurchaseApproval;
+}

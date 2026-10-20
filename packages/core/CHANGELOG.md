@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add versioned saved-card purchase-approval settings and hosted setup-link helpers. An explicitly authorized setup link can expose the approval toggle; enabling it requires Approve/Deny before the separate real-card CVV step. Requires the corresponding backend deployment and a new package publication.
+
 - Add trusted-platform card spending-limit read/write helpers over ordinary payment Rules, with versioned settings, shared payment usage and additional applicable limits. Card spending is booked at credential release; no refund-confirmation API is provided. Requires the corresponding backend deployment; package publication is pending.
 
 ## 0.5.0

@@ -137,3 +137,10 @@ export type {
 
 // Default export for convenience
 export { SapiomClient as default } from "./client/SapiomClient.js";
+
+export type {
+  CardPurchaseApprovalSettings,
+  SetupPurchaseApproval,
+  CreateCardSetupLinkInput,
+  CardSetupLinkView,
+} from "./types/payment-card.js";
