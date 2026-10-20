@@ -51,10 +51,12 @@ import { z } from "zod/v4";
 const MAX_ITEMS = 5;
 /** Truncate each child's analysis before it rides into the reduce prompt. */
 const MAX_ANALYSIS_CHARS = 1200;
-/** Bound the leaf model call — one focused analysis, not an essay. */
-const LEAF_MAX_TOKENS = 700;
-/** Bound the reduce model call — a combined brief, not a book. */
-const REDUCE_MAX_TOKENS = 1000;
+/**
+ * Caps for the leaf and reduce calls. Thinking is spent from the same budget as the
+ * reply, so these cover both; the prompts, not the caps, keep the replies short.
+ */
+const LEAF_MAX_TOKENS = 4096;
+const REDUCE_MAX_TOKENS = 4096;
 
 /**
  * The goal a zero-input run works on. A real goal with real sub-parts, so the

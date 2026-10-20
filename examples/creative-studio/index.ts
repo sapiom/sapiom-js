@@ -738,7 +738,7 @@ async function inspectPlate(
             ],
           },
         ],
-        max_tokens: 2000,
+        max_tokens: 4096,
       },
       { name: PLATE_CHECK_TOOL, schema: PLATE_CHECK_SCHEMA },
     )) as Partial<PlateVerdict> | undefined;

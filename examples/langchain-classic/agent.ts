@@ -35,7 +35,7 @@ export async function createLangChainDemoAgent(
   console.log("  Creating LangChain agent with Sapiom tracking...\n");
 
   const model = new ChatAnthropic({
-    model: "claude-3-5-haiku-latest",
+    model: "claude-haiku-4-5",
     anthropicApiKey: config.anthropicApiKey,
   });
 

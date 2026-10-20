@@ -55,7 +55,7 @@ async function main() {
   // Using Anthropic here. For OpenAI, change to: model: "openai:gpt-4o-mini"
   // and set OPENAI_API_KEY in your .env instead of ANTHROPIC_API_KEY
   const agent = createAgent({
-    model: "anthropic:claude-3-5-haiku-latest",
+    model: "anthropic:claude-sonnet-5-5",
     tools: [weatherTool, calculatorTool],
     middleware: [
       createSapiomMiddleware({

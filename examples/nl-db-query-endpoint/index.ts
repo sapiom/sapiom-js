@@ -651,7 +651,7 @@ const plan = defineStep({
         messages: [
           { role: "user", content: `Question: ${config.sampleQuestion}` },
         ],
-        max_tokens: 500,
+        max_tokens: 4096, // thinking is spent from this budget too
       },
       model: config.model || undefined,
     });

@@ -784,7 +784,7 @@ const narrate = defineStep({
               content: `METRICS:\n${renderMetrics(metrics)}\n\nANOMALY: ${anomaly.description} (severity: ${anomaly.severity})`,
             },
           ],
-          max_tokens: 700,
+          max_tokens: 4096, // thinking is spent from this budget too
         },
       });
       narrative =
