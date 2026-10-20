@@ -17,7 +17,7 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 
 ```json
 {
-  "injectionRef": "inj_…",
+  "injectionRef": "550e8400-e29b-41d4-a716-446655440000",
   "profileId": "shopify-card-vault",
   "pageOrigin": "https://shop.example",
   "request": {
@@ -30,7 +30,7 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 }
 ```
 
-`pageOrigin` is the top-level page origin. `headers` is a lowercased string map. This client sends only `accept`, `content-type`, and `shopify-identification-signature`, and drops a value longer than 8192 characters. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
+`injectionRef` is a UUID. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. This client sends only `accept`, `content-type`, and `shopify-identification-signature`, and drops a value longer than 8192 characters. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
 
 Success:
 
@@ -83,7 +83,7 @@ const handle = await attachInterceptor(cdpUrl, {
 
 Call `handle.on` after `attachInterceptor` resolves. Events emitted while attach was running, including a target that could not arm Fetch, are delivered to that first subscriber.
 
-A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
+A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
