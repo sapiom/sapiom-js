@@ -1,7 +1,7 @@
 /**
  * Unit tests for the local `llm.run` stub's handling of `LlmRunSpec.output`.
  *
- * `output` requests a tool call on the real surface, so the stub has to answer in
+ * `output` forces a tool call on the real surface, so the stub has to answer in
  * that shape — otherwise `structuredOf` reads `undefined` under `run_local` for
  * code that gets a value in production, and every caller that (rightly) refuses
  * to invent a value fails locally for the wrong reason (SAP-2892).

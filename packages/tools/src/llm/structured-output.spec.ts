@@ -96,14 +96,12 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     properties: { name: { type: "string" }, age: { type: "number" } },
     required: ["name", "age"],
   };
-  const TOOL_REQUEST = "Return your final answer by calling the `record_person` tool exactly once.";
 
-  it("injects the tool and requests it under tool_choice auto, appended to any caller-declared tools", async () => {
+  it("injects the tool + forces tool_choice, appended to any caller-declared tools", async () => {
     const cap: Captured = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, TOOL_CALL_RESPONSE) });
     await sapiom.llm.run({
       request: {
-        system: "You extract people from text.",
         messages: [{ role: "user", content: "extract the person" }],
         max_tokens: 256,
         tools: [{ name: "unrelated_tool", input_schema: { type: "object" } }],
@@ -115,29 +113,7 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
       { name: "unrelated_tool", input_schema: { type: "object" } },
       { name: "record_person", input_schema: SCHEMA },
     ]);
-    // A forced tool_choice ({ type: "tool" } / "any") is a 400 on current Claude models.
-    expect(body.tool_choice).toEqual({ type: "auto" });
-    expect(body.system).toBe(`You extract people from text.\n\n${TOOL_REQUEST}`);
-  });
-
-  it("asks for the tool in a block-array system prompt, and when there is none", async () => {
-    const cap: Captured = {};
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, TOOL_CALL_RESPONSE) });
-    const cached = { type: "text", text: "Stable prefix.", cache_control: { type: "ephemeral" } };
-    await sapiom.llm.run({
-      request: { system: [cached], messages: [{ role: "user", content: "extract" }], max_tokens: 256 },
-      output: { name: "record_person", schema: SCHEMA },
-    });
-    expect(JSON.parse(cap.body ?? "{}").system).toEqual([
-      cached,
-      { type: "text", text: TOOL_REQUEST },
-    ]);
-
-    await sapiom.llm.run({
-      request: { messages: [{ role: "user", content: "extract" }], max_tokens: 256 },
-      output: { name: "record_person", schema: SCHEMA },
-    });
-    expect(JSON.parse(cap.body ?? "{}").system).toBe(TOOL_REQUEST);
+    expect(body.tool_choice).toEqual({ type: "tool", name: "record_person" });
   });
 
   it("does not mutate the caller's original request object", async () => {
@@ -147,7 +123,6 @@ describe("llm.run — structured-output convenience (spec.output)", () => {
     await sapiom.llm.run({ request, output: { name: "record_person", schema: SCHEMA } });
     expect(request).not.toHaveProperty("tools");
     expect(request).not.toHaveProperty("tool_choice");
-    expect(request).not.toHaveProperty("system");
   });
 
   it("leaves the request untouched, and the response type unchanged, when output is omitted", async () => {
@@ -227,7 +202,7 @@ describe("ctx.sapiom.llm.{structuredOf,textOf,readDisclosure} — reachable from
 
 /**
  * The silent failure this error exists to end (SAP-3280): a routed label emits a
- * `thinking` block before the tool call, thinking is spent out of `max_tokens`,
+ * `thinking` block before the forced tool call, thinking is spent out of `max_tokens`,
  * and a cap sized for the answer alone ends the turn before the tool call is emitted.
  * `structuredOf` then correctly returns `undefined` and the author sees a `TypeError`
  * from destructuring it — indistinguishable from a genuinely empty result.
@@ -615,7 +590,7 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     expect(error).toBeInstanceOf(LlmStructuredOutputMissingError);
   });
 
-  it("leaves a truncated PLAIN-TEXT call alone — no `output`, no tool call requested", async () => {
+  it("leaves a truncated PLAIN-TEXT call alone — no `output`, nothing forced", async () => {
     // A text turn that hit the cap is truncated but still readable, so it stays the
     // caller's call. Throwing there would break every deliberately-bounded reply.
     const completion = { stop_reason: "max_tokens", content: [{ type: "text", text: "partial…" }] };
