@@ -20,6 +20,8 @@ export interface TransactionCostInput {
 }
 
 export interface CreateTransactionRequest {
+  /** Return after hosted approval/card confirmation, using a registered organization destination. */
+  returnUrl?: string;
   requestFacts?: {
     source: string;
     version: string;
@@ -80,6 +82,7 @@ export interface TransactionCostResponse {
 }
 
 export interface TransactionResponse {
+  returnUrl?: string | null;
   id: string;
   organizationId: string;
   serviceName: string;
