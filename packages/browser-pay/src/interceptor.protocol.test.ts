@@ -1113,11 +1113,13 @@ describe("interceptor CDP decisions", () => {
       await new Promise((resolve) => setTimeout(resolve, 40));
       expect(calls).toBe(1);
       release();
+      // `refused` is emitted once the failRequest reply comes back, after the stub records the command.
       await waitFor(
         () =>
           stub.commands.filter(
             (command) => command.method === "Fetch.failRequest",
-          ).length >= 2,
+          ).length >= 2 &&
+          events.filter((event) => event.type === "refused").length >= 2,
         "both failed",
       );
       expect(calls).toBe(1);
