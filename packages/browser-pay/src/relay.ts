@@ -1,4 +1,11 @@
 import {
+  assertCredentialMayTravel,
+  credentialFetch,
+  resolveCredentialPolicy,
+  type CredentialPolicy,
+} from "@sapiom/analytics-core/credential";
+
+import {
   parseRelayResponse,
   type RelayRequest,
   type RelayResponse,
@@ -66,14 +73,12 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function assertBaseUrl(baseUrl: string): void {
+function assertBaseUrl(baseUrl: string, policy: CredentialPolicy): void {
   let url: URL;
   try {
     url = new URL(baseUrl);
   } catch {
-    throw new Error(
-      "Payment relay baseUrl must be https (http is only allowed on loopback)",
-    );
+    throw new Error("Payment relay baseUrl must be a valid URL");
   }
   if (
     baseUrl.includes("#") ||
@@ -85,17 +90,8 @@ function assertBaseUrl(baseUrl: string): void {
       "Payment relay baseUrl must not contain a query or fragment",
     );
   }
-  const host = url.hostname;
-  if (url.protocol === "https:") return;
-  if (
-    url.protocol === "http:" &&
-    (host === "localhost" || host === "127.0.0.1" || host === "[::1]")
-  ) {
-    return;
-  }
-  throw new Error(
-    "Payment relay baseUrl must be https (http is only allowed on loopback)",
-  );
+  // Refuse at construction, not on the first payment.
+  assertCredentialMayTravel(url, policy);
 }
 
 function requireHttpOptions(options: HttpRelayOptions): {
@@ -103,11 +99,15 @@ function requireHttpOptions(options: HttpRelayOptions): {
   apiKey: string;
   transactionId: string;
   fetchImpl: typeof fetch;
+  policy: CredentialPolicy;
 } {
   if (!options || typeof options.baseUrl !== "string" || !options.baseUrl) {
     throw new Error("Payment relay baseUrl is required");
   }
-  assertBaseUrl(options.baseUrl);
+  const policy = resolveCredentialPolicy(undefined, {
+    label: "@sapiom/browser-pay",
+  });
+  assertBaseUrl(options.baseUrl, policy);
   if (!options.transactionId) {
     throw new Error("Payment relay transactionId is required");
   }
@@ -122,6 +122,7 @@ function requireHttpOptions(options: HttpRelayOptions): {
     apiKey,
     transactionId: options.transactionId,
     fetchImpl: options.fetchImpl ?? fetch,
+    policy,
   };
 }
 
@@ -142,17 +143,22 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
       const url = `${config.baseUrl}/v1/transactions/${encodeURIComponent(config.transactionId)}/payment/relay`;
       let response: Response;
       try {
-        response = await config.fetchImpl(url, {
-          method: "POST",
-          redirect: "manual",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-            "x-api-key": config.apiKey,
+        response = await credentialFetch(
+          config.fetchImpl,
+          url,
+          {
+            method: "POST",
+            redirect: "manual",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(request),
+            signal: call?.signal,
           },
-          body: JSON.stringify(request),
-          signal: call?.signal,
-        });
+          { header: "x-api-key", value: config.apiKey },
+          config.policy,
+        );
       } catch (error) {
         throw transportError(error, call?.signal);
       }

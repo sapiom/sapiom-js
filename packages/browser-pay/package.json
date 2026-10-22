@@ -30,6 +30,9 @@
       "require": "./dist/cjs/index.js"
     }
   },
+  "dependencies": {
+    "@sapiom/analytics-core": "workspace:^"
+  },
   "files": [
     "dist",
     "!dist/**/*.tsbuildinfo",

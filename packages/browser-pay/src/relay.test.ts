@@ -66,7 +66,7 @@ describe("httpPaymentRelay", () => {
     expect(() =>
       httpPaymentRelay({ ...options, baseUrl: "http://example.com" }),
     ).toThrow(
-      "Payment relay baseUrl must be https (http is only allowed on loopback)",
+      "@sapiom/browser-pay: refusing plaintext HTTP to http://example.com",
     );
     for (const baseUrl of [
       "https://api.sapiom.ai#/payment/relay",

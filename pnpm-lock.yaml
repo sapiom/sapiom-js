@@ -281,6 +281,10 @@ importers:
         version: 5.9.3
 
   packages/browser-pay:
+    dependencies:
+      '@sapiom/analytics-core':
+        specifier: workspace:^
+        version: link:../analytics-core
     devDependencies:
       '@sapiom/tools':
         specifier: workspace:*

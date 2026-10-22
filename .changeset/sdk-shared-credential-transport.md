@@ -2,6 +2,7 @@
 "@sapiom/analytics-core": minor
 "@sapiom/core": minor
 "@sapiom/agent-core": minor
+"@sapiom/browser-pay": minor
 "@sapiom/mcp": patch
 "@sapiom/tools": patch
 ---
@@ -13,8 +14,8 @@ subpath, is the only code that sets the key header.
 
 Behavior changes, shipped as 0.x minor bumps: a plain `http://` URL to a
 non-loopback host is now refused, and the key headers are stripped on a
-cross-origin redirect. `@sapiom/core` gains its first runtime dependency,
-`@sapiom/analytics-core`.
+cross-origin redirect. `@sapiom/core` and `@sapiom/browser-pay` gain their
+first runtime dependency, `@sapiom/analytics-core`.
 
 - `@sapiom/core`, `@sapiom/agent-core` and `@sapiom/mcp`: a plain `http://`
   URL to a non-loopback host (for example a Docker service name or a LAN IP)
@@ -29,5 +30,9 @@ cross-origin redirect. `@sapiom/core` gains its first runtime dependency,
   `x-api-key`, `x-sapiom-api-key` and every `x-sapiom-*` header.
 - `@sapiom/core`: `getHttpClient().defaults.headers` no longer carries the key;
   read `defaults.credential` instead.
+- `@sapiom/browser-pay`: the payment relay uses the shared rule, so a
+  `*.localhost` base URL and `SAPIOM_ALLOW_INSECURE_HTTP=1` are now accepted, and
+  a refused base URL throws a `CredentialChannelError`. Redirects are still
+  refused.
 - `@sapiom/tools`: no behavior change. A refused call now throws a
   `CredentialChannelError`, a `TypeError` subclass that keeps `name: "TypeError"`.
