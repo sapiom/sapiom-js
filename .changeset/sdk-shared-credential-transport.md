@@ -11,6 +11,11 @@ host, from every SDK client, and never follows a redirect to another origin.
 One function, `credentialFetch` from the new `@sapiom/analytics-core/credential`
 subpath, is the only code that sets the key header.
 
+Behavior changes, shipped as 0.x minor bumps: a plain `http://` URL to a
+non-loopback host is now refused, and the key headers are stripped on a
+cross-origin redirect. `@sapiom/core` gains its first runtime dependency,
+`@sapiom/analytics-core`.
+
 - `@sapiom/core`, `@sapiom/agent-core` and `@sapiom/mcp`: a plain `http://`
   URL to a non-loopback host (for example a Docker service name or a LAN IP)
   now fails before the request is sent. On a trusted private network, opt in
