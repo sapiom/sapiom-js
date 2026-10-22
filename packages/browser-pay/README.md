@@ -83,6 +83,8 @@ const handle = await attachInterceptor(cdpUrl, {
 });
 ```
 
+`baseUrl` must be https, or plain http to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` URL makes `httpPaymentRelay` throw a `CredentialChannelError` before a request is sent. On a trusted private network, set `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects from the relay are always refused.
+
 Call `handle.on` after `attachInterceptor` resolves. Events emitted while attach was running, including a target that could not arm Fetch, are delivered to that first subscriber.
 
 A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
