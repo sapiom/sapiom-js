@@ -20,6 +20,8 @@
  * credential is in place and find out during a production run.
  */
 
+import { credentialFetch } from "@sapiom/analytics-core/credential";
+import { harnessCredentialPolicy } from "./credential-policy.js";
 import {
   type ApiKeyProvider,
   staticApiKeyProvider,
@@ -89,14 +91,14 @@ export function createVaultSecretsClient(opts: {
 
     const attempt = async (key: string): Promise<Response | null> => {
       try {
-        return await fetchImpl(`${baseUrl}${path}`, {
-          ...init,
-          headers: {
-            ...init.headers,
-            // Core (`api.*`) takes a Bearer token — see template-catalog.ts.
-            Authorization: `Bearer ${key}`,
-          },
-        });
+        // Core (`api.*`) takes a Bearer token: see template-catalog.ts.
+        return await credentialFetch(
+          fetchImpl,
+          `${baseUrl}${path}`,
+          init,
+          { header: "authorization", value: `Bearer ${key}` },
+          harnessCredentialPolicy(),
+        );
       } catch {
         return null;
       }

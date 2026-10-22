@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { CredentialChannelError } from "@sapiom/analytics-core/credential";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -218,6 +219,67 @@ describe("generateMcpConfig", () => {
       ),
     );
     expect(withNull.mcpServers.sapiom.headers).toBeUndefined();
+  });
+
+  describe("credential channel for the remote MCP key", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    const useEnvironment = (apiURL: string) =>
+      writeCredentialsFile({
+        currentEnvironment: "custom",
+        environments: { custom: { appURL: apiURL, apiURL } },
+      });
+    const configPath = (sessionId: string) =>
+      path.join(tmpDir, ".sapiom", "harness", "generated", sessionId, "mcp-config.json");
+
+    it("refuses to write the key for plaintext http to a non-loopback host", async () => {
+      vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+      await useEnvironment("http://10.0.0.5:3000");
+
+      await expect(
+        generateMcpConfig("session-lan", { apiKey: "sk_live_test123" }),
+      ).rejects.toBeInstanceOf(CredentialChannelError);
+      await expect(fs.access(configPath("session-lan"))).rejects.toThrow();
+    });
+
+    it("still writes the keyless config for that host", async () => {
+      vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+      await useEnvironment("http://10.0.0.5:3000");
+
+      const config = JSON.parse(
+        await fs.readFile(await generateMcpConfig("session-lan-anon"), "utf-8"),
+      );
+      expect(config.mcpServers.sapiom).toEqual({
+        type: "http",
+        url: "http://10.0.0.5:3000/v1/mcp",
+      });
+    });
+
+    it("writes the key for a loopback host", async () => {
+      vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+      await useEnvironment("http://localhost:3000");
+
+      const config = JSON.parse(
+        await fs.readFile(
+          await generateMcpConfig("session-local", { apiKey: "sk_live_test123" }),
+          "utf-8",
+        ),
+      );
+      expect(config.mcpServers.sapiom.headers).toEqual({ "x-api-key": "sk_live_test123" });
+    });
+
+    it("writes the key for a private host when SAPIOM_ALLOW_INSECURE_HTTP=1", async () => {
+      vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "1");
+      await useEnvironment("http://10.0.0.5:3000");
+
+      const config = JSON.parse(
+        await fs.readFile(
+          await generateMcpConfig("session-lan-opt-in", { apiKey: "sk_live_test123" }),
+          "utf-8",
+        ),
+      );
+      expect(config.mcpServers.sapiom.headers).toEqual({ "x-api-key": "sk_live_test123" });
+    });
   });
 
   it("writes the config file with owner-only permissions (it can carry a live API key)", async () => {

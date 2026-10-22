@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createTemplateCatalog } from "./template-catalog.js";
 import type { ApiKeyProvider } from "./api-key-provider.js";
@@ -68,7 +68,7 @@ describe("createTemplateCatalog", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`${BASE}/v1/workflows/templates`);
-    expect(init.headers).toEqual({ Authorization: "Bearer sk_test" });
+    expect(init.headers).toEqual({ authorization: "Bearer sk_test" });
   });
 
   it("returns the live catalog, preserving every template", async () => {
@@ -119,7 +119,7 @@ describe("createTemplateCatalog", () => {
     expect(result.source).toBe("live");
     expect(keys.refreshCalls).toBe(1);
     const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
-    expect(secondInit.headers).toEqual({ Authorization: "Bearer sk_fresh" });
+    expect(secondInit.headers).toEqual({ authorization: "Bearer sk_fresh" });
   });
 
   it("does not retry when refresh yields the same key (no infinite recovery loop)", async () => {
@@ -492,5 +492,31 @@ describe("createTemplateCatalog", () => {
 
       await expect(catalog.detail("nope")).resolves.toBeNull();
     });
+  });
+});
+
+describe("createTemplateCatalog — credential channel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses plaintext http to a non-loopback host and logs why", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const catalog = createTemplateCatalog({
+      apiKey: "sk_test",
+      baseUrl: "http://api.internal",
+      fetchImpl,
+    });
+
+    await expect(catalog.list()).resolves.toEqual({
+      templates: [],
+      source: "fallback",
+      reason: "unreachable",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(String(errors.mock.calls[0]?.[0])).toContain("refusing plaintext HTTP");
   });
 });
