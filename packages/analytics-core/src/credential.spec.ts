@@ -5,6 +5,7 @@ import {
   CredentialChannelError,
   assertCredentialMayTravel,
   credentialFetch,
+  credentialHeaders,
   isLoopbackHostname,
   matchesIntegrity,
   mayCarryCredential,
@@ -379,5 +380,88 @@ describe("credentialFetch", () => {
       "sk_real",
       undefined,
     ]);
+  });
+
+  describe("with an authorization credential", () => {
+    const BEARER = { header: "authorization", value: "Bearer k" } as const;
+    const redirectTo = (location: string) =>
+      new Response(null, { status: 307, headers: { location } });
+
+    it("replaces the caller's Authorization header", async () => {
+      const { calls, fetchImpl } = recorder(new Response("ok"));
+      await credentialFetch(
+        fetchImpl,
+        "https://api.example/x",
+        { headers: { Authorization: "Bearer forged" } },
+        BEARER,
+        STRICT,
+      );
+      expect(calls[0].headers).toEqual({ authorization: "Bearer k" });
+    });
+
+    it("drops it on a redirect to another origin", async () => {
+      const { calls, fetchImpl } = recorder(
+        redirectTo("https://other.example/y"),
+        new Response("ok"),
+      );
+      await credentialFetch(
+        fetchImpl,
+        "https://api.example/x",
+        {},
+        BEARER,
+        STRICT,
+      );
+      expect(calls.map((c) => c.headers.authorization)).toEqual([
+        "Bearer k",
+        undefined,
+      ]);
+    });
+
+    it("keeps it on a same-origin redirect", async () => {
+      const { calls, fetchImpl } = recorder(
+        redirectTo("/y"),
+        new Response("ok"),
+      );
+      await credentialFetch(
+        fetchImpl,
+        "https://api.example/x",
+        {},
+        BEARER,
+        STRICT,
+      );
+      expect(calls.map((c) => c.headers.authorization)).toEqual([
+        "Bearer k",
+        "Bearer k",
+      ]);
+    });
+  });
+});
+
+describe("credentialHeaders", () => {
+  const KEY = { header: "x-api-key", value: "sk_real" } as const;
+
+  it.each([
+    "https://api.example/mcp",
+    "http://localhost:3000/mcp",
+    "http://127.0.0.1/mcp",
+  ])("returns the credential header for %s", (url) => {
+    expect(credentialHeaders(url, KEY, STRICT)).toEqual({
+      "x-api-key": "sk_real",
+    });
+  });
+
+  it.each(["http://10.0.0.5:3000/mcp", "ftp://host/mcp"])(
+    "refuses %s",
+    (url) => {
+      expect(() => credentialHeaders(url, KEY, STRICT)).toThrow(
+        CredentialChannelError,
+      );
+    },
+  );
+
+  it("allows plain http to a private host when opted in", () => {
+    expect(
+      credentialHeaders("http://10.0.0.5:3000/mcp", KEY, OPTED_IN),
+    ).toEqual({ "x-api-key": "sk_real" });
   });
 });
