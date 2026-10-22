@@ -206,7 +206,9 @@ describe("createRunsRouter", () => {
       // the local boot token (which only gates the harness's own /api surface).
       expect(fetchImpl).toHaveBeenCalledWith(
         "https://agents.test/agents/v1/executions/exec_invoice_002",
-        { headers: { "x-sapiom-api-key": "sk-held-key" } },
+        expect.objectContaining({
+          headers: { "x-sapiom-api-key": "sk-held-key" },
+        }),
       );
       expect(provider.refreshCalls).toBe(0);
     });
