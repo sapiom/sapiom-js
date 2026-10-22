@@ -1,4 +1,4 @@
-import { readErrorBody } from "../_client/errors.js";
+import { ensureOk as sharedEnsureOk } from "../_client/errors.js";
 
 /**
  * Error thrown by the `browserAutomation` capability when a request fails
@@ -31,15 +31,18 @@ export class BrowserAutomationHttpError extends Error {
  * Return the response when 2xx, otherwise throw a {@link BrowserAutomationHttpError}.
  * Parses the error body as JSON when possible; falls back to raw text.
  */
-export async function ensureOk(
+export function ensureOk(
   response: Response,
   errorPrefix: string,
 ): Promise<Response> {
-  if (response.ok) return response;
-  const { body } = await readErrorBody(response);
-  throw new BrowserAutomationHttpError(
-    `${errorPrefix}: HTTP ${response.status}`,
-    response.status,
-    body,
+  return sharedEnsureOk(
+    response,
+    errorPrefix,
+    ({ status, body }) =>
+      new BrowserAutomationHttpError(
+        `${errorPrefix}: HTTP ${status}`,
+        status,
+        body,
+      ),
   );
 }

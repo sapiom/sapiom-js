@@ -1,0 +1,114 @@
+export interface HeldPlaceholder {
+  number: string;
+  injectionRef: string;
+}
+
+function placeholderDigits(number: string): string | undefined {
+  const digits = number.replace(/[\s-]/g, "");
+  if (digits.length === 0 || !/^\d+$/.test(digits)) return undefined;
+  return digits;
+}
+
+function isSeparatorChar(char: string): boolean {
+  return char === " " || char === "\t" || char === "-" || char === "+";
+}
+
+function readDecoded(
+  text: string,
+  index: number,
+): { char: string; next: number } {
+  if (index >= text.length) return { char: "", next: index };
+  if (text.startsWith("\\u", index)) {
+    const hex = text.slice(index + 2, index + 6);
+    if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+      return {
+        char: String.fromCharCode(Number.parseInt(hex, 16)),
+        next: index + 6,
+      };
+    }
+  }
+  if (text[index] === "+") return { char: " ", next: index + 1 };
+  if (text[index] === "%" && index + 2 < text.length) {
+    const encoded = text.slice(index, index + 3);
+    if (/^%[0-9a-fA-F]{2}$/.test(encoded)) {
+      try {
+        const char = decodeURIComponent(encoded);
+        if (char.length === 1) return { char, next: index + 3 };
+      } catch {
+        // keep the literal percent
+      }
+    }
+  }
+  return { char: text[index] ?? "", next: index + 1 };
+}
+
+function heldSpanEnd(
+  text: string,
+  digits: string,
+  start: number,
+): number | undefined {
+  const first = readDecoded(text, start);
+  if (first.char !== digits[0]) return undefined;
+  let index = first.next;
+  for (let digit = 1; digit < digits.length; digit++) {
+    let cursor = index;
+    while (cursor < text.length) {
+      const separator = readDecoded(text, cursor);
+      if (!isSeparatorChar(separator.char) || separator.next === cursor) break;
+      cursor = separator.next;
+    }
+    if (cursor !== index) {
+      const after = readDecoded(text, cursor);
+      if (after.char === digits[digit]) {
+        index = after.next;
+        continue;
+      }
+    }
+    const raw = readDecoded(text, index);
+    if (raw.char !== digits[digit]) return undefined;
+    index = raw.next;
+  }
+  return index;
+}
+
+function holdsDigits(text: string, digits: string): boolean {
+  for (let start = 0; start < text.length; start++) {
+    if (heldSpanEnd(text, digits, start) !== undefined) return true;
+  }
+  return false;
+}
+
+export function textHoldsPlaceholderNumber(
+  text: string,
+  number: string,
+): boolean {
+  if (number.length === 0 || text.length === 0) return false;
+  if (text.includes(number)) return true;
+  const digits = placeholderDigits(number);
+  if (!digits) return false;
+  return holdsDigits(text, digits);
+}
+
+function maskHeldSpans(text: string, digits: string): string {
+  let out = "";
+  let cursor = 0;
+  for (let start = 0; start < text.length; ) {
+    const end = heldSpanEnd(text, digits, start);
+    if (end === undefined) {
+      start += 1;
+      continue;
+    }
+    out += text.slice(cursor, start);
+    out += "••••";
+    cursor = end;
+    start = end;
+  }
+  return out + text.slice(cursor);
+}
+
+export function redactHeld(value: string, number: string): string {
+  if (number.length === 0 || value.length === 0) return value;
+  const digits = placeholderDigits(number);
+  if (!digits) return value.split(number).join("••••");
+  return maskHeldSpans(value, digits);
+}

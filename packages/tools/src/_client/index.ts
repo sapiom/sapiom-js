@@ -282,9 +282,12 @@ export class Transport {
     const headers: Record<string, string> = {
       "x-sapiom-client": CLIENT_MARKER,
       ...attributionToHeaders(this.attribution),
-      // Merged as a plain object, as before: callers pass records.
-      ...(init.headers as Record<string, string> | undefined),
     };
+    // Iterate rather than spread: a spread drops a `Headers` instance or a
+    // tuple array, both valid `HeadersInit`.
+    for (const [name, value] of new Headers(init.headers ?? {})) {
+      headers[name] = value;
+    }
     const startedAt = Date.now();
     let response: Response;
     try {

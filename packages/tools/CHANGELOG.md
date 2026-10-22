@@ -1,5 +1,51 @@
 # @sapiom/tools
 
+## 0.47.0
+
+### Minor Changes
+
+- 04ebfba: `llm.run` now throws `LlmRefusalError` when the response's `stop_reason` is `"refusal"`,
+  instead of returning the declined turn as an answer. It carries `category` and
+  `explanation` from `stop_details`. `ModelRunSpec.maxTokens` now documents that the cap
+  covers thinking as well as output.
+
+## 0.46.0
+
+### Minor Changes
+
+- 16d9e39: The tenant API key now only travels over HTTPS, or plain HTTP to a loopback
+  host, and never follows a redirect to another origin.
+
+  - A plain `http://` URL to a non-loopback host (for example `http://api:3000`)
+    now fails before the request is sent. On a trusted private network, opt in
+    with `createClient({ allowInsecureHttp: true })` or
+    `SAPIOM_ALLOW_INSECURE_HTTP=1`. `localhost`, `*.localhost`, `127.0.0.1` and
+    `[::1]` work as before.
+  - The transport follows redirects itself. The first hop to another origin
+    drops the credential (`x-sapiom-api-key`, `x-api-key`), every `x-sapiom-*`
+    header, and the headers `fetch` drops on its own (`authorization`, `cookie`,
+    `proxy-authorization`). Same-origin redirects are unchanged, and a caller
+    passing `redirect: "manual"` or `"error"` gets plain `fetch`.
+
+### Patch Changes
+
+- ffc2d22: Sandbox methods that threw a bare `Error` on a non-2xx (create, writeFile,
+  readFile, the exec paths, getProcess, createPublicUrl, deployPreview, destroy)
+  now throw `SandboxHttpError`, with a numeric `status` and `retryAfterMs`. The
+  message is unchanged and the class still extends `Error`.
+
+  `Transport.fetch` keeps the caller's headers when they are passed as a `Headers`
+  instance or a tuple array; a spread used to drop them.
+
+  `Retry-After` is parsed by one RFC 9110 parser on the shared non-2xx path. A
+  delay past a safe integer, or an HTTP-date more than a day out, is ignored
+  rather than trusted. The sandbox multipart retry loop used its own looser copy,
+  which read `"1.5"` as a delay.
+
+  Internally, the capability namespaces now share one non-2xx path; each keeps its
+  own error class and message. Executions still parse their own error body and
+  `Retry-After` for now.
+
 ## 0.45.0
 
 ### Minor Changes

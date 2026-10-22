@@ -5,6 +5,7 @@
  */
 import { createClient } from "../index.js";
 import {
+  LlmRefusalError,
   LlmStructuredOutputMissingError,
   LlmStructuredOutputTruncatedError,
   structuredOf,
@@ -598,6 +599,48 @@ describe("llm.run — a structured call truncated before its tool call", () => {
       request: { messages: [{ role: "user", content: "write" }], max_tokens: 64 },
     });
     expect(textOf(res)).toBe("partial…");
+  });
+});
+
+describe("llm.run — a refused request", () => {
+  const REFUSED = {
+    id: "msg_refused",
+    type: "message",
+    model: "smart",
+    served_class: "large",
+    stop_reason: "refusal",
+    stop_details: { type: "refusal", category: "cyber", explanation: "Declined by policy." },
+    content: [],
+  };
+
+  const runWith = (response: Record<string, unknown>, output?: { name: string; schema: Record<string, unknown> }) =>
+    createClient({ apiKey: "k", fetch: fakeDirectFetch({}, response) }).llm.run({
+      request: { messages: [{ role: "user", content: "hi" }], max_tokens: 4096 },
+      ...(output ? { output } : {}),
+    });
+
+  it("throws LlmRefusalError instead of returning the refused turn", async () => {
+    const error = await runWith(REFUSED).catch((err: unknown) => err as LlmRefusalError);
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    expect(error.name).toBe("LlmRefusalError");
+    expect(error.category).toBe("cyber");
+    expect(error.explanation).toBe("Declined by policy.");
+    expect(error.servedClass).toBe("large");
+    expect(error.message).toContain("stop_reason: refusal; category: cyber");
+    expect(error.response).toBe(REFUSED);
+  });
+
+  it("reports the refusal, not a missing structured call, when output was set", async () => {
+    await expect(runWith(REFUSED, { name: "record_person", schema: { type: "object" } })).rejects.toBeInstanceOf(
+      LlmRefusalError,
+    );
+  });
+
+  it("reads a refusal with no stop_details as having no category or explanation", async () => {
+    const error = await runWith({ content: [], stop_reason: "refusal" }).catch((err: unknown) => err as LlmRefusalError);
+    expect(error).toBeInstanceOf(LlmRefusalError);
+    expect(error.category).toBeUndefined();
+    expect(error.explanation).toBeUndefined();
   });
 });
 

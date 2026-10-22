@@ -276,7 +276,7 @@ const curate = defineStep({
               content: `TOPIC: ${topic}\n\nSOURCES:\n${research}`,
             },
           ],
-          max_tokens: 800,
+          max_tokens: 4096, // thinking is spent from this budget too
         },
       });
       brief =
