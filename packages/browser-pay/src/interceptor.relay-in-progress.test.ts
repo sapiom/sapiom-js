@@ -505,6 +505,111 @@ describe("relay_in_progress", () => {
     }
   });
 
+  it("does not poll a terminal refusal when retryable is true", async () => {
+    const idempotencyKey = paymentIdempotencyKey("POST", CHECKOUT_URL, CARD);
+    const cdp = await startCdp();
+    const relay = await startRelay([
+      { outcome: "refused", reason: "payment_released", retryable: true },
+    ]);
+    const events: InterceptorEvent[] = [];
+    const handle = await attachInterceptor(cdp.url, {
+      relay: httpPaymentRelay({
+        baseUrl: relay.origin,
+        apiKey: "test-key",
+        transactionId: TRANSACTION_ID,
+      }),
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+    });
+    handle.on((event) => events.push(event));
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-retryable");
+      await waitFor(
+        () => events.some((event) => event.type === "refused"),
+        "refused",
+      );
+      expect(relay.posts).toEqual([
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+      ]);
+      expect(count(cdp.commands, "Fetch.failRequest")).toBe(1);
+      expect(count(cdp.commands, "Fetch.fulfillRequest")).toBe(0);
+      expect(events.filter((event) => event.type === "refused")).toStrictEqual([
+        {
+          type: "refused",
+          url: "https://checkout.example",
+          reason: "payment_released",
+          retryable: true,
+        },
+      ]);
+    } finally {
+      await handle.detach();
+      await cdp.close();
+      await relay.close();
+    }
+  });
+
+  it("keeps polling relay_in_progress when retryable is false", async () => {
+    const idempotencyKey = paymentIdempotencyKey("POST", CHECKOUT_URL, CARD);
+    const cdp = await startCdp();
+    const relay = await startRelay([
+      { outcome: "refused", reason: "relay_in_progress", retryable: false },
+      RELAYED,
+    ]);
+    const events: InterceptorEvent[] = [];
+    const handle = await attachInterceptor(cdp.url, {
+      relay: httpPaymentRelay({
+        baseUrl: relay.origin,
+        apiKey: "test-key",
+        transactionId: TRANSACTION_ID,
+      }),
+      placeholder: HELD,
+      profileId: "shopify-card-vault",
+    });
+    handle.on((event) => events.push(event));
+    try {
+      armPage(cdp);
+      await waitFor(
+        () => cdp.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      emitPaused(cdp, "req-poll-false");
+      await waitFor(
+        () => events.some((event) => event.type === "relayed"),
+        "relayed",
+      );
+      expect(relay.posts).toEqual([
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+        {
+          method: "POST",
+          url: RELAY_PATH,
+          idempotencyKey,
+          requestBody: CARD,
+        },
+      ]);
+      expect(count(cdp.commands, "Fetch.fulfillRequest")).toBe(1);
+      expect(events.some((event) => event.type === "refused")).toBe(false);
+    } finally {
+      await handle.detach();
+      await cdp.close();
+      await relay.close();
+    }
+  });
+
   it("remembers unknown after relay_in_progress and does not post it again", async () => {
     const idempotencyKey = paymentIdempotencyKey("POST", CHECKOUT_URL, CARD);
     const cdp = await startCdp();
