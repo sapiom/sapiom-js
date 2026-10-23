@@ -3,7 +3,7 @@ name: Test
 on:
   pull_request:
     types: [opened, synchronize, reopened, stacked]
-    branches: [main]
+    # Branch-based stacks need the same unprivileged checks as PRs to main.
   push:
     branches: [main]
 

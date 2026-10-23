@@ -32,11 +32,19 @@ test("pull request CI uses unprivileged fork-safe triggers", () => {
       /^    types: \[opened, synchronize, reopened, stacked\]$/m,
       `${relativePath}: run existing PR events and native stack changes`,
     );
-    assert.match(
-      pullRequest,
-      /^    branches: \[main\]$/m,
-      `${relativePath}: target main directly or through a native stack`,
-    );
+    if (relativePath === ".github/workflows/test.yml") {
+      assert.doesNotMatch(
+        pullRequest,
+        /^    branches(?:-ignore)?:/m,
+        `${relativePath}: test branch-based stacks regardless of their base`,
+      );
+    } else {
+      assert.match(
+        pullRequest,
+        /^    branches: \[main\]$/m,
+        `${relativePath}: target main directly or through a native stack`,
+      );
+    }
     assert.doesNotMatch(workflow, /pull_request_target:/, relativePath);
     assert.match(
       workflow,

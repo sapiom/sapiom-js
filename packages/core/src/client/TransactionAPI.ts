@@ -9,7 +9,6 @@ import {
   TransactionCostResponse,
 } from "../types/transaction.js";
 import type { HttpClient } from "./HttpClient.js";
-
 export class TransactionAPI {
   constructor(private readonly httpClient: HttpClient) {}
 
