@@ -623,6 +623,17 @@ describe("interceptor event redaction", () => {
     assertNoMarkers(warnings);
   });
 
+  it("passes stale_generation through and leaves retryable unset", async () => {
+    const { events } = await captureRefusals([
+      { outcome: "refused", reason: "stale_generation" },
+    ]);
+    const refused = refusedEvents(events);
+    expect(refused).toStrictEqual([
+      { type: "refused", url: ORIGIN, reason: "stale_generation" },
+    ]);
+    expect(refused[0]).not.toHaveProperty("retryable");
+  });
+
   it("keeps a safe requestId and omits a missing or unsafe one", async () => {
     const kept = "req_123456789012";
     const { events, warnings } = await captureRefusals([
