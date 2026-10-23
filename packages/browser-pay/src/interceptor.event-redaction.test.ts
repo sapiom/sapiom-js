@@ -487,6 +487,47 @@ describe("interceptor event redaction", () => {
     }
   });
 
+  it("surfaces payments_stopped as a known refusal reason", async () => {
+    const stub = await startCdp();
+    const warnings: Warning[] = [];
+    try {
+      const { handle, events } = await attachArmed(
+        stub,
+        stubPaymentRelay(async () => ({
+          outcome: "refused",
+          reason: "payments_stopped",
+        })),
+        loggerFor(warnings),
+      );
+
+      emitPause(stub, "payments-stopped", checkoutUrl(PLACEHOLDER_FORMS[1]));
+      await waitFor(
+        () => events.filter((event) => event.type === "refused").length === 1,
+        "payments stopped refusal",
+      );
+
+      expect(events).toContainEqual({
+        type: "refused",
+        url: ORIGIN,
+        reason: "payments_stopped",
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === "refused" && event.reason === "unrecognized",
+        ),
+      ).toBe(false);
+      expect(warnings.map((warning) => warning.fields)).toEqual([
+        { reason: "payments_stopped" },
+      ]);
+      assertNoMarkers(events);
+      assertNoMarkers(warnings);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("uses origin-only URLs for network and unknown failures", async () => {
     const stub = await startCdp();
     let calls = 0;

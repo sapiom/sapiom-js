@@ -70,6 +70,7 @@ const KNOWN_REFUSAL_REASONS = [
   "card_fields_invalid",
   "merchant_mismatch",
   "provider_unavailable",
+  "payments_stopped",
 ] as const;
 
 /** A relay refusal reason. Any reason outside the known set is `unrecognized`. */
