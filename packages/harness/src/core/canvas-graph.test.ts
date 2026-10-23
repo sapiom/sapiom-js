@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractWorkflowGraph, mergeLaunchesIntoGraph, type CanvasGraph } from "./canvas-graph.js";
+import type { AgentManifest } from "@sapiom/agent";
+import { extractWorkflowGraph, graphFromManifest, mergeLaunchesIntoGraph, type CanvasGraph } from "./canvas-graph.js";
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__");
 const ORDER_TRIAGE_DIR = path.join(FIXTURES_DIR, "order-triage");
@@ -186,5 +187,29 @@ describe("mergeLaunchesIntoGraph", () => {
     const nodesBefore = baseGraph.nodes.length;
     mergeLaunchesIntoGraph(baseGraph, [{ slug: "other-flow", fromStepId: null }]);
     expect(baseGraph.nodes).toHaveLength(nodesBefore);
+  });
+});
+
+describe("graphFromManifest — pause timeoutStep", () => {
+  it("draws the timeout branch as its own edge next to the signal-resume edge", () => {
+    const manifest = {
+      name: "vendor-wait",
+      entry: "wait",
+      steps: {
+        wait: {
+          timeoutMs: null,
+          inputSchema: null,
+          transitions: [{ kind: "pause", signal: "vendor.confirmed", resumeStep: "ship", timeoutStep: "next_vendor" }],
+        },
+        ship: { timeoutMs: null, inputSchema: null, transitions: [{ kind: "terminate" }] },
+        next_vendor: { timeoutMs: null, inputSchema: null, transitions: [{ kind: "terminate" }] },
+      },
+    } as unknown as AgentManifest;
+
+    const edges = graphFromManifest(manifest, []).edges.filter((e) => e.from === "wait");
+    expect(edges).toEqual([
+      { from: "wait", to: "ship", kind: "cross", label: "vendor.confirmed" },
+      { from: "wait", to: "next_vendor", kind: "cross", label: "vendor.confirmed · timeout" },
+    ]);
   });
 });

@@ -27,6 +27,7 @@ import {
   isContinue,
   isFail,
   isPause,
+  isPauseTimeout,
   isRetry,
   isTerminate,
   isAgentDefinition,
@@ -446,6 +447,20 @@ describe('directive guards', () => {
       expect(d.signal.correlationId).toBe('run-1');
       expect(d.resumeStep).toBe('finalize');
     }
+  });
+
+  it('isPauseTimeout narrows only the branded timeout payload', () => {
+    const timeoutPayload = { __sapiomPauseTimeout: true as const, signal: 'thing.done', pausedUntilMs: 123 };
+    expect(isPauseTimeout(timeoutPayload)).toBe(true);
+    if (isPauseTimeout(timeoutPayload)) {
+      expect(timeoutPayload.signal).toBe('thing.done');
+      expect(timeoutPayload.pausedUntilMs).toBe(123);
+    }
+    // A real signal payload (no brand) is not a timeout.
+    expect(isPauseTimeout({ signal: 'thing.done', result: 'ok' })).toBe(false);
+    expect(isPauseTimeout({ __sapiomPauseTimeout: false })).toBe(false);
+    expect(isPauseTimeout(null)).toBe(false);
+    expect(isPauseTimeout('timeout')).toBe(false);
   });
 });
 

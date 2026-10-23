@@ -34,6 +34,7 @@ const pauseDirectiveSchema = z.object({
   }),
   timeoutMs: z.number().int().positive().optional(),
   resumeStep: z.string().optional(),
+  timeoutStep: z.string().min(1).optional(),
 });
 
 const terminateDirectiveSchema = z.object({

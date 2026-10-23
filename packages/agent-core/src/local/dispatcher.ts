@@ -311,6 +311,7 @@ function splitDirective(d: NextStepDirective): {
           signal: d.signal,
           timeoutMs: d.timeoutMs,
           resumeStep: d.resumeStep,
+          timeoutStep: d.timeoutStep,
         },
       };
     case "retry":
