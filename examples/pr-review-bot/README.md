@@ -4,8 +4,8 @@ On a pull-request webhook, a coding agent checks out and analyzes the code,
 flags any change that shipped without matching tests, and posts the review to
 your email or a Slack channel — using your own bot token.
 
-The run **suspends at $0** while it waits for a PR, so it can sit idle for days
-between reviews and cost nothing until a webhook wakes it.
+The run **suspends at $0** while it waits for a PR, so it can sit idle for up to a
+week and cost nothing until a webhook wakes it.
 
 ## What it does
 
@@ -19,7 +19,9 @@ watch  ──(pause: wait for "pr.opened", $0 while idle)──▶  review  ─�
    `{ executionId, signal, correlationId }`, then returns
    `pauseUntilSignal({ signal: "pr.opened", resumeStep: "review", correlationId })`.
    The run suspends here at zero cost until a PR is opened.
-2. **(paused)** — nothing runs, nothing is billed, for as long as it takes.
+2. **(paused)** — nothing runs, nothing is billed, for up to the engine's 7-day
+   default pause deadline; if no PR opens in that window the run ends with a
+   pause-timeout failure.
 3. **review** (resume target) — its **input IS the PR payload**. A coding agent
    (`ctx.sapiom.models.coding.run`) checks the code out in a sandbox and
    analyzes the diff, told to surface changes that lack tests. It's read-only —
