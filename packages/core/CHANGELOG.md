@@ -1,5 +1,9 @@
 # @sapiom/core
 
+## Unreleased
+
+- Add optional transaction `returnUrl` for hosted purchase approval/card-confirmation return navigation. Destinations must be registered by the organization. Requires the corresponding backend deployment and package publication.
+
 ## 0.5.0
 
 ### Minor Changes

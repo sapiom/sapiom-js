@@ -157,6 +157,18 @@ await client.transactions.create({
 })
 ```
 
+##### Hosted purchase return navigation
+
+Pass `returnUrl` to `client.transactions.create(...)` to offer a return to your app after
+hosted approval and any required card confirmation. It may include your own opaque conversation
+reference, for example `https://your-app.example/conversations/123?state=opaque-reference`.
+Register HTTPS origins in organization metadata `paymentReturnOrigins`, or native app schemes
+(without the colon) in `paymentReturnSchemes`, through the organization PATCH API with `org.write`.
+The destination is stored per purchase, survives sign-in and revisions, and is opened only when
+the user clicks the return link. Sapiom adds no result parameters. Omission preserves the existing
+completion screen; read the transaction/checkout status before reporting payment success.
+Requires the corresponding backend deployment; native-link handling depends on the target device.
+
 ##### transactions.get()
 
 ```typescript
