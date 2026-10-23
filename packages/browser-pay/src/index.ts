@@ -5,6 +5,7 @@ export type {
   InterceptorEvent,
   InterceptorHandle,
   InterceptorTarget,
+  KnownRefusalReason,
   RefusalReason,
 } from "./interceptor.js";
 

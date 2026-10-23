@@ -1,12 +1,16 @@
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import type { Duplex } from "node:stream";
 import { CdpConnection } from "./cdp.js";
 import { textHoldsPlaceholderNumber } from "./detect";
+import type { KnownRefusalReason } from "./index";
 import type { PayLogger } from "./logger";
 import {
   attachInterceptor,
+  KNOWN_REFUSAL_REASONS,
   type InterceptorEvent,
   type InterceptorHandle,
 } from "./interceptor";
@@ -296,7 +300,12 @@ function emitPage(stub: CdpStub) {
   });
 }
 
-function emitPause(stub: CdpStub, requestId: string, url: string): void {
+function emitPause(
+  stub: CdpStub,
+  requestId: string,
+  url: string,
+  body: string = BODY,
+): void {
   stub.emit({
     method: "Fetch.requestPaused",
     sessionId: "page-1",
@@ -306,10 +315,71 @@ function emitPause(stub: CdpStub, requestId: string, url: string): void {
         url,
         method: "POST",
         headers: { "content-type": "application/json" },
-        postData: BODY,
+        postData: body,
       },
     },
   });
+}
+
+async function captureRefusals(
+  responses: RelayResponse[],
+  heldNumber: string = HELD.number,
+): Promise<{
+  events: InterceptorEvent[];
+  warnings: Warning[];
+}> {
+  const stub = await startCdp();
+  const warnings: Warning[] = [];
+  const queue = [...responses];
+  try {
+    const { handle, events } = await attachArmed(
+      stub,
+      stubPaymentRelay(async () => {
+        const next = queue.shift();
+        if (!next) throw new Error("unexpected relay call");
+        return next;
+      }),
+      loggerFor(warnings),
+      heldNumber,
+    );
+    for (let index = 0; index < responses.length; index++) {
+      emitPause(
+        stub,
+        `refusal-${index}`,
+        checkoutUrl(PLACEHOLDER_FORMS[index % PLACEHOLDER_FORMS.length]),
+        `{"note":"case-${index}","held":"${heldNumber}"}`,
+      );
+    }
+    await waitFor(
+      () =>
+        events.filter((event) => event.type === "refused").length ===
+        responses.length,
+      "refusals",
+    );
+    await handle.detach();
+    return { events, warnings };
+  } finally {
+    await stub.close();
+  }
+}
+
+function refusedEvents(events: InterceptorEvent[]): InterceptorEvent[] {
+  return events.filter((event) => event.type === "refused");
+}
+
+function knownReasonBullets(readme: string): string[] {
+  const lines = readme.split(/\r?\n/);
+  const start = lines.findIndex(
+    (line) => line.trim() === "### Known refusal reasons",
+  );
+  if (start < 0) return [];
+  const bullets: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith("#")) break;
+    const match = /^-\s+`([^`]+)`\s*$/.exec(line);
+    if (match?.[1]) bullets.push(match[1]);
+  }
+  return bullets;
 }
 
 async function waitFor(predicate: () => boolean, label: string): Promise<void> {
@@ -336,10 +406,11 @@ function success(): RelayResponse {
 function attachOptions(
   relay: ReturnType<typeof stubPaymentRelay>,
   logger?: PayLogger,
+  heldNumber: string = HELD.number,
 ) {
   return {
     relay,
-    placeholder: HELD,
+    placeholder: { number: heldNumber, injectionRef: HELD.injectionRef },
     profileId: "synthetic-profile",
     ...(logger ? { logger } : {}),
   };
@@ -350,11 +421,12 @@ async function attachArmed(
   stub: CdpStub,
   relay: ReturnType<typeof stubPaymentRelay>,
   logger?: PayLogger,
+  heldNumber: string = HELD.number,
 ): Promise<{ handle: InterceptorHandle; events: InterceptorEvent[] }> {
   const events: InterceptorEvent[] = [];
   const handle = await attachInterceptor(
     stub.url,
-    attachOptions(relay, logger),
+    attachOptions(relay, logger, heldNumber),
   );
   handle.on((event) => events.push(event));
   emitPage(stub);
@@ -485,6 +557,281 @@ describe("interceptor event redaction", () => {
     } finally {
       await stub.close();
     }
+  });
+
+  it("passes a code-shaped reason through and replaces any other shape", async () => {
+    const cases: Array<[string, string]> = [
+      ["future_reason", "future_reason"],
+      ["a".repeat(48), "a".repeat(48)],
+      ["a".repeat(49), "unrecognized"],
+      ["reason2", "unrecognized"],
+      ["a:b", "unrecognized"],
+      ["a/b", "unrecognized"],
+      ["a.b", "unrecognized"],
+      ["a b", "unrecognized"],
+      ["Total_changed", "unrecognized"],
+    ];
+    const { events, warnings } = await captureRefusals(
+      cases.map(([reason]) => ({ outcome: "refused", reason })),
+    );
+    expect(refusedEvents(events)).toStrictEqual(
+      cases.map(([, reason]) => ({
+        type: "refused",
+        url: ORIGIN,
+        reason,
+      })),
+    );
+    expect(warnings).toStrictEqual(
+      cases.map(([, reason]) => ({
+        message: "payment relay refused the paused request",
+        fields: { reason },
+      })),
+    );
+    assertNoMarkers(events);
+    assertNoMarkers(warnings);
+  });
+
+  it("copies retryable true and false, and omits it when the relay did not send it", async () => {
+    const { events, warnings } = await captureRefusals([
+      { outcome: "refused", reason: "total_changed", retryable: true },
+      { outcome: "refused", reason: "total_changed", retryable: false },
+      { outcome: "refused", reason: "total_changed" },
+    ]);
+    const refused = refusedEvents(events);
+    expect(refused).toStrictEqual([
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "total_changed",
+        retryable: true,
+      },
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "total_changed",
+        retryable: false,
+      },
+      { type: "refused", url: ORIGIN, reason: "total_changed" },
+    ]);
+    expect("retryable" in refused[2]).toBe(false);
+    expect(warnings.map((warning) => warning.fields)).toStrictEqual([
+      { reason: "total_changed" },
+      { reason: "total_changed" },
+      { reason: "total_changed" },
+    ]);
+    assertNoMarkers(events);
+    assertNoMarkers(warnings);
+  });
+
+  it("keeps a safe requestId and omits a missing or unsafe one", async () => {
+    const kept = "req_123456789012";
+    const { events, warnings } = await captureRefusals([
+      {
+        outcome: "refused",
+        reason: "sapiom_error",
+        requestId: "req_future",
+      },
+      { outcome: "refused", reason: "sapiom_error" },
+      {
+        outcome: "refused",
+        reason: "sapiom_error",
+        requestId: kept,
+      },
+      {
+        outcome: "refused",
+        reason: "sapiom_error",
+        requestId: "4000_0000_0000_0002",
+      },
+      {
+        outcome: "refused",
+        reason: "sapiom_error",
+        requestId: "1234567890123",
+      },
+    ]);
+    const refused = refusedEvents(events);
+    expect(refused).toStrictEqual([
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "sapiom_error",
+        requestId: "req_future",
+      },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "sapiom_error",
+        requestId: kept,
+      },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+    ]);
+    expect("requestId" in refused[1]).toBe(false);
+    expect("requestId" in refused[3]).toBe(false);
+    expect("requestId" in refused[4]).toBe(false);
+    expect(warnings.map((warning) => warning.fields)).toStrictEqual([
+      { reason: "sapiom_error" },
+      { reason: "sapiom_error" },
+      { reason: "sapiom_error" },
+      { reason: "sapiom_error" },
+      { reason: "sapiom_error" },
+    ]);
+    assertNoMarkers(events);
+    assertNoMarkers(warnings);
+  });
+
+  it("passes every listed reason except relay_in_progress through unchanged", async () => {
+    const reasons = KNOWN_REFUSAL_REASONS.filter(
+      (reason) => reason !== "relay_in_progress",
+    );
+    const { events } = await captureRefusals(
+      reasons.map((reason) => ({ outcome: "refused", reason })),
+    );
+    expect(
+      refusedEvents(events).map((event) =>
+        event.type === "refused" ? event.reason : "",
+      ),
+    ).toEqual([...reasons]);
+  });
+
+  it("omits a requestId that contains the held placeholder", async () => {
+    const number = "tok4242";
+    const { events, warnings } = await captureRefusals(
+      [
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "id_tok4242",
+        },
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "tok-4242",
+        },
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "id_tok_4242",
+        },
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "550e8400-e29b-41d4-a716-446655440000",
+        },
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "a".repeat(64),
+        },
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "a".repeat(65),
+        },
+        {
+          outcome: "refused",
+          reason: "sapiom_error",
+          requestId: "4242_4242_4242_4242",
+        },
+      ],
+      number,
+    );
+    expect(refusedEvents(events)).toStrictEqual([
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "sapiom_error",
+        requestId: "550e8400-e29b-41d4-a716-446655440000",
+      },
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "sapiom_error",
+        requestId: "a".repeat(64),
+      },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(number);
+    expect(warnings).toStrictEqual(
+      Array.from({ length: 7 }, () => ({
+        message: "payment relay refused the paused request",
+        fields: { reason: "sapiom_error" },
+      })),
+    );
+  });
+
+  it("omits a requestId that hides held digits behind other separators", async () => {
+    const number = "4242.4242.4242.4242";
+    const leaked = "req_4242_4242_4242_4242";
+    const { events } = await captureRefusals(
+      [{ outcome: "refused", reason: "sapiom_error", requestId: leaked }],
+      number,
+    );
+    expect(refusedEvents(events)).toStrictEqual([
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("4242424242424242");
+    expect(JSON.stringify(events)).not.toContain(leaked);
+  });
+
+  it("drops a 13 to 19 digit collapse and keeps a longer one", async () => {
+    const nil = "00000000-0000-0000-0000-000000000000";
+    const nineteen = "1234_5678_9012_3456_789";
+    const twenty = "1234_5678_9012_3456_7890";
+    const { events } = await captureRefusals([
+      { outcome: "refused", reason: "sapiom_error", requestId: nineteen },
+      { outcome: "refused", reason: "sapiom_error", requestId: twenty },
+      { outcome: "refused", reason: "sapiom_error", requestId: nil },
+    ]);
+    expect(refusedEvents(events)).toStrictEqual([
+      { type: "refused", url: ORIGIN, reason: "sapiom_error" },
+      {
+        type: "refused",
+        url: ORIGIN,
+        reason: "sapiom_error",
+        requestId: twenty,
+      },
+      { type: "refused", url: ORIGIN, reason: "sapiom_error", requestId: nil },
+    ]);
+  });
+
+  it("drops a hostile custom relay body, request id, and retryable before the listener", async () => {
+    const hostile = {
+      outcome: "refused",
+      reason: "future_reason",
+      retryable: "true",
+      requestId: "https://x/?session=synthqueryvalue",
+      body: HELD.number,
+    } as unknown as RelayResponse;
+    const { events, warnings } = await captureRefusals([hostile]);
+    const refused = refusedEvents(events);
+    expect(refused).toStrictEqual([
+      { type: "refused", url: ORIGIN, reason: "future_reason" },
+    ]);
+    expect("body" in refused[0]).toBe(false);
+    expect("requestId" in refused[0]).toBe(false);
+    expect("retryable" in refused[0]).toBe(false);
+    expect(warnings).toStrictEqual([
+      {
+        message: "payment relay refused the paused request",
+        fields: { reason: "future_reason" },
+      },
+    ]);
+    assertNoMarkers(events);
+    assertNoMarkers(warnings);
+  });
+
+  it("lists known refusal reasons in the README in array order", () => {
+    const readme = readFileSync(
+      path.join(__dirname, "..", "README.md"),
+      "utf8",
+    );
+    const listed: readonly KnownRefusalReason[] = KNOWN_REFUSAL_REASONS;
+    expect(knownReasonBullets(readme)).toEqual([...listed]);
   });
 
   it("uses origin-only URLs for network and unknown failures", async () => {

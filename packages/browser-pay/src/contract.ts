@@ -24,7 +24,12 @@ export interface RelayedHttpResponse {
 
 export type RelayResponse =
   | { outcome: "relayed"; response: RelayedHttpResponse }
-  | { outcome: "refused"; reason: string }
+  | {
+      outcome: "refused";
+      reason: string;
+      retryable?: boolean;
+      requestId?: string;
+    }
   | { outcome: "unknown" };
 
 export function paymentIdempotencyKey(
@@ -60,7 +65,16 @@ export function parseRelayResponse(value: unknown): RelayResponse {
     if (typeof value.reason !== "string" || value.reason.length === 0) {
       throw new Error("Payment relay returned an unreadable response");
     }
-    return { outcome: "refused", reason: value.reason };
+    const retryable = value.retryable;
+    const requestId = value.requestId;
+    return {
+      outcome: "refused",
+      reason: value.reason,
+      ...(typeof retryable === "boolean" ? { retryable } : {}),
+      ...(typeof requestId === "string" && requestId.length > 0
+        ? { requestId }
+        : {}),
+    };
   }
   if (value.outcome !== "relayed" || !isRecord(value.response)) {
     throw new Error("Payment relay returned an unreadable response");
