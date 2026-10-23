@@ -52,6 +52,17 @@ function sandboxWith(
   return Sandbox.attach("box", {}, transport);
 }
 
+/** Same as {@link sandboxWith}, but `route` may itself take simulated time
+ * to resolve (e.g. via `setTimeout`) instead of responding instantly. */
+function sandboxWithAsync(
+  route: (url: string, init: RequestInit) => Promise<FakeResponse>,
+): Sandbox {
+  const fetchFn = (async (url: string, init: RequestInit = {}) =>
+    (await route(url, init)) as unknown as Response) as unknown as typeof globalThis.fetch;
+  const transport = new Transport({ apiKey: "k", fetch: fetchFn });
+  return Sandbox.attach("box", {}, transport);
+}
+
 describe("Sandbox.exec — terminal status handling", () => {
   it("returns the real exit code when the process polls to status 'failed' (regression: exec-7 hang)", async () => {
     let polls = 0;
@@ -104,6 +115,142 @@ describe("Sandbox.exec — terminal status handling", () => {
     const res = await box.exec("echo hi", { pollInterval: 1 });
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toBe("hi");
+  });
+});
+
+// Regression coverage for #859: execStream's post-stream status
+// reconciliation loop (entered when the log stream ends before the process
+// reaches a terminal status) had no deadline, so a process that never
+// reported a terminal status hung the output iterable forever. Bounded to
+// mirror pollProcess and @sapiom/sandbox's execStream fix (#616): same
+// timeout constant, same error text.
+describe("Sandbox.execStream — post-stream status reconciliation", () => {
+  function streamOk(body: string): FakeResponse {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+    });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      text: async () => body,
+      headers: { get: () => null },
+      // execStream reads the response body directly, not via .json()/.text().
+      body: stream,
+    } as unknown as FakeResponse;
+  }
+
+  it("reconciles an exit code reported after the log stream ends", async () => {
+    jest.useFakeTimers();
+    try {
+      let polls = 0;
+      const box = sandboxWith((url, init) => {
+        if ((init.method ?? "GET") === "POST" && url.endsWith("/process")) {
+          return ok({ pid: "p5", status: "running" });
+        }
+        if (url.endsWith("/logs/stream")) {
+          return streamOk("stdout:hello\n");
+        }
+        // Status poll: running once, then a terminal failure.
+        polls += 1;
+        return ok(
+          polls < 2
+            ? { pid: "p5", status: "running" }
+            : { pid: "p5", status: "failed", exitCode: 3 },
+        );
+      });
+
+      const stream = await box.execStream("false");
+      const drained = (async () => {
+        const seen: Array<{ stream: string; data: string }> = [];
+        for await (const line of stream.output) seen.push(line);
+        return seen;
+      })();
+
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(await drained).toEqual([{ stream: "stdout", data: "hello" }]);
+      expect(stream.exitCode).toBe(3);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("times out when the process never reaches a terminal status", async () => {
+    jest.useFakeTimers();
+    try {
+      const box = sandboxWith((url, init) => {
+        if ((init.method ?? "GET") === "POST" && url.endsWith("/process")) {
+          return ok({ pid: "p6", status: "running" });
+        }
+        if (url.endsWith("/logs/stream")) {
+          return streamOk("");
+        }
+        return ok({ pid: "p6", status: "running" });
+      });
+
+      const stream = await box.execStream("sleep 999");
+      const drained = (async () => {
+        for await (const line of stream.output) void line;
+      })();
+      const rejection = expect(drained).rejects.toThrow(
+        "Process p6 timed out after 60000ms",
+      );
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      await rejection;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("counts a slow initial status read against the timeout budget", async () => {
+    // Regression for a review finding on this fix: the deadline used to be
+    // computed *after* the initial post-stream status read, so a slow first
+    // read granted a fresh 60s window on top of however long it took --
+    // e.g. a 30s-slow first read plus a stuck process could take ~90s to
+    // time out instead of the advertised 60s. The deadline must start
+    // before that first read, so the slow read eats into the same budget.
+    jest.useFakeTimers();
+    try {
+      const initialReadDelayMs = 45_000;
+      let statusCalls = 0;
+      const box = sandboxWithAsync(async (url, init) => {
+        if ((init.method ?? "GET") === "POST" && url.endsWith("/process")) {
+          return ok({ pid: "p7", status: "running" });
+        }
+        if (url.endsWith("/logs/stream")) {
+          return streamOk("");
+        }
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          // Simulate a slow first status read after the stream ends.
+          await new Promise((r) => setTimeout(r, initialReadDelayMs));
+        }
+        return ok({ pid: "p7", status: "running" });
+      });
+
+      const stream = await box.execStream("sleep 999");
+      const drained = (async () => {
+        for await (const line of stream.output) void line;
+      })();
+      const rejection = expect(drained).rejects.toThrow(
+        "Process p7 timed out after 60000ms",
+      );
+
+      // Let the slow first read resolve, then advance only up to the
+      // *remaining* budget (60s total, minus the 45s already spent on the
+      // first read). The buggy ordering would need another full 60s here
+      // (90s total) before throwing.
+      await jest.advanceTimersByTimeAsync(initialReadDelayMs);
+      await jest.advanceTimersByTimeAsync(60_000 - initialReadDelayMs);
+      await rejection;
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
