@@ -982,6 +982,82 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
+  it("relays to any checkout without a profile, forwarding its headers but the connection's, cookies and fetch hints", async () => {
+    const stub = await startStub({ postData: CARD });
+    const calls: RelayRequest[] = [];
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: HELD,
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      const many = Object.fromEntries(
+        Array.from({ length: 40 }, (_, i) => [`x-extra-${i}`, "1"]),
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-1",
+          networkId: "net-1",
+          request: {
+            url: "https://api.pay.example/v1/tokens",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Bearer pk_test_example",
+              Cookie: "session=secret",
+              Host: "api.pay.example",
+              "Sec-Fetch-Site": "cross-site",
+              "sec-ch-ua": '"Chromium"',
+              ...many,
+            },
+            hasPostData: true,
+            postDataEntries: [{}],
+          },
+          resourceType: "Fetch",
+        },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "relayed"),
+        "relayed",
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).not.toHaveProperty("profileId");
+      expect(calls[0].request.url).toBe("https://api.pay.example/v1/tokens");
+      const headers = calls[0].request.headers;
+      expect(header(headers, "content-type")).toBe("application/json");
+      expect(header(headers, "authorization")).toBe("Bearer pk_test_example");
+      for (const dropped of ["cookie", "host", "sec-fetch-site", "sec-ch-ua"]) {
+        expect(headers).not.toHaveProperty(dropped);
+      }
+      expect(Object.keys(headers)).toHaveLength(32);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("refuses an empty profileId", async () => {
+    await expect(
+      attachInterceptor("ws://127.0.0.1:1", {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "",
+      }),
+    ).rejects.toThrow("profileId must not be empty");
+  });
+
   it("reads a body with missing entry bytes via getRequestPostData and relays it", async () => {
     const stub = await startStub({ postData: CARD });
     const calls: RelayRequest[] = [];

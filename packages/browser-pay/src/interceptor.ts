@@ -22,8 +22,14 @@ export interface AttachOptions {
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
   placeholder: HeldPlaceholder;
-  /** Relay profile, for example `shopify-card-vault`. */
-  profileId: string;
+  /**
+   * Relay profile, for example `shopify-card-vault`. Omit it for any other
+   * checkout: the relay sends the paused request to its own URL when that is
+   * https to a public host, and finds the card fields by the placeholder's
+   * values. Without a profile every header is forwarded but the connection's,
+   * `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints.
+   */
+  profileId?: string;
   /**
    * How long to wait for a terminal relay outcome before failing the paused
    * request. Defaults to 55 seconds. Identical pauses share one poll,
@@ -773,12 +779,15 @@ class PaymentInterceptor {
       return await this.options.relay.relay(
         {
           injectionRef: this.options.placeholder.injectionRef,
-          profileId: this.options.profileId,
+          ...(this.options.profileId && { profileId: this.options.profileId }),
           pageOrigin,
           request: {
             method: request.method,
             url: request.url,
-            headers: forwardedHeaders(request.headers),
+            headers: forwardedHeaders(
+              request.headers,
+              this.options.profileId ? profileHeader : genericHeader,
+            ),
             body,
           },
           idempotencyKey,
@@ -1200,11 +1209,42 @@ const FORWARDED_HEADERS = new Set([
   "shopify-identification-signature",
 ]);
 
-function forwardedHeaders(raw: unknown): Record<string, string> {
+/** Headers of the connection, or set by whoever sends the request on. */
+const UNFORWARDED_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "cookie",
+  "host",
+  "keep-alive",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/** The relay accepts at most this many headers. */
+const MAX_FORWARDED_HEADERS = 32;
+
+const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
+const genericHeader = (key: string) =>
+  !UNFORWARDED_HEADERS.has(key) &&
+  !key.startsWith("sec-fetch-") &&
+  !key.startsWith("sec-ch-") &&
+  !key.startsWith(":");
+
+function forwardedHeaders(
+  raw: unknown,
+  forwarded: (key: string) => boolean,
+): Record<string, string> {
   const out: Record<string, string> = {};
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();
-    if (!FORWARDED_HEADERS.has(key) || value.length > 8192) return;
+    if (!forwarded(key) || value.length > 8192) return;
+    if (!(key in out) && Object.keys(out).length >= MAX_FORWARDED_HEADERS) {
+      return;
+    }
     out[key] = value;
   };
   if (Array.isArray(raw)) {
@@ -1472,8 +1512,8 @@ function assertAttachOptions(options: AttachOptions): void {
   }
   assertPositiveDuration("timeoutMs", options.timeoutMs);
   assertPositiveDuration("attemptTimeoutMs", options.attemptTimeoutMs);
-  if (!options.profileId) {
-    throw new Error("profileId is required");
+  if (options.profileId !== undefined && options.profileId.length === 0) {
+    throw new Error("profileId must not be empty");
   }
   const digits = options.placeholder?.number?.replace(/\D/g, "") ?? "";
   if (!options.placeholder?.injectionRef || digits.length === 0) {

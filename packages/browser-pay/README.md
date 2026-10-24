@@ -4,8 +4,8 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 
 ## Sequence
 
-1. The agent creates a checkout (UCP `create_checkout`).
-2. Governance arms a placeholder and returns it with `continue_url`.
+1. The agent creates a checkout: UCP `create_checkout`, or, at any other checkout, a transaction with `browser-checkout` request facts (the merchant origin and the total it will pay) funded by a card.
+2. Governance arms a placeholder and returns it (with `continue_url` for UCP).
 3. The agent opens a browser session and drives checkout, typing the placeholder.
 4. `attachInterceptor` pauses the card request, including inside a payment iframe.
 5. A match is `POST /v1/transactions/{transactionId}/payment/relay`.
@@ -30,7 +30,7 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 }
 ```
 
-`injectionRef` is a UUID. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. This client sends only `accept`, `content-type`, and `shopify-identification-signature`, and drops a value longer than 8192 characters. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
+`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints, at most 32 of them. It drops a value longer than 8192 characters. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
 
 Success:
 
@@ -117,6 +117,17 @@ const handle = await attachInterceptor(cdpUrl, {
   placeholder,
 });
 ```
+
+For a Shopify checkout, `profileId: "shopify-card-vault"` keeps the recorded profile's stricter checks. For any other checkout, leave `profileId` out:
+
+```typescript
+const handle = await attachInterceptor(cdpUrl, {
+  relay: httpPaymentRelay({ baseUrl, apiKey, transactionId }),
+  placeholder,
+});
+```
+
+The relay records every request it is asked to send (host, path, header names, the body's shape and where the card fields were, never a value). It refuses `destination_not_allowed` for a URL that isn't https to a public host or a method other than POST, and `card_fields_invalid` when the placeholder's number isn't in the body exactly once, a card field can't be told apart from another holding the same value, or a card number shows up in the URL or headers. A form that encrypts card fields in the page (Adyen client-side encryption and similar) never shows the placeholder, so it can't be paid this way. A provider may decline a card sent from the card vault's servers rather than the buyer's browser.
 
 `baseUrl` must be https, or plain http to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` URL makes `httpPaymentRelay` throw a `CredentialChannelError` before a request is sent. On a trusted private network, set `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects from the relay are always refused.
 
