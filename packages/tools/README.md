@@ -75,27 +75,27 @@ If a single process makes calls on behalf of more than one agent or trace, deriv
 
 Each capability is a namespace, importable from the barrel or its own subpath (e.g. `@sapiom/tools/sandboxes`). Every capability has its own README with usage details, preconditions, and gotchas the type signatures can't express — read it before first use.
 
-| Namespace           | What it is                                                                                              | Docs                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `sandboxes`         | Isolated, ephemeral compute                                                                             | [src/sandboxes](./src/sandboxes/README.md)                   |
-| `repositories`      | Private, in-network git repos                                                                           | [src/repositories](./src/repositories/README.md)             |
-| `models`            | The managed loop (`models.run`) and coding agents (`models.coding`)                                     | [src/models](./src/models/README.md)                         |
-| `fileStorage`       | Tenant-scoped object storage (presigned URLs)                                                           | [src/file-storage](./src/file-storage/README.md)             |
-| `contentGeneration` | Media generation (images + video; audio soon), with optional `storage`                                  | [src/content-generation](./src/content-generation/README.md) |
-| `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`)   | [src/search](./src/search/README.md)                         |
-| `agents`            | Run a deployed agent, or dispatch one from a step and await its result                                  | [src/agents](./src/agents/README.md)                         |
-| `schedules`         | Schedule a deployed agent to run on a cron, or once at a set time                                       | [src/schedules](./src/schedules/README.md)                   |
-| `events`            | Emit a tenant event from a step, starting every agent whose `event` trigger matches its type            | [src/events](./src/events/index.ts)                          |
-| `database`          | Permanent Postgres databases (yours until you delete them), returned with direct connection credentials | [src/database](./src/database/README.md)                     |
-| `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks                 | [src/email](./src/email/README.md)                           |
-| `domains`           | Register domain names and manage their DNS records                                                      | [src/domains](./src/domains/README.md)                       |
-| `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)          | [src/memory](./src/memory/README.md)                         |
-| `google`            | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                               | [src/google](./src/google/README.md)                         |
-| `github`            | List a tenant's GitHub repositories                                                                     | [src/github](./src/github/README.md)                         |
-| `slack`             | Post, edit, and react to Slack messages; read threads and users                                         | [src/connectors/slack](./src/connectors/slack/README.md)     |
-| `linear` / `notion` | Call a tenant's Linear or Notion MCP tools (`listTools`, `callTool`); `mcp(slug)` for any MCP connector | [src/connectors/mcp](./src/connectors/mcp/README.md)         |
-| `llm`               | Routed LLM calls: one-shot `run` and deferred `submit` / sessions                                       | [src/llm](./src/llm/index.ts)                                |
-| `decisions`         | System One decisions: `evaluate` returns calibrated probabilities over a fixed answer set               | [src/decisions](./src/decisions/index.ts)                    |
+| Namespace                                 | What it is                                                                                              | Docs                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `sandboxes`                               | Isolated, ephemeral compute                                                                             | [src/sandboxes](./src/sandboxes/README.md)                   |
+| `repositories`                            | Private, in-network git repos                                                                           | [src/repositories](./src/repositories/README.md)             |
+| `models`                                  | The managed loop (`models.run`) and coding agents (`models.coding`)                                     | [src/models](./src/models/README.md)                         |
+| `fileStorage`                             | Tenant-scoped object storage (presigned URLs)                                                           | [src/file-storage](./src/file-storage/README.md)             |
+| `contentGeneration`                       | Media generation (images + video; audio soon), with optional `storage`                                  | [src/content-generation](./src/content-generation/README.md) |
+| `search`                                  | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`)   | [src/search](./src/search/README.md)                         |
+| `agents`                                  | Run a deployed agent, or dispatch one from a step and await its result                                  | [src/agents](./src/agents/README.md)                         |
+| `schedules`                               | Schedule a deployed agent to run on a cron, or once at a set time                                       | [src/schedules](./src/schedules/README.md)                   |
+| `events`                                  | Emit a tenant event from a step, starting every agent whose `event` trigger matches its type            | [src/events](./src/events/index.ts)                          |
+| `database`                                | Permanent Postgres databases (yours until you delete them), returned with direct connection credentials | [src/database](./src/database/README.md)                     |
+| `email`                                   | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks                 | [src/email](./src/email/README.md)                           |
+| `domains`                                 | Register domain names and manage their DNS records                                                      | [src/domains](./src/domains/README.md)                       |
+| `memory`                                  | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)          | [src/memory](./src/memory/README.md)                         |
+| `connectors.google`                       | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                               | [src/connectors/google](./src/connectors/google/README.md)   |
+| `connectors.github`                       | List a tenant's GitHub repositories                                                                     | [src/connectors/github](./src/connectors/github/README.md)   |
+| `connectors.slack`                        | Post, edit, and react to Slack messages; read threads and users                                         | [src/connectors/slack](./src/connectors/slack/README.md)     |
+| `connectors.linear` / `connectors.notion` | Call a tenant's Linear or Notion MCP tools (`listTools`, `callTool`); `mcp(slug)` for any MCP connector | [src/connectors/mcp](./src/connectors/mcp/README.md)         |
+| `llm`                                     | Routed LLM calls: one-shot `run` and deferred `submit` / sessions                                       | [src/llm](./src/llm/index.ts)                                |
+| `decisions`                               | System One decisions: `evaluate` returns calibrated probabilities over a fixed answer set               | [src/decisions](./src/decisions/index.ts)                    |
 
 ### `llm.run` vs `decisions.evaluate`
 
