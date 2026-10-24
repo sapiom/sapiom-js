@@ -402,7 +402,8 @@ Assistant, and the MCP config written for Claude Code and Codex) only travel ove
 `https://` or to a loopback host (`localhost`, `127.0.0.1`), and the key is
 dropped on a redirect to another origin. A custom environment on plain `http://`
 to any other host (for example `http://10.0.0.5:3000`) is refused, and starting a
-session against it fails. On a trusted private network, opt in with
+signed-in session against it fails (a session without an API key has no key to
+protect and starts as before). On a trusted private network, opt in with
 `SAPIOM_ALLOW_INSECURE_HTTP=1`:
 
 - **CLI**: set it in the shell that runs `npx @sapiom/harness`.
