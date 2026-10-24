@@ -11,6 +11,8 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 5. A match is `POST /v1/transactions/{transactionId}/payment/relay`.
 6. The page receives the processor status, headers, and body. A terminal refusal, an unknown outcome, or a relay error fails the paused request. `relay_in_progress` keeps the request paused and asks again with the same idempotency key.
 
+An agent that gives up before paying cancels the purchase, which revokes the placeholder: a UCP checkout with `POST /v1/transactions/{transactionId}/ucp/checkout/cancel`, a browser-checkout purchase with `POST /v1/transactions/{transactionId}/cancel`. The browser-checkout cancel answers 409 `card_relayed` once the card was relayed; the payment is spent, and the agent completes the transaction instead.
+
 ## Relay contract
 
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
