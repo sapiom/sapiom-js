@@ -8,6 +8,9 @@
  * Mirrors `@sapiom/tools`'s DEFAULT_BASE_URL for the base URL resolution.
  */
 
+import { credentialFetch } from "@sapiom/analytics-core/credential";
+import { harnessCredentialPolicy } from "./credential-policy.js";
+
 /** Returns the agents API base URL, honouring the same env-var precedence as
  *  @sapiom/tools's DEFAULT_BASE_URL. */
 export function resolveAgentsBaseUrl(): string {
@@ -183,12 +186,12 @@ export function createDefinitionSlugResolver(opts: {
     };
     let failure = "network error or timeout";
     try {
-      const response = await fetchImpl(
+      const response = await credentialFetch(
+        fetchImpl,
         `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definitionId)}`,
-        {
-          headers: { "x-sapiom-api-key": key },
-          signal: AbortSignal.timeout(5_000),
-        },
+        { signal: AbortSignal.timeout(5_000) },
+        { header: "x-sapiom-api-key", value: key },
+        harnessCredentialPolicy(),
       );
       failure = response.ok ? "invalid response" : `HTTP ${response.status}`;
       if (response.status === 401 || response.status === 403)
@@ -251,10 +254,13 @@ export function createDefinitionSlugResolver(opts: {
     };
     let failure = "network error or timeout";
     try {
-      const response = await fetchImpl(`${baseUrl}/agents/v1/definitions`, {
-        headers: { "x-sapiom-api-key": currentKey },
-        signal: AbortSignal.timeout(5_000),
-      });
+      const response = await credentialFetch(
+        fetchImpl,
+        `${baseUrl}/agents/v1/definitions`,
+        { signal: AbortSignal.timeout(5_000) },
+        { header: "x-sapiom-api-key", value: currentKey },
+        harnessCredentialPolicy(),
+      );
       failure = response.ok ? "invalid response" : `HTTP ${response.status}`;
       if (response.status === 401 || response.status === 403)
         failure +=

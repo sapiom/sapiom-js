@@ -23,6 +23,8 @@
  * never take the rail down.
  */
 
+import { credentialFetch } from "@sapiom/analytics-core/credential";
+import { harnessCredentialPolicy } from "./credential-policy.js";
 import type { AccountPlanView } from "../shared/types.js";
 import {
   type ApiKeyProvider,
@@ -131,10 +133,14 @@ export function createAccountPlanReader(opts: {
 
     const attempt = async (key: string): Promise<Response | null> => {
       try {
-        return await fetchImpl(`${baseUrl}${path}`, {
-          // Core (`api.*`) takes a Bearer token — see template-catalog.ts.
-          headers: { Authorization: `Bearer ${key}` },
-        });
+        // Core (`api.*`) takes a Bearer token: see template-catalog.ts.
+        return await credentialFetch(
+          fetchImpl,
+          `${baseUrl}${path}`,
+          {},
+          { header: "authorization", value: `Bearer ${key}` },
+          harnessCredentialPolicy(),
+        );
       } catch (err) {
         warnOnce(err instanceof Error ? err.message : String(err));
         return null;

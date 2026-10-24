@@ -1,5 +1,4 @@
-/** Centralize channel and redirect checks so clients share one tenant-credential policy.
- * Harness exceptions to the literal-header guard are tracked in SAP-4112. */
+/** Centralize channel and redirect checks so clients share one tenant-credential policy. */
 import { createHash } from "node:crypto";
 
 export const ALLOW_INSECURE_HTTP_ENV = "SAPIOM_ALLOW_INSECURE_HTTP";
@@ -293,8 +292,19 @@ export async function fetchKeepingCredential(
 }
 
 export interface Credential {
-  readonly header: "x-api-key" | "x-sapiom-api-key";
+  readonly header: "x-api-key" | "x-sapiom-api-key" | "authorization";
   readonly value: string;
+}
+
+/** For a credential handed to another process (a config file): check the URL where it is chosen,
+ * since the request itself is made outside this policy. */
+export function credentialHeaders(
+  url: string,
+  credential: Credential,
+  policy: CredentialPolicy,
+): Record<string, string> {
+  assertCredentialMayTravel(new URL(url), policy);
+  return { [credential.header]: credential.value };
 }
 
 /** Set the credential after caller headers so they cannot replace it.

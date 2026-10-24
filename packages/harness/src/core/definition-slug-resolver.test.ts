@@ -80,10 +80,10 @@ describe("createDefinitionSlugResolver", () => {
 
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://tools.sapiom.ai/agents/v1/definitions/42",
-      {
+      expect.objectContaining({
         headers: { "x-sapiom-api-key": "my-api-key" },
         signal: expect.any(AbortSignal),
-      },
+      }),
     );
   });
 
@@ -147,10 +147,13 @@ describe("createDefinitionSlugResolver", () => {
       status: "available",
       metadata: { slug: "signed-in-agent", activeBuildRunStatus: "ready" },
     });
-    expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), {
-      headers: { "x-sapiom-api-key": "sk-after-login" },
-      signal: expect.any(AbortSignal),
-    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: { "x-sapiom-api-key": "sk-after-login" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it("does not cache mutable build status", async () => {
@@ -694,5 +697,55 @@ describe("authenticated deployment evidence", () => {
         expect(fetchImpl).toHaveBeenCalledTimes(1);
       });
     });
+  });
+});
+
+describe("createDefinitionSlugResolver — credential channel", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  const resolverAt = (fetchImpl: typeof fetch) =>
+    createDefinitionSlugResolver({
+      apiKey: "sk-test",
+      baseUrl: "http://agents.internal",
+      fetchImpl,
+    });
+
+  it("refuses plaintext http to a non-loopback host without calling fetch", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+    const fetchImpl = makeFetch(200, []);
+    const resolver = resolverAt(fetchImpl);
+
+    await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+      status: "unavailable",
+      lastConfirmedDeployed: null,
+    });
+    await expect(resolver.listVisible()).resolves.toMatchObject({
+      status: "unavailable",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("sends the key over plaintext http when SAPIOM_ALLOW_INSECURE_HTTP=1", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "1");
+    const fetchImpl = makeFetch(200, {
+      slug: "lease-abstractor",
+      activeBuildRunId: null,
+      activeBuildRunStatus: null,
+    });
+
+    await resolverAt(fetchImpl).resolveMetadata("188");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://agents.internal/agents/v1/definitions/188",
+      expect.objectContaining({
+        headers: { "x-sapiom-api-key": "sk-test" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 });

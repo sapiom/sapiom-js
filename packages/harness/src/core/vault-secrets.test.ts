@@ -7,7 +7,7 @@
  * rather than a dead end.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VaultSecretError, createVaultSecretsClient } from "./vault-secrets.js";
 
@@ -145,5 +145,25 @@ describe("remove", () => {
     await expect(clientWith(fetchImpl).remove("188", "API_KEY")).rejects.toThrow(
       VaultSecretError,
     );
+  });
+});
+
+describe("credential channel", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("refuses plaintext http to a non-loopback host without calling fetch", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+    const { fetchImpl, calls } = stubFetch(json({ keys: [] }));
+    const client = createVaultSecretsClient({
+      apiKey: "sk_test",
+      baseUrl: "http://api.internal",
+      fetchImpl,
+    });
+
+    await expect(client.list("188")).resolves.toBeNull();
+    await expect(client.set("188", "API_TOKEN", "v")).rejects.toThrow(
+      "could not be sent",
+    );
+    expect(calls).toHaveLength(0);
   });
 });
