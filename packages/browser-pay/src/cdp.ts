@@ -24,17 +24,19 @@ type Pending = {
   method: string;
 };
 
+const PLAIN_CDP_METHOD = /^[A-Za-z]+\.[A-Za-z]+$/;
+
 export class CdpCommandError extends Error {
-  readonly method: string;
+  readonly method: string | undefined;
   readonly code: number | undefined;
   readonly timedOut: boolean;
 
   constructor(method: string, timedOut: boolean, code?: number) {
-    super(
-      `${timedOut ? "CDP command timed out" : "CDP command failed"}: ${method}`,
-    );
+    const safe = PLAIN_CDP_METHOD.test(method) ? method : undefined;
+    const label = timedOut ? "CDP command timed out" : "CDP command failed";
+    super(safe === undefined ? label : `${label}: ${safe}`);
     this.name = "CdpCommandError";
-    this.method = method;
+    this.method = safe;
     this.timedOut = timedOut;
     this.code =
       typeof code === "number" && Number.isInteger(code) ? code : undefined;

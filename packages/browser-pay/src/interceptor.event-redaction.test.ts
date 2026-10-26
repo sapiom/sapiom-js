@@ -693,7 +693,7 @@ describe("interceptor event redaction", () => {
     }
   });
 
-  it("names the local CDP method and drops remote error text", async () => {
+  it("uses generic errors for secret-bearing CDP methods", async () => {
     const method = "Synthetic.method?token=SYNTHETIC_METHOD_SECRET_1";
     const errorStub = await startCdp({
       errorOnMethod: {
@@ -706,8 +706,11 @@ describe("interceptor event redaction", () => {
       const error = await captureError(
         errorConnection.send(method, {}, undefined, 1_000),
       );
-      expect(error.message).toBe(`CDP command failed: ${method}`);
-      expect(error.message).not.toContain("peer rejected");
+      expect(error.message).toBe("CDP command failed");
+      expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+      expect(
+        JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      ).not.toContain("SYNTHETIC_METHOD_SECRET");
     } finally {
       errorConnection.close();
       await errorStub.close();
@@ -719,8 +722,11 @@ describe("interceptor event redaction", () => {
       const error = await captureError(
         timeoutConnection.send(method, {}, undefined, 10),
       );
-      expect(error.message).toBe(`CDP command timed out: ${method}`);
-      expect(error.message).not.toContain("peer rejected");
+      expect(error.message).toBe("CDP command timed out");
+      expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+      expect(
+        JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      ).not.toContain("SYNTHETIC_METHOD_SECRET");
     } finally {
       timeoutConnection.close();
       await timeoutStub.close();
