@@ -21,17 +21,23 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  method: string;
 };
 
 export class CdpCommandError extends Error {
+  readonly method: string;
   readonly code: number | undefined;
   readonly timedOut: boolean;
 
-  constructor(timedOut: boolean, code?: number) {
-    super(timedOut ? "CDP command timed out" : "CDP command failed");
+  constructor(method: string, timedOut: boolean, code?: number) {
+    super(
+      `${timedOut ? "CDP command timed out" : "CDP command failed"}: ${method}`,
+    );
     this.name = "CdpCommandError";
+    this.method = method;
     this.timedOut = timedOut;
-    this.code = code;
+    this.code =
+      typeof code === "number" && Number.isInteger(code) ? code : undefined;
   }
 }
 
@@ -360,7 +366,9 @@ export class CdpConnection {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if (message.failed) {
-          pending.reject(new CdpCommandError(false, message.code));
+          pending.reject(
+            new CdpCommandError(pending.method, false, message.code),
+          );
         } else {
           pending.resolve(message.result);
         }
@@ -411,12 +419,13 @@ export class CdpConnection {
       }
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new CdpCommandError(true));
+        reject(new CdpCommandError(method, true));
       }, timeoutMs);
       this.pending.set(id, {
         resolve,
         reject,
         timer,
+        method,
       });
       try {
         this.socket.send(

@@ -117,6 +117,11 @@ describe("CdpConnection", () => {
       const pending = connection.send("Fetch.enable", {}, undefined, 20);
       await expect(pending).rejects.toBeInstanceOf(CdpCommandError);
       await expect(pending).rejects.toHaveProperty("timedOut", true);
+      await expect(pending).rejects.toHaveProperty("method", "Fetch.enable");
+      await expect(pending).rejects.toHaveProperty(
+        "message",
+        "CDP command timed out: Fetch.enable",
+      );
       connection.close();
     } finally {
       await stub.close();

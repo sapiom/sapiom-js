@@ -452,15 +452,46 @@ class PaymentInterceptor {
       ...(targetType ? { targetType } : {}),
       origin: eventUrl(session.url, this.number),
     });
-    await this.connection
-      .send("Target.closeTarget", { targetId: session.targetId })
-      .catch(() => {});
+    await this.swallowStep(
+      this.connection.send("Target.closeTarget", {
+        targetId: session.targetId,
+      }),
+      "Target.closeTarget",
+      session,
+    );
     return false;
   }
 
+  private async swallowStep<T>(
+    pending: Promise<T>,
+    method: string,
+    target?: { type: string; url: string },
+  ): Promise<T | undefined> {
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.closed) return undefined;
+      const failed = error instanceof CdpCommandError ? error : undefined;
+      const targetType =
+        target?.type === "page" || target?.type === "iframe"
+          ? target.type
+          : undefined;
+      const code = failed?.code;
+      this.logger.warn("browser step failed", {
+        method: failed?.method ?? method,
+        ...(code !== undefined ? { code } : {}),
+        timedOut: failed?.timedOut ?? false,
+        ...(targetType ? { targetType } : {}),
+        ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+      });
+      return undefined;
+    }
+  }
+
   private async autoAttachChildren(sessionId: string): Promise<void> {
-    await this.connection
-      .send(
+    const session = this.sessions.get(sessionId);
+    await this.swallowStep(
+      this.connection.send(
         "Target.setAutoAttach",
         {
           autoAttach: true,
@@ -469,8 +500,10 @@ class PaymentInterceptor {
           filter: CHILD_FILTER,
         },
         sessionId,
-      )
-      .catch(() => {});
+      ),
+      "Target.setAutoAttach",
+      session,
+    );
   }
 
   private async resumeIfWaiting(
@@ -478,24 +511,30 @@ class PaymentInterceptor {
     waitingForDebugger: boolean,
   ): Promise<void> {
     if (!waitingForDebugger) return;
-    await this.connection
-      .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
-      .catch(() => {});
+    const session = this.sessions.get(sessionId);
+    await this.swallowStep(
+      this.connection.send("Runtime.runIfWaitingForDebugger", {}, sessionId),
+      "Runtime.runIfWaitingForDebugger",
+      session,
+    );
   }
 
   private async attachExistingFrames(): Promise<void> {
-    const listed = await this.connection
-      .send("Target.getTargets")
-      .catch(() => undefined);
+    const listed = await this.swallowStep(
+      this.connection.send("Target.getTargets"),
+      "Target.getTargets",
+    );
     for (const info of parseTargetInfos(listed)) {
       if (info.type !== "iframe") continue;
       if (this.byTarget.has(info.targetId)) continue;
-      const attached = await this.connection
-        .send("Target.attachToTarget", {
+      const attached = await this.swallowStep(
+        this.connection.send("Target.attachToTarget", {
           targetId: info.targetId,
           flatten: true,
-        })
-        .catch(() => undefined);
+        }),
+        "Target.attachToTarget",
+        { type: info.type, url: info.url },
+      );
       const sessionId = readAttachedSessionId(attached);
       if (!sessionId || this.sessions.has(sessionId)) continue;
       const session = this.trackSession({
@@ -1300,7 +1339,8 @@ async function armFetch(
   } catch (error) {
     const failed = error instanceof CdpCommandError ? error : undefined;
     return {
-      method: "Fetch.enable",
+      method:
+        failed?.method === "Fetch.enable" ? failed.method : "Fetch.enable",
       timedOut: failed?.timedOut ?? false,
       ...(failed?.code !== undefined ? { code: failed.code } : {}),
     };
