@@ -1,11 +1,11 @@
 /**
  * The documentation the finder can reach.
  *
- * Five pages, not a mirror of the site's nav: these are the ones someone
- * reaches for from inside the product — how to start an agent, how to start a
- * workflow, which models a capability can call, and the two halves of MCP
- * setup. Everything else is one click away behind the footer link, which is
- * why this list gets to stay short instead of growing a page per release.
+ * One page, not a mirror of the site's nav: which models a capability can
+ * call. The list also held the agents and workflows quick starts and the two
+ * halves of MCP setup until those pages were retired (2026-10-23).
+ * Everything else is one click away behind the footer link, which is why this
+ * list gets to stay short instead of growing a page per release.
  */
 export const DOCS_SITE = "https://docs.sapiom.ai/";
 

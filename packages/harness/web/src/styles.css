@@ -9177,7 +9177,7 @@ button.rail-footer-card:hover {
   color: var(--text-faint);
 }
 
-/* First-run footer: the one-time telemetry opt-in + docs link. */
+/* First-run footer: the one-time telemetry opt-in. */
 .composer-footer {
   width: 100%;
   max-width: 640px;
