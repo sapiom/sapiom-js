@@ -19,28 +19,8 @@ export interface DocLink {
 
 export const DOC_LINKS: readonly DocLink[] = [
   {
-    label: "Agents quick start",
-    meta: "Run your first agent",
-    href: "https://docs.sapiom.ai/agents/quick-start",
-  },
-  {
-    label: "Workflows quick start",
-    meta: "Typed steps, gates and exits",
-    href: "https://docs.sapiom.ai/workflows/quick-start",
-  },
-  {
     label: "AI models",
     meta: "Which models a capability can call",
     href: "https://docs.sapiom.ai/capabilities/ai-models",
-  },
-  {
-    label: "MCP servers: setup",
-    meta: "Connect a server to a workspace",
-    href: "https://docs.sapiom.ai/integration/mcp-servers/setup",
-  },
-  {
-    label: "MCP servers: remote",
-    meta: "Reach a server you do not host",
-    href: "https://docs.sapiom.ai/integration/mcp-servers/remote",
   },
 ];

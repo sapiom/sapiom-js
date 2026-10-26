@@ -350,7 +350,7 @@ describe("rankPaletteItems filters", () => {
   it("the Docs tab lists the doc links and matches within them", () => {
     const unqueried = rank("", filterSources, "docs");
     expect(unqueried.every((item) => item.kind === "doc")).toBe(true);
-    const queried = rank("mcp", filterSources, "docs");
+    const queried = rank("models", filterSources, "docs");
     expect(queried.length).toBeGreaterThan(0);
     expect(queried.every((item) => item.kind === "doc")).toBe(true);
   });

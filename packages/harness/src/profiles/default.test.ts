@@ -12,7 +12,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "a4a13da1ea4d960df634dd2946aef953a79bf6cae91907494cd6cbefc1db547a";
+  "2158c2c45db76fc9a35f20f41a888cbdaf58bc393c751bf37360d807fc55199c";
 
 const legacy = readFileSync(
   new URL("./fixtures/legacy-system-prompt.md", import.meta.url),
@@ -128,7 +128,6 @@ describe("known served-prompt compatibility", () => {
       "Structured output = tool-use/schema output",
       "**Omit `model` entirely**",
       "Raw provider ids are never\nhonored",
-      "Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.",
     ]) {
       expect(legacy).toContain(claim);
       expect(DEFAULT_SYSTEM_PROMPT).toContain(claim);

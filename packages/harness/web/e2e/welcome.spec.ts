@@ -67,11 +67,8 @@ test.describe("first run", () => {
     await expect(page.locator(".composer-template-card").first()).toBeVisible();
     await expect(page.getByTestId("composer-browse-templates")).toBeVisible();
 
-    // First-run only: the one-time telemetry opt-in (SAP-1988) and docs.
+    // First-run only: the one-time telemetry opt-in (SAP-1988).
     await expect(page.getByTestId("welcome-consent")).toBeVisible();
-    const docs = page.getByTestId("welcome-docs");
-    await expect(docs).toHaveAttribute("href", "https://docs.sapiom.ai/agents/quick-start");
-    await expect(docs).toHaveAttribute("target", "_blank");
 
     await page.screenshot({ path: "web/e2e/screenshots/composer-home.png", fullPage: true });
   });

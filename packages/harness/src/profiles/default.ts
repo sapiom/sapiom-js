@@ -51,7 +51,6 @@ nothing. Reach for \`small\`/\`medium\`/\`large\` only to choose a class
 deliberately. Raw provider ids are never
 honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented in the guide.
-Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
 
 Fixed answer set and you need a probability → \`ctx.sapiom.decisions.evaluate\` (yes/no, pick-one,
 rubric score from a System One decision model). Ask all independent questions over the same state

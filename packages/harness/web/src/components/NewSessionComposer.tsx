@@ -697,15 +697,6 @@ export function NewSessionComposer({
               default; change it anytime in Settings.
             </span>
           </label>
-          <a
-            className="composer-docs"
-            data-testid="welcome-docs"
-            href="https://docs.sapiom.ai/agents/quick-start"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read documentation <Icon name="ArrowUpRight" size={12} />
-          </a>
         </div>
       )}
     </div>

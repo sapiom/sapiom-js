@@ -9199,17 +9199,6 @@ button.rail-footer-card:hover {
   color: var(--text-faint);
   line-height: 1.5;
 }
-.composer-docs {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  color: var(--text-dim);
-  font-size: var(--type-label);
-  text-decoration: none;
-}
-.composer-docs:hover {
-  color: var(--text);
-}
 /* ── Overview: a CARD ON TOP that introduces the app ──────────────────────
    Summoned from the account menu. An app-level overlay fixed over the WHOLE
    shell (rail, terminal, canvas), centred on a scrim, so re-reading what
