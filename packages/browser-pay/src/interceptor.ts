@@ -477,13 +477,17 @@ class PaymentInterceptor {
           ? target.type
           : undefined;
       const code = failed?.code;
-      this.logger.warn("browser step failed", {
-        method: failed?.method ?? method,
-        ...(code !== undefined ? { code } : {}),
-        timedOut: failed?.timedOut ?? false,
-        ...(targetType ? { targetType } : {}),
-        ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
-      });
+      try {
+        this.logger.warn("browser step failed", {
+          method,
+          ...(code !== undefined ? { code } : {}),
+          timedOut: failed?.timedOut ?? false,
+          ...(targetType ? { targetType } : {}),
+          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+        });
+      } catch {
+        // A logger must not change control flow.
+      }
       return undefined;
     }
   }

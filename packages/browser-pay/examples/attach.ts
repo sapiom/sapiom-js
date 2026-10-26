@@ -21,10 +21,7 @@ const log = {
   info(message: string, fields?: Readonly<Record<string, string | number>>) {
     process.stdout.write(`${message} ${JSON.stringify(fields ?? {})}\n`);
   },
-  warn(
-    message: string,
-    fields?: Readonly<Record<string, string | number | boolean>>,
-  ) {
+  warn(message: string, fields?: Readonly<Record<string, string | number>>) {
     process.stderr.write(`${message} ${JSON.stringify(fields ?? {})}\n`);
   },
 };

@@ -422,6 +422,53 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
+  it("a throwing logger leaves a nested setAutoAttach failure unchanged", async () => {
+    const options: StubOptions = {
+      failChildAutoAttach: true,
+      targets: [
+        {
+          targetId: "target-card",
+          type: "iframe",
+          url: "https://checkout.pci.shopifyinc.com/sessions",
+        },
+      ],
+      attachedSessionId: "iframe-card",
+    };
+    const run = async (logger?: {
+      warn(message: string): void;
+    }): Promise<{ events: InterceptorEvent[]; commands: Command[] }> => {
+      const stub = await startStub(options);
+      const events: InterceptorEvent[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async () => success()),
+          placeholder: HELD,
+          profileId: "shopify-card-vault",
+          ...(logger ? { logger } : {}),
+        });
+        handle.on((event) => events.push(event));
+        await handle.detach();
+        return { events: [...events], commands: [...stub.commands] };
+      } finally {
+        await stub.close();
+      }
+    };
+    const silent = await run();
+    let warned = 0;
+    const throwing = await run({
+      warn() {
+        warned += 1;
+        throw new Error("logger boom");
+      },
+    });
+    expect(warned).toBeGreaterThan(0);
+    expect(silent.commands.map((command) => command.method)).toContain(
+      "Fetch.enable",
+    );
+    expect(throwing.events).toEqual(silent.events);
+    expect(throwing.commands).toEqual(silent.commands);
+  });
+
   it("logs a resume failure and still leaves the target armed", async () => {
     const stub = await startStub({ failResume: true });
     const events: InterceptorEvent[] = [];
