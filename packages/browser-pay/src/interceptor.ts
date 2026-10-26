@@ -1339,8 +1339,7 @@ async function armFetch(
   } catch (error) {
     const failed = error instanceof CdpCommandError ? error : undefined;
     return {
-      method:
-        failed?.method === "Fetch.enable" ? failed.method : "Fetch.enable",
+      method: "Fetch.enable",
       timedOut: failed?.timedOut ?? false,
       ...(failed?.code !== undefined ? { code: failed.code } : {}),
     };
