@@ -296,5 +296,3 @@ Three things worth knowing rather than assuming:
   the pair, so that id need not be the only run that resumes. `matched` counts
   the runs that actually resumed, which under-reports a partial fanout — read
   `message` whenever it is present.
-
-Full guide: [Using signals](https://docs.sapiom.ai/guides/use-signals).
