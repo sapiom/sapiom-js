@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { CdpConnection } from "./cdp";
+import { CdpCommandError, CdpConnection } from "./cdp";
 
 function acceptKey(key: string): string {
   return crypto
@@ -104,6 +104,20 @@ describe("CdpConnection", () => {
       const pending = connection.send("Fetch.enable", {}, undefined, 30_000);
       socket.destroy(new Error("reset"));
       await expect(pending).rejects.toThrow(/reset|CDP/);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("rejects Fetch.enable with timedOut when the browser never replies", async () => {
+    const stub = await listen();
+    try {
+      const connection = await CdpConnection.connect(stub.url);
+      await stub.onceSocket;
+      const pending = connection.send("Fetch.enable", {}, undefined, 20);
+      await expect(pending).rejects.toBeInstanceOf(CdpCommandError);
+      await expect(pending).rejects.toHaveProperty("timedOut", true);
+      connection.close();
     } finally {
       await stub.close();
     }

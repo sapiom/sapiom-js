@@ -92,7 +92,7 @@ export type InterceptorEvent =
       type: "failed";
       url: string;
       reason: FailureReason;
-      method?: "Fetch.enable" | "Network.enable";
+      method?: "Fetch.enable";
       code?: number;
       timedOut?: boolean;
       targetType?: "page" | "iframe";
@@ -1278,7 +1278,7 @@ function multipartOmitsFileBytes(body: string): boolean {
 }
 
 type ArmMiss = {
-  method: "Fetch.enable" | "Network.enable";
+  method: "Fetch.enable";
   code?: number;
   timedOut: boolean;
 };

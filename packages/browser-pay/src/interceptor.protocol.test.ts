@@ -429,6 +429,37 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
+  it("omits code when Fetch.enable returns a non-integer CDP code", async () => {
+    const stub = await startStub({ failFetch: true, fetchErrorCode: 1.5 });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "non-integer code",
+      );
+      const failed = events.find((event) => event.type === "failed");
+      expect(failed).toStrictEqual({
+        type: "failed",
+        url: "https://shop.example",
+        reason: "intercept_unavailable",
+        method: "Fetch.enable",
+        timedOut: false,
+        targetType: "page",
+        origin: "https://shop.example",
+      });
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("emits about: for an about:blank target that cannot arm Fetch", async () => {
     const stub = await startStub({ failFetch: true });
     const events: InterceptorEvent[] = [];
