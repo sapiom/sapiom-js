@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { CdpConnection } from "./cdp.js";
+import { CdpCommandError, CdpConnection } from "./cdp.js";
 import { textHoldsPlaceholderNumber } from "./detect";
 import type { PayLogger } from "./logger";
 import {
@@ -602,8 +602,13 @@ describe("interceptor event redaction", () => {
           type: "failed",
           url: ORIGIN,
           reason: "intercept_unavailable",
+          method: "Fetch.enable",
+          timedOut: false,
+          targetType: "page",
+          origin: ORIGIN,
         },
       ]);
+      expect(JSON.stringify(events)).not.toContain("Fetch is unsupported");
       assertNoMarkers(events);
       await handle.detach();
     } finally {
@@ -702,6 +707,14 @@ describe("interceptor event redaction", () => {
       );
       expect(error.message).toBe("CDP command failed");
       expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+      expect(error).toBeInstanceOf(CdpCommandError);
+      const encoded = JSON.stringify(error, Object.getOwnPropertyNames(error));
+      expect(encoded).not.toContain("peer rejected");
+      if (error instanceof CdpCommandError) {
+        expect(error.method).toBe(method);
+        expect(error.timedOut).toBe(false);
+        expect(error.code).toBeUndefined();
+      }
     } finally {
       errorConnection.close();
       await errorStub.close();

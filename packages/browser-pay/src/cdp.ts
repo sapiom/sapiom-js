@@ -18,10 +18,32 @@ export interface CdpEvent {
 }
 
 type Pending = {
+  method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 };
+
+export class CdpCommandError extends Error {
+  readonly method: string;
+  readonly code: number | undefined;
+  readonly timedOut: boolean;
+
+  constructor(method: string, details: { code?: number; timedOut: boolean }) {
+    super(details.timedOut ? "CDP command timed out" : "CDP command failed");
+    this.name = "CdpCommandError";
+    this.method = method;
+    this.code = details.code;
+    this.timedOut = details.timedOut;
+  }
+}
+
+function readErrorCode(error: unknown): number | undefined {
+  if (!isRecord(error)) return undefined;
+  const code = error.code;
+  if (typeof code !== "number" || !Number.isFinite(code)) return undefined;
+  return code;
+}
 
 function parseCdpMessage(value: unknown):
   | {
@@ -31,6 +53,7 @@ function parseCdpMessage(value: unknown):
       sessionId?: string;
       result?: unknown;
       failed?: true;
+      code?: number;
     }
   | undefined {
   if (!isRecord(value)) return undefined;
@@ -40,14 +63,19 @@ function parseCdpMessage(value: unknown):
   const params = isRecord(value.params) ? value.params : {};
   const sessionId =
     typeof value.sessionId === "string" ? value.sessionId : undefined;
-  // The remote error text is dropped here so it can never reach a caller.
+  const code = value.error ? readErrorCode(value.error) : undefined;
   return {
     ...(id !== undefined ? { id } : {}),
     ...(method !== undefined ? { method } : {}),
     params,
     ...(sessionId ? { sessionId } : {}),
     result: value.result,
-    ...(value.error ? { failed: true as const } : {}),
+    ...(value.error
+      ? {
+          failed: true as const,
+          ...(code !== undefined ? { code } : {}),
+        }
+      : {}),
   };
 }
 
@@ -339,7 +367,12 @@ export class CdpConnection {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if (message.failed) {
-          pending.reject(new Error("CDP command failed"));
+          pending.reject(
+            new CdpCommandError(pending.method, {
+              ...(message.code !== undefined ? { code: message.code } : {}),
+              timedOut: false,
+            }),
+          );
         } else {
           pending.resolve(message.result);
         }
@@ -390,9 +423,10 @@ export class CdpConnection {
       }
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error("CDP command timed out"));
+        reject(new CdpCommandError(method, { timedOut: true }));
       }, timeoutMs);
       this.pending.set(id, {
+        method,
         resolve,
         reject,
         timer,

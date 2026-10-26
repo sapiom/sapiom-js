@@ -1,4 +1,4 @@
-import { CdpConnection, type CdpEvent } from "./cdp.js";
+import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
   paymentIdempotencyKey,
   type RelayedHttpResponse,
@@ -88,7 +88,29 @@ export type InterceptorEvent =
   | { type: "relayed"; url: string; status: number }
   | { type: "relayed_unfulfilled"; url: string; status: number }
   | { type: "refused"; url: string; reason: RefusalReason }
-  | { type: "failed"; url: string; reason: FailureReason };
+  | {
+      type: "failed";
+      url: string;
+      reason: FailureReason;
+      method?:
+        | "Fetch.enable"
+        | "Target.attachToTarget"
+        | "Target.setAutoAttach";
+      code?: number;
+      timedOut?: boolean;
+      targetType?: "page" | "iframe";
+      origin?: string;
+    };
+
+type ArmMethod = NonNullable<
+  Extract<InterceptorEvent, { type: "failed" }>["method"]
+>;
+
+interface ArmFailure {
+  method: ArmMethod;
+  code: number | undefined;
+  timedOut: boolean;
+}
 
 export interface InterceptorHandle {
   detach(): Promise<void>;
@@ -192,6 +214,7 @@ interface Session {
   url: string;
   parentSessionId?: string;
   fetchEnabled: boolean;
+  unarmed?: boolean;
 }
 
 // Blank frames stay armed. Disarming about:blank and arming again on the
@@ -341,12 +364,16 @@ class PaymentInterceptor {
     const info = params.targetInfo;
     if (this.byTarget.has(info.targetId)) {
       // setAutoAttach already owns this target. A second session would pause
-      // every request twice.
-      void this.resumeIfWaiting(sessionId, params.waitingForDebugger).then(() =>
-        this.connection
+      // every request twice. A target that failed closed stays paused.
+      const owned = this.byTarget.get(info.targetId);
+      void (async () => {
+        if (!owned?.unarmed) {
+          await this.resumeIfWaiting(sessionId, params.waitingForDebugger);
+        }
+        await this.connection
           .send("Target.detachFromTarget", { sessionId })
-          .catch(() => {}),
-      );
+          .catch(() => {});
+      })();
       return;
     }
     const session = this.trackSession({
@@ -358,10 +385,7 @@ class PaymentInterceptor {
       ...(event.sessionId ? { parentSessionId: event.sessionId } : {}),
     });
     const arm = (async () => {
-      if (info.type === "page" || info.type === "iframe") {
-        await this.autoAttachChildren(sessionId);
-      }
-      await this.enableSession(session.sessionId, params.waitingForDebugger);
+      await this.armAttached(session, params.waitingForDebugger);
     })();
     this.pendingArms.add(arm);
     void arm.finally(() => {
@@ -385,7 +409,7 @@ class PaymentInterceptor {
     const info = parseTargetInfoChange(event.params);
     if (!info) return;
     const session = this.byTarget.get(info.targetId);
-    if (!session) return;
+    if (!session || session.unarmed) return;
     session.url = info.url;
     if (!shouldArm(session)) {
       this.disarm(session);
@@ -425,24 +449,58 @@ class PaymentInterceptor {
     await this.resumeIfWaiting(sessionId, waitingForDebugger);
   }
 
+  private async armAttached(
+    session: Session,
+    waitingForDebugger: boolean,
+  ): Promise<void> {
+    if (session.type === "page" || session.type === "iframe") {
+      const nested = await this.autoAttachChildren(session.sessionId);
+      if (nested && shouldArm(session)) {
+        await this.closeUnarmed(session, nested);
+        return;
+      }
+    }
+    await this.enableSession(session.sessionId, waitingForDebugger);
+  }
+
   private async armOrClose(session: Session): Promise<boolean> {
-    const armed = await armFetch(this.connection, session);
-    if (armed) return true;
+    const cause = await armFetch(this.connection, session);
+    if (!cause) return true;
+    return this.closeUnarmed(session, cause);
+  }
+
+  private async closeUnarmed(
+    target: Pick<Session, "targetId" | "type" | "url">,
+    cause: ArmFailure,
+  ): Promise<boolean> {
+    const tracked = this.byTarget.get(target.targetId);
+    if (tracked) tracked.unarmed = true;
     if (this.closed) return false;
+    const targetType =
+      target.type === "page" || target.type === "iframe"
+        ? target.type
+        : undefined;
     this.emit({
       type: "failed",
-      url: session.url,
+      url: target.url,
       reason: "intercept_unavailable",
+      method: cause.method,
+      ...(cause.code !== undefined ? { code: cause.code } : {}),
+      timedOut: cause.timedOut,
+      ...(targetType ? { targetType } : {}),
+      origin: target.url,
     });
     await this.connection
-      .send("Target.closeTarget", { targetId: session.targetId })
+      .send("Target.closeTarget", { targetId: target.targetId })
       .catch(() => {});
     return false;
   }
 
-  private async autoAttachChildren(sessionId: string): Promise<void> {
-    await this.connection
-      .send(
+  private async autoAttachChildren(
+    sessionId: string,
+  ): Promise<ArmFailure | undefined> {
+    try {
+      await this.connection.send(
         "Target.setAutoAttach",
         {
           autoAttach: true,
@@ -451,8 +509,11 @@ class PaymentInterceptor {
           filter: CHILD_FILTER,
         },
         sessionId,
-      )
-      .catch(() => {});
+      );
+      return undefined;
+    } catch (error) {
+      return armFailure(error, "Target.setAutoAttach");
+    }
   }
 
   private async resumeIfWaiting(
@@ -472,12 +533,21 @@ class PaymentInterceptor {
     for (const info of parseTargetInfos(listed)) {
       if (info.type !== "iframe") continue;
       if (this.byTarget.has(info.targetId)) continue;
-      const attached = await this.connection
-        .send("Target.attachToTarget", {
+      let attached: unknown;
+      try {
+        attached = await this.connection.send("Target.attachToTarget", {
           targetId: info.targetId,
           flatten: true,
-        })
-        .catch(() => undefined);
+        });
+      } catch (error) {
+        if (!this.byTarget.has(info.targetId) && armable(info.type, info.url)) {
+          await this.closeUnarmed(
+            { targetId: info.targetId, type: info.type, url: info.url },
+            armFailure(error, "Target.attachToTarget"),
+          );
+        }
+        continue;
+      }
       const sessionId = readAttachedSessionId(attached);
       if (!sessionId || this.sessions.has(sessionId)) continue;
       const session = this.trackSession({
@@ -487,8 +557,7 @@ class PaymentInterceptor {
         url: info.url,
         fetchEnabled: false,
       });
-      await this.autoAttachChildren(sessionId);
-      await this.enableSession(session.sessionId, false);
+      await this.armAttached(session, false);
     }
   }
 
@@ -878,10 +947,16 @@ class PaymentInterceptor {
     };
   }
 
-  // Callers pass the raw request URL. It is cut to the origin here, once, so
-  // no event leaves with a path, query, or held number.
   private emit(event: InterceptorEvent): void {
-    const safe = { ...event, url: eventUrl(event.url, this.number) };
+    const number = this.number;
+    const safe: InterceptorEvent =
+      event.type === "failed" && event.origin !== undefined
+        ? {
+            ...event,
+            url: eventUrl(event.url, number),
+            origin: eventUrl(event.origin, number),
+          }
+        : { ...event, url: eventUrl(event.url, number) };
     if (this.buffering && this.backlog) {
       this.backlog.push(safe);
       return;
@@ -1254,16 +1329,32 @@ function isMultipart(headers: unknown): boolean {
     .includes("multipart/");
 }
 
-// The retrieved body keeps a file part's filename header and drops its bytes.
 function multipartOmitsFileBytes(body: string): boolean {
   return /content-disposition:[^\r\n]*[;\s]filename\s*\*?=/i.test(body);
+}
+
+function armable(type: string, url: string): boolean {
+  return shouldArm({
+    sessionId: "",
+    targetId: "",
+    type,
+    url,
+    fetchEnabled: false,
+  });
+}
+
+function armFailure(error: unknown, method: ArmMethod): ArmFailure {
+  if (error instanceof CdpCommandError) {
+    return { method, code: error.code, timedOut: error.timedOut };
+  }
+  return { method, code: undefined, timedOut: false };
 }
 
 async function armFetch(
   connection: CdpConnection,
   session: Session,
-): Promise<boolean> {
-  if (session.fetchEnabled) return true;
+): Promise<ArmFailure | undefined> {
+  if (session.fetchEnabled) return undefined;
   try {
     await connection
       .send("Network.enable", {}, session.sessionId)
@@ -1273,11 +1364,11 @@ async function armFetch(
       { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
       session.sessionId,
     );
-  } catch {
-    return false;
+  } catch (error) {
+    return armFailure(error, "Fetch.enable");
   }
   session.fetchEnabled = true;
-  return true;
+  return undefined;
 }
 
 async function continueRequest(

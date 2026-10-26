@@ -27,9 +27,18 @@ interface Command {
   sessionId?: string;
 }
 
+interface CommandError {
+  message: string;
+  code?: number;
+}
+
 interface StubOptions {
   failAutoAttach?: boolean;
   failFetch?: boolean;
+  fetchError?: CommandError;
+  hangFetch?: boolean;
+  failNestedAutoAttach?: CommandError;
+  failAttach?: CommandError;
   failFulfill?: boolean;
   holdFulfill?: boolean;
   postData?: string;
@@ -63,7 +72,7 @@ async function startStub(options: StubOptions = {}): Promise<{
   const chunks: Buffer[] = [];
   let buffered = 0;
 
-  const reply = (id: number, result: unknown, error?: { message: string }) => {
+  const reply = (id: number, result: unknown, error?: CommandError) => {
     const message = error ? { id, error } : { id, result };
     socket?.write(serverFrame(JSON.stringify(message)));
   };
@@ -117,16 +126,36 @@ async function startStub(options: StubOptions = {}): Promise<{
       params: message.params ?? {},
       ...(message.sessionId ? { sessionId: message.sessionId } : {}),
     });
+    if (
+      message.method === "Target.setAutoAttach" &&
+      message.sessionId &&
+      options.failNestedAutoAttach
+    ) {
+      reply(message.id, undefined, options.failNestedAutoAttach);
+      return;
+    }
     if (message.method === "Target.setAutoAttach" && options.failAutoAttach) {
       reply(message.id, undefined, { message: "auto-attach refused" });
       return;
     }
-    if (message.method === "Fetch.enable" && options.failFetch) {
-      reply(message.id, undefined, { message: "Fetch is unsupported" });
+    if (message.method === "Fetch.enable" && options.hangFetch) return;
+    if (
+      message.method === "Fetch.enable" &&
+      (options.failFetch || options.fetchError)
+    ) {
+      reply(
+        message.id,
+        undefined,
+        options.fetchError ?? { message: "Fetch is unsupported" },
+      );
       return;
     }
     if (message.method === "Target.getTargets") {
       reply(message.id, { targetInfos: options.targets ?? [] });
+      return;
+    }
+    if (message.method === "Target.attachToTarget" && options.failAttach) {
+      reply(message.id, undefined, options.failAttach);
       return;
     }
     if (message.method === "Target.attachToTarget") {
@@ -237,8 +266,12 @@ function awaitListen(server: http.Server): Promise<void> {
   });
 }
 
-async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-  const deadline = Date.now() + 3_000;
+async function waitFor(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline)
       throw new Error(`timed out waiting for ${label}`);
@@ -348,7 +381,369 @@ describe("interceptor CDP decisions", () => {
         type: "failed",
         url: "https://shop.example",
         reason: "intercept_unavailable",
+        method: "Fetch.enable",
+        timedOut: false,
+        targetType: "page",
+        origin: "https://shop.example",
       });
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("reports the CDP code when Fetch.enable fails and still closes the target", async () => {
+    const remote = "REMOTE_CDP_TEXT_SHOULD_NOT_LEAK";
+    const pageUrl =
+      "https://user:secret@shop.example:8443/checkout?pan=4242424242424242#cvv";
+    const stub = await startStub({
+      fetchError: { code: -32000, message: remote },
+    });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-1",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-page",
+            type: "page",
+            url: pageUrl,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
+        }),
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Runtime.runIfWaitingForDebugger",
+      );
+      const failed = events.find((event) => event.type === "failed");
+      expect(failed).toEqual({
+        type: "failed",
+        url: "https://shop.example:8443",
+        reason: "intercept_unavailable",
+        method: "Fetch.enable",
+        code: -32000,
+        timedOut: false,
+        targetType: "page",
+        origin: "https://shop.example:8443",
+      });
+      const encoded = JSON.stringify(events);
+      expect(encoded).not.toContain(remote);
+      expect(encoded).not.toContain("secret");
+      expect(encoded).not.toContain("4242424242424242");
+      expect(encoded).not.toContain("checkout");
+      expect(encoded).not.toContain("cvv");
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("reports a Fetch.enable timeout and still closes the target", async () => {
+    const pageUrl =
+      "https://user:secret@shop.example:8443/checkout?pan=4242424242424242#cvv";
+    const stub = await startStub({ hangFetch: true });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-1",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-page",
+            type: "page",
+            url: pageUrl,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+        25_000,
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Runtime.runIfWaitingForDebugger",
+      );
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
+        }),
+      );
+      const failed = events.find((event) => event.type === "failed");
+      expect(failed).toEqual({
+        type: "failed",
+        url: "https://shop.example:8443",
+        reason: "intercept_unavailable",
+        method: "Fetch.enable",
+        timedOut: true,
+        targetType: "page",
+        origin: "https://shop.example:8443",
+      });
+      expect(failed).not.toHaveProperty("code");
+      const encoded = JSON.stringify(events);
+      expect(encoded).not.toContain("CDP command timed out");
+      expect(encoded).not.toContain("secret");
+      expect(encoded).not.toContain("4242424242424242");
+      expect(encoded).not.toContain("checkout");
+      expect(encoded).not.toContain("cvv");
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  }, 40_000);
+
+  it("closes the page when nested Target.setAutoAttach fails", async () => {
+    const remote = "NESTED_REMOTE_TEXT_SHOULD_NOT_LEAK";
+    const stub = await startStub({
+      failNestedAutoAttach: { code: -32601, message: remote },
+    });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
+        }),
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Target.targetInfoChanged",
+        params: {
+          targetInfo: {
+            targetId: "target-page",
+            url: "https://shop.example/pay",
+          },
+        },
+      });
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-2",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-page",
+            type: "page",
+            url: "https://shop.example/pay",
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Target.detachFromTarget" &&
+              command.params.sessionId === "page-2",
+          ),
+        "detach duplicate",
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Fetch.enable",
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Runtime.runIfWaitingForDebugger",
+      );
+      expect(events).toContainEqual({
+        type: "failed",
+        url: "https://shop.example",
+        reason: "intercept_unavailable",
+        method: "Target.setAutoAttach",
+        code: -32601,
+        timedOut: false,
+        targetType: "page",
+        origin: "https://shop.example",
+      });
+      expect(JSON.stringify(events)).not.toContain(remote);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("closes an existing iframe when Target.attachToTarget fails", async () => {
+    const remote = "ATTACH_REMOTE_TEXT_SHOULD_NOT_LEAK";
+    const stub = await startStub({
+      failAttach: { code: -32000, message: remote },
+      targets: [
+        {
+          targetId: "iframe-existing",
+          type: "iframe",
+          url: "https://user:secret@checkout.example:8443/card?pan=4242424242424242#cvv",
+        },
+      ],
+    });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "iframe-existing" },
+        }),
+      );
+      expect(events).toContainEqual({
+        type: "failed",
+        url: "https://checkout.example:8443",
+        reason: "intercept_unavailable",
+        method: "Target.attachToTarget",
+        code: -32000,
+        timedOut: false,
+        targetType: "iframe",
+        origin: "https://checkout.example:8443",
+      });
+      const encoded = JSON.stringify(events);
+      expect(encoded).not.toContain(remote);
+      expect(encoded).not.toContain("secret");
+      expect(encoded).not.toContain("4242424242424242");
+      expect(encoded).not.toContain("cvv");
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("closes an existing iframe when nested Target.setAutoAttach fails", async () => {
+    const remote = "EXISTING_NESTED_REMOTE_TEXT_SHOULD_NOT_LEAK";
+    const stub = await startStub({
+      failNestedAutoAttach: { code: -32601, message: remote },
+      targets: [
+        {
+          targetId: "iframe-existing",
+          type: "iframe",
+          url: "https://checkout.example/card",
+        },
+      ],
+    });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "iframe-existing" },
+        }),
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Fetch.enable",
+      );
+      expect(events).toContainEqual({
+        type: "failed",
+        url: "https://checkout.example",
+        reason: "intercept_unavailable",
+        method: "Target.setAutoAttach",
+        code: -32601,
+        timedOut: false,
+        targetType: "iframe",
+        origin: "https://checkout.example",
+      });
+      expect(JSON.stringify(events)).not.toContain(remote);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("does not close a captcha iframe when nested auto-attach fails", async () => {
+    const stub = await startStub({
+      failNestedAutoAttach: {
+        code: -32000,
+        message: "NESTED_CAPTCHA_SHOULD_NOT_LEAK",
+      },
+    });
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      handle.on((event) => events.push(event));
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "captcha-1",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-captcha",
+            type: "iframe",
+            url: "https://hcaptcha.com/captcha",
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Runtime.runIfWaitingForDebugger" &&
+              command.sessionId === "captcha-1",
+          ),
+        "resume captcha",
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Target.closeTarget",
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Fetch.enable",
+      );
+      expect(events).toEqual([]);
+      expect(JSON.stringify(stub.commands)).not.toContain(
+        "NESTED_CAPTCHA_SHOULD_NOT_LEAK",
+      );
       await handle.detach();
     } finally {
       await stub.close();
@@ -1561,6 +1956,10 @@ describe("interceptor CDP decisions", () => {
         type: "failed",
         url: "https://checkout.example",
         reason: "intercept_unavailable",
+        method: "Fetch.enable",
+        timedOut: false,
+        targetType: "iframe",
+        origin: "https://checkout.example",
       });
       await handle.detach();
     } finally {

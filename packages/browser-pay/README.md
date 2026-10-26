@@ -87,6 +87,10 @@ const handle = await attachInterceptor(cdpUrl, {
 
 Call `handle.on` after `attachInterceptor` resolves. Events emitted while attach was running, including a target that could not arm Fetch, are delivered to that first subscriber.
 
+A `failed` event with reason `intercept_unavailable` means that target could not be armed. The interceptor closes it with `Target.closeTarget` and does not resume it. That close also runs when `Target.attachToTarget` fails for an existing iframe that would have been armed, and when nested `Target.setAutoAttach` fails on a page or iframe that would have been armed. Captcha widgets, extension pages, and workers stay open.
+
+`method` is the CDP method that failed: `Fetch.enable`, `Target.attachToTarget`, or nested `Target.setAutoAttach`. `code` is the numeric CDP error code when the browser sent one, and is absent when it did not. `timedOut` is true when that command hit its timeout, and false when it did not, including a dropped connection with no `code`. `targetType` is `page` or `iframe`. `origin` is the scheme, host, and port only, the same cut as `url`, with no path, query, fragment, or userinfo. The browser's error text is not on the event.
+
 A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
