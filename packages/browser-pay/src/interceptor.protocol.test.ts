@@ -885,6 +885,103 @@ describe("interceptor CDP decisions", () => {
     );
   });
 
+  it("swallows a rejected async logger and still closes the target", async () => {
+    const stub = await startStub({ failFetch: true });
+    const events: InterceptorEvent[] = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: {
+          async warn() {
+            throw new Error("ASYNC_LOGGER_REJECTION");
+          },
+        },
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
+        }),
+      );
+      await handle.detach();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await stub.close();
+    }
+  });
+
+  it("logs Fetch.enable before a failed handler detaches", async () => {
+    const stub = await startStub({ failFetch: true });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => {
+        events.push(event);
+        if (event.type === "failed") void handle.detach();
+      });
+      attachPage(stub.emit);
+      await waitFor(() => warnings.length === 1, "Fetch.enable warning");
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("reads a body with missing entry bytes via getRequestPostData and relays it", async () => {
     const stub = await startStub({ postData: CARD });
     const calls: RelayRequest[] = [];

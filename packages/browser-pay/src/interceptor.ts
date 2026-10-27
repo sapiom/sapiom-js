@@ -429,12 +429,12 @@ class PaymentInterceptor {
     const failure = await armFetch(this.connection, session);
     if (!failure) return true;
     if (this.closed) return false;
+    this.logStepFailure("Fetch.enable", failure, session);
     this.emit({
       type: "failed",
       url: session.url,
       reason: "intercept_unavailable",
     });
-    this.logStepFailure("Fetch.enable", failure, session);
     await this.swallowStep(
       this.connection.send("Target.closeTarget", {
         targetId: session.targetId,
@@ -458,13 +458,15 @@ class PaymentInterceptor {
         : undefined;
     const code = failed?.code;
     try {
-      this.logger.warn("browser step failed", {
-        method,
-        ...(code !== undefined ? { code } : {}),
-        timedOut: failed?.timedOut ?? false,
-        ...(targetType ? { targetType } : {}),
-        ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
-      });
+      void Promise.resolve(
+        this.logger.warn("browser step failed", {
+          method,
+          ...(code !== undefined ? { code } : {}),
+          timedOut: failed?.timedOut ?? false,
+          ...(targetType ? { targetType } : {}),
+          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+        }),
+      ).catch(() => {});
     } catch {
       // A logger must not change control flow.
     }
