@@ -597,15 +597,11 @@ describe("interceptor event redaction", () => {
         attachOptions(stubPaymentRelay(async () => success())),
       );
       handle.on((event) => events.push(event));
-      expect(events).toEqual([
+      expect(events).toStrictEqual([
         {
           type: "failed",
           url: ORIGIN,
           reason: "intercept_unavailable",
-          method: "Fetch.enable",
-          timedOut: false,
-          targetType: "page",
-          origin: ORIGIN,
         },
       ]);
       assertNoMarkers(events);

@@ -88,16 +88,7 @@ export type InterceptorEvent =
   | { type: "relayed"; url: string; status: number }
   | { type: "relayed_unfulfilled"; url: string; status: number }
   | { type: "refused"; url: string; reason: RefusalReason }
-  | {
-      type: "failed";
-      url: string;
-      reason: FailureReason;
-      method?: "Fetch.enable";
-      code?: number;
-      timedOut?: boolean;
-      targetType?: "page" | "iframe";
-      origin?: string;
-    };
+  | { type: "failed"; url: string; reason: FailureReason };
 
 export interface InterceptorHandle {
   detach(): Promise<void>;
@@ -438,20 +429,12 @@ class PaymentInterceptor {
     const failure = await armFetch(this.connection, session);
     if (!failure) return true;
     if (this.closed) return false;
-    const targetType =
-      session.type === "page" || session.type === "iframe"
-        ? session.type
-        : undefined;
     this.emit({
       type: "failed",
       url: session.url,
       reason: "intercept_unavailable",
-      method: failure.method,
-      ...(failure.code !== undefined ? { code: failure.code } : {}),
-      timedOut: failure.timedOut,
-      ...(targetType ? { targetType } : {}),
-      origin: eventUrl(session.url, this.number),
     });
+    this.logStepFailure("Fetch.enable", failure, session);
     await this.swallowStep(
       this.connection.send("Target.closeTarget", {
         targetId: session.targetId,
@@ -462,6 +445,31 @@ class PaymentInterceptor {
     return false;
   }
 
+  private logStepFailure(
+    method: string,
+    error: unknown,
+    target?: { type: string; url: string },
+  ): void {
+    if (this.closed) return;
+    const failed = error instanceof CdpCommandError ? error : undefined;
+    const targetType =
+      target?.type === "page" || target?.type === "iframe"
+        ? target.type
+        : undefined;
+    const code = failed?.code;
+    try {
+      this.logger.warn("browser step failed", {
+        method,
+        ...(code !== undefined ? { code } : {}),
+        timedOut: failed?.timedOut ?? false,
+        ...(targetType ? { targetType } : {}),
+        ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+      });
+    } catch {
+      // A logger must not change control flow.
+    }
+  }
+
   private async swallowStep<T>(
     pending: Promise<T>,
     method: string,
@@ -470,24 +478,7 @@ class PaymentInterceptor {
     try {
       return await pending;
     } catch (error) {
-      if (this.closed) return undefined;
-      const failed = error instanceof CdpCommandError ? error : undefined;
-      const targetType =
-        target?.type === "page" || target?.type === "iframe"
-          ? target.type
-          : undefined;
-      const code = failed?.code;
-      try {
-        this.logger.warn("browser step failed", {
-          method,
-          ...(code !== undefined ? { code } : {}),
-          timedOut: failed?.timedOut ?? false,
-          ...(targetType ? { targetType } : {}),
-          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
-        });
-      } catch {
-        // A logger must not change control flow.
-      }
+      this.logStepFailure(method, error, target);
       return undefined;
     }
   }
@@ -1320,16 +1311,10 @@ function multipartOmitsFileBytes(body: string): boolean {
   return /content-disposition:[^\r\n]*[;\s]filename\s*\*?=/i.test(body);
 }
 
-type ArmMiss = {
-  method: "Fetch.enable";
-  code?: number;
-  timedOut: boolean;
-};
-
 async function armFetch(
   connection: CdpConnection,
   session: Session,
-): Promise<ArmMiss | undefined> {
+): Promise<Error | undefined> {
   if (session.fetchEnabled) return;
   try {
     await connection
@@ -1341,12 +1326,7 @@ async function armFetch(
       session.sessionId,
     );
   } catch (error) {
-    const failed = error instanceof CdpCommandError ? error : undefined;
-    return {
-      method: "Fetch.enable",
-      timedOut: failed?.timedOut ?? false,
-      ...(failed?.code !== undefined ? { code: failed.code } : {}),
-    };
+    return error instanceof Error ? error : new Error("CDP command failed");
   }
   session.fetchEnabled = true;
 }
