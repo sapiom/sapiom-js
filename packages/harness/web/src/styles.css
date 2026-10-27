@@ -9177,7 +9177,7 @@ button.rail-footer-card:hover {
   color: var(--text-faint);
 }
 
-/* First-run footer: the one-time telemetry opt-in + docs link. */
+/* First-run footer: the one-time telemetry opt-in. */
 .composer-footer {
   width: 100%;
   max-width: 640px;
@@ -9198,17 +9198,6 @@ button.rail-footer-card:hover {
   font-size: var(--type-meta);
   color: var(--text-faint);
   line-height: 1.5;
-}
-.composer-docs {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  color: var(--text-dim);
-  font-size: var(--type-label);
-  text-decoration: none;
-}
-.composer-docs:hover {
-  color: var(--text);
 }
 /* ── Overview: a CARD ON TOP that introduces the app ──────────────────────
    Summoned from the account menu. An app-level overlay fixed over the WHOLE

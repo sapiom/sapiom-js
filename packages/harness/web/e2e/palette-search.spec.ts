@@ -111,12 +111,13 @@ test("the Docs tab searches the doc links and offers the docs site in the footer
   await page.getByTestId("command-palette-filter-docs").click();
 
   const list = page.getByTestId("command-palette-list");
-  await expect(list.getByText("Agents quick start")).toBeVisible();
+  await expect(list.getByText("AI models")).toBeVisible();
   await expect(page.getByTestId("command-palette-destination")).toContainText("Open documentation");
 
+  await page.getByTestId("command-palette-input").fill("models");
+  await expect(list.getByText("AI models")).toBeVisible();
   await page.getByTestId("command-palette-input").fill("mcp");
-  await expect(list.getByText("MCP servers: setup")).toBeVisible();
-  await expect(list.getByText("Agents quick start")).toBeHidden();
+  await expect(list.getByText("AI models")).toBeHidden();
 });
 
 test("a scoped tab never leaks other kinds into the results", async ({ page }) => {

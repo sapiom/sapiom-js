@@ -51,8 +51,7 @@ first:
 claude mcp add sapiom -- npx -y @sapiom/mcp
 ```
 
-Other clients: run `npx -y @sapiom/mcp` as a local (stdio) MCP server — see
-[docs.sapiom.ai](https://docs.sapiom.ai/integration/mcp-servers/setup) for per-client config.
+Other clients: run `npx -y @sapiom/mcp` as a local (stdio) MCP server.
 Sapiom's other server, **the hosted capability server** (`https://api.sapiom.ai/v1/mcp`), is
 for a one-off call with no automation to keep; which server a task belongs to, and what local
 work does and does not spend, is the served section
@@ -323,8 +322,7 @@ Database lifetime and metering: served section
 ### Secrets, `agents.launch`, receipts, App Link webhooks
 
 Taught once, in the served text — not restated here. Per-agent secrets and the read-only Vault:
-[Capabilities from steps](https://api.sapiom.ai/v1/agents/authoring-rules#capability-catalog) and
-[Credentials and configuration](https://docs.sapiom.ai/reference/credentials-and-configuration).
+[Capabilities from steps](https://api.sapiom.ai/v1/agents/authoring-rules#capability-catalog).
 Fire-and-forget dispatch with `ctx.sapiom.agents.launch`: "Composing Deployed Agents" below and
 [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
 Receipts and manual replay of inbound events: the local authoring server's served primer (in
@@ -410,8 +408,7 @@ The full rule — the worked example (`llm.run` with `output`, read back with `s
 as output, the label rule and the result's `servedClass`/`lane` disclosure, and how to debug a
 run in the Run Inspector — is the served section
 [Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface).
-Read it before the first `llm.*` / `models.run` / `agents.run` call. Customer guide:
-[Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface).
+Read it before the first `llm.*` / `models.run` / `agents.run` call.
 
 <!-- /section: llm-call-surface -->
 
@@ -739,8 +736,5 @@ Write each step the way it should run in production — never weaken logic to sh
 | Resource                                                                     | What it covers                                                                                                 |
 | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.1 |
-| [Authoring guide](https://docs.sapiom.ai/agents/authoring)                   | Full step model, failure patterns, pause/resume, determinism                                                   |
-| [Quickstart](https://docs.sapiom.ai/agents/quick-start)                      | Scaffold → write → test → deploy walkthrough                                                                   |
 | [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |
-| [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface) | `llm.run` vs `models.run` vs `agents.run` — which to call and why                                              |
 | `AGENTS.md` in your scaffold                                                 | The quick in-project reference                                                                                 |

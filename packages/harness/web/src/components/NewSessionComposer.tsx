@@ -93,7 +93,8 @@ interface NewSessionComposerProps {
   entries: HarnessEntry[];
   onHarnessChange: (harness: HarnessKind) => void;
   /** Genuine first run (AppState.firstRun): shows the one-time telemetry
-   *  opt-in + docs footer. */
+   *  opt-in footer. The docs link it also carried pointed at a page retired
+   *  on 2026-10-23. */
   firstRun: boolean;
   /**
    * Create the agent from this idea and open its first session. Rejects with
@@ -697,15 +698,6 @@ export function NewSessionComposer({
               default; change it anytime in Settings.
             </span>
           </label>
-          <a
-            className="composer-docs"
-            data-testid="welcome-docs"
-            href="https://docs.sapiom.ai/agents/quick-start"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read documentation <Icon name="ArrowUpRight" size={12} />
-          </a>
         </div>
       )}
     </div>
