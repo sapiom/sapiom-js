@@ -4,7 +4,8 @@
  *
  * Uses a throwaway git-dir in the OS temp area with the source as the work-tree,
  * so `git add -A` snapshots the current files (respecting an exclude for
- * node_modules/.git), commits, and force-pushes to the repo's clone URL. Auth is
+ * node_modules and dotfiles, like the upload mode), commits, and force-pushes to
+ * the repo's clone URL. Symlinks are committed as links, never their target. Auth is
  * the caller's credential sent as the `x-sapiom-git-token` header (the git
  * smart-HTTP data plane accepts it). Force-push because a freshly-created repo is
  * auto-initialized, so a plain push is non-fast-forward — the local working tree
@@ -34,9 +35,10 @@ export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string,
 
   try {
     git(['init', '-q', '-b', branch]);
-    // Never upload deps / vcs metadata — the sandbox build installs deps.
+    // Never upload deps (the sandbox build installs them) or dotfiles (`.env`, `.npmrc`,
+    // `.git/`), matching `uploadDir`. The project's own .gitignore files still apply.
     mkdirSync(path.join(gitDir, 'info'), { recursive: true });
-    writeFileSync(path.join(gitDir, 'info', 'exclude'), 'node_modules/\n.git/\n');
+    writeFileSync(path.join(gitDir, 'info', 'exclude'), 'node_modules/\n.*\n');
     git(['add', '-A']);
     git(['-c', 'user.email=preview@sapiom.ai', '-c', 'user.name=sapiom-preview', 'commit', '-q', '-m', 'preview']);
     // Token via -c http.extraHeader (scoped to this command). Force-push HEAD.

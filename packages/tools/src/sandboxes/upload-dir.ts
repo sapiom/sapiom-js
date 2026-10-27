@@ -5,8 +5,18 @@
  * skips `node_modules`, `.git`, and dotfiles/dot-dirs (dependencies install in the
  * sandbox — never uploaded). Extra `ignore` patterns match by exact path, path
  * prefix (`dir/`), name segment, or suffix (`*.log`).
+ *
+ * Symlinks inside the tree are skipped, not followed: a link's target can sit
+ * outside `dir` (and a preview can be public), and a self-referential link would
+ * recurse forever. `dir` itself may be a symlink: it is the path the caller named.
  */
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  statSync,
+  lstatSync,
+  existsSync,
+} from "node:fs";
 import path from "node:path";
 
 export interface CollectedFile {
@@ -40,9 +50,10 @@ export function collectDirFiles(dir: string, ignore: string[] = []): CollectedFi
       const childAbs = path.join(abs, entry);
       const rel = path.relative(root, childAbs).split(path.sep).join("/");
       if (isIgnored(rel, ignore)) continue;
-      if (statSync(childAbs).isDirectory()) {
+      const stat = lstatSync(childAbs);
+      if (stat.isDirectory()) {
         walk(childAbs);
-      } else {
+      } else if (stat.isFile()) {
         files.push({ path: rel, content: readFileSync(childAbs, "utf8") });
       }
     }

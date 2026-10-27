@@ -407,6 +407,43 @@ describe("sapiom_dev_app_publish tool", () => {
     });
   });
 
+  it.each(["../..", "/etc"])(
+    "refuses source.path %s before any HTTP call",
+    async (sourcePath) => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+      const dir = project(
+        { "index.html": "<h1>hi</h1>" },
+        { ...SANDBOX, source: { kind: "upload", path: sourcePath } },
+      );
+
+      const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+      expect(res.isError).toBe(true);
+      expect(parse(res).error.code).toBe("SOURCE_OUTSIDE_PROJECT");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a symlinked source directory whose target is outside the project", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    const dir = project(
+      { "index.html": "<h1>hi</h1>" },
+      { ...SANDBOX, source: { kind: "upload", path: "web" } },
+    );
+    const outside = mkdtempSync(path.join(tmpdir(), "app-publish-outside-"));
+    dirs.push(outside);
+    writeFileSync(path.join(outside, "secret.txt"), "SECRET");
+    symlinkSync(outside, path.join(dir, "web"));
+
+    const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(res.isError).toBe(true);
+    expect(parse(res).error.code).toBe("SOURCE_OUTSIDE_PROJECT");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps web/sapiom.json when source.path is web — only <project>/sapiom.json is config", async () => {
     const fetchMock = mockHappyBackend();
     const dir = project(

@@ -101,4 +101,31 @@ describe('previewSandbox', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    ['upload', '../..'],
+    ['git', '../..'],
+    ['upload', '/etc'],
+  ])('%s source with path %p: rejects before any network call', async (kind, sourcePath) => {
+    const source = kind === 'git' ? { kind, slug: 'my-app', path: sourcePath } : { kind, path: sourcePath };
+    const dir = tmpProject({ ...UPLOAD_SANDBOX, source });
+    try {
+      await expect(previewSandbox({ dir, apiKey: 'sk_test' })).rejects.toMatchObject({
+        code: 'SOURCE_OUTSIDE_PROJECT',
+      });
+      for (const mock of [
+        mockGet,
+        mockCreate,
+        mockRepoGet,
+        mockRepoCreate,
+        mockPushLocalDir,
+        mockUploadDir,
+        mockDeployPreview,
+      ]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

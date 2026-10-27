@@ -10,7 +10,16 @@
 export { previewSandbox } from './preview.js';
 export type { PreviewSandboxOptions } from './preview.js';
 
-export { getSandbox, readSandboxes, writeSandbox, configureSandbox, checkSandboxes, CONFIG_FILE } from './config.js';
+export {
+  getSandbox,
+  readSandboxes,
+  writeSandbox,
+  configureSandbox,
+  checkSandboxes,
+  resolveSourceDir,
+  sourcePathIssue,
+  CONFIG_FILE,
+} from './config.js';
 
 // Validation schema (single source of truth) — reused by the config reader, the
 // `check` pass, and the MCP `configure` tool's typed arg schema (config-as-tool-args).

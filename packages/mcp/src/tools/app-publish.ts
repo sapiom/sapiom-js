@@ -74,6 +74,7 @@ import {
   CONFIG_FILE,
   getSandbox,
   PreviewOperationError,
+  resolveSourceDir,
   type SandboxConfig,
 } from "@sapiom/sandbox-preview";
 import { z } from "zod";
@@ -392,13 +393,13 @@ function requireAppLink(data: unknown): AppLinkWire {
  * of a public link. Any other `sapiom.json` in the tree — a nested one, or
  * `web/sapiom.json` under a `source.path` of `web` — is ordinary app content.
  *
- * Symlinks INSIDE the tree are skipped rather than followed. `collectDirFiles`
- * follows them, but its destination is a private sandbox; here the bundle can
- * end up behind a public URL, and a link out of the tree
- * (`report.txt -> ../../secrets`) would publish whatever it points at. A
- * self-referential link would also recurse forever. The source root itself is
- * resolved (`statSync`): it is the path the user explicitly pointed at, and a
- * symlinked source directory is ordinary in a workspace.
+ * Symlinks INSIDE the tree are skipped rather than followed, as in
+ * `collectDirFiles`: the bundle can end up behind a public URL, and a link out
+ * of the tree (`report.txt -> ../../secrets`) would publish whatever it points
+ * at. A self-referential link would also recurse forever. The source root
+ * itself comes from `resolveSourceDir`, which refuses a `source.path` outside
+ * the project; a symlinked source directory is accepted (`statSync`) only when
+ * its real target stays inside the project.
  *
  * A `git`-source resource is read from the same local working tree: the bundle
  * store takes a file map, so there is nothing for a server-side checkout to do.
@@ -407,8 +408,7 @@ export function collectBundleFiles(
   projectDir: string,
   cfg: SandboxConfig,
 ): Record<string, string> {
-  const sub = cfg.source.path ?? ".";
-  const root = path.resolve(projectDir, sub);
+  const root = resolveSourceDir(projectDir, cfg);
   // `statSync`, not `lstatSync`: the root is the path the user named, and a
   // symlinked source directory must not be reported as a missing one.
   if (!existsSync(root) || !statSync(root).isDirectory()) {

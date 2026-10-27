@@ -14,7 +14,7 @@
  * multi-surface part (see schema.ts) and is a candidate to extract into a shared
  * `@sapiom/project-config` once a second resources-map surface exists.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { PreviewOperationError } from './errors.js';
@@ -68,6 +68,54 @@ function parseSandboxEntry(name: string, entry: Record<string, unknown>): Sandbo
   return { name, ...(body as SandboxConfigBody) };
 }
 
+/**
+ * Why a `source.path` may not be used, or undefined when it is fine. Lexical only, so
+ * it also works at write time: absolute paths (POSIX or Windows) and any path that
+ * climbs above its starting point once normalised are refused.
+ */
+export function sourcePathIssue(sub: string): string | undefined {
+  if (path.isAbsolute(sub) || path.win32.isAbsolute(sub)) {
+    return 'must be a relative path inside the project directory, not an absolute path';
+  }
+  // Segment-based on purpose: resolving against a real base like `/` would let `../..` collapse onto it.
+  const normalized = path.posix.normalize(sub.replace(/\\/g, '/'));
+  if (normalized === '..' || normalized.startsWith('../')) {
+    return 'must stay inside the project directory';
+  }
+  return undefined;
+}
+
+function isWithin(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * The sandbox's source directory, guaranteed to sit inside `projectDir`: the lexical
+ * check catches `../..` and absolute paths, and the realpath check catches a
+ * symlinked source directory whose target is outside the project. Returns the
+ * lexical path so callers keep the path the user named.
+ */
+export function resolveSourceDir(projectDir: string, cfg: SandboxConfig): string {
+  const sub = cfg.source.path ?? '.';
+  const root = path.resolve(projectDir);
+  const sourceDir = path.resolve(root, sub);
+  const outside = (reason: string): PreviewOperationError =>
+    new PreviewOperationError({
+      code: 'SOURCE_OUTSIDE_PROJECT',
+      message: `source.path "${sub}" of sandbox "${cfg.name}" ${reason}.`,
+      hint: `Set \`source.path\` on the "${cfg.name}" resource in ${CONFIG_FILE} to a folder inside ${root}.`,
+    });
+
+  const issue = sourcePathIssue(sub);
+  if (issue || !isWithin(root, sourceDir)) throw outside(issue ?? 'must stay inside the project directory');
+  // A missing directory is reported by the caller that reads it.
+  if (existsSync(sourceDir) && !isWithin(realpathSync(root), realpathSync(sourceDir))) {
+    throw outside('resolves (through a symlink) outside the project directory');
+  }
+  return sourceDir;
+}
+
 /** All sandbox resources in the project, keyed by name (validated; empty object if none). */
 export function readSandboxes(dir: string): Record<string, SandboxConfig> {
   const cfg = readFile(dir);
@@ -97,6 +145,7 @@ export function getSandbox(dir: string, name?: string): SandboxConfig {
         hint: names.length ? `Known sandboxes: ${names.join(', ')}.` : undefined,
       });
     }
+    resolveSourceDir(dir, found);
     return found;
   }
 
@@ -114,7 +163,9 @@ export function getSandbox(dir: string, name?: string): SandboxConfig {
       hint: 'Pass a name, e.g. `sapiom sandbox preview <name>`.',
     });
   }
-  return sandboxes[names[0]];
+  const only = sandboxes[names[0]];
+  resolveSourceDir(dir, only);
+  return only;
 }
 
 /**
@@ -130,6 +181,14 @@ export function configureSandbox(dir: string, name: string, body: SandboxConfigB
       code: 'INVALID_SANDBOX',
       message: `Invalid sandbox configuration for "${name}".`,
       hint: detail,
+    });
+  }
+  const pathIssue = sourcePathIssue(body.source.path ?? '.');
+  if (pathIssue) {
+    throw new PreviewOperationError({
+      code: 'INVALID_SANDBOX',
+      message: `Invalid sandbox configuration for "${name}".`,
+      hint: `source.path: ${pathIssue}`,
     });
   }
   const existing = readFile(dir) ?? {};
@@ -161,7 +220,10 @@ export function checkSandboxes(dir: string): { ok: boolean; sandboxes: string[];
     const r = storedSandboxSchema.safeParse(entry);
     if (!r.success) {
       for (const i of r.error.issues) issues.push(`resources.${name}.${i.path.join('.')}: ${i.message}`);
+      continue;
     }
+    const pathIssue = sourcePathIssue(r.data.source.path ?? '.');
+    if (pathIssue) issues.push(`resources.${name}.source.path: ${pathIssue}`);
   }
   return { ok: issues.length === 0, sandboxes: found, issues };
 }

@@ -7,12 +7,10 @@
  * provisions + uploads + triggers. Pure of process.env — the caller (CLI/MCP)
  * supplies `dir`, `apiKey`, and any host override.
  */
-import path from 'node:path';
-
 import { createClient } from '@sapiom/tools';
 import type { Sapiom } from '@sapiom/tools';
 
-import { getSandbox } from './config.js';
+import { getSandbox, resolveSourceDir } from './config.js';
 import { PreviewOperationError } from './errors.js';
 import { pushLocalDir } from './git-push.js';
 import type { PreviewResult, SandboxConfig } from './types.js';
@@ -41,7 +39,7 @@ export async function previewSandbox(opts: PreviewSandboxOptions): Promise<Previ
   const sapiom = createClient({ apiKey: opts.apiKey });
   const baseUrl = opts.servicesBaseUrl;
   const sub = cfg.source.path ?? '.';
-  const sourceDir = path.resolve(opts.dir, sub);
+  const sourceDir = resolveSourceDir(opts.dir, cfg);
 
   // 1. `git` source: get the code into a Sapiom repo BEFORE the sandbox — ensure
   //    the repo (create-if-absent) and push the local working tree. The server

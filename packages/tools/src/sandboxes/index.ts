@@ -628,9 +628,9 @@ export class Sandbox {
 
   /**
    * Upload a local directory into the sandbox (files relative to the workspace
-   * root), skipping `node_modules`, `.git`, and dotfiles. Dependencies install in
-   * the sandbox at build time — never uploaded. fs-only (no-op target for
-   * in-process callers without a local filesystem).
+   * root), skipping `node_modules`, `.git`, dotfiles and symlinks. Dependencies
+   * install in the sandbox at build time — never uploaded. fs-only (no-op target
+   * for in-process callers without a local filesystem).
    */
   async uploadDir(localDir: string, opts?: UploadDirOptions): Promise<void> {
     const files = collectDirFiles(localDir, opts?.ignore);

@@ -1,8 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { getSandbox, readSandboxes, writeSandbox, configureSandbox, checkSandboxes } from './config.js';
+import {
+  getSandbox,
+  readSandboxes,
+  writeSandbox,
+  configureSandbox,
+  checkSandboxes,
+  resolveSourceDir,
+} from './config.js';
 import { PreviewOperationError } from './errors.js';
 import { CONFIG_VERSION } from './schema.js';
 
@@ -173,6 +180,109 @@ describe('config — checkSandboxes', () => {
       expect(result.ok).toBe(false);
       expect(result.sandboxes).toEqual(['web']);
       expect(result.issues.join(' ')).toMatch(/start/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('config — source.path containment', () => {
+  const withPath = (sourcePath: string, kind: 'upload' | 'git' = 'upload') => ({
+    ...webSandbox,
+    source: kind === 'git' ? { kind, slug: 'web-repo', path: sourcePath } : { kind, path: sourcePath },
+  });
+
+  function codeOf(fn: () => unknown): string | undefined {
+    try {
+      fn();
+    } catch (e) {
+      return (e as PreviewOperationError).code;
+    }
+    return undefined;
+  }
+
+  it.each(['../..', '..', 'web/../../x', '/etc'])('getSandbox rejects source.path %p', (sourcePath) => {
+    const dir = tmpProject({ resources: { web: withPath(sourcePath) } });
+    try {
+      expect(codeOf(() => getSandbox(dir))).toBe('SOURCE_OUTSIDE_PROJECT');
+      expect(codeOf(() => getSandbox(dir, 'web'))).toBe('SOURCE_OUTSIDE_PROJECT');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['upload', '../..'],
+    ['git', '../..'],
+    ['upload', '/etc'],
+  ] as const)('configureSandbox refuses a %s source with path %p and writes nothing', (kind, sourcePath) => {
+    const dir = tmpProject();
+    try {
+      const { type: _type, ...body } = withPath(sourcePath, kind);
+      let caught: unknown;
+      try {
+        configureSandbox(dir, 'web', body as Parameters<typeof configureSandbox>[2]);
+      } catch (e) {
+        caught = e;
+      }
+      expect((caught as PreviewOperationError).code).toBe('INVALID_SANDBOX');
+      expect((caught as PreviewOperationError).hint).toMatch(/source\.path/);
+      expect(existsSync(path.join(dir, 'sapiom.json'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('configureSandbox refuses an absolute path even when it points inside the project, leaving the file intact', () => {
+    const dir = tmpProject({ resources: { web: webSandbox } });
+    try {
+      const before = readFileSync(path.join(dir, 'sapiom.json'), 'utf8');
+      const body = { source: { kind: 'upload' as const, path: path.resolve(dir, 'web') }, start: 'node server.js', port: 3000 };
+      expect(codeOf(() => configureSandbox(dir, 'web', body))).toBe('INVALID_SANDBOX');
+      expect(readFileSync(path.join(dir, 'sapiom.json'), 'utf8')).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a source directory that is a symlink to outside the project, accepts one that stays inside', () => {
+    const dir = tmpProject({ resources: { web: withPath('web') } });
+    const outside = mkdtempSync(path.join(tmpdir(), 'sbxprev-outside-'));
+    try {
+      symlinkSync(outside, path.join(dir, 'web'));
+      expect(codeOf(() => getSandbox(dir))).toBe('SOURCE_OUTSIDE_PROJECT');
+
+      rmSync(path.join(dir, 'web'));
+      mkdirSync(path.join(dir, 'real-web'));
+      symlinkSync(path.join(dir, 'real-web'), path.join(dir, 'web'));
+      expect(getSandbox(dir).name).toBe('web');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each([undefined, '.', 'web', './web', 'web/../web', 'missing'])(
+    'resolveSourceDir keeps the lexical path for source.path %p',
+    (sourcePath) => {
+      const dir = tmpProject();
+      try {
+        mkdirSync(path.join(dir, 'web'));
+        const cfg = { name: 'web', source: { kind: 'upload' as const, path: sourcePath }, start: 's', port: 3000 };
+        expect(resolveSourceDir(dir, cfg)).toBe(path.resolve(dir, sourcePath ?? '.'));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('checkSandboxes reports an escaping source.path as an issue without throwing', () => {
+    const dir = tmpProject({ resources: { web: withPath('../..') } });
+    try {
+      const result = checkSandboxes(dir);
+      expect(result.ok).toBe(false);
+      expect(result.sandboxes).toEqual(['web']);
+      expect(result.issues).toEqual(['resources.web.source.path: must stay inside the project directory']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
