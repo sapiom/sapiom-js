@@ -597,7 +597,7 @@ describe("interceptor event redaction", () => {
         attachOptions(stubPaymentRelay(async () => success())),
       );
       handle.on((event) => events.push(event));
-      expect(events).toEqual([
+      expect(events).toStrictEqual([
         {
           type: "failed",
           url: ORIGIN,
@@ -680,7 +680,9 @@ describe("interceptor event redaction", () => {
           attachOptions(stubPaymentRelay(async () => success())),
         ),
       );
-      expect(protocolError.message).toBe("CDP command failed");
+      expect(protocolError.message).toBe(
+        "CDP command failed: Target.setAutoAttach",
+      );
       assertSafeError(protocolError);
     } finally {
       await stub.close();
@@ -702,6 +704,9 @@ describe("interceptor event redaction", () => {
       );
       expect(error.message).toBe("CDP command failed");
       expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+      expect(
+        JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      ).not.toContain("SYNTHETIC_METHOD_SECRET");
     } finally {
       errorConnection.close();
       await errorStub.close();
@@ -715,6 +720,9 @@ describe("interceptor event redaction", () => {
       );
       expect(error.message).toBe("CDP command timed out");
       expect(error.message).not.toContain("SYNTHETIC_METHOD_SECRET");
+      expect(
+        JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      ).not.toContain("SYNTHETIC_METHOD_SECRET");
     } finally {
       timeoutConnection.close();
       await timeoutStub.close();

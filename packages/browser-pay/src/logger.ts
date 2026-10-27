@@ -1,7 +1,7 @@
 export interface PayLogger {
   warn(
     message: string,
-    fields?: Readonly<Record<string, string | number>>,
+    fields?: Readonly<Record<string, string | number | boolean>>,
   ): void;
 }
 

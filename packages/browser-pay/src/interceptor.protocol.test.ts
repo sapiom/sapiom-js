@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { CdpCommandError } from "./cdp";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
 import type { HeldPlaceholder, RelayRequest, RelayResponse } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
@@ -27,9 +28,17 @@ interface Command {
   sessionId?: string;
 }
 
+const REMOTE_STEP = "REMOTE_STEP_TEXT";
+
 interface StubOptions {
   failAutoAttach?: boolean;
+  failChildAutoAttach?: boolean;
+  failResume?: boolean;
+  failAttachToTarget?: boolean;
+  failCloseTarget?: boolean;
   failFetch?: boolean;
+  fetchErrorCode?: number;
+  fetchErrorMessage?: string;
   failFulfill?: boolean;
   holdFulfill?: boolean;
   postData?: string;
@@ -63,7 +72,11 @@ async function startStub(options: StubOptions = {}): Promise<{
   const chunks: Buffer[] = [];
   let buffered = 0;
 
-  const reply = (id: number, result: unknown, error?: { message: string }) => {
+  const reply = (
+    id: number,
+    result: unknown,
+    error?: { message: string; code?: number },
+  ) => {
     const message = error ? { id, error } : { id, result };
     socket?.write(serverFrame(JSON.stringify(message)));
   };
@@ -121,8 +134,32 @@ async function startStub(options: StubOptions = {}): Promise<{
       reply(message.id, undefined, { message: "auto-attach refused" });
       return;
     }
+    if (
+      message.method === "Target.setAutoAttach" &&
+      message.sessionId &&
+      options.failChildAutoAttach
+    ) {
+      reply(message.id, undefined, { message: REMOTE_STEP, code: -32000 });
+      return;
+    }
+    if (
+      message.method === "Runtime.runIfWaitingForDebugger" &&
+      options.failResume
+    ) {
+      reply(message.id, undefined, { message: REMOTE_STEP, code: -32000 });
+      return;
+    }
+    if (message.method === "Target.closeTarget" && options.failCloseTarget) {
+      reply(message.id, undefined, { message: REMOTE_STEP, code: -32000 });
+      return;
+    }
     if (message.method === "Fetch.enable" && options.failFetch) {
-      reply(message.id, undefined, { message: "Fetch is unsupported" });
+      reply(message.id, undefined, {
+        message: options.fetchErrorMessage ?? "Fetch is unsupported",
+        ...(options.fetchErrorCode !== undefined
+          ? { code: options.fetchErrorCode }
+          : {}),
+      });
       return;
     }
     if (message.method === "Target.getTargets") {
@@ -130,6 +167,10 @@ async function startStub(options: StubOptions = {}): Promise<{
       return;
     }
     if (message.method === "Target.attachToTarget") {
+      if (options.failAttachToTarget) {
+        reply(message.id, undefined, { message: REMOTE_STEP, code: -32000 });
+        return;
+      }
       reply(message.id, {
         sessionId: options.attachedSessionId ?? "iframe-existing",
       });
@@ -300,18 +341,275 @@ function header(
   return headers[name.toLowerCase()];
 }
 
+type StepWarning = {
+  message: string;
+  fields?: Readonly<Record<string, string | number | boolean>>;
+};
+
+function stepLogger(warnings: StepWarning[]) {
+  return {
+    warn(
+      message: string,
+      fields?: Readonly<Record<string, string | number | boolean>>,
+    ) {
+      warnings.push(fields ? { message, fields } : { message });
+    },
+  };
+}
+
 describe("interceptor CDP decisions", () => {
   it("closes the CDP connection when start fails", async () => {
     const stub = await startStub({ failAutoAttach: true });
     try {
-      await expect(
-        attachInterceptor(stub.url, {
+      const caught = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      }).catch((error: unknown) => error);
+      expect(caught).toBeInstanceOf(CdpCommandError);
+      expect(caught).toMatchObject({
+        method: "Target.setAutoAttach",
+        message: "CDP command failed: Target.setAutoAttach",
+      });
+      expect(
+        JSON.stringify(caught, Object.getOwnPropertyNames(caught as object)),
+      ).not.toContain("auto-attach refused");
+      await waitFor(() => stub.sawClose(), "websocket close");
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("logs a nested setAutoAttach failure and still arms Fetch", async () => {
+    const stub = await startStub({ failChildAutoAttach: true });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      expect(events).toEqual([]);
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Target.closeTarget",
+      );
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Target.setAutoAttach",
+            code: -32000,
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain(REMOTE_STEP);
+      expect(JSON.stringify(warnings)).not.toContain("checkout");
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("a throwing logger leaves a nested setAutoAttach failure unchanged", async () => {
+    const options: StubOptions = {
+      failChildAutoAttach: true,
+      targets: [
+        {
+          targetId: "target-card",
+          type: "iframe",
+          url: "https://checkout.pci.shopifyinc.com/sessions",
+        },
+      ],
+      attachedSessionId: "iframe-card",
+    };
+    const run = async (logger?: {
+      warn(message: string): void;
+    }): Promise<{ events: InterceptorEvent[]; commands: Command[] }> => {
+      const stub = await startStub(options);
+      const events: InterceptorEvent[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
           relay: stubPaymentRelay(async () => success()),
           placeholder: HELD,
           profileId: "shopify-card-vault",
+          ...(logger ? { logger } : {}),
+        });
+        handle.on((event) => events.push(event));
+        await handle.detach();
+        return { events: [...events], commands: [...stub.commands] };
+      } finally {
+        await stub.close();
+      }
+    };
+    const silent = await run();
+    let warned = 0;
+    const throwing = await run({
+      warn() {
+        warned += 1;
+        throw new Error("logger boom");
+      },
+    });
+    expect(warned).toBeGreaterThan(0);
+    expect(silent.commands.map((command) => command.method)).toContain(
+      "Fetch.enable",
+    );
+    expect(throwing.events).toEqual(silent.events);
+    expect(throwing.commands).toEqual(silent.commands);
+  });
+
+  it("logs a resume failure and still leaves the target armed", async () => {
+    const stub = await startStub({ failResume: true });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(() => warnings.length === 1, "resume warning");
+      expect(events).toEqual([]);
+      expect(stub.commands.map((command) => command.method)).toContain(
+        "Fetch.enable",
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Target.closeTarget",
+      );
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Runtime.runIfWaitingForDebugger",
+            code: -32000,
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain(REMOTE_STEP);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("logs an attachToTarget failure and leaves that iframe unarmed", async () => {
+    const stub = await startStub({
+      failAttachToTarget: true,
+      targets: [
+        {
+          targetId: "target-card",
+          type: "iframe",
+          url: "https://checkout.pci.shopifyinc.com/sessions?card=1",
+        },
+      ],
+    });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      expect(events).toEqual([]);
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Fetch.enable",
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Target.closeTarget",
+      );
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Target.attachToTarget",
+            code: -32000,
+            timedOut: false,
+            targetType: "iframe",
+            origin: "https://checkout.pci.shopifyinc.com",
+          },
+        },
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain(REMOTE_STEP);
+      expect(JSON.stringify(warnings)).not.toContain("sessions");
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("logs a closeTarget failure and still emits intercept_unavailable", async () => {
+    const stub = await startStub({ failFetch: true, failCloseTarget: true });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(() => warnings.length === 2, "close warning");
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
         }),
-      ).rejects.toThrow("CDP command failed");
-      await waitFor(() => stub.sawClose(), "websocket close");
+      );
+      expect(stub.commands.map((command) => command.method)).not.toContain(
+        "Runtime.runIfWaitingForDebugger",
+      );
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Target.closeTarget",
+            code: -32000,
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain(REMOTE_STEP);
+      await handle.detach();
     } finally {
       await stub.close();
     }
@@ -320,11 +618,13 @@ describe("interceptor CDP decisions", () => {
   it("does not resume a target whose Fetch.enable failed", async () => {
     const stub = await startStub({ failFetch: true });
     const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
     try {
       const handle = await attachInterceptor(stub.url, {
         relay: stubPaymentRelay(async () => success()),
         placeholder: HELD,
         profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -344,12 +644,339 @@ describe("interceptor CDP decisions", () => {
           params: { targetId: "target-page" },
         }),
       );
-      expect(events).toContainEqual({
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("reports the CDP code when Fetch.enable fails and still closes the target", async () => {
+    const remote = "REMOTE_CDP_TEXT_SHOULD_NOT_LEAK";
+    const stub = await startStub({
+      failFetch: true,
+      fetchErrorCode: -32000,
+      fetchErrorMessage: remote,
+    });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-1",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-page",
+            type: "page",
+            url: "https://shop.example/checkout?q=1#frag",
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
+        }),
+      );
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            code: -32000,
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toContain(remote);
+      expect(JSON.stringify(warnings)).not.toContain(remote);
+      expect(JSON.stringify(warnings)).not.toContain("checkout");
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("omits code when Fetch.enable returns a non-integer CDP code", async () => {
+    const stub = await startStub({ failFetch: true, fetchErrorCode: 1.5 });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "non-integer code",
+      );
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("logs about: for an about:blank target that cannot arm Fetch", async () => {
+    const stub = await startStub({ failFetch: true });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => events.push(event));
+      stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "blank-1",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-blank",
+            type: "iframe",
+            url: "about:blank",
+          },
+        },
+      });
+      await waitFor(
+        () => events.some((event) => event.type === "failed"),
+        "about blank",
+      );
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "about:",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            timedOut: false,
+            targetType: "iframe",
+            origin: "about:",
+          },
+        },
+      ]);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("a throwing logger does not change a Fetch.enable failure", async () => {
+    const run = async (logger?: {
+      warn(message: string): void;
+    }): Promise<{ events: InterceptorEvent[]; commands: Command[] }> => {
+      const stub = await startStub({ failFetch: true });
+      const events: InterceptorEvent[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async () => success()),
+          placeholder: HELD,
+          profileId: "shopify-card-vault",
+          ...(logger ? { logger } : {}),
+        });
+        handle.on((event) => events.push(event));
+        attachPage(stub.emit);
+        await waitFor(
+          () =>
+            stub.commands.some(
+              (command) => command.method === "Target.closeTarget",
+            ),
+          "closeTarget",
+        );
+        await handle.detach();
+        return { events: [...events], commands: [...stub.commands] };
+      } finally {
+        await stub.close();
+      }
+    };
+    const silent = await run();
+    let warned = 0;
+    const throwing = await run({
+      warn() {
+        warned += 1;
+        throw new Error("logger boom");
+      },
+    });
+    expect(warned).toBeGreaterThan(0);
+    expect(silent.events).toStrictEqual([
+      {
         type: "failed",
         url: "https://shop.example",
         reason: "intercept_unavailable",
+      },
+    ]);
+    expect(throwing.events).toStrictEqual(silent.events);
+    expect(throwing.commands).toEqual(silent.commands);
+    expect(throwing.commands).toContainEqual(
+      expect.objectContaining({
+        method: "Target.closeTarget",
+        params: { targetId: "target-page" },
+      }),
+    );
+  });
+
+  it("swallows a rejected async logger and still closes the target", async () => {
+    const stub = await startStub({ failFetch: true });
+    const events: InterceptorEvent[] = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: {
+          async warn() {
+            throw new Error("ASYNC_LOGGER_REJECTION");
+          },
+        },
       });
+      handle.on((event) => events.push(event));
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(stub.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Target.closeTarget",
+          params: { targetId: "target-page" },
+        }),
+      );
       await handle.detach();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await stub.close();
+    }
+  });
+
+  it("logs Fetch.enable before a failed handler detaches", async () => {
+    const stub = await startStub({ failFetch: true });
+    const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async () => success()),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+        logger: stepLogger(warnings),
+      });
+      handle.on((event) => {
+        events.push(event);
+        if (event.type === "failed") void handle.detach();
+      });
+      attachPage(stub.emit);
+      await waitFor(() => warnings.length === 1, "Fetch.enable warning");
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://shop.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
+      expect(warnings).toStrictEqual([
+        {
+          message: "browser step failed",
+          fields: {
+            method: "Fetch.enable",
+            timedOut: false,
+            targetType: "page",
+            origin: "https://shop.example",
+          },
+        },
+      ]);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) => command.method === "Target.closeTarget",
+          ),
+        "closeTarget",
+      );
     } finally {
       await stub.close();
     }
@@ -1557,11 +2184,13 @@ describe("interceptor CDP decisions", () => {
         ),
       ).toBe(true);
       handle.on((event) => events.push(event));
-      expect(events).toContainEqual({
-        type: "failed",
-        url: "https://checkout.example",
-        reason: "intercept_unavailable",
-      });
+      expect(events).toStrictEqual([
+        {
+          type: "failed",
+          url: "https://checkout.example",
+          reason: "intercept_unavailable",
+        },
+      ]);
       await handle.detach();
     } finally {
       await stub.close();

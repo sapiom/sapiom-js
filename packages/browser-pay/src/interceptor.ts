@@ -1,4 +1,4 @@
-import { CdpConnection, type CdpEvent } from "./cdp.js";
+import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
   paymentIdempotencyKey,
   type RelayedHttpResponse,
@@ -426,23 +426,69 @@ class PaymentInterceptor {
   }
 
   private async armOrClose(session: Session): Promise<boolean> {
-    const armed = await armFetch(this.connection, session);
-    if (armed) return true;
+    const failure = await armFetch(this.connection, session);
+    if (!failure) return true;
     if (this.closed) return false;
+    this.logStepFailure("Fetch.enable", failure, session);
     this.emit({
       type: "failed",
       url: session.url,
       reason: "intercept_unavailable",
     });
-    await this.connection
-      .send("Target.closeTarget", { targetId: session.targetId })
-      .catch(() => {});
+    await this.swallowStep(
+      this.connection.send("Target.closeTarget", {
+        targetId: session.targetId,
+      }),
+      "Target.closeTarget",
+      session,
+    );
     return false;
   }
 
+  private logStepFailure(
+    method: string,
+    error: unknown,
+    target?: { type: string; url: string },
+  ): void {
+    if (this.closed) return;
+    const failed = error instanceof CdpCommandError ? error : undefined;
+    const targetType =
+      target?.type === "page" || target?.type === "iframe"
+        ? target.type
+        : undefined;
+    const code = failed?.code;
+    try {
+      void Promise.resolve(
+        this.logger.warn("browser step failed", {
+          method,
+          ...(code !== undefined ? { code } : {}),
+          timedOut: failed?.timedOut ?? false,
+          ...(targetType ? { targetType } : {}),
+          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+        }),
+      ).catch(() => {});
+    } catch {
+      // A logger must not change control flow.
+    }
+  }
+
+  private async swallowStep<T>(
+    pending: Promise<T>,
+    method: string,
+    target?: { type: string; url: string },
+  ): Promise<T | undefined> {
+    try {
+      return await pending;
+    } catch (error) {
+      this.logStepFailure(method, error, target);
+      return undefined;
+    }
+  }
+
   private async autoAttachChildren(sessionId: string): Promise<void> {
-    await this.connection
-      .send(
+    const session = this.sessions.get(sessionId);
+    await this.swallowStep(
+      this.connection.send(
         "Target.setAutoAttach",
         {
           autoAttach: true,
@@ -451,8 +497,10 @@ class PaymentInterceptor {
           filter: CHILD_FILTER,
         },
         sessionId,
-      )
-      .catch(() => {});
+      ),
+      "Target.setAutoAttach",
+      session,
+    );
   }
 
   private async resumeIfWaiting(
@@ -460,24 +508,30 @@ class PaymentInterceptor {
     waitingForDebugger: boolean,
   ): Promise<void> {
     if (!waitingForDebugger) return;
-    await this.connection
-      .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
-      .catch(() => {});
+    const session = this.sessions.get(sessionId);
+    await this.swallowStep(
+      this.connection.send("Runtime.runIfWaitingForDebugger", {}, sessionId),
+      "Runtime.runIfWaitingForDebugger",
+      session,
+    );
   }
 
   private async attachExistingFrames(): Promise<void> {
-    const listed = await this.connection
-      .send("Target.getTargets")
-      .catch(() => undefined);
+    const listed = await this.swallowStep(
+      this.connection.send("Target.getTargets"),
+      "Target.getTargets",
+    );
     for (const info of parseTargetInfos(listed)) {
       if (info.type !== "iframe") continue;
       if (this.byTarget.has(info.targetId)) continue;
-      const attached = await this.connection
-        .send("Target.attachToTarget", {
+      const attached = await this.swallowStep(
+        this.connection.send("Target.attachToTarget", {
           targetId: info.targetId,
           flatten: true,
-        })
-        .catch(() => undefined);
+        }),
+        "Target.attachToTarget",
+        { type: info.type, url: info.url },
+      );
       const sessionId = readAttachedSessionId(attached);
       if (!sessionId || this.sessions.has(sessionId)) continue;
       const session = this.trackSession({
@@ -1262,8 +1316,8 @@ function multipartOmitsFileBytes(body: string): boolean {
 async function armFetch(
   connection: CdpConnection,
   session: Session,
-): Promise<boolean> {
-  if (session.fetchEnabled) return true;
+): Promise<Error | undefined> {
+  if (session.fetchEnabled) return;
   try {
     await connection
       .send("Network.enable", {}, session.sessionId)
@@ -1273,11 +1327,10 @@ async function armFetch(
       { patterns: [{ urlPattern: "*", requestStage: "Request" }] },
       session.sessionId,
     );
-  } catch {
-    return false;
+  } catch (error) {
+    return error instanceof Error ? error : new Error("CDP command failed");
   }
   session.fetchEnabled = true;
-  return true;
 }
 
 async function continueRequest(
