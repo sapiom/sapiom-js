@@ -134,8 +134,8 @@ export function createProjectMapRouter(options: ProjectMapRouterOptions): Router
     platform: PlatformSource | null,
   ) => {
     const [description, gitState] = await Promise.all([
-      // Steps run each agent's code. Studio opts in: its Canvas already imports the agents of a
-      // folder the user opened, so the map adds no new execution (SAP-4381).
+      // Steps import and run each agent's code; Studio's map opts in for the folders the user
+      // added (SAP-4381).
       describe({ root, ...(ref ? { ref } : {}), platform, steps: true }),
       gitRefs(root),
     ]);

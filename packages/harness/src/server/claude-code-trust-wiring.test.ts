@@ -146,6 +146,23 @@ it("matches an added root by its resolved path, and needs a readable config (SAP
   expect(await status(physical)).toEqual({ root: linked, trusted: false, trustable: true });
 }, 20_000);
 
+it("picks the innermost added root by its resolved path, whatever its spelling (SAP-4381)", async () => {
+  root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "claude-code-trust-wiring-")),
+  );
+  const outer = path.join(root, "o");
+  const inner = path.join(outer, "in");
+  // A spelling of the outer root longer than the inner one's.
+  const outerAlias = path.join(root, "a-much-longer-spelling-of-the-outer-project");
+  await fs.mkdir(path.join(inner, "agent"), { recursive: true });
+  await fs.symlink(outer, outerAlias);
+  await start([outerAlias, inner]);
+  await fs.writeFile(configFile(), "{}");
+
+  expect((await status(path.join(inner, "agent"))).root).toBe(inner);
+  expect((await status(outer)).root).toBe(outerAlias);
+}, 20_000);
+
 it("keeps both routes behind the boot token (SAP-4381)", async () => {
   await start();
   expect((await api("GET", "/claude-code-trust?cwd=/tmp", undefined, null)).status).toBe(401);

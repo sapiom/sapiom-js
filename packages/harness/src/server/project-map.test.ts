@@ -143,7 +143,6 @@ describe("createProjectMapRouter", () => {
     // The scan reported `${root}-real`; the response keeps the opened folder.
     expect(body.map).toEqual({ ...buildMap(description(`${f.root}-real`)), root: f.root });
     expect(body.map.root).toBe(f.root);
-    // Studio opts into steps, which run the agents' code (SAP-4381).
     expect(f.describeSpy).toHaveBeenCalledWith({ root: f.root, platform: null, steps: true });
   });
 

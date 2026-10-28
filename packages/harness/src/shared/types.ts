@@ -1056,12 +1056,8 @@ export interface AgentScaffoldResponse {
 /** The app's active UI theme, as tracked client-side (web/src/lib/theme.ts). */
 export type UiTheme = "light" | "dark";
 
-/**
- * `GET /api/claude-code-trust?cwd=`: the added project root holding `cwd` and
- * whether Claude Code already trusts it. `trustable` is false when Studio
- * could not write the record (no added root, home or above it, a filesystem
- * root, or no readable Claude Code config), so the SPA does not ask.
- */
+/** `trustable` is false whenever Studio could not write the record, so the SPA never asks a
+ *  question it cannot act on (SAP-4381). */
 export interface ClaudeCodeTrustStatus {
   root: string | null;
   trusted: boolean;

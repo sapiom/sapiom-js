@@ -3,13 +3,8 @@ import type { JSX } from "react";
 
 import { Dialog } from "./Dialog";
 
-/**
- * Ask before trusting a project folder for Claude Code (SAP-4381). Trust lets
- * the folder's own Claude Code settings and hooks run without Claude Code's
- * prompt, here and in every later `claude` run there, so it takes a
- * deliberate click. Escape, a backdrop click and "Not now" all leave the
- * folder untrusted; the session still starts and Claude Code asks itself.
- */
+/** Trust lets the folder's hooks run unprompted beyond Studio, so only a deliberate click grants
+ *  it; every other way out leaves Claude Code to ask (SAP-4381). */
 export function TrustFolderConfirm({
   root,
   onAnswer,
@@ -29,8 +24,6 @@ export function TrustFolderConfirm({
       title="Trust this folder?"
       onClose={() => onAnswer(false)}
       initialFocusRef={notNowRef}
-      /* NO `triggerRef`: a session start opens it, not a control that keeps
-         focus, so there is nothing to hand focus back to. */
       actions={
         <>
           <button className="btn-ghost" ref={notNowRef} onClick={() => onAnswer(false)}>

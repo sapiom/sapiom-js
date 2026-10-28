@@ -13,12 +13,8 @@ import { homedir } from "node:os";
 import { join, parse, resolve } from "node:path";
 
 /**
- * TRUST A PROJECT ROOT FOR CLAUDE CODE, once the user has confirmed it in
- * Studio (SAP-4381; the dialog and its reason: flow-map-chat-overlay.md §4.7
- * item 5). Without the record a hand-off or Open in session session starts
- * behind Claude Code's "Do you trust the files in this folder?" dialog, and
- * its first message waits there. The record also lets the folder's
- * `.claude/settings.json` hooks run, so it is never written without asking.
+ * Written only after the user confirms in Studio: the record lets the folder's Claude Code
+ * hooks run without a prompt (SAP-4381; flow-map-chat-overlay.md §4.7 item 5).
  *
  * Verified against Claude Code 2.1.289:
  * - Trust is `projects[<absolute path>].hasTrustDialogAccepted: true` in the
@@ -99,12 +95,8 @@ export async function trustClaudeCodeProject(
   }
 }
 
-/**
- * Whether Claude Code already trusts `root`, read without the lock and
- * without writing. "untrustable" is every case `trustClaudeCodeProject`
- * would skip: home, a folder above it, a filesystem root, or a config that
- * is missing, unreadable or not an object.
- */
+/** Lock-free so asking whether to prompt never waits on a writer; "untrustable" mirrors the
+ *  writer's root and config refusals, not its lock timeout. */
 export async function claudeCodeTrustState(
   root: string,
   options: { env?: NodeJS.ProcessEnv; home?: string } = {},

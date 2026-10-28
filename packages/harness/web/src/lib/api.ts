@@ -365,7 +365,6 @@ export interface HarnessApi {
     selection: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
-  /** Whether Claude Code already trusts the added project root holding `cwd`. */
   claudeCodeTrustStatus(cwd: string): Promise<ClaudeCodeTrustStatus>;
   /** Trust an added project root for Claude Code, only once the user confirmed. */
   trustClaudeCodeFolder(root: string): Promise<ClaudeCodeTrustResponse>;
@@ -2050,11 +2049,8 @@ export class MockApi implements HarnessApi {
     return { ...current, selection, repaired: !valid };
   }
 
-  /**
-   * Every folder reads as trusted unless an e2e spec lists it in
-   * `__MOCK_UNTRUSTED_ROOTS__`, so specs that never think about trust never
-   * meet the dialog. Trust calls are recorded in `__HARNESS_TEST__.trustCalls`.
-   */
+  /** Trusted unless a spec lists the folder in `__MOCK_UNTRUSTED_ROOTS__`, so specs that never
+   *  think about trust never meet the dialog. */
   async claudeCodeTrustStatus(cwd: string): Promise<ClaudeCodeTrustStatus> {
     await delay(50);
     const win = (typeof window === "undefined" ? {} : window) as {
@@ -2076,6 +2072,7 @@ export class MockApi implements HarnessApi {
       __HARNESS_TEST__?: Record<string, unknown>;
       __MOCK_UNTRUSTED_ROOTS__?: string[];
       __MOCK_TRUST_FAIL_ONCE__?: boolean;
+      __MOCK_TRUST_SKIP_ONCE__?: boolean;
     };
     win.__HARNESS_TEST__ = {
       ...(win.__HARNESS_TEST__ ?? {}),
@@ -2084,6 +2081,10 @@ export class MockApi implements HarnessApi {
     if (win.__MOCK_TRUST_FAIL_ONCE__) {
       win.__MOCK_TRUST_FAIL_ONCE__ = false;
       throw new Error("mock: couldn't trust the folder");
+    }
+    if (win.__MOCK_TRUST_SKIP_ONCE__) {
+      win.__MOCK_TRUST_SKIP_ONCE__ = false;
+      return { result: "skipped" };
     }
     win.__MOCK_UNTRUSTED_ROOTS__ = (win.__MOCK_UNTRUSTED_ROOTS__ ?? []).filter((candidate) => candidate !== root);
     return { result: "trusted" };

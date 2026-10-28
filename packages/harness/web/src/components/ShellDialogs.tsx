@@ -22,12 +22,8 @@ import type { Dialogs } from "../lib/use-dialogs";
 import type { HarnessStateHook } from "../lib/use-harness-state";
 import type { SessionActions, ShellNav } from "../lib/use-session-actions";
 
-/**
- * The cards ON TOP of the shell: the Overview, the folder step's web dialog,
- * the one-time explainer, the command palette, the clone, remove and folder
- * trust confirms, and the run sheet. They mount beside the centre rather than standing in for
- * it, and each outlives whichever control opened it.
- */
+/** The cards on top of the shell mount beside the centre rather than standing in for it, so
+ *  each outlives whichever control opened it. */
 export function ShellDialogs({
   harness,
   state,

@@ -184,10 +184,8 @@ export interface HarnessStateHook {
      *  session itself once it is ready to be seen. */
     options?: { select?: boolean },
   ) => Promise<HarnessSession>;
-  /** The added project root a Claude Code session is waiting to have trusted
-   *  ("Trust this folder?"), or null when nothing is asking (SAP-4381). */
   folderTrustPrompt: { root: string } | null;
-  /** The user's answer to `folderTrustPrompt`: true writes the trust. */
+  /** Trust is requested only on an affirmative answer (SAP-4381). */
   answerFolderTrust: (trust: boolean) => void;
   attachFile: (
     sessionId: string,
@@ -1522,12 +1520,8 @@ export function useHarnessState(): HarnessStateHook {
     setFolderTrustPrompt(queue[0] ? { root: queue[0].root } : null);
   }, []);
 
-  /**
-   * Claude Code runs a trusted folder's project hooks without asking, so
-   * Studio writes that trust only when the user says so (SAP-4381). Declining,
-   * or any failure here, starts the session untrusted: Claude Code then asks
-   * in the terminal itself.
-   */
+  /** Trust lets project hooks run unprompted, so it waits for the user's answer; no answer or
+   *  failure here may stop the session from starting (SAP-4381). */
   const settleFolderTrust = useCallback(async (cwd: string): Promise<void> => {
     let status: ClaudeCodeTrustStatus;
     try {
@@ -1546,10 +1540,11 @@ export function useHarnessState(): HarnessStateHook {
       });
       if (!trust) return;
       try {
-        await api.trustClaudeCodeFolder(root);
+        if ((await api.trustClaudeCodeFolder(root)).result !== "skipped") return;
       } catch {
-        setToast(createToastMessage("Couldn't trust this folder. Claude Code will ask in the terminal."));
+        // Reported below, like a write the server skipped.
       }
+      setToast(createToastMessage("Couldn't trust this folder. Claude Code will ask in the terminal."));
     })().finally(() => folderTrustByRootRef.current.delete(root));
     folderTrustByRootRef.current.set(root, settled);
     return settled;

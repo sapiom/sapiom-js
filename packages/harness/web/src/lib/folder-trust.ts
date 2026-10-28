@@ -1,10 +1,7 @@
 import type { ClaudeCodeTrustStatus, HarnessKind } from "@shared/types";
 
-/**
- * Whether to ask "Trust this folder?" before starting a session (SAP-4381).
- * Only Claude Code reads the trust record, and only an added root that is
- * not trusted yet and that Studio could actually write is worth asking about.
- */
+/** Only Claude Code reads the trust record, and asking is pointless unless Studio could write
+ *  it for a root not trusted yet (SAP-4381). */
 export function shouldAskFolderTrust(
   harness: HarnessKind,
   status: ClaudeCodeTrustStatus,

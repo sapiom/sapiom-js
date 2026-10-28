@@ -892,21 +892,18 @@ export const startServer = async (
   } catch (err) {
     console.error("[harness] agent registry prune failed:", err);
   }
-  /**
-   * The added project root (recentDirs) holding `cwd`, the innermost when
-   * roots nest; compared resolved, so a symlink spelling on either side
-   * matches. Only such a root may ever be trusted for Claude Code.
-   */
+  // Only an added root may be trusted for Claude Code; compared resolved so a symlink spelling
+  // on either side cannot widen or dodge the match (SAP-4381).
   const addedRootFor = async (cwd: string): Promise<string | null> => {
     const { recentDirs } = await loadSettings(statePaths.settings);
     const real = (path: string) => realpath(path).catch(() => path);
     const resolved = await real(cwd);
     const roots = await Promise.all(recentDirs.map(real));
-    return (
-      recentDirs
-        .filter((_, i) => isWithinWorkspacePath(roots[i]!, resolved))
-        .sort((a, b) => b.length - a.length)[0] ?? null
-    );
+    const holding = recentDirs
+      .map((dir, i) => ({ dir, real: roots[i]! }))
+      .filter(({ real }) => isWithinWorkspacePath(real, resolved))
+      .sort((a, b) => b.real.length - a.real.length);
+    return holding[0]?.dir ?? null;
   };
   // Same hygiene for settings.json's recentDirs — dead entries are already
   // filtered from every read, but pruning here persists their removal.

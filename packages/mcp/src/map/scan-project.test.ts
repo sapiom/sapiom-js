@@ -357,7 +357,7 @@ export async function notOwn(ctx: any) { await ctx.sapiom.agents.run({ definitio
   });
 });
 
-/** A project whose one agent writes `marker` the moment its code is imported. */
+/** A top-level side effect makes any import of the agent's code observable (SAP-4381). */
 async function markerProject(): Promise<{ root: string; marker: string }> {
   const root = await project({
     "sapiom.json": '{ "name": "loud" }',

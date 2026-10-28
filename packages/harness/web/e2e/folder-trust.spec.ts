@@ -1,13 +1,5 @@
-/**
- * FOLDER TRUST ASKS FIRST (SAP-4381): Studio writes Claude Code's folder trust
- * only after the user says "Trust folder" in its own confirmation. Declining,
- * or any failure on the way, still starts the session: Claude Code then asks
- * in the terminal itself.
- *
- * Mock mode: every folder reads as trusted unless the spec lists it in
- * `__MOCK_UNTRUSTED_ROOTS__`, and trust writes land in
- * `__HARNESS_TEST__.trustCalls` (../src/lib/api.ts MockApi).
- */
+/** Folder trust lets project hooks run unprompted, so Studio must ask before writing it, and a
+ *  session must start whatever the answer (SAP-4381). */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
@@ -33,18 +25,18 @@ const sessionStarts = (page: Page): Promise<number> =>
 
 async function mockTrust(
   page: Page,
-  hooks: { untrusted?: string[]; statusFails?: boolean; trustFailsOnce?: boolean },
+  hooks: { untrusted?: string[]; statusFails?: boolean; trustFailsOnce?: boolean; trustSkipsOnce?: boolean },
 ): Promise<void> {
   await page.addInitScript((h) => {
     Object.assign(window, {
       __MOCK_UNTRUSTED_ROOTS__: h.untrusted ?? [],
       __MOCK_TRUST_STATUS_FAIL__: h.statusFails ?? false,
       __MOCK_TRUST_FAIL_ONCE__: h.trustFailsOnce ?? false,
+      __MOCK_TRUST_SKIP_ONCE__: h.trustSkipsOnce ?? false,
     });
   }, hooks);
 }
 
-/** The blank folder as a project, then its rail `+`: a Claude Code chat at the root. */
 async function newChatInBlankProject(page: Page): Promise<void> {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
@@ -61,7 +53,6 @@ test("an untrusted project asks first, and Trust folder trusts that root once", 
   await expect(dialog(page)).toBeVisible();
   await expect(dialog(page)).toContainText("Trust this folder?");
   await expect(dialog(page)).toContainText(BLANK_PROJECT_ROOT);
-  // The session waits for the answer.
   expect(await sessionStarts(page)).toBe(0);
   // The safe answer holds focus: trusting takes a deliberate click.
   await expect(dialog(page).getByRole("button", { name: "Not now" })).toBeFocused();
@@ -94,7 +85,7 @@ for (const decline of ["Not now", "Escape"] as const) {
 }
 
 test("continuing a past session in an untrusted project asks too", async ({ page }) => {
-  // sess-pricing ran in acme-app; Continue here seeds a fresh session there.
+  // Continuing history creates a session too, so it must pass the same gate.
   await mockTrust(page, { untrusted: ["/Users/demo/acme-app"] });
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
@@ -148,15 +139,20 @@ test("an unreadable trust status asks nothing, trusts nothing, and starts", asyn
   expect((await evidence(page)).trustCalls).toEqual([]);
 });
 
-test("a failed trust write says so and still starts the session", async ({ page }) => {
-  await mockTrust(page, { untrusted: [BLANK_PROJECT_ROOT], trustFailsOnce: true });
-  await newChatInBlankProject(page);
-  await page.getByTestId("trust-folder-confirm-btn").click();
+for (const outcome of ["fails", "is skipped"] as const) {
+  test(`a trust write that ${outcome} says so and still starts the session`, async ({ page }) => {
+    await mockTrust(page, {
+      untrusted: [BLANK_PROJECT_ROOT],
+      ...(outcome === "fails" ? { trustFailsOnce: true } : { trustSkipsOnce: true }),
+    });
+    await newChatInBlankProject(page);
+    await page.getByTestId("trust-folder-confirm-btn").click();
 
-  await expect(page.getByTestId("toast")).toContainText("Couldn't trust this folder.");
-  await expect.poll(() => sessionStarts(page)).toBe(1);
-  expect((await evidence(page)).trustCalls).toEqual([BLANK_PROJECT_ROOT]);
-});
+    await expect(page.getByTestId("toast")).toContainText("Couldn't trust this folder.");
+    await expect.poll(() => sessionStarts(page)).toBe(1);
+    expect((await evidence(page)).trustCalls).toEqual([BLANK_PROJECT_ROOT]);
+  });
+}
 
 test("two starts in one untrusted project share one question and one trust write", async ({ page }) => {
   await mockTrust(page, { untrusted: [BLANK_PROJECT_ROOT] });

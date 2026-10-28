@@ -233,11 +233,8 @@ export interface RestRouterOptions {
   onTelemetryOptInChange?: (optIn: boolean) => void;
   /** Called only for roots newly added to the user's durable project list. */
   onRecentDirAdded?: (root: string) => Promise<void> | void;
-  /**
-   * Claude Code folder trust for added project roots. `trust` writes only
-   * after the user confirmed in Studio, and answers null for a folder that is
-   * not an added root (SAP-4381).
-   */
+  /** Trust outlives Studio, so `trust` is called only on the user's say-so and answers null
+   *  for anything but an added root (SAP-4381). */
   claudeCodeTrust?: {
     status: (cwd: string) => Promise<ClaudeCodeTrustStatus>;
     trust: (root: string) => Promise<ClaudeCodeTrustResponse | null>;

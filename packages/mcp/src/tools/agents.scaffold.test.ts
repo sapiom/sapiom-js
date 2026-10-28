@@ -38,8 +38,7 @@ afterEach(() => {
 });
 
 describe("sapiom_dev_agents_scaffold template names (SAP-4381)", () => {
-  // `../src` is a real directory next to agent-core's bundled templates: before the fix it was
-  // copied into the project and npm-installed like a template.
+  // Real directories beside the bundled templates must be refused before any copy or install.
   it.each(["../src", "../../agent-core/src"])("rejects %j without creating the project", async (template) => {
     const base = mkdtempSync(path.join(os.tmpdir(), "sapiom-scaffold-tool-"));
     temps.push(base);
