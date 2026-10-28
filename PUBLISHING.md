@@ -67,7 +67,8 @@ has to reach people once. Details and pitfalls:
    `package.json` versions, updates `CHANGELOG.md`, and deletes the changeset
    file.
 3. **Merge that "version packages" PR.** The push to `main` triggers the
-   `Publish` workflow, which runs `pnpm changeset publish`. Because it goes
+   `Publish` workflow; approve its `publish` job when GitHub asks (environment
+   `npm-publish`), and it runs `pnpm changeset publish`. Because it goes
    through pnpm it resolves `workspace:*` to real version ranges, and it only
    publishes versions not already on npm — so it's a safe no-op on any push that
    isn't a version bump.
@@ -78,9 +79,17 @@ publishing.
 ### Prerequisites (already configured; here for reference)
 
 - **A Trusted Publisher configured PER PACKAGE on npmjs.com**, pointing at repo
-  `sapiom/sapiom-js` and workflow file `publish.yml` (environment left blank). A
+  `sapiom/sapiom-js`, workflow file `publish.yml` and environment `npm-publish`.
+  Exactly one per package: npm accepts a token that matches any of them, so an
+  extra publisher without the environment reopens publishing from any branch. A
   missing or mismatched trusted publisher is the usual cause of a publish
-  **E404** — and the reason a brand-new package needs a manual first publish.
+  **E404**, and the reason a brand-new package needs a manual first publish.
+- The `publish` job runs in the **`npm-publish` environment** (`main` only,
+  required reviewers). A read-only `check` job runs first and only starts
+  `publish` when a public package version is missing from npm, so a release push
+  waits for one approval and ordinary pushes ask for none. A run waiting for
+  approval holds the workflow's concurrency group and later publish runs queue
+  behind it: approve or reject promptly.
 - Toolchain in the workflow: Node 24 and npm >= 11.5 (OIDC support) + pnpm 10+.
   `packageManager` in the root `package.json` must stay in sync.
 - The job grants `id-token: write` so the runner can mint the short-lived OIDC
@@ -150,7 +159,11 @@ Publisher → Add**:
 - Provider: **GitHub Actions**
 - Repository: `sapiom/sapiom-js`
 - Workflow filename: `publish.yml`
-- Environment: _(leave blank)_
+- Environment: `npm-publish`
+
+Until this publisher exists, every push to `main` finds the new version missing
+and asks for an `npm-publish` approval that can only fail with E404: reject those
+until the manual first publish is done.
 
 From here on, the package publishes automatically via the normal flow.
 
@@ -177,7 +190,9 @@ npm deprecate @sapiom/<name>@<bad-version> "Broken: unresolved workspace depende
 ## Manually re-running the Publish workflow
 
 Safe at any time — `changeset publish` only ships versions not already on npm,
-so a re-run is a no-op for everything currently published:
+so a re-run is a no-op for everything currently published. Dispatch from `main`
+only: the workflow refuses any other branch, and the `npm-publish` environment
+would refuse it anyway.
 
 ```bash
 gh workflow run publish.yml --ref main
@@ -193,3 +208,69 @@ gh workflow run publish.yml --ref main -f publish_mcp_registry=true
 This still skips npm versions that are already published and uses the workflow's
 GitHub OIDC login for the MCP registry. Leave the input off for ordinary reruns;
 only request registration when the current MCP version is missing from the registry.
+
+## Release pipeline protections
+
+The guarantees live in repository and npm settings, not in workflow YAML: anyone
+who can push a branch can edit a workflow file on it. Keep these settings in
+place and recreate them from here if they are ever lost. Reviewer ids come from
+`gh api users/<login> --jq .id`.
+
+1. **`npm-publish` environment**: `main` only, required reviewers, no admin bypass.
+
+   ```bash
+   gh api -X PUT repos/sapiom/sapiom-js/environments/npm-publish --input - <<'JSON'
+   {"reviewers":[{"type":"User","id":<reviewer id>}],"prevent_self_review":false,
+    "can_admins_bypass":false,
+    "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+   JSON
+   gh api -X POST repos/sapiom/sapiom-js/environments/npm-publish/deployment-branch-policies \
+     -f name=main -f type=branch
+   ```
+
+2. **`desktop-release` environment**: same shape, admitting `v*` tags and `main`,
+   and holding the five signing secrets as environment secrets
+   (`packages/harness-desktop/scripts/mac-signing-secrets.sh` writes them there).
+
+   ```bash
+   gh api -X PUT repos/sapiom/sapiom-js/environments/desktop-release --input - <<'JSON'
+   {"reviewers":[{"type":"User","id":<reviewer id>}],"prevent_self_review":false,
+    "can_admins_bypass":false,
+    "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+   JSON
+   gh api -X POST repos/sapiom/sapiom-js/environments/desktop-release/deployment-branch-policies \
+     -f name='v*' -f type=tag
+   gh api -X POST repos/sapiom/sapiom-js/environments/desktop-release/deployment-branch-policies \
+     -f name=main -f type=branch
+   ```
+
+   Both environments must exist before a workflow names them: GitHub creates a
+   missing environment on first use, with no protection at all.
+
+3. **No repository-level copies** of `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`,
+   `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, and no `NPM_TOKEN`. Repository
+   secrets reach every branch's workflow runs.
+   `gh api repos/sapiom/sapiom-js/actions/secrets --jq '.secrets[].name'` must
+   list none of them.
+
+4. **`v*` tag ruleset**: only organization owners create, move or delete release
+   tags.
+
+   ```bash
+   gh api -X POST repos/sapiom/sapiom-js/rulesets --input - <<'JSON'
+   {"name":"release-tags","target":"tag","enforcement":"active",
+    "conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},
+    "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],
+    "bypass_actors":[{"actor_id":1,"actor_type":"OrganizationAdmin","bypass_mode":"always"}]}
+   JSON
+   ```
+
+5. **npm**: each public package has exactly one Trusted Publisher, with
+   environment `npm-publish` (see above). Optionally set Publishing access to
+   "Require two-factor authentication and disallow tokens", which leaves trusted
+   publishing working.
+
+Order when setting this up from scratch: environments, environment secrets and
+the ruleset first; then the workflow change that names the environments; then
+the npm environment field (setting it earlier rejects the current workflow's
+tokens); then delete the repository-level secrets.

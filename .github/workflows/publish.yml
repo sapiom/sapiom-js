@@ -8,7 +8,13 @@ name: Publish
 #     A mismatch (repo/workflow/env) is the usual cause of a publish E404.
 #   - Toolchain: Node > 22 and npm >= 11.5 (OIDC support) + a pnpm that supports
 #     trusted publishing (pnpm 10+). `packageManager` in package.json must match.
-#   - `id-token: write` (below) lets the runner mint the short-lived OIDC token.
+#   - The OIDC grant (below) exists only in the `publish` job, which runs in the
+#     `npm-publish` environment: `main` only, with required reviewers. Each
+#     package's Trusted Publisher names that environment, so a token minted
+#     anywhere else is refused by npm.
+#   - The `check` job holds no OIDC grant. It refuses dispatches from other
+#     branches and only lets `publish` start when a public package version is
+#     missing from npm, so ordinary pushes to main never wait for an approval.
 #
 # npm generates provenance attestations automatically under trusted publishing
 # (no --provenance flag needed). `changeset publish` runs through pnpm so it
@@ -32,23 +38,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      pending: ${{ steps.pending.outputs.pending }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Refuse dispatches from other branches
+        run: node scripts/assert-release-ref.mjs
+
+      - name: Check release readiness
+        run: node scripts/assert-release-ready.mjs
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Find versions not yet on npm
+        id: pending
+        run: node scripts/release-pending.mjs
+
+  publish:
+    needs: check
+    # A skipped job requests no environment approval: reviewers are only asked
+    # when there is something to publish.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (needs.check.outputs.pending == 'true' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_mcp_registry))
+    runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write # OIDC: mint the short-lived token npm trades for publish auth
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check release readiness
         run: node scripts/assert-release-ready.mjs
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         # pnpm version comes from package.json `packageManager` (pnpm 10+ for OIDC).
         # Keep all workflows in sync with it.
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -91,7 +132,7 @@ jobs:
             exit "$STATUS"
           fi
 
-      # --- MCP registry publish (unchanged; already OIDC via github-oidc) ---
+      # --- MCP registry publish (OIDC via github-oidc) ---
       - name: Sync MCP server.json version
         if: steps.publish.outputs.mcp-changed == 'true'
         working-directory: packages/mcp
@@ -99,10 +140,22 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
 
+      # Pinned and checksummed: this binary runs inside the job that holds the
+      # OIDC grant. Bump both values together from the release's checksums file.
       - name: Install mcp-publisher
         if: steps.publish.outputs.mcp-changed == 'true'
+        env:
+          MCP_PUBLISHER_VERSION: 1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
-          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          set -euo pipefail
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "::error::The pinned mcp-publisher checksum is for linux amd64, not $(uname -m)."
+            exit 1
+          fi
+          curl -fsSLo mcp-publisher.tar.gz "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
 
       - name: Authenticate to MCP Registry
         if: steps.publish.outputs.mcp-changed == 'true'

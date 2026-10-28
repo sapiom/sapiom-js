@@ -138,7 +138,9 @@ smoke check starts two real runtimes, creates independent sessions, and requires
   `electron-builder.yml`, and why `CSC_IDENTITY_AUTO_DISCOVERY` is `${{ secrets.CSC_LINK != '' }}` —
   left on without a cert, electron-builder grabs any keychain identity and half-signs.
   Secrets: `CSC_LINK` (base64 of the Developer ID `.p12`), `CSC_KEY_PASSWORD`, `APPLE_ID`,
-  `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+  `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`. They are secrets of the `desktop-release`
+  environment, never repository secrets: the environment admits only `v*` tags and `main` and waits
+  for a required reviewer, so code on other branches cannot read them.
 - **You do not need a Mac to create the certificate.** Generate the CSR with openssl, upload it at
   developer.apple.com (Certificates → Developer ID Application), then bundle the `.cer` with the key
   into a `.p12`. On OpenSSL 3 add `-legacy` to `pkcs12 -export`, or macOS refuses the resulting file.
@@ -183,7 +185,8 @@ smoke check starts two real runtimes, creates independent sessions, and requires
 `.github/workflows/desktop-release.yml` — a `prepare` job (resolves version + channel, fails fast on
 a tag that disagrees with `package.json`), then one build job per OS (`ubuntu-latest`, `macos-14`,
 `windows-2022`), `fail-fast: false`, Windows `continue-on-error` while Phase 6 is open.
-`workflow_dispatch` builds artifacts only (14-day retention). Keep the runner pins and the Python
+`workflow_dispatch` builds artifacts only (14-day retention), from `main` only: `prepare` refuses
+other branches. Keep the runner pins and the Python
 pin: each has a comment explaining the failure it prevents — don't "modernize" them without
 reproducing that failure.
 
@@ -212,6 +215,8 @@ this survived from the first release to 0.3.8 with CI green. `src/main/release-t
 **Cutting a beta.** `harness-desktop` is `private: true` and never published to npm, so a beta does
 not need changesets pre-mode (which would drag every package in the monorepo into it). Branch off
 `main`, hand-set the version to `x.y.z-beta.N`, tag `vx.y.z-beta.N`, push the tag, delete the branch.
+Only organization owners can push `v*` tags (tag ruleset), and the build waits for a
+`desktop-release` reviewer like any release.
 `detectUpdateChannel` infers `beta` from the suffix, so the build emits `beta*.yml` only and stable
 installs never see it. Promote by shipping the final `x.y.z` from `main` as usual.
 
