@@ -7,7 +7,7 @@ export interface IdentityFetchOptions {
   /** The caller's undici `dispatcher`, which a request rebuilt for a redirect would otherwise lose. */
   dispatcher?: unknown;
   /**
-   * An unsent clone of the request, read only when a 307/308 resends the body.
+   * An unsent clone of the request, read only when a redirect resends the body.
    * Without it that redirect fails, as `fetch` fails for a stream body.
    */
   replay?: Request;

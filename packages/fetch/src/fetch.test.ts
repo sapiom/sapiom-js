@@ -65,7 +65,6 @@ const PAYMENT_REQUIRED = JSON.stringify({
   ],
 });
 
-/** Local servers that record each request's headers; closed after every test. */
 const servers: http.Server[] = [];
 const received: Record<string, http.IncomingHttpHeaders[]> = {};
 

@@ -29,9 +29,10 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
 /**
  * Creates a Sapiom-enabled fetch function with automatic authorization and payment handling
  *
- * Drop-in replacement for native fetch() with Sapiom capabilities.
- * Works directly with native Request/Response objects, preserving all native fetch features
- * (FormData, Blob, streams, etc.).
+ * Drop-in replacement for native fetch() with Sapiom capabilities, working directly with
+ * native Request/Response objects (FormData, Blob, streams, etc.). Pass an undici
+ * `dispatcher` in `init`: one set on a Request input is lost when a request carrying
+ * `Sapiom-Identity` is redirected.
  *
  * @param config - Optional configuration (reads from env vars by default)
  * @returns A fetch function with Sapiom payment and authorization handling
