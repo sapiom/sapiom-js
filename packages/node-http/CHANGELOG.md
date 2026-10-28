@@ -1,5 +1,13 @@
 # @sapiom/node-http
 
+## 0.4.2
+
+### Patch Changes
+
+- Updated dependencies [a8068d8]
+- Updated dependencies [a76b8bd]
+  - @sapiom/core@0.6.0
+
 ## 0.4.1
 
 ### Patch Changes
