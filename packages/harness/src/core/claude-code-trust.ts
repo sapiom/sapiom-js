@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, parse, resolve } from "node:path";
+import { dirname, join, parse, resolve } from "node:path";
 
 /** Written only after the user confirms in Studio: the record lets the folder's Claude Code
  *  hooks run without a prompt (SAP-4381; flow-map-chat-overlay.md §4.7 item 5). */
@@ -95,12 +95,27 @@ export async function claudeCodeTrustState(
   if (!isRecord(config)) return "untrustable";
   const projects = config.projects ?? {};
   if (!isRecord(projects)) return "untrustable";
-  return keys.every((key) => {
+  const accepted = (key: string) => {
     const entry = projects[key];
     return isRecord(entry) && entry.hasTrustDialogAccepted === true;
-  })
-    ? "trusted"
-    : "untrusted";
+  };
+  for (const key of keys) {
+    if (!(await trustScope(key)).some(accepted)) return "untrusted";
+  }
+  return "trusted";
+}
+
+/** The keys whose record trusts `key` for Claude Code: itself, then each parent up to its git root,
+ *  so a project already trusted through its repository is not asked about again. */
+async function trustScope(key: string): Promise<string[]> {
+  const scope = [key];
+  for (let dir = key; ; ) {
+    if (await exists(join(dir, ".git"))) return scope;
+    const parent = dirname(dir);
+    if (parent === dir) return [key];
+    dir = parent;
+    scope.push(spell(parent));
+  }
 }
 
 /** A key whose trust would cover every project under home: a filesystem root, home or above. */

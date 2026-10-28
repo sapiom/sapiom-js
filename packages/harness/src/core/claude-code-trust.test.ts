@@ -220,6 +220,19 @@ describe("claudeCodeTrustState (SAP-4381)", () => {
     expect(await claudeCodeTrustState(project, { env, home })).toBe("untrustable");
   });
 
+  it("counts a parent's trust only up to the git root, as Claude Code does", async () => {
+    const repo = path.join(dir, "work");
+    const outside = { [dir]: { hasTrustDialogAccepted: true } };
+    await writeConfig({ projects: { [repo]: { hasTrustDialogAccepted: true } } });
+    // No repository: only the folder's own record counts.
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrusted");
+
+    await fs.mkdir(path.join(repo, ".git"));
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("trusted");
+    await writeConfig({ projects: outside });
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrusted");
+  });
+
   it("needs the resolved spelling trusted too when the root is a symlink", async () => {
     const linked = path.join(dir, "linked");
     await fs.symlink(project, linked);
