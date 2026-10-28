@@ -23,13 +23,39 @@ import {
   Transport,
   capabilityCall,
   defaultTransport,
+  resolveCoreBaseUrl,
 } from "../_client/index.js";
+import { assertTrustedServiceUrl } from "../_client/trusted-url.js";
 import {
   ContentGenerationFailedError,
   ContentGenerationHttpError,
 } from "./errors.js";
 import { pollForResult, statusUrlFromResultUrl } from "./poll.js";
 import type { DispatchHandle } from "../dispatch.js";
+
+/**
+ * The poll carries the tenant credential, so the URLs the submit response names
+ * must stay inside the configured Sapiom deployment.
+ */
+function assertTrustedPollUrls(
+  handle: { statusUrl?: string },
+  responseUrl: string,
+  transport: Transport,
+  baseUrl: string | undefined,
+): void {
+  const coreBase = resolveCoreBaseUrl(baseUrl ?? transport.coreBaseUrl);
+  assertTrustedServiceUrl(
+    responseUrl,
+    coreBase,
+    "@sapiom/tools content generation",
+  );
+  if (handle.statusUrl)
+    assertTrustedServiceUrl(
+      handle.statusUrl,
+      coreBase,
+      "@sapiom/tools content generation",
+    );
+}
 
 export { ContentGenerationFailedError, ContentGenerationHttpError };
 
@@ -803,6 +829,7 @@ export async function launchImage(
   if (!responseUrl) {
     throw new Error("Image submit did not return a result URL to poll");
   }
+  assertTrustedPollUrls(handle, responseUrl, transport, baseUrl);
   const requestId = handle.requestId ?? "unknown";
 
   const wait = async ({
@@ -1195,6 +1222,7 @@ export async function createVideo(
   if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
+  assertTrustedPollUrls(handle, responseUrl, transport, baseUrl);
 
   // Poll the result THROUGH Sapiom until it's ready. The poll is what persists the
   // output when `storage` was requested, so `fileId` is filled in by the time it returns.
@@ -1402,6 +1430,7 @@ export async function launchVideo(
   if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
+  assertTrustedPollUrls(handle, responseUrl, transport, baseUrl);
 
   const requestId = handle.requestId ?? "unknown";
 

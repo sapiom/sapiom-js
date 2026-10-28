@@ -67,6 +67,7 @@
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { encodeSegment } from "../_client/path-segment.js";
+import { assertTrustedServiceUrl } from "../_client/trusted-url.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import type { DispatchHandle } from "../dispatch.js";
 
@@ -1018,8 +1019,11 @@ export async function redeem<T = Record<string, unknown>>(
   link: LlmGrantLink,
   request: Record<string, unknown>,
   transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
 ): Promise<T> {
   const url = `${link.anthropicBaseUrl.replace(/\/$/, "")}/v2/anthropic/v1/messages`;
+  // The grant link comes from the service; the request carries the tenant credential.
+  assertTrustedServiceUrl(url, baseUrl, "@sapiom/tools llm.redeem");
   return transport.request<T>(url, {
     method: "POST",
     headers: { "x-sapiom-grant-token": link.apiKey },

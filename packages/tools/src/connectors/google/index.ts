@@ -95,8 +95,10 @@ export async function fetch(
     // Absolute vendor URL → forward its host; bare path → let the proxy use the default origin.
     headers[CONNECTOR_HOST_HEADER] = proxied.upstreamHost;
   } else {
-    const path = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
-    url = `${DEFAULT_BASE_URL}/connectors/v1/providers/${PROVIDER}/proxy${path}`;
+    // Resolve dot segments here, at a throwaway root, so a bare path cannot climb out
+    // of the proxy route once appended to it.
+    const { pathname, search } = new URL(pathOrUrl, "https://proxy.invalid");
+    url = `${DEFAULT_BASE_URL}/connectors/v1/providers/${PROVIDER}/proxy${pathname}${search}`;
   }
   return transport.fetch(url, { ...init, headers });
 }

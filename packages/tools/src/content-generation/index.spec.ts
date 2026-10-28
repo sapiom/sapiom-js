@@ -2513,3 +2513,83 @@ describe("terminalFailureFrom()", () => {
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// Server-supplied poll URLs stay inside the configured deployment
+// ---------------------------------------------------------------------------
+
+describe("content generation poll URL trust", () => {
+  const CORE = "https://api.sapiom.ai";
+  const FOREIGN = {
+    requestId: "req-foreign",
+    statusUrl: "https://evil.example/queue/x/status",
+    responseUrl: "https://evil.example/queue/x",
+  };
+  const SIBLING = {
+    requestId: "req-sibling",
+    statusUrl: "https://fal.services.sapiom.ai/queue/x/status",
+    responseUrl: "https://fal.services.sapiom.ai/queue/x",
+  };
+
+  it.each([
+    ["images.launch", (t: Transport) => launchImage({ prompt: "x" }, t, CORE)],
+    [
+      "video.create",
+      (t: Transport) =>
+        createVideo({ prompt: "x", pollIntervalMs: 1 }, t, CORE),
+    ],
+    ["video.launch", (t: Transport) => launchVideo({ prompt: "x" }, t, CORE)],
+  ])("%s refuses a foreign poll URL before polling", async (_label, call) => {
+    const { transport, calls } = makeLaunchTransport(FOREIGN, {
+      video: { url: "u" },
+    });
+
+    await expect(call(transport)).rejects.toThrow(/evil\.example/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("refuses a foreign statusUrl even when responseUrl is trusted", async () => {
+    const { transport, calls } = makeLaunchTransport(
+      { ...SIBLING, statusUrl: FOREIGN.statusUrl },
+      { video: { url: "u" } },
+    );
+
+    await expect(launchVideo({ prompt: "x" }, transport, CORE)).rejects.toThrow(
+      /evil\.example/,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it("polls a sibling Sapiom media service", async () => {
+    const { transport, calls } = makeLaunchTransport(SIBLING, {
+      video: { url: "https://media/v.mp4" },
+    });
+
+    await expect(
+      createVideo({ prompt: "x", pollIntervalMs: 1 }, transport, CORE),
+    ).resolves.toMatchObject({ video: { url: "https://media/v.mp4" } });
+    expect(calls[1]!.url).toBe(SIBLING.responseUrl);
+  });
+
+  it("checks against the transport's Core base when no baseUrl is given", async () => {
+    const calls: FetchCall[] = [];
+    const transport = new Transport({
+      apiKey: "test-key",
+      coreBaseUrl: "http://localhost:3000",
+      allowInsecureHttp: true,
+      fetch: (async (input: string, init: RequestInit = {}) => {
+        calls.push({ url: String(input), init });
+        return init.method === "POST"
+          ? jsonResponse({
+              requestId: "req-local",
+              responseUrl: "http://127.0.0.1:4000/queue/x",
+            })
+          : jsonResponse({ images: [{ url: "u" }] });
+      }) as unknown as typeof globalThis.fetch,
+    });
+
+    const handle = await launchImage({ prompt: "x" }, transport);
+    await handle.wait({ pollMs: 1 });
+    expect(calls[1]!.url).toBe("http://127.0.0.1:4000/queue/x");
+  });
+});

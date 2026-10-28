@@ -141,8 +141,15 @@ describe("llm.run — direct routed call", () => {
 
   it("run(): neverFail: false opts into plain 429s (header sent as false)", async () => {
     const cap: Captured = {};
-    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch(cap, { ok: true }) });
-    await sapiom.llm.run({ request: SPEC.request, model: "m2.7", neverFail: false });
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeDirectFetch(cap, { ok: true }),
+    });
+    await sapiom.llm.run({
+      request: SPEC.request,
+      model: "m2.7",
+      neverFail: false,
+    });
     expect(cap.headers?.["x-sapiom-never-fail"]).toBe("false");
   });
 
@@ -357,7 +364,9 @@ describe("llm.redeem", () => {
       messages: [],
       model: "ignored",
     });
-    expect(cap.url).toBe("https://llm.services.sapiom.ai/v2/anthropic/v1/messages");
+    expect(cap.url).toBe(
+      "https://llm.services.sapiom.ai/v2/anthropic/v1/messages",
+    );
     // the grant rides its own header; the reserved deployment wins server-side
     expect(cap.headers?.["x-sapiom-grant-token"]).toBe("sapiom-grant-xyz");
     // the caller's API key settles billing at the edge (SAP-1496)
@@ -386,6 +395,44 @@ describe("llm.redeem", () => {
     );
     expect(cap.headers?.["x-sapiom-grant-token"]).toBe("sapiom-grant-xyz");
     expect(cap.headers?.["x-sapiom-api-key"]).toBe("k2");
+  });
+
+  it("redeems a link on a sibling Sapiom service host", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(url);
+      return new Response("{}", {
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const { Transport } = await import("../_client/index.js");
+
+    await redeem(
+      { ...LINK, anthropicBaseUrl: "https://litellm.services.sapiom.ai" },
+      { messages: [] },
+      new Transport({ apiKey: "k", fetch: fetchImpl }),
+    );
+
+    expect(urls).toEqual([
+      "https://litellm.services.sapiom.ai/v2/anthropic/v1/messages",
+    ]);
+  });
+
+  it("refuses a link outside the configured deployment before sending", async () => {
+    const fetchImpl = jest.fn();
+    const { Transport } = await import("../_client/index.js");
+
+    await expect(
+      redeem(
+        { ...LINK, anthropicBaseUrl: "https://evil.example" },
+        { messages: [] },
+        new Transport({
+          apiKey: "k",
+          fetch: fetchImpl as unknown as typeof globalThis.fetch,
+        }),
+      ),
+    ).rejects.toThrow(/evil\.example/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

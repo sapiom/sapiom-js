@@ -216,7 +216,7 @@ describe("controlled execution delivery", () => {
                 status: "succeeded",
                 result: {
                   requestId: "native-id",
-                  responseUrl: "https://generation.test/result",
+                  responseUrl: "https://core.test/queue/result",
                   resolvedModel: "fixture-model",
                 },
               },

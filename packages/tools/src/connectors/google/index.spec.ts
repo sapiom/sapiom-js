@@ -113,6 +113,23 @@ describe("google.fetch()", () => {
     );
     expect(headerOf(calls[0]!, "x-sapiom-connector-host")).toBeUndefined();
   });
+
+  it.each([
+    ["/../../v1/keys", "/v1/keys"],
+    ["../v1/keys?x=1", "/v1/keys?x=1"],
+    ["/drive/./v3/../v3/files", "/drive/v3/files"],
+    ["drive/v3/files", "/drive/v3/files"],
+  ])("keeps the bare path %j inside the proxy route", async (path, rest) => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ ok: true }),
+    ]);
+
+    await google.fetch(path, {}, transport);
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/providers/google/proxy${rest}`,
+    );
+  });
 });
 
 describe("google.drive", () => {

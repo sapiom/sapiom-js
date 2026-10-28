@@ -7,7 +7,7 @@ type Client = ReturnType<typeof createClient>;
 const native = {
   requestId: "native",
   resolvedModel: "balanced",
-  responseUrl: "https://generation.test/result",
+  responseUrl: "https://core.test/queue/result",
 };
 const cases: {
   name: string;
