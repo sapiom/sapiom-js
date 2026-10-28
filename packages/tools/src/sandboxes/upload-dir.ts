@@ -1,15 +1,5 @@
-/**
- * Collect the files to upload from a local directory for a preview deploy.
- *
- * Walks `dir` and returns `{ path, content }[]` with POSIX-relative paths. Always
- * skips `node_modules`, `.git`, and dotfiles/dot-dirs (dependencies install in the
- * sandbox — never uploaded). Extra `ignore` patterns match by exact path, path
- * prefix (`dir/`), name segment, or suffix (`*.log`).
- *
- * Symlinks inside the tree are skipped, not followed: a link's target can sit
- * outside `dir` (and a preview can be public), and a self-referential link would
- * recurse forever. `dir` itself may be a symlink: it is the path the caller named.
- */
+// Nested symlinks are skipped because their target can escape `dir` or loop; a
+// symlinked `dir` itself is walked because the caller named it.
 import {
   readFileSync,
   readdirSync,

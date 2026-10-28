@@ -68,11 +68,7 @@ function parseSandboxEntry(name: string, entry: Record<string, unknown>): Sandbo
   return { name, ...(body as SandboxConfigBody) };
 }
 
-/**
- * Why a `source.path` may not be used, or undefined when it is fine. Lexical only, so
- * it also works at write time: absolute paths (POSIX or Windows) and any path that
- * climbs above its starting point once normalised are refused.
- */
+/** Lexical on purpose, so `configureSandbox` can refuse a path before the directory exists. */
 export function sourcePathIssue(sub: string): string | undefined {
   if (path.isAbsolute(sub) || path.win32.isAbsolute(sub)) {
     return 'must be a relative path inside the project directory, not an absolute path';
@@ -90,12 +86,7 @@ function isWithin(root: string, target: string): boolean {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
-/**
- * The sandbox's source directory, guaranteed to sit inside `projectDir`: the lexical
- * check catches `../..` and absolute paths, and the realpath check catches a
- * symlinked source directory whose target is outside the project. Returns the
- * lexical path so callers keep the path the user named.
- */
+/** Lexical and realpath checks so neither `../..` nor a symlinked source folder escapes the project. */
 export function resolveSourceDir(projectDir: string, cfg: SandboxConfig): string {
   const sub = cfg.source.path ?? '.';
   const root = path.resolve(projectDir);

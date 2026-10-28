@@ -444,6 +444,22 @@ describe("sapiom_dev_app_publish tool", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("never publishes the project's sapiom.json through a source folder linked to the project root", async () => {
+    const fetchMock = mockHappyBackend();
+    const dir = project(
+      { "index.html": "<h1>hi</h1>" },
+      { ...SANDBOX, source: { kind: "upload", path: "web" } },
+    );
+    symlinkSync(dir, path.join(dir, "web"));
+
+    const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+    expect(res.isError).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).files).toEqual({
+      "index.html": "<h1>hi</h1>",
+    });
+  });
+
   it("keeps web/sapiom.json when source.path is web — only <project>/sapiom.json is config", async () => {
     const fetchMock = mockHappyBackend();
     const dir = project(

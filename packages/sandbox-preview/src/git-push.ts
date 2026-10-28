@@ -1,16 +1,5 @@
-/**
- * Push a local directory's current contents to a Sapiom git repo — without
- * touching the user's directory (no `.git` created there).
- *
- * Uses a throwaway git-dir in the OS temp area with the source as the work-tree,
- * so `git add -A` snapshots the current files (minus node_modules and dotfiles,
- * like the upload mode), commits, and force-pushes to the repo's clone URL.
- * Symlinks are committed as links, never their target. Auth is
- * the caller's credential sent as the `x-sapiom-git-token` header (the git
- * smart-HTTP data plane accepts it). Force-push because a freshly-created repo is
- * auto-initialized, so a plain push is non-fast-forward — the local working tree
- * is the source of truth for a preview.
- */
+// A throwaway git-dir leaves the user's directory untouched; force-push because a new repo is
+// auto-initialized and the local working tree is the preview's source of truth.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,9 +27,8 @@ export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string,
 
   try {
     git(['init', '-q', '-b', branch]);
-    // Never upload deps (the sandbox build installs them) or dotfiles (`.env`, `.npmrc`,
-    // `.git/`), matching `uploadDir`. The exclude file keeps git from walking them; the
-    // pathspec enforces it, since a project `.gitignore` negation (`!.env`) beats the exclude file.
+    // Skip deps and dotfiles like `uploadDir`; pathspecs enforce it because a project
+    // `.gitignore` negation (`!.env`) outranks info/exclude.
     mkdirSync(path.join(gitDir, 'info'), { recursive: true });
     writeFileSync(path.join(gitDir, 'info', 'exclude'), 'node_modules/\n.*\n');
     git(['add', '-A', '--', '.', ...NEVER_PUSHED]);

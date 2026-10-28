@@ -65,6 +65,7 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import path from "node:path";
@@ -393,13 +394,8 @@ function requireAppLink(data: unknown): AppLinkWire {
  * of a public link. Any other `sapiom.json` in the tree — a nested one, or
  * `web/sapiom.json` under a `source.path` of `web` — is ordinary app content.
  *
- * Symlinks INSIDE the tree are skipped rather than followed, as in
- * `collectDirFiles`: the bundle can end up behind a public URL, and a link out
- * of the tree (`report.txt -> ../../secrets`) would publish whatever it points
- * at. A self-referential link would also recurse forever. The source root
- * itself comes from `resolveSourceDir`, which refuses a `source.path` outside
- * the project; a symlinked source directory is accepted (`statSync`) only when
- * its real target stays inside the project.
+ * Symlinks INSIDE the tree are skipped (a public link must not publish their target); the
+ * root comes from `resolveSourceDir` and is walked by its real path so `web -> .` still skips the config.
  *
  * A `git`-source resource is read from the same local working tree: the bundle
  * store takes a file map, so there is nothing for a server-side checkout to do.
@@ -418,7 +414,8 @@ export function collectBundleFiles(
       hint: `Fix \`source.path\` on the "${cfg.name}" resource in ${CONFIG_FILE}.`,
     });
   }
-  const projectConfig = path.resolve(projectDir, CONFIG_FILE);
+  const realRoot = realpathSync(root);
+  const projectConfig = path.join(realpathSync(projectDir), CONFIG_FILE);
 
   const files: Record<string, string> = {};
   const walk = (abs: string): void => {
@@ -428,7 +425,7 @@ export function collectBundleFiles(
       if (childAbs === projectConfig) continue;
       const stat = lstatSync(childAbs);
       if (stat.isSymbolicLink()) continue;
-      const rel = path.relative(root, childAbs).split(path.sep).join("/");
+      const rel = path.relative(realRoot, childAbs).split(path.sep).join("/");
       if (stat.isDirectory()) {
         walk(childAbs);
         continue;
@@ -437,7 +434,7 @@ export function collectBundleFiles(
       files[rel] = decodeTextFile(childAbs, rel);
     }
   };
-  walk(root);
+  walk(realRoot);
 
   if (Object.keys(files).length === 0) {
     throw new PreviewOperationError({
