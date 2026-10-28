@@ -1056,8 +1056,8 @@ export interface AgentScaffoldResponse {
 /** The app's active UI theme, as tracked client-side (web/src/lib/theme.ts). */
 export type UiTheme = "light" | "dark";
 
-/** `trustable` is false whenever Studio could not write the record, so the SPA never asks a
- *  question it cannot act on (SAP-4381). */
+/** `trustable` covers the root and config only, so the SPA skips questions it could never act
+ *  on; a held lock surfaces at write time as `skipped` (SAP-4381). */
 export interface ClaudeCodeTrustStatus {
   root: string | null;
   trusted: boolean;

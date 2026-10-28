@@ -12,28 +12,8 @@ import {
 import { homedir } from "node:os";
 import { join, parse, resolve } from "node:path";
 
-/**
- * Written only after the user confirms in Studio: the record lets the folder's Claude Code
- * hooks run without a prompt (SAP-4381; flow-map-chat-overlay.md §4.7 item 5).
- *
- * Verified against Claude Code 2.1.289:
- * - Trust is `projects[<absolute path>].hasTrustDialogAccepted: true` in the
- *   global config, the same record the dialog writes when the user accepts.
- * - The global config is `<config dir>/.config.json` when that legacy file
- *   exists, else `$CLAUDE_CONFIG_DIR/.claude.json` (home directory when the
- *   variable is unset). `<config dir>` is `$CLAUDE_CONFIG_DIR` or `~/.claude`.
- * - A session is trusted when its folder or a parent up to its git root holds
- *   the record, so one entry for the root covers sessions started inside it.
- * - Claude Code re-reads the file under the lock directory `<file>.lock`
- *   before every save and merges `projects` by key, so an entry written
- *   under the same lock survives a running Claude Code.
- *
- * Only this root's record changes; every other key is kept. Nothing is
- * written when the file is missing (Claude Code restores a missing config
- * from its backups, and a stub would hide that), unreadable, or not an
- * object, and never for the home directory, a folder above it or a
- * filesystem root, whose trust would cover every project beneath them.
- */
+/** Written only after the user confirms in Studio: the record lets the folder's Claude Code
+ *  hooks run without a prompt (SAP-4381; flow-map-chat-overlay.md §4.7 item 5). */
 export async function trustClaudeCodeProject(
   root: string,
   options: { env?: NodeJS.ProcessEnv; home?: string } = {},

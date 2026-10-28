@@ -152,7 +152,7 @@ it("picks the innermost added root by its resolved path, whatever its spelling (
   );
   const outer = path.join(root, "o");
   const inner = path.join(outer, "in");
-  // A spelling of the outer root longer than the inner one's.
+  // Longer than the inner root's path, so ranking by spelling would wrongly pick the outer root.
   const outerAlias = path.join(root, "a-much-longer-spelling-of-the-outer-project");
   await fs.mkdir(path.join(inner, "agent"), { recursive: true });
   await fs.symlink(outer, outerAlias);

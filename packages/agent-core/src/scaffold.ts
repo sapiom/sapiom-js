@@ -162,8 +162,8 @@ export function listTemplates(templatesDir?: string): string[] {
   );
 }
 
-/** Only bundled template names resolve: a copied template is `npm install`ed, so a path from
- *  elsewhere on disk must never be copied (SAP-4381). */
+/** Only bundled template names resolve: a copied template may be `npm install`ed, so a path
+ *  from elsewhere on disk must never be copied (SAP-4381). */
 export function resolveTemplate(name: string, templatesDir?: string): string {
   const available = listTemplates(templatesDir);
   if (!available.includes(name)) {
