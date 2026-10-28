@@ -16,7 +16,6 @@ function transport(): Transport {
   });
 }
 
-/** Everything `console.log` writes for `value`. */
 function consoleOutput(value: unknown): string {
   const spy = jest.spyOn(console, "log").mockImplementation(() => {});
   try {

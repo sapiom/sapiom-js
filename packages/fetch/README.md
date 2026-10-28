@@ -72,7 +72,6 @@ const publicRequest = new Request('/api/public');
 (publicRequest as any).__sapiom = { enabled: false };
 await fetch(publicRequest);
 
-// Or pass it in the init object
 await fetch('/api/public', { __sapiom: { enabled: false } } as RequestInit);
 
 // Override metadata for a specific request

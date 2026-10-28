@@ -76,7 +76,7 @@ export function assertCredentialMayTravel(
   );
 }
 
-/** What `fetch` itself drops on an origin change, plus the other credentials: the key and the identity JWT. */
+/** Another origin must not receive any credential, including the ones `fetch` keeps. */
 const CROSS_ORIGIN_DROPPED: ReadonlySet<string> = new Set([
   "authorization",
   "proxy-authorization",

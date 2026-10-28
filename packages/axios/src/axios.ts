@@ -22,11 +22,8 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
   polling?: TransactionPollingConfig;
 }
 
-/**
- * follow-redirects strips only authorization, cookie and proxy-authorization when
- * the origin changes, so the identity JWT is removed here. Applies to axios's Node
- * http adapter, the only one that calls `beforeRedirect`.
- */
+/** follow-redirects strips only authorization, cookie and proxy-authorization on an
+ * origin change, so the identity JWT needs its own guard. */
 function dropIdentityOnCrossOriginRedirect(
   config: InternalAxiosRequestConfig,
   targetUrl: string,
@@ -147,7 +144,7 @@ export function withSapiom(
         ...(config as any).__sapiom,
       };
       if (metadata.enabled === false) return config;
-      // The URL axios itself will request: an absolute `url` ignores `baseURL`.
+      // Match the URL axios will request, so `baseURL` and `allowAbsoluteUrls` count.
       const url = config.url !== undefined ? axiosInstance.getUri(config) : undefined;
       if (url) {
         const identityHeaders =

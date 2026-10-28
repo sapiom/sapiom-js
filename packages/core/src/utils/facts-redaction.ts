@@ -16,7 +16,6 @@ const DROPPED_HEADERS: ReadonlySet<string> = new Set([
   "payment-signature",
 ]);
 
-/** Any header whose name contains one of these is treated as a credential. */
 const DROPPED_SUBSTRINGS = [
   "auth",
   "key",
@@ -36,10 +35,7 @@ function isSensitiveHeader(name: string): boolean {
   );
 }
 
-/**
- * Headers safe to record in transaction facts: credentials, cookies and payment
- * proofs are dropped, the rest is stringified.
- */
+/** Transaction facts leave the caller's process, so credential headers stay out. */
 export function sanitizeFactHeaders(
   headers: Headers | Record<string, unknown> | null | undefined,
 ): Record<string, string> {
@@ -59,10 +55,7 @@ export function sanitizeFactHeaders(
 /** Placeholder origin for resolving a relative URL; never part of the result. */
 const RELATIVE_BASE = "http://relative.invalid";
 
-/**
- * The URL to record in transaction facts: query keys are kept, their values are
- * emptied, and userinfo and fragment are dropped. A relative URL stays relative.
- */
+/** Query values, userinfo and fragments can hold secrets that must not reach transaction facts. */
 export function redactUrlForFacts(url: string): string {
   let parsed: URL;
   let relative = false;
@@ -83,7 +76,6 @@ export function redactUrlForFacts(url: string): string {
   return relative ? `${parsed.pathname}${parsed.search}` : parsed.toString();
 }
 
-/** A `search` string (`?a=1&b=2`) with every value emptied (`?a=&b=`). */
 export function redactSearch(search: string): string {
   if (!search || search === "?") return "";
   const keys = Array.from(new URLSearchParams(search).keys());

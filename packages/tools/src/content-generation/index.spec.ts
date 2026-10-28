@@ -2514,10 +2514,6 @@ describe("terminalFailureFrom()", () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// Server-supplied poll URLs stay inside the configured deployment
-// ---------------------------------------------------------------------------
-
 describe("content generation poll URL trust", () => {
   const CORE = "https://api.sapiom.ai";
   const FOREIGN = {

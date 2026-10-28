@@ -78,11 +78,8 @@ export class IdentityManager {
     return this.matchesAudience(targetHostname, this.cached.audiences);
   }
 
-  /**
-   * Convenience method: resolves the token and returns the `Sapiom-Identity` header
-   * if the target URL's hostname matches the token audience. Returns empty object otherwise.
-   * Only https targets qualify, or plain http to a loopback host: the JWT is a bearer credential.
-   */
+  /** The JWT is a bearer credential: attach it only to its audience, over https
+   * (or http to a loopback host). */
   async getHeaderIfMatch(targetUrl: string): Promise<Record<string, string>> {
     const hostname = this.extractSecureHostname(targetUrl);
     if (!hostname) return {};

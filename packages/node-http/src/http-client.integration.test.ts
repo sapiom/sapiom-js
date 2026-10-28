@@ -640,10 +640,6 @@ describe("Node-HTTP Client Integration Tests", () => {
     });
   });
 
-  // ============================================================================
-  // TRANSACTION FACTS REDACTION
-  // ============================================================================
-
   describe("Transaction facts redaction", () => {
     it("records request facts without credentials or query values", async () => {
       mocks.create.mockResolvedValue({

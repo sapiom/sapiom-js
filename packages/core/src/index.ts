@@ -54,7 +54,6 @@ export type {
 export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry.js";
 export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry.js";
 
-// HTTP wrapper credential hygiene
 export {
   sanitizeFactHeaders,
   redactUrlForFacts,

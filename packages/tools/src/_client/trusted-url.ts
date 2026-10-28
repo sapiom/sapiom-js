@@ -1,19 +1,12 @@
-/**
- * URLs the SDK receives from a Sapiom service and then calls with the tenant
- * credential (grant links, media poll URLs). Each must stay inside the deployment
- * the caller configured, or the credential would follow whatever host a response
- * names.
- */
+/** Follow-up calls to server-supplied URLs carry the tenant credential, so those URLs
+ * need a trust boundary. */
 import {
   CredentialChannelError,
   isLoopbackHostname,
 } from "@sapiom/analytics-core/credential";
 
-/**
- * Domains Sapiom owns outright. Sibling trust stops here: under any other domain
- * (a shared host such as `workers.dev`, or a public suffix such as `co.uk`) a
- * sibling host can belong to someone else.
- */
+/** Sibling trust stops at Sapiom-owned domains: under a shared host or a public
+ * suffix, a sibling can belong to another tenant. */
 const SAPIOM_DOMAINS = ["sapiom.ai", "sapiom.dev"];
 
 function isUnderSapiomDomain(hostname: string): boolean {
@@ -22,7 +15,6 @@ function isUnderSapiomDomain(hostname: string): boolean {
   );
 }
 
-/** `hostname` minus its first label, when that is still inside a Sapiom domain. */
 function sapiomParentDomain(hostname: string): string | undefined {
   const dot = hostname.indexOf(".");
   if (dot < 0) return undefined;
@@ -30,12 +22,8 @@ function sapiomParentDomain(hostname: string): string | undefined {
   return isUnderSapiomDomain(parent) ? parent : undefined;
 }
 
-/**
- * Refuse a server-supplied `url` unless its host is the configured base's host, a
- * subdomain of the base host's parent domain when that parent is a Sapiom domain
- * (sibling Sapiom services share one), or both are loopback hosts. The error
- * names origins only.
- */
+/** A credential-bearing follow-up call must stay inside the configured deployment;
+ * the error names origins only, since a path or query can hold a secret. */
 export function assertTrustedServiceUrl(
   url: string,
   configuredBase: string,

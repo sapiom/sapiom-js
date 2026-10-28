@@ -1,8 +1,4 @@
-/**
- * Sapiom-Identity attachment: the audience is checked against the URL axios really
- * requests, the per-request opt-out is honoured, and the JWT never follows a
- * redirect to another origin.
- */
+/** The identity JWT is a bearer credential: these pin where axios may send it. */
 import http from "http";
 import { AddressInfo } from "net";
 import axios from "axios";
@@ -12,7 +8,7 @@ import { withSapiom } from "./axios";
 
 const JWT = "identity-jwt";
 
-/** Matches the real audience rule closely enough: Sapiom services hosts and loopback. */
+/** Loopback matches too, so the redirect tests can use local servers. */
 function createClient() {
   const getHeaderIfMatch = jest.fn(async (url: string) => {
     const { hostname } = new URL(url);
@@ -86,7 +82,6 @@ describe("withSapiom identity header", () => {
   });
 
   describe("redirect hop origin", () => {
-    /** The `beforeRedirect` hook the identity interceptor installed on a request to `url`. */
     async function hookFor(url: string) {
       const { client } = createClient();
       const instance = axios.create();
@@ -168,7 +163,6 @@ describe("withSapiom identity header", () => {
     const servers: http.Server[] = [];
     const received: Record<string, http.IncomingHttpHeaders[]> = {};
 
-    /** A local server that records request headers, then runs `handle`. */
     async function listen(
       name: string,
       handle: (req: http.IncomingMessage, res: http.ServerResponse) => void,
