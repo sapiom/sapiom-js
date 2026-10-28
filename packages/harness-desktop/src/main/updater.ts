@@ -246,22 +246,8 @@ async function setAutoUpdatePref(on: boolean): Promise<void> {
 }
 
 /**
- * Offer the update, and act on the user's choice.
- *
- * A custom window (see `update-window.ts`), not something injected into the page:
- * this fires whenever a background download finishes, and it must work regardless
- * of what the main window happens to be showing. (The SPA's profile menu has its
- * own, *user-initiated* path: see `checkForUpdatesNow`.)
- *
- * Three outcomes:
- *  - **restart** → apply now.
- *  - **later** → remembered per version FOR THIS RUN only. Re-prompting on every
- *    check would nag someone who already said no; forgetting across launches would
- *    mean a deferred update is never mentioned again. Prompting once per launch is
- *    the middle that needs no state on disk — and an explicit "check for updates"
- *    clears it, because asking IS undeclining.
- *  - **skip** → remembered ACROSS launches (persisted): the user doesn't want this
- *    version at all. A newer one is still offered; "check for updates" clears skips.
+ * A main-process window, not page UI, so a background download can prompt whatever the main window
+ * shows. "Later" lasts this run, "skip" persists, and an explicit check clears both.
  */
 async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
   const { version } = info;

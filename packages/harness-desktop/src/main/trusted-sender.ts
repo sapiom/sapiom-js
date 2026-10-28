@@ -1,28 +1,6 @@
 /**
- * Which renderer may drive a privileged IPC channel.
- *
- * Only the harness SPA, running in the MAIN window's top frame at `/`, is trusted.
- * This guard is shared by every privileged channel (update checks, the native
- * folder picker) so the rule lives in exactly one place — copying a security check
- * is how one call site quietly drifts from the others.
- *
- * Two things could otherwise ask, and both are why an identity check alone is not
- * enough:
- *  - another window — a pop-out inherits `webPreferences` (preload included) unless
- *    the main process prevents it (`windows.ts` does; this is the check that still
- *    holds if that ever regresses);
- *  - the main window itself after navigating to a page other than the SPA root on
- *    this same origin, which an agent might control.
- *
- * Hence an identity check (the sender IS the main window's webContents), a frame
- * check (the call comes from its top frame), an origin check (the harness origin the
- * window loaded, not another localhost port such as an agent's dev server, SAP-4382)
- * and a path check (`/`). The SPA lives at `/` and never navigates its top frame over
- * http, so requiring `/` is exact today. If the SPA ever adopts routing this fails
- * CLOSED and logs why, rather than quietly widening.
- *
- * Electron is imported for TYPES ONLY (erased at build), so this module stays free
- * of a runtime `electron` dependency and can be unit-tested.
+ * Every privileged channel shares this guard: other windows, subframes, other local origins and pages
+ * other than the SPA root must not get privileged IPC (SAP-4382). It fails closed and logs why.
  */
 import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
 
