@@ -11,7 +11,7 @@
 //   (defaults to the HOST platform; any further args pass through, e.g.
 //   -c.mac.notarize=true)
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as os from "node:os";
@@ -60,7 +60,7 @@ const isWindows = process.platform === "win32";
 // override for a tester, and letting it leak from a developer's shell into what
 // gets packaged would build a beta-channel artifact by accident.
 const { version } = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
-const { resolveUpdateChannel } = await import(
+const { resolveUpdateChannel, withMinimumSystemVersion, MAC_MINIMUM_DARWIN_VERSION } = await import(
   pathToFileURL(join(pkgDir, "dist", "main", "update-policy.js")).href
 );
 const { channel } = resolveUpdateChannel(version, {});
@@ -152,5 +152,18 @@ run(
   ],
   deployDir,
 );
+
+// Installs on a macOS older than the app supports must not auto-update into a build
+// they cannot launch; the updater honours `minimumSystemVersion`, which
+// electron-builder does not write. Failing here beats publishing an unstamped manifest.
+if (platform === "--mac") {
+  const manifests = readdirSync(outputDir).filter((name) => name.endsWith("-mac.yml"));
+  if (manifests.length === 0) throw new Error(`[pack] no *-mac.yml update manifest in ${outputDir}`);
+  for (const name of manifests) {
+    const file = join(outputDir, name);
+    writeFileSync(file, withMinimumSystemVersion(readFileSync(file, "utf8"), MAC_MINIMUM_DARWIN_VERSION));
+    console.log(`[pack] ${name}: minimumSystemVersion ${MAC_MINIMUM_DARWIN_VERSION}`);
+  }
+}
 
 console.log(`[pack] done → ${outputDir}`);

@@ -130,7 +130,9 @@ smoke check starts two real runtimes, creates independent sessions, and requires
   pins Python 3.11.
 - **macOS 13 (Ventura) is the minimum.** Electron 44+ dropped macOS 12, and the app runs on
   Electron 45. Keep `electronVersion` in `electron-builder.yml` equal to the exact `electron`
-  devDependency.
+  devDependency. `pack.mjs --mac` stamps `minimumSystemVersion` (a Darwin version, see
+  `MAC_MINIMUM_DARWIN_VERSION`) into the `*-mac.yml` manifests, so an install on an older macOS
+  skips the update rather than replacing a working app; raise it with the next OS floor.
 - **Only arm64 is built today.** `macos-14` is Apple Silicon and electron-builder defaults to the
   host arch, so **Intel Macs get no artifact**. Add an `x64`/universal target before GA if Intel users
   are in scope.

@@ -13,6 +13,8 @@
  * `--smoke` run, the packaging gate starts depending on the network and on the
  * state of our published releases, and a deterministic check becomes a flaky one.
  */
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 import {
   autoInstallAllowed,
@@ -20,9 +22,11 @@ import {
   classifyUpdateError,
   DISABLE_ENV_VAR,
   FORCE_ENV_VAR,
+  MAC_MINIMUM_DARWIN_VERSION,
   STABLE_ACCEPTS_PRERELEASE,
   resolveUpdateChannel,
   shouldEnableUpdater,
+  withMinimumSystemVersion,
 } from "./update-policy.js";
 
 const noEnv: NodeJS.ProcessEnv = {};
@@ -439,5 +443,38 @@ describe("autoInstallAllowed", () => {
   it("allows on Windows once the baked config names a publisher (list or scalar)", () => {
     expect(autoInstallAllowed({ platform: "win32", updateConfig: signedList })).toEqual({ allowed: true });
     expect(autoInstallAllowed({ platform: "win32", updateConfig: signedScalar })).toEqual({ allowed: true });
+  });
+});
+
+describe("withMinimumSystemVersion", () => {
+  const manifest =
+    "version: 0.5.0\nfiles:\n  - url: Sapiom-0.5.0-arm64-mac.zip\n    sha512: abc\n    size: 1\npath: Sapiom-0.5.0-arm64-mac.zip\nsha512: abc\nreleaseDate: '2026-01-01T00:00:00.000Z'\n";
+
+  it("appends a top-level key and leaves the rest of the manifest intact", () => {
+    const out = withMinimumSystemVersion(manifest, MAC_MINIMUM_DARWIN_VERSION);
+    expect(out).toBe(`${manifest}minimumSystemVersion: 22.0.0\n`);
+  });
+
+  it("replaces an existing value instead of adding a second key", () => {
+    const once = withMinimumSystemVersion(manifest, "21.0.0");
+    const out = withMinimumSystemVersion(once, MAC_MINIMUM_DARWIN_VERSION);
+    expect(out.match(/^minimumSystemVersion:/gm)).toHaveLength(1);
+    expect(out).toMatch(/^minimumSystemVersion: 22\.0\.0$/m);
+  });
+
+  it("handles a manifest without a trailing newline", () => {
+    expect(withMinimumSystemVersion("version: 1.0.0", "22.0.0")).toBe("version: 1.0.0\nminimumSystemVersion: 22.0.0\n");
+  });
+
+  it("uses the Darwin release of macOS 13, which os.release() reports", () => {
+    expect(MAC_MINIMUM_DARWIN_VERSION).toBe("22.0.0");
+  });
+
+  // pack.mjs is a script with side effects, so its wiring is asserted as text.
+  it("is applied by pack.mjs to every mac manifest", () => {
+    const pack = readFileSync(new URL("../../scripts/pack.mjs", import.meta.url), "utf8");
+    expect(pack).toMatch(/if \(platform === "--mac"\)/);
+    expect(pack).toMatch(/endsWith\("-mac\.yml"\)/);
+    expect(pack).toMatch(/withMinimumSystemVersion\(readFileSync\(file, "utf8"\), MAC_MINIMUM_DARWIN_VERSION\)/);
   });
 });

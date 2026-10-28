@@ -224,6 +224,27 @@ export function autoInstallAllowed(input: AutoInstallInput): AutoInstallDecision
   };
 }
 
+/**
+ * The Darwin release of macOS 13, the oldest macOS Electron 45 runs on. It is a Darwin
+ * version, not "13.0", because electron-updater compares a manifest's
+ * `minimumSystemVersion` with `os.release()`.
+ */
+export const MAC_MINIMUM_DARWIN_VERSION = "22.0.0";
+
+/**
+ * Stamp a mac update manifest (`latest-mac.yml` / `beta-mac.yml`) with
+ * `minimumSystemVersion`, so an install on an older macOS skips the update instead of
+ * replacing a working app with one it cannot launch. electron-builder writes no such
+ * key itself; `scripts/pack.mjs` applies this after packaging.
+ */
+export function withMinimumSystemVersion(manifest: string, version: string): string {
+  const line = `minimumSystemVersion: ${version}`;
+  if (/^minimumSystemVersion:/m.test(manifest)) {
+    return manifest.replace(/^minimumSystemVersion:.*$/m, line);
+  }
+  return `${manifest.replace(/\n*$/, "\n")}${line}\n`;
+}
+
 /** What went wrong with a check, in terms a user can act on. */
 export type UpdateErrorKind =
   /** The channel has no release to offer — not a fault, just nothing published. */
