@@ -90,7 +90,10 @@ publishing.
   `publish_mcp_registry` dispatch), so a release push waits for one approval and
   ordinary pushes ask for none. A run waiting for approval holds the workflow's
   concurrency group: only the newest later run waits behind it (GitHub cancels
-  older waiting ones), so approve or reject promptly.
+  older waiting ones), so approve or reject promptly. Approve the waiting
+  publish before merging the next "chore: version packages" PR: a version whose
+  run gets cancelled is never published, because the next run publishes only the
+  versions on `main` at its own commit.
 - Toolchain in the workflow: Node 24 and npm >= 11.5 (OIDC support) + pnpm 10+.
   `packageManager` in the root `package.json` must stay in sync.
 - The job grants `id-token: write` so the runner can mint the short-lived OIDC
