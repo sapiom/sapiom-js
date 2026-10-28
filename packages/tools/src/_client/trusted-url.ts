@@ -9,18 +9,32 @@ import {
   isLoopbackHostname,
 } from "@sapiom/analytics-core/credential";
 
-/** `hostname` minus its first label, or `undefined` when that leaves a bare TLD. */
-function parentDomain(hostname: string): string | undefined {
+/**
+ * Domains Sapiom owns outright. Sibling trust stops here: under any other domain
+ * (a shared host such as `workers.dev`, or a public suffix such as `co.uk`) a
+ * sibling host can belong to someone else.
+ */
+const SAPIOM_DOMAINS = ["sapiom.ai", "sapiom.dev"];
+
+function isUnderSapiomDomain(hostname: string): boolean {
+  return SAPIOM_DOMAINS.some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+  );
+}
+
+/** `hostname` minus its first label, when that is still inside a Sapiom domain. */
+function sapiomParentDomain(hostname: string): string | undefined {
   const dot = hostname.indexOf(".");
   if (dot < 0) return undefined;
   const parent = hostname.slice(dot + 1);
-  return parent.includes(".") ? parent : undefined;
+  return isUnderSapiomDomain(parent) ? parent : undefined;
 }
 
 /**
  * Refuse a server-supplied `url` unless its host is the configured base's host, a
- * subdomain of the base host's parent domain (sibling Sapiom services share one),
- * or both are loopback hosts. The error names origins only.
+ * subdomain of the base host's parent domain when that parent is a Sapiom domain
+ * (sibling Sapiom services share one), or both are loopback hosts. The error
+ * names origins only.
  */
 export function assertTrustedServiceUrl(
   url: string,
@@ -37,7 +51,7 @@ export function assertTrustedServiceUrl(
     );
   }
   if (target.host === base.host) return;
-  const parent = parentDomain(base.hostname);
+  const parent = sapiomParentDomain(base.hostname);
   if (parent && target.hostname.endsWith(`.${parent}`)) return;
   if (isLoopbackHostname(base.hostname) && isLoopbackHostname(target.hostname))
     return;

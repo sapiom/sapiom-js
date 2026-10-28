@@ -26,6 +26,16 @@ describe("assertTrustedServiceUrl", () => {
       "http://localhost:3000",
     ],
     ["the bare base host", "https://sapiom.ai/x", "https://sapiom.ai"],
+    [
+      "a sibling service on the dev domain",
+      "https://fal.services.sapiom.dev/queue/x",
+      "https://api.sapiom.dev",
+    ],
+    [
+      "the same host on a custom deployment",
+      "https://core.example.com/queue/x",
+      "https://core.example.com",
+    ],
   ])("accepts %s", (_label, url, base) => {
     expect(() => assertTrustedServiceUrl(url, base, LABEL)).not.toThrow();
   });
@@ -51,6 +61,16 @@ describe("assertTrustedServiceUrl", () => {
       "a loopback URL with a remote base",
       "http://127.0.0.1:4000/x",
       "https://api.sapiom.ai",
+    ],
+    [
+      "another tenant on a shared hosting domain",
+      "https://attacker.workers.dev/queue/x",
+      "https://tenant.workers.dev",
+    ],
+    [
+      "another site under a public suffix",
+      "https://attacker.co.uk/queue/x",
+      "https://tenant.co.uk",
     ],
     ["an unparsable URL", "not a url", "https://api.sapiom.ai"],
   ])("refuses %s", (_label, url, base) => {
