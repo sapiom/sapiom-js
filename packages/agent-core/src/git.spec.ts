@@ -195,9 +195,11 @@ describe('credentials never reach git argv', () => {
   let calls: Call[];
   let spy: jest.SpyInstance;
   let savedCount: string | undefined;
+  let gitVersion: string;
 
   beforeEach(() => {
     calls = [];
+    gitVersion = 'git version 2.53.0';
     savedCount = process.env.GIT_CONFIG_COUNT;
     delete process.env.GIT_CONFIG_COUNT;
     const cp = jest.requireActual<typeof import('node:child_process')>('node:child_process');
@@ -206,6 +208,8 @@ describe('credentials never reach git argv', () => {
       args: readonly string[],
       options?: { env?: NodeJS.ProcessEnv },
     ) => {
+      // The version probe is not a credential-bearing call: keep it out of `calls`.
+      if (args[0] === '--version') return gitVersion;
       calls.push({ args: [...args], env: options?.env });
       return '';
     }) as unknown as typeof cp.execFileSync);
@@ -338,6 +342,27 @@ describe('credentials never reach git argv', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('refuses a credential push on git older than 2.31, before running git', () => {
+    gitVersion = 'git version 2.30.2';
+
+    expect(() => pushHead('/tmp/tree', TOKEN_URL, 'main')).toThrow(
+      expect.objectContaining({ code: 'GIT_TOO_OLD', message: expect.stringContaining('2.31') }),
+    );
+    expect(() =>
+      cloneRepo({ cloneUrl: TOKEN_URL, targetDir: '/tmp/x', branch: 'main', repoFullName: 'o/r', cwd: '/tmp' }),
+    ).toThrow(expect.objectContaining({ code: 'GIT_TOO_OLD' }));
+    expect(calls).toHaveLength(0);
+  });
+
+  it('accepts git 2.31 exactly and a vendor-suffixed version', () => {
+    gitVersion = 'git version 2.31.0';
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+    gitVersion = 'git version 2.39.5 (Apple Git-154)';
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+
+    expect(calls).toHaveLength(2);
   });
 
   it('passes a URL without userinfo or a local path through unchanged, with no env', () => {

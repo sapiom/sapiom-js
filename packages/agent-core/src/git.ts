@@ -106,6 +106,7 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
     return { url };
   }
   if (!/^https?:$/.test(parsed.protocol) || !parsed.username || !parsed.password) return { url };
+  assertGitReadsEnvConfig();
   const basic = Buffer.from(
     `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`,
   ).toString("base64");
@@ -113,6 +114,36 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
   parsed.password = "";
   const tokenless = parsed.toString();
   return { url: tokenless, env: gitHeaderEnv(`Authorization: Basic ${basic}`, tokenless) };
+}
+
+/**
+ * git before 2.31 silently ignores `GIT_CONFIG_COUNT`/`KEY`/`VALUE`, so the
+ * credential header is dropped and the request fails like a rejected token.
+ * Fail with the real cause instead. An unreadable version is let through: the
+ * command itself then reports what is wrong.
+ */
+function assertGitReadsEnvConfig(): void {
+  let out: string;
+  try {
+    out = execFileSync("git", ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } catch (err) {
+    const missing = gitMissingError(err);
+    if (missing) throw missing;
+    return;
+  }
+  const match = /(\d+)\.(\d+)/.exec(out ?? "");
+  if (!match) return;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major > 2 || (major === 2 && minor >= 31)) return;
+  throw new AgentOperationError({
+    code: "GIT_TOO_OLD",
+    message: `git ${match[0]} is too old: Sapiom needs git 2.31 or newer.`,
+    hint: "Upgrade Git (https://git-scm.com/downloads), then retry.",
+  });
 }
 
 /**

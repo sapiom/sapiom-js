@@ -40,10 +40,35 @@ export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string,
     writeFileSync(path.join(gitDir, 'info', 'exclude'), 'node_modules/\n.git/\n');
     git(['add', '-A']);
     git(['-c', 'user.email=preview@sapiom.ai', '-c', 'user.name=sapiom-preview', 'commit', '-q', '-m', 'preview']);
+    assertGitReadsEnvConfig();
     git(['push', '--force', cloneUrl, `HEAD:${branch}`], tokenHeaderEnv(token));
   } finally {
     rmSync(gitDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * git before 2.31 silently ignores `GIT_CONFIG_COUNT`/`KEY`/`VALUE`, so the
+ * token header is dropped and the push fails like a rejected token. Fail with
+ * the real cause instead. An unreadable version is let through: the push itself
+ * then reports what is wrong.
+ */
+function assertGitReadsEnvConfig(): void {
+  let out: string;
+  try {
+    out = execFileSync('git', ['--version'], { encoding: 'utf8', stdio: 'pipe' });
+  } catch {
+    return;
+  }
+  const match = /(\d+)\.(\d+)/.exec(out ?? '');
+  if (!match) return;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major > 2 || (major === 2 && minor >= 31)) return;
+  throw new PreviewOperationError({
+    code: 'GIT_TOO_OLD',
+    message: `git ${match[0]} is too old: Sapiom needs git 2.31 or newer.`,
+    hint: 'Upgrade Git (https://git-scm.com/downloads), then retry.',
+  });
 }
 
 /**

@@ -16,13 +16,17 @@ describe('pushLocalDir credential handling', () => {
   let src: string;
   let calls: Call[];
   let savedCount: string | undefined;
+  let gitVersion: string;
 
   beforeEach(() => {
     src = mkdtempSync(path.join(tmpdir(), 'sbxprev-src-'));
     calls = [];
+    gitVersion = 'git version 2.53.0';
     savedCount = process.env.GIT_CONFIG_COUNT;
     delete process.env.GIT_CONFIG_COUNT;
     mockExecFileSync.mockReset().mockImplementation((_file: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) => {
+      // The version probe is not a credential-bearing call: keep it out of `calls`.
+      if (args[0] === '--version') return gitVersion;
       calls.push({ args, env: opts?.env });
       return Buffer.from('');
     });
@@ -73,5 +77,14 @@ describe('pushLocalDir credential handling', () => {
     expect(env.GIT_CONFIG_COUNT).toBe('3');
     expect(env.GIT_CONFIG_KEY_1).toBe('credential.helper');
     expect(env.GIT_CONFIG_KEY_2).toBe('http.extraHeader');
+  });
+
+  it('refuses to push on git older than 2.31', () => {
+    gitVersion = 'git version 2.25.1';
+
+    expect(() => pushLocalDir(src, 'https://git.example/repo', 'sk_SECRET')).toThrow(
+      expect.objectContaining({ code: 'GIT_TOO_OLD', message: expect.stringContaining('2.31') }),
+    );
+    expect(calls.find((c) => c.args.includes('push'))).toBeUndefined();
   });
 });
