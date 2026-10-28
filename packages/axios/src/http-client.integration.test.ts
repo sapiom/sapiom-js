@@ -1032,8 +1032,9 @@ describe("Axios transaction facts redaction", () => {
     expect(headerNames).not.toContain("sapiom-identity");
     expect(headerNames).not.toContain("x-sapiom-api-key");
 
-    const responseFacts = (mocks.complete.mock.calls[0]![1].responseFacts as any)
-      .facts;
+    const responseFacts = (
+      mocks.complete.mock.calls[0]![1].responseFacts as any
+    ).facts;
     expect(Object.keys(responseFacts.headers)).not.toContain("set-cookie");
     expect(responseFacts.headers["content-type"]).toBe("text/plain");
   });

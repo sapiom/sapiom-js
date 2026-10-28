@@ -854,8 +854,9 @@ describe("HTTP Client Integration Tests", () => {
       expect(JSON.stringify(request)).not.toContain("secret");
       expect(Object.keys(request.headers)).toEqual(["accept"]);
 
-      const responseFacts = (mocks.complete.mock.calls[0]![1]
-        .responseFacts as any).facts;
+      const responseFacts = (
+        mocks.complete.mock.calls[0]![1].responseFacts as any
+      ).facts;
       expect(Object.keys(responseFacts.headers)).not.toContain("set-cookie");
       expect(responseFacts.headers["content-type"]).toBe("text/plain");
     });
@@ -890,9 +891,7 @@ describe("HTTP Client Integration Tests", () => {
       expect(metadata.originalRequest.url).toBe(
         "https://api.example.com/paid?token=",
       );
-      expect(Object.keys(metadata.responseHeaders)).not.toContain(
-        "set-cookie",
-      );
+      expect(Object.keys(metadata.responseHeaders)).not.toContain("set-cookie");
       expect(metadata.responseHeaders["x-trace"]).toBe("t");
     });
   });

@@ -37,7 +37,9 @@ describe("withSapiom identity header", () => {
   describe("audience target", () => {
     it("checks an absolute url against its own host, not baseURL", async () => {
       const { client, getHeaderIfMatch } = createClient();
-      const instance = axios.create({ baseURL: "https://x.services.sapiom.ai/" });
+      const instance = axios.create({
+        baseURL: "https://x.services.sapiom.ai/",
+      });
       const mock = new MockAdapter(instance);
       mock.onGet("https://evil.example/x").reply(200, "ok");
       withSapiom(instance, { sapiomClient: client });
@@ -50,7 +52,9 @@ describe("withSapiom identity header", () => {
 
     it("attaches the header to a relative url on the Sapiom host", async () => {
       const { client, getHeaderIfMatch } = createClient();
-      const instance = axios.create({ baseURL: "https://x.services.sapiom.ai/" });
+      const instance = axios.create({
+        baseURL: "https://x.services.sapiom.ai/",
+      });
       const mock = new MockAdapter(instance);
       mock.onGet("/v1/x").reply(200, "ok");
       withSapiom(instance, { sapiomClient: client });
@@ -65,7 +69,9 @@ describe("withSapiom identity header", () => {
 
     it("skips the identity for a request with __sapiom.enabled false", async () => {
       const { client, getHeaderIfMatch } = createClient();
-      const instance = axios.create({ baseURL: "https://x.services.sapiom.ai/" });
+      const instance = axios.create({
+        baseURL: "https://x.services.sapiom.ai/",
+      });
       const mock = new MockAdapter(instance);
       mock.onGet("/v1/x").reply(200, "ok");
       withSapiom(instance, { sapiomClient: client });
