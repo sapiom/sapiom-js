@@ -1,6 +1,6 @@
 /**
  * Agent pages must not reach privileged IPC from another local origin, a subframe or a
- * path other than the SPA root; electron is mocked, so the guard is tested on its own.
+ * path other than the SPA root.
  */
 import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -47,15 +47,8 @@ export function createSetupWindow(): BrowserWindow {
 }
 
 /**
- * The main window: loads the harness SPA from the local server at its
- * boot-token URL. Navigation stays on the harness origin: other local origins open
- * in a preview window, web links in the system browser.
- *
- * It carries a preload — a deliberately minimal one. The SPA is the same bundle
- * `npx @sapiom/harness` serves to a plain browser, so this window is the only
- * place it can offer anything desktop-specific (today: "Check for updates" in the
- * profile menu). The SPA feature-detects `window.sapiomDesktop` and simply
- * omits those affordances in a browser — see `harness/web/src/lib/desktop.ts`.
+ * Other local origins may host agent content, so only the boot-selected harness origin keeps this
+ * window and its preload; the SPA feature-detects `window.sapiomDesktop` (`harness/web/src/lib/desktop.ts`).
  */
 export function createMainWindow(loadUrl: string): BrowserWindow {
   // macOS only: drop the native title bar and inset the traffic lights so they
@@ -86,8 +79,7 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
       preload: desktopPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // Same bundled preload as the setup window: the page may end up showing
-      // agent-served content, so its renderer gets no Node.
+      // The page may end up showing agent-served content, so its renderer gets no Node.
       sandbox: true,
       // How the preload learns the app version. `process.env` would mean relying
       // on a renderer inheriting a variable mutated after startup; this is the

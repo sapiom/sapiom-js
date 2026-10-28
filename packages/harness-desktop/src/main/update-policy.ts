@@ -192,7 +192,7 @@ export function shouldEnableUpdater(input: UpdaterGateInput): UpdaterGate {
 
 export interface AutoInstallInput {
   platform: NodeJS.Platform;
-  /** Raw `resources/app-update.yml`, or null when it could not be read. */
+  /** Raw `resources/app-update.yml`: unreadable (null) must keep install-on-quit off on Windows. */
   updateConfig: string | null;
 }
 

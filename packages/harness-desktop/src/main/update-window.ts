@@ -110,7 +110,7 @@ export async function showUpdatePrompt(parent: BrowserWindow, opts: UpdatePrompt
       preload: updatePreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // Sandboxed, with the bundled CommonJS preload (see scripts/build-preloads.mjs).
+      // A sandboxed preload cannot be ESM, hence the scripts/build-preloads.mjs bundle.
       sandbox: true,
       additionalArguments: [
         `${UPDATE_VERSION_ARG}${opts.version}`,

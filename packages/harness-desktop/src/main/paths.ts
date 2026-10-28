@@ -27,7 +27,7 @@ export function setupPreloadPath(): string {
   return path.join(mainDir, "..", "preload", "setup.cjs");
 }
 
-/** Preload for the MAIN window (the harness SPA): exposes `window.sapiomDesktop`. Same bundle as setup. */
+/** Preload for the MAIN window (the harness SPA): exposes `window.sapiomDesktop`. */
 export function desktopPreloadPath(): string {
   return path.join(mainDir, "..", "preload", "desktop.cjs");
 }
@@ -37,7 +37,7 @@ export function updateHtmlPath(): string {
   return path.join(mainDir, "..", "renderer", "update.html");
 }
 
-/** Preload for the update window: exposes `window.sapiomUpdate`. Same bundle as setup. */
+/** Preload for the update window: exposes `window.sapiomUpdate`. */
 export function updatePreloadPath(): string {
   return path.join(mainDir, "..", "preload", "update.cjs");
 }

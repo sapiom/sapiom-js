@@ -11,8 +11,8 @@
  *  - another window — a pop-out inherits `webPreferences` (preload included) unless
  *    the main process prevents it (`windows.ts` does; this is the check that still
  *    holds if that ever regresses);
- *  - the main window itself after navigating to agent-authored content, which the
- *    harness serves at `/canvas/:sessionId/*` on this same origin.
+ *  - the main window itself after navigating to a page other than the SPA root on
+ *    this same origin, which an agent might control.
  *
  * Hence an identity check (the sender IS the main window's webContents), a frame
  * check (the call comes from its top frame), an origin check (the harness origin the

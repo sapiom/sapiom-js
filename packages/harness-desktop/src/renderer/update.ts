@@ -27,9 +27,8 @@ const restartBtn = document.getElementById("restart") as HTMLButtonElement;
 versionHeaderEl.textContent = bridge.version;
 versionBodyEl.textContent = bridge.version || "A new version";
 
-// Toggle reflects the persisted preference and writes back immediately on change —
-// independent of which button the user ends on, so closing the window still keeps
-// a toggle change.
+// Saved on change, independent of the button the user ends on, so closing the window keeps it;
+// main sends the preference already filtered by build policy.
 autoUpdateEl.checked = bridge.autoUpdate;
 // Inline style, not `hidden`: `.toggle-row` sets its own `display`, which would win.
 if (!bridge.autoUpdateAvailable) autoUpdateEl.closest<HTMLElement>(".toggle-row")!.style.display = "none";

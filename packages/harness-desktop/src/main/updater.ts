@@ -250,8 +250,8 @@ async function setAutoUpdatePref(on: boolean): Promise<void> {
  *
  * A custom window (see `update-window.ts`), not something injected into the page:
  * this fires whenever a background download finishes, and it must work regardless
- * of what the main window happens to be showing. (The SPA's Settings popover has
- * its own, *user-initiated* path — see `checkForUpdatesNow`.)
+ * of what the main window happens to be showing. (The SPA's profile menu has its
+ * own, *user-initiated* path: see `checkForUpdatesNow`.)
  *
  * Three outcomes:
  *  - **restart** → apply now.
@@ -498,7 +498,7 @@ function registerHandlers(): void {
  */
 let updaterStarted = false;
 
-/** The `app-update.yml` packaging baked into this install, or null if unreadable. */
+/** Read from the install itself, so a user preference cannot enable an unverified Windows install. */
 function readBakedUpdateConfig(): string | null {
   try {
     return readFileSync(path.join(process.resourcesPath, "app-update.yml"), "utf8");
