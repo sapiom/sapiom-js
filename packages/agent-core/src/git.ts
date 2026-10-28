@@ -1,7 +1,8 @@
 /**
  * Minimal git helpers for `deploy`. The push targets the minted credential URL
- * directly (passed as the remote argument) rather than persisting it via
- * `remote set-url`, so the short-lived token never lands in `.git/config`.
+ * directly rather than persisting it via `remote set-url`, so the short-lived
+ * token never lands in `.git/config`. The URL's credential is moved into the
+ * child's environment (see {@link gitAuth}) so it never appears in argv.
  */
 import { execFileSync } from "node:child_process";
 
@@ -23,7 +24,7 @@ function gitMissingError(err: unknown): AgentOperationError | null {
   });
 }
 
-function git(args: string[], cwd: string): string {
+function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv): string {
   try {
     // windowsHide: this runs inside console-less GUI processes (the desktop
     // app and the sapiom-dev MCP server) — a console child would otherwise
@@ -33,6 +34,7 @@ function git(args: string[], cwd: string): string {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      env,
     }).trim();
   } catch (err) {
     const missing = gitMissingError(err);
@@ -89,6 +91,51 @@ export function redactCredentials(text: string): string {
   return text.replace(/(https?:\/\/)[^@\s/]+@/gi, "$1***@");
 }
 
+/**
+ * Split a token-bearing `https://user:token@host/...` URL into the tokenless
+ * URL (safe for argv, which every local user can read through `ps`) and an
+ * environment that hands git the same credential as an `Authorization: Basic`
+ * header. Anything without userinfo (a plain URL, a local path) is returned
+ * unchanged with no environment.
+ */
+function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { url };
+  }
+  if (!/^https?:$/.test(parsed.protocol) || !parsed.username || !parsed.password) return { url };
+  const basic = Buffer.from(
+    `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`,
+  ).toString("base64");
+  parsed.username = "";
+  parsed.password = "";
+  return { url: parsed.toString(), env: gitHeaderEnv(`Authorization: Basic ${basic}`) };
+}
+
+/**
+ * Process env plus a command-scoped `http.extraHeader`, appended after any
+ * `GIT_CONFIG_*` pairs the user already set. Without userinfo a rejected
+ * header makes git fall back to credential helpers, askpass and the terminal,
+ * which could hang or send a different credential: the helper list is reset
+ * and both prompts are disabled so a 401 fails fast.
+ */
+function gitHeaderEnv(header: string): NodeJS.ProcessEnv {
+  const existing = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "", 10);
+  const base = Number.isInteger(existing) && existing > 0 ? existing : 0;
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    [`GIT_CONFIG_KEY_${base}`]: "credential.helper",
+    [`GIT_CONFIG_VALUE_${base}`]: "",
+    [`GIT_CONFIG_KEY_${base + 1}`]: "http.extraHeader",
+    [`GIT_CONFIG_VALUE_${base + 1}`]: header,
+    GIT_CONFIG_COUNT: String(base + 2),
+  };
+}
+
 export interface CloneRepoOptions {
   /**
    * Token-bearing HTTPS clone URL. SECRET: it embeds a live, read-only,
@@ -122,6 +169,7 @@ export interface CloneRepoOptions {
  */
 export function cloneRepo(opts: CloneRepoOptions): void {
   const { cloneUrl, targetDir, branch, repoFullName, cwd } = opts;
+  const auth = gitAuth(cloneUrl);
   try {
     execFileSync(
       "git",
@@ -136,10 +184,10 @@ export function cloneRepo(opts: CloneRepoOptions): void {
         "--branch",
         branch,
         "--",
-        cloneUrl,
+        auth.url,
         targetDir,
       ],
-      { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", windowsHide: true },
+      { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", windowsHide: true, env: auth.env },
     );
   } catch (err) {
     const missing = gitMissingError(err);
@@ -174,7 +222,8 @@ export function pushHead(dir: string, pushUrl: string, branch: string): void {
   // used only when retrying a credential-rejected push; the freshly
   // provisioned repo may already contain a starting commit, so a plain push is
   // non-fast-forward. The remote is only a build source.
-  git(["push", "--force", pushUrl, `HEAD:${branch}`], dir);
+  const auth = gitAuth(pushUrl);
+  git(["push", "--force", auth.url, `HEAD:${branch}`], dir, auth.env);
 }
 
 /**
@@ -204,5 +253,6 @@ export function pushSynthesizedTree(
     ],
     treeDir,
   );
-  git(["push", "--force", pushUrl, `HEAD:${branch}`], treeDir);
+  const auth = gitAuth(pushUrl);
+  git(["push", "--force", auth.url, `HEAD:${branch}`], treeDir, auth.env);
 }

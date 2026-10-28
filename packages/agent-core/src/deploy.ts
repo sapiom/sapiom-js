@@ -20,6 +20,8 @@ import { assertDeployable, pushHead, pushSynthesizedTree } from "./git.js";
  * credential may have expired between the mint and the push (e.g. a slow
  * bundle). Matches the patterns git reports for HTTP 401/403 and credential
  * rejection, checking the already-redacted hint so the match is safe to log.
+ * The push credential travels as a header with prompts disabled, so a 401
+ * surfaces as git's "terminal prompts disabled" failure.
  */
 function isPushAuthError(err: unknown): boolean {
   if (!(err instanceof AgentOperationError) || err.code !== "GIT") return false;
@@ -28,7 +30,8 @@ function isPushAuthError(err: unknown): boolean {
     text.includes("authentication failed") ||
     text.includes("could not read from") ||
     text.includes("the requested url returned error: 401") ||
-    text.includes("the requested url returned error: 403")
+    text.includes("the requested url returned error: 403") ||
+    text.includes("terminal prompts disabled")
   );
 }
 
