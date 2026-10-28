@@ -33,9 +33,10 @@ describe("server instructions", () => {
     // from the served endpoint, body and digest together. Editing the body by hand
     // fails this; the fix is to re-run the script, never to re-point the digest.
     expect(AUTHORING_INSTRUCTIONS_DIGEST).toMatch(/^[0-9a-f]{64}$/);
-    // A release id is either a version (2.14) or a date (YYYY-MM-DD).
+    // A release id is either a version (2.14) or a date (YYYY-MM-DD), optionally with a
+    // same-day revision suffix (2026-10-27.7).
     expect(AUTHORING_INSTRUCTIONS_RELEASE).toMatch(
-      /^(\d+\.\d+|\d{4}-\d{2}-\d{2})$/,
+      /^(\d+\.\d+|\d{4}-\d{2}-\d{2}(\.\d+)?)$/,
     );
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
@@ -56,8 +57,11 @@ describe("server instructions", () => {
     // the old package names are gone entirely — new users never see them
     expect(AUTHORING_INSTRUCTIONS).not.toContain("defineOrchestration");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("@sapiom/orchestration");
-    // Pointer to the full docs + the scaffold-shipped guidance (AGENTS.md + skill)
-    expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/agents");
+    // Pointer to the scaffold-shipped guidance (AGENTS.md + skill). The docs.sapiom.ai
+    // agent pages it also linked were retired, and no link to them may come back.
+    expect(AUTHORING_INSTRUCTIONS).not.toMatch(
+      /docs\.sapiom\.ai\/(agents|guides|integration|reference|router)\b/,
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
   });
@@ -165,6 +169,10 @@ describe("server instructions", () => {
       "GET /v1/workflows/receipts/{id}",
       "POST /v1/workflows/receipts/{id}/replay",
       "POST /v1/workflows/fires/{id}/replay",
+      // The REST trigger routes: the signal-target webhook trigger is created there, and a
+      // client older than `@sapiom/mcp` 0.16 manages event/webhook triggers and secrets there.
+      "POST /v1/workflows/definitions/{slug}/triggers",
+      "POST /v1/workflows/triggers/{id}/secret/rotate",
     ];
     const outsideAllowList = ALLOWED_WORKFLOWS_ROUTES.reduce(
       (text, route) => text.split(route).join(""),
@@ -229,7 +237,7 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("App Link `/hook/*` receiver");
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "https://docs.sapiom.ai/guides/triggers",
+      "POST /v1/workflows/definitions/{slug}/triggers",
     );
   });
 
@@ -271,8 +279,8 @@ describe("server instructions", () => {
     // the token expiry that makes storing the address wrong too.
     const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
     expect(flat).toContain("**redirector, not a reverse proxy**");
-    expect(flat).toContain("request the root WITHOUT following redirects");
-    expect(flat).toContain("Do NOT make `__status` your FIRST call");
+    expect(flat).toContain("request the root without following redirects");
+    expect(flat).toContain("Don't make `__status` your first call");
     expect(flat).toContain(
       "Re-read the address per use rather than storing it",
     );
