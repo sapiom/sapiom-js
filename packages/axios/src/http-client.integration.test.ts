@@ -979,3 +979,100 @@ describe("Axios HTTP Client Integration Tests", () => {
     });
   });
 });
+
+describe("Axios transaction facts redaction", () => {
+  const PAYMENT_REQUIRED = {
+    x402Version: 1,
+    accepts: [
+      {
+        scheme: "exact",
+        network: "base",
+        maxAmountRequired: "1000000",
+        resource: "https://api.example.com/paid",
+        payTo: "0x123",
+        asset: "0xUSDC",
+      },
+    ],
+  };
+
+  it("records no credential headers and no query values", async () => {
+    const { client: sapiomClient, mocks } = createMockSapiomClient();
+    const instance = axios.create({ baseURL: "https://api.example.com" });
+    const mock = new MockAdapter(instance);
+    mocks.create.mockResolvedValue({
+      id: "tx-1",
+      status: TransactionStatus.AUTHORIZED,
+    } as any);
+    mocks.complete.mockResolvedValue({} as any);
+    mock
+      .onGet(/^\/p\?/)
+      .reply(200, "ok", { "set-cookie": "s=1", "content-type": "text/plain" });
+    withSapiom(instance, { sapiomClient });
+
+    await instance.get("/p?q=secret", {
+      headers: {
+        Cookie: "c=1",
+        "Sapiom-Identity": "jwt",
+        "x-sapiom-api-key": "sk_1",
+        Accept: "text/plain",
+      },
+    });
+    await flushPromises();
+
+    const request = (mocks.create.mock.calls[0]![0].requestFacts as any)
+      .request;
+    expect(request.url).toBe("https://api.example.com/p?q=");
+    expect(request.urlParsed.search).toBe("?q=");
+    expect(JSON.stringify(request)).not.toContain("secret");
+    const headerNames = Object.keys(request.headers).map((h) =>
+      h.toLowerCase(),
+    );
+    expect(headerNames).toContain("accept");
+    expect(headerNames).not.toContain("cookie");
+    expect(headerNames).not.toContain("sapiom-identity");
+    expect(headerNames).not.toContain("x-sapiom-api-key");
+
+    const responseFacts = (mocks.complete.mock.calls[0]![1].responseFacts as any)
+      .facts;
+    expect(Object.keys(responseFacts.headers)).not.toContain("set-cookie");
+    expect(responseFacts.headers["content-type"]).toBe("text/plain");
+  });
+
+  it("filters the 402 response headers and redacts the original URL", async () => {
+    const { client: sapiomClient, mocks } = createMockSapiomClient();
+    const instance = axios.create({ baseURL: "https://api.example.com" });
+    const mock = new MockAdapter(instance);
+    mocks.create.mockResolvedValue({
+      id: "tx-auth",
+      status: TransactionStatus.AUTHORIZED,
+    } as any);
+    mocks.get.mockResolvedValue({
+      id: "tx-auth",
+      status: TransactionStatus.AUTHORIZED,
+      requiresPayment: false,
+    } as any);
+    mocks.reauthorizeWithPayment.mockResolvedValue({
+      id: "tx-auth",
+      status: TransactionStatus.AUTHORIZED,
+      payment: { authorizationPayload: "payment-token" },
+    } as any);
+    mocks.complete.mockResolvedValue({} as any);
+    let calls = 0;
+    mock.onGet(/^\/paid\?/).reply(() => {
+      calls++;
+      return calls === 1
+        ? [402, PAYMENT_REQUIRED, { "set-cookie": "s=1", "x-trace": "t" }]
+        : [200, { paid: true }];
+    });
+    withSapiom(instance, { sapiomClient });
+
+    await instance.get("/paid?token=secret");
+    await flushPromises();
+
+    const metadata = (mocks.reauthorizeWithPayment.mock.calls[0]![1] as any)
+      .metadata;
+    expect(metadata.originalRequest.url).toBe("/paid?token=");
+    expect(Object.keys(metadata.responseHeaders)).not.toContain("set-cookie");
+    expect(metadata.responseHeaders["x-trace"]).toBe("t");
+  });
+});

@@ -1,4 +1,4 @@
-import { AxiosInstance } from "axios";
+import { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 
 import {
   BaseSapiomIntegrationConfig,
@@ -20,6 +20,36 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
    * Overrides default timeout (30s) and poll interval (1s).
    */
   polling?: TransactionPollingConfig;
+}
+
+/**
+ * follow-redirects strips only authorization, cookie and proxy-authorization when
+ * the origin changes, so the identity JWT is removed here. Applies to axios's Node
+ * http adapter, the only one that calls `beforeRedirect`.
+ */
+function dropIdentityOnCrossOriginRedirect(
+  config: InternalAxiosRequestConfig,
+  targetUrl: string,
+): void {
+  const origin = new URL(targetUrl).origin;
+  const callerHook = config.beforeRedirect;
+  config.beforeRedirect = (options, responseDetails, ...rest: unknown[]) => {
+    (callerHook as any)?.(options, responseDetails, ...rest);
+    const port = options.port ? `:${options.port}` : "";
+    let hopOrigin: string | undefined;
+    try {
+      hopOrigin = new URL(`${options.protocol}//${options.hostname}${port}`)
+        .origin;
+    } catch {
+      hopOrigin = undefined;
+    }
+    if (hopOrigin === origin) return;
+    const headers = options.headers as Record<string, unknown> | undefined;
+    if (!headers) return;
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === "sapiom-identity") delete headers[name];
+    }
+  };
 }
 
 /**
@@ -99,11 +129,13 @@ export function withSapiom(
   // Identity header interceptor: attach Sapiom-Identity when target matches token audience
   if (sapiomClient.identity) {
     axiosInstance.interceptors.request.use(async (config) => {
-      const url = config.url
-        ? config.baseURL
-          ? `${config.baseURL}${config.url}`
-          : config.url
-        : undefined;
+      const metadata = {
+        ...(axiosInstance as any).__sapiomDefaultMetadata,
+        ...(config as any).__sapiom,
+      };
+      if (metadata.enabled === false) return config;
+      // The URL axios itself will request: an absolute `url` ignores `baseURL`.
+      const url = config.url !== undefined ? axiosInstance.getUri(config) : undefined;
       if (url) {
         const identityHeaders =
           await sapiomClient.identity.getHeaderIfMatch(url);
@@ -112,6 +144,7 @@ export function withSapiom(
             "Sapiom-Identity",
             identityHeaders["Sapiom-Identity"],
           );
+          dropIdentityOnCrossOriginRedirect(config, url);
         }
       }
       return config;

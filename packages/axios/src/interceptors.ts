@@ -17,6 +17,9 @@ import {
   HttpClientResponseFacts,
   HttpClientErrorFacts,
   FailureMode,
+  redactSearch,
+  redactUrlForFacts,
+  sanitizeFactHeaders,
 } from "@sapiom/core";
 
 import type { TransactionPollingConfig } from "@sapiom/core";
@@ -394,38 +397,26 @@ export function addAuthorizationInterceptor(
           protocol: parsed.protocol,
           hostname: parsed.hostname,
           pathname: parsed.pathname,
-          search: parsed.search,
+          search: redactSearch(parsed.search),
           port: parsed.port ? parseInt(parsed.port) : null,
         };
       } catch {
         urlParsed = {
           protocol: "",
           hostname: "",
-          pathname: endpoint,
+          pathname: redactUrlForFacts(endpoint).split("?", 1)[0] ?? "",
           search: "",
           port: null,
         };
       }
 
-      const sanitizedHeaders: Record<string, string> = {};
-      if (axiosConfig.headers) {
-        Object.entries(axiosConfig.headers as Record<string, any>).forEach(
-          ([key, value]) => {
-            const lowerKey = key.toLowerCase();
-            if (
-              !lowerKey.includes("auth") &&
-              !lowerKey.includes("key") &&
-              !lowerKey.includes("token")
-            ) {
-              sanitizedHeaders[key] = String(value);
-            }
-          },
-        );
-      }
+      const sanitizedHeaders = sanitizeFactHeaders(
+        axiosConfig.headers as Record<string, unknown> | undefined,
+      );
 
       const requestFacts: HttpClientRequestFacts = {
         method,
-        url: fullUrl,
+        url: redactUrlForFacts(fullUrl),
         urlParsed,
         headers: sanitizedHeaders,
         hasBody: !!axiosConfig.data,
@@ -625,10 +616,12 @@ export function addPaymentInterceptor(
                   x402: x402Response,
                   metadata: {
                     originalRequest: {
-                      url: originalConfig.url,
+                      url: redactUrlForFacts(originalConfig.url ?? ""),
                       method: originalConfig.method,
                     },
-                    responseHeaders: error.response?.headers,
+                    responseHeaders: sanitizeFactHeaders(
+                      error.response?.headers as Record<string, unknown>,
+                    ),
                     httpStatusCode: 402,
                   },
                 },
@@ -654,10 +647,12 @@ export function addPaymentInterceptor(
               x402: x402Response,
               metadata: {
                 originalRequest: {
-                  url: originalConfig.url,
+                  url: redactUrlForFacts(originalConfig.url ?? ""),
                   method: originalConfig.method,
                 },
-                responseHeaders: error.response?.headers,
+                responseHeaders: sanitizeFactHeaders(
+                  error.response?.headers as Record<string, unknown>,
+                ),
                 httpStatusCode: 402,
               },
             },
@@ -789,21 +784,9 @@ export function addCompletionInterceptor(
         const startTime = (axiosConfig as any).__sapiomStartTime || Date.now();
         const durationMs = Date.now() - startTime;
 
-        const sanitizedHeaders: Record<string, string> = {};
-        const sensitiveHeaders = new Set([
-          "set-cookie",
-          "authorization",
-          "x-api-key",
-        ]);
-        if (response.headers) {
-          Object.entries(response.headers as Record<string, any>).forEach(
-            ([key, value]) => {
-              if (!sensitiveHeaders.has(key.toLowerCase())) {
-                sanitizedHeaders[key] = String(value);
-              }
-            },
-          );
-        }
+        const sanitizedHeaders = sanitizeFactHeaders(
+          response.headers as Record<string, unknown> | undefined,
+        );
 
         const facts: HttpClientResponseFacts = {
           status: response.status,
