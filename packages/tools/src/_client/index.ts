@@ -188,7 +188,10 @@ export function attributionFromEnv(): Attribution {
 export class Transport {
   readonly capabilityDelivery: "legacy" | "executions";
   readonly coreBaseUrl: string | undefined;
-  private readonly apiKey: string | undefined;
+  // Runtime-private (not TS `private`) so serializing or logging a handle that
+  // holds this transport cannot carry either secret.
+  readonly #apiKey: string | undefined;
+  readonly #resumeToken: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly attribution: Attribution;
   /**
@@ -196,7 +199,9 @@ export class Transport {
    * Explicit config wins; otherwise the ambient env var, so the sandbox runtime —
    * which injects `SAPIOM_CAPABILITY_RESUME_TOKEN` — keeps working unchanged.
    */
-  readonly resumeToken: string | undefined;
+  get resumeToken(): string | undefined {
+    return this.#resumeToken;
+  }
   private readonly policy: CredentialPolicy;
   /**
    * Lazily-created usage-analytics emitter (see `./analytics.ts`). Not readonly:
@@ -208,10 +213,10 @@ export class Transport {
   constructor(config: TransportConfig = {}) {
     this.capabilityDelivery = config.capabilityDelivery ?? "legacy";
     this.coreBaseUrl = config.coreBaseUrl;
-    this.apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
+    this.#apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
     this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.attribution = config.attribution ?? {};
-    this.resumeToken =
+    this.#resumeToken =
       config.resumeToken ??
       process.env.SAPIOM_CAPABILITY_RESUME_TOKEN ??
       undefined;
@@ -229,16 +234,31 @@ export class Transport {
    */
   withAttribution(attribution: Attribution): Transport {
     const derived = new Transport({
-      apiKey: this.apiKey,
+      apiKey: this.#apiKey,
       fetch: this.fetchImpl,
       attribution: { ...this.attribution, ...attribution },
-      resumeToken: this.resumeToken,
+      resumeToken: this.#resumeToken,
       coreBaseUrl: this.coreBaseUrl,
       capabilityDelivery: this.capabilityDelivery,
       allowInsecureHttp: this.policy.allowInsecureHttp,
     });
     derived.analyticsHolder = this.analyticsHolder;
     return derived;
+  }
+
+  /** Only the non-secret settings, so a serialized handle never carries the transport's secrets. */
+  toJSON(): Pick<Transport, "capabilityDelivery" | "coreBaseUrl"> {
+    return {
+      capabilityDelivery: this.capabilityDelivery,
+      coreBaseUrl: this.coreBaseUrl,
+    };
+  }
+
+  [Symbol.for("nodejs.util.inspect.custom")](): Pick<
+    Transport,
+    "capabilityDelivery" | "coreBaseUrl"
+  > {
+    return this.toJSON();
   }
 
   /**
@@ -273,7 +293,7 @@ export class Transport {
     init: RequestInit = {},
     options: TransportRequestOptions = {},
   ): Promise<Response> {
-    if (!this.apiKey) {
+    if (!this.#apiKey) {
       throw new Error(
         "@sapiom/tools: no tenant credential. Pass createClient({ apiKey }) for standalone use, " +
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
@@ -299,7 +319,7 @@ export class Transport {
         { ...init, headers },
         {
           header: options.authHeader ?? DEFAULT_AUTH_HEADER,
-          value: this.apiKey,
+          value: this.#apiKey,
         },
         this.policy,
       );
@@ -327,7 +347,7 @@ export class Transport {
     error?: unknown,
   ): void {
     try {
-      analyticsFor(this.analyticsHolder, this.apiKey).track(
+      analyticsFor(this.analyticsHolder, this.#apiKey).track(
         options.analyticsEvent ?? CAPABILITY_CALL_EVENT,
         capabilityCallData({
           url: options.analyticsUrl ?? url,
@@ -360,7 +380,7 @@ export class Transport {
       if (cache.has(key)) return;
       cache.set(key, now);
       if (cache.size > 1000) cache.delete(cache.keys().next().value!);
-      analyticsFor(this.analyticsHolder, this.apiKey).track(
+      analyticsFor(this.analyticsHolder, this.#apiKey).track(
         CAPABILITY_CALL_EVENT,
         {
           ...capabilityCallData({
@@ -383,7 +403,7 @@ export class Transport {
 
   observeExecutionWaitInterrupted(executionId: string): void {
     try {
-      analyticsFor(this.analyticsHolder, this.apiKey).track(
+      analyticsFor(this.analyticsHolder, this.#apiKey).track(
         "capability.execution.wait_interrupted",
         { execution_id: executionId },
       );
