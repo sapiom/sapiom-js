@@ -76,13 +76,14 @@ export function assertCredentialMayTravel(
   );
 }
 
-/** What `fetch` itself drops on an origin change, plus the other credential header. */
+/** What `fetch` itself drops on an origin change, plus the other credentials: the key and the identity JWT. */
 const CROSS_ORIGIN_DROPPED: ReadonlySet<string> = new Set([
   "authorization",
   "proxy-authorization",
   "cookie",
   "host",
   "x-api-key",
+  "sapiom-identity",
 ]);
 
 /** Headers for a hop to another origin: no credential, no `x-sapiom-*` context. */

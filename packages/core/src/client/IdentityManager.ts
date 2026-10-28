@@ -1,3 +1,5 @@
+import { isLoopbackHostname } from "@sapiom/analytics-core/credential";
+
 import { HttpClient } from "./HttpClient.js";
 
 /**
@@ -79,9 +81,10 @@ export class IdentityManager {
   /**
    * Convenience method: resolves the token and returns the `Sapiom-Identity` header
    * if the target URL's hostname matches the token audience. Returns empty object otherwise.
+   * Only https targets qualify, or plain http to a loopback host: the JWT is a bearer credential.
    */
   async getHeaderIfMatch(targetUrl: string): Promise<Record<string, string>> {
-    const hostname = this.extractHostname(targetUrl);
+    const hostname = this.extractSecureHostname(targetUrl);
     if (!hostname) return {};
 
     const token = await this.resolveToken();
@@ -235,11 +238,17 @@ export class IdentityManager {
     return false;
   }
 
-  private extractHostname(url: string): string | null {
+  private extractSecureHostname(url: string): string | null {
+    let parsed: URL;
     try {
-      return new URL(url).hostname;
+      parsed = new URL(url);
     } catch {
       return null;
     }
+    if (parsed.protocol === "https:") return parsed.hostname;
+    if (parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname)) {
+      return parsed.hostname;
+    }
+    return null;
   }
 }

@@ -244,6 +244,49 @@ describe("IdentityManager", () => {
     });
   });
 
+  describe("channel", () => {
+    it("should NOT attach header over plain http to a matching non-loopback host", async () => {
+      const httpClient = createMockHttpClient();
+      const manager = new IdentityManager(httpClient);
+      mockTokenResponse("services.sapiom.ai");
+      await manager.getToken();
+
+      const headers = await manager.getHeaderIfMatch(
+        "http://services.sapiom.ai/v1/models",
+      );
+      expect(headers).toEqual({});
+
+      manager.dispose();
+    });
+
+    it("should attach header over plain http to a matching loopback host", async () => {
+      const httpClient = createMockHttpClient();
+      const manager = new IdentityManager(httpClient);
+      const { jwt } = mockTokenResponse("localhost");
+
+      const headers = await manager.getHeaderIfMatch(
+        "http://localhost:3000/v1/models",
+      );
+      expect(headers["Sapiom-Identity"]).toBe(jwt);
+
+      manager.dispose();
+    });
+
+    it("should NOT attach header to a non-http(s) URL", async () => {
+      const httpClient = createMockHttpClient();
+      const manager = new IdentityManager(httpClient);
+      mockTokenResponse("services.sapiom.ai");
+      await manager.getToken();
+
+      const headers = await manager.getHeaderIfMatch(
+        "ws://services.sapiom.ai/v1/stream",
+      );
+      expect(headers).toEqual({});
+
+      manager.dispose();
+    });
+  });
+
   describe("graceful degradation", () => {
     it("should return null when facilitator is unreachable", async () => {
       const httpClient = createMockHttpClient();

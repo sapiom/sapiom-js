@@ -198,7 +198,7 @@ describe("resolveCredentialPolicy", () => {
 });
 
 describe("withoutCrossOriginHeaders", () => {
-  it("drops the credential, every x-sapiom-* header, and what fetch drops itself", () => {
+  it("drops the credentials, the identity JWT, every x-sapiom-* header, and what fetch drops itself", () => {
     expect(
       withoutCrossOriginHeaders({
         "x-sapiom-api-key": "k",
@@ -209,6 +209,7 @@ describe("withoutCrossOriginHeaders", () => {
         "Proxy-Authorization": "Basic p",
         cookie: "c=1",
         host: "api.sapiom.ai",
+        "Sapiom-Identity": "jwt",
         accept: "application/json",
         "content-type": "application/json",
       }),
