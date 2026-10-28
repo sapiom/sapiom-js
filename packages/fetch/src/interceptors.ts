@@ -498,9 +498,9 @@ export async function handlePayment(
 
   return await fetchDroppingIdentityCrossOrigin(
     globalThis.fetch,
-    new Request(requestForRetry, { headers: retryHeaders }),
+    new Request(requestForRetry.clone(), { headers: retryHeaders }),
     "@sapiom/fetch",
-    identityOptions,
+    { ...identityOptions, replay: requestForRetry },
   );
 }
 

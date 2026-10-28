@@ -15,26 +15,6 @@ import {
   CompletionConfig,
 } from "./interceptors.js";
 
-/** What the identity redirect path must keep from the caller's request once it rebuilds it. */
-function identityFetchOptions(
-  input: string | URL | Request,
-  init?: RequestInit,
-): IdentityFetchOptions {
-  const body = init?.body as
-    | { getReader?: unknown; [Symbol.asyncIterator]?: unknown }
-    | null
-    | undefined;
-  // A Request does not say what its body was built from, so it is streamed like
-  // one: buffering could hold an endless upload back.
-  const streamBody =
-    (typeof body === "object" &&
-      body !== null &&
-      (typeof body.getReader === "function" ||
-        typeof body[Symbol.asyncIterator] === "function")) ||
-    (body === undefined && input instanceof Request && input.body !== null);
-  return { streamBody, dispatcher: (init as any)?.dispatcher };
-}
-
 /**
  * Configuration for Sapiom-enabled Fetch client
  */
@@ -155,7 +135,10 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     }
 
     let request = new Request(input, init);
-    const identityOptions = identityFetchOptions(input, init);
+    // A request rebuilt for a redirect would lose the caller's undici dispatcher.
+    const identityOptions: IdentityFetchOptions = {
+      dispatcher: (init as any)?.dispatcher,
+    };
 
     // Attach identity header if target matches token audience
     if (sapiomClient.identity) {
@@ -176,13 +159,13 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     let error: Error | null = null;
 
     try {
-      // Clone before sending so we have an unconsumed body for 402 retry
+      // Clone before sending: an unconsumed body for a 402 retry or a 307/308 resend
       const requestForRetry = request.clone();
       response = await fetchDroppingIdentityCrossOrigin(
         globalThis.fetch,
         request,
         "@sapiom/fetch",
-        identityOptions,
+        { ...identityOptions, replay: requestForRetry },
       );
 
       if (response.status === 402) {

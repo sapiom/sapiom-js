@@ -209,7 +209,7 @@ describe("createFetch identity across redirects", () => {
     expect(received.b![0]!["sapiom-identity"]).toBeUndefined();
   });
 
-  it("keeps the caller's dispatcher and streams its stream body", async () => {
+  it("sends the caller's request with its dispatcher", async () => {
     const spy = jest
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => new Response("ok"));
@@ -217,64 +217,114 @@ describe("createFetch identity across redirects", () => {
       const { client } = createSapiomClient();
       const fetch = createFetch({ sapiomClient: client });
       const dispatcher = { name: "proxy-agent" };
-      const body = new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("chunk"));
-          controller.close();
-        },
-      });
 
       await fetch("http://127.0.0.1:9/upload", {
         method: "POST",
-        body,
-        duplex: "half",
+        body: "payload",
         dispatcher,
       } as unknown as RequestInit);
 
-      const init = spy.mock.calls[0]![1] as RequestInit & {
-        dispatcher?: unknown;
-        duplex?: string;
-      };
-      expect(init.headers).toMatchObject({ "sapiom-identity": "identity-jwt" });
+      const [sent, init] = spy.mock.calls[0]! as [
+        Request,
+        RequestInit & { dispatcher?: unknown },
+      ];
+      expect(sent.headers.get("sapiom-identity")).toBe("identity-jwt");
+      expect(await sent.text()).toBe("payload");
       expect(init.dispatcher).toBe(dispatcher);
-      expect(init.body).toBeInstanceOf(ReadableStream);
-      expect(init.duplex).toBe("half");
     } finally {
       spy.mockRestore();
     }
   });
 
-  it("starts sending a Request input's stream body before it ends", async () => {
-    let firstChunk: () => void;
-    const chunkArrived = new Promise<void>((resolve) => (firstChunk = resolve));
+  it("sends a keepalive Request input with a string body", async () => {
     const server = await listen("a", (req, res) => {
-      req.once("data", () => {
-        firstChunk();
-      });
-      req.on("end", () => res.end("ok"));
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => res.end(body));
     });
     const { client } = createSapiomClient();
     const fetch = createFetch({ sapiomClient: client });
-    let close: () => void;
-    const body = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("first"));
-        close = () => controller.close();
-      },
-    });
 
-    const pending = fetch(
-      new Request(`${server}/upload`, {
+    const response = await fetch(
+      new Request(`${server}/beacon`, {
         method: "POST",
-        body,
-        duplex: "half",
-      } as unknown as RequestInit),
+        body: "payload",
+        keepalive: true,
+      }),
     );
-    await chunkArrived;
-    close!();
-    const response = await pending;
 
-    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("payload");
     expect(received.a![0]!["sapiom-identity"]).toBe("identity-jwt");
   });
+
+  it("resends a Request input's body on a 307 to another origin", async () => {
+    const target = await listen("b", (req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => res.end(body));
+    });
+    const origin = await listen("a", (req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(307, { location: `${target}/next` });
+        res.end();
+      });
+    });
+    const { client } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+
+    const response = await fetch(
+      new Request(`${origin}/start`, { method: "POST", body: "payload" }),
+    );
+
+    expect(await response.text()).toBe("payload");
+    expect(received.b![0]!["sapiom-identity"]).toBeUndefined();
+  });
+
+  const streamed = (body: ReadableStream): RequestInit =>
+    ({ method: "POST", body, duplex: "half" }) as RequestInit;
+  const calls: [
+    string,
+    (url: string, body: ReadableStream) => [string | Request, RequestInit?],
+  ][] = [
+    ["a Request input", (url, body) => [new Request(url, streamed(body))]],
+    [
+      "a Request input with `body: null`",
+      (url, body) => [new Request(url, streamed(body)), { body: null }],
+    ],
+    ["a URL with a stream body", (url, body) => [url, streamed(body)]],
+  ];
+
+  it.each(calls)(
+    "starts sending the stream body of %s before it ends",
+    async (_label, args) => {
+      let firstChunk: () => void;
+      const chunkArrived = new Promise<void>(
+        (resolve) => (firstChunk = resolve),
+      );
+      const server = await listen("a", (req, res) => {
+        req.once("data", () => {
+          firstChunk();
+        });
+        req.on("end", () => res.end("ok"));
+      });
+      const { client } = createSapiomClient();
+      const fetch = createFetch({ sapiomClient: client });
+      let close: () => void;
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("first"));
+          close = () => controller.close();
+        },
+      });
+
+      const pending = fetch(...args(`${server}/upload`, body));
+      await chunkArrived;
+      close!();
+      const response = await pending;
+
+      expect(response.status).toBe(200);
+      expect(received.a![0]!["sapiom-identity"]).toBe("identity-jwt");
+    },
+  );
 });

@@ -7,7 +7,6 @@ interface Hop {
   body?: string;
 }
 
-/** A fetch that answers from `routes` (url -> response factory) and records every hop. */
 function recordingFetch(routes: Record<string, () => Response>) {
   const hops: Hop[] = [];
   const impl = jest.fn(async (input: any, init?: RequestInit) => {
@@ -20,7 +19,8 @@ function recordingFetch(routes: Record<string, () => Response>) {
       init?.body instanceof ArrayBuffer
         ? Buffer.from(init.body).toString()
         : undefined;
-    hops.push({ url, headers, method: init?.method, body });
+    const method = init?.method ?? (input as Request).method;
+    hops.push({ url, headers, method, body });
     const route = routes[url];
     if (!route) throw new Error(`unexpected request to ${url}`);
     return route();
@@ -65,7 +65,7 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
     expect(hops[1]!.headers["sapiom-identity"]).toBe("jwt");
   });
 
-  it("resends a buffered body on a 307", async () => {
+  it("resends the replay copy's body on a 307", async () => {
     const { impl, hops } = recordingFetch({
       "https://a.services.sapiom.ai/x": redirect(307, "https://b.example/y"),
       "https://b.example/y": ok(),
@@ -76,7 +76,9 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
       body: JSON.stringify({ a: 1 }),
     });
 
-    await fetchDroppingIdentityCrossOrigin(impl, request, "test");
+    await fetchDroppingIdentityCrossOrigin(impl, request, "test", {
+      replay: request.clone(),
+    });
 
     expect(hops[1]!.method).toBe("POST");
     expect(hops[1]!.body).toBe('{"a":1}');
@@ -107,36 +109,29 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
     expect(res.status).toBe(302);
     expect(calls.mock.calls[0]![0]).toBe(request);
   });
-  it("forwards a caller stream unbuffered and refuses to resend it on a 307", async () => {
-    const seen: RequestInit[] = [];
-    const impl = jest.fn(async (_url: any, init?: RequestInit) => {
-      seen.push(init!);
+
+  it("sends the caller's request itself first, then refuses a 307 without a replay copy", async () => {
+    const calls: [unknown, RequestInit | undefined][] = [];
+    const impl = jest.fn(async (input: any, init?: RequestInit) => {
+      calls.push([input, init]);
       return new Response(null, {
         status: 307,
         headers: { location: "https://a.services.sapiom.ai/y" },
       });
     }) as unknown as typeof fetch;
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("chunk"));
-        controller.close();
-      },
-    });
     const request = new Request("https://a.services.sapiom.ai/x", {
       method: "POST",
       headers: { "Sapiom-Identity": "jwt" },
-      body: stream,
-      duplex: "half",
-    } as RequestInit);
+      body: "payload",
+      keepalive: true,
+    });
 
     await expect(
-      fetchDroppingIdentityCrossOrigin(impl, request, "test", {
-        streamBody: true,
-      }),
+      fetchDroppingIdentityCrossOrigin(impl, request, "test"),
     ).rejects.toThrow(/streamed request body/);
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.body).toBeInstanceOf(ReadableStream);
-    expect((seen[0] as { duplex?: string }).duplex).toBe("half");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toBe(request);
+    expect(calls[0]![1]!.redirect).toBe("manual");
   });
 
   it("keeps the caller's dispatcher on every hop", async () => {
@@ -158,15 +153,14 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
       expect((init as { dispatcher?: unknown }).dispatcher).toBe(dispatcher);
     }
   });
-  it("rejects promptly when aborted while buffering an open body", async () => {
-    const impl = jest.fn() as unknown as typeof fetch;
-    let cancelled = false;
+
+  it("rejects promptly when aborted while reading the replay copy", async () => {
+    const { impl, calls } = recordingFetch({
+      "https://a.services.sapiom.ai/x": redirect(307, "/y"),
+    });
     const open = new ReadableStream({
       pull() {
         return new Promise(() => undefined);
-      },
-      cancel() {
-        cancelled = true;
       },
     });
     const controller = new AbortController();
@@ -177,18 +171,39 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
       duplex: "half",
       signal: controller.signal,
     } as RequestInit);
+    const replay = request.clone();
 
-    const pending = fetchDroppingIdentityCrossOrigin(impl, request, "test");
+    const pending = fetchDroppingIdentityCrossOrigin(impl, request, "test", {
+      replay,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     controller.abort(new Error("caller gave up"));
 
     await expect(pending).rejects.toThrow("caller gave up");
-    expect(cancelled).toBe(true);
-    expect(impl).not.toHaveBeenCalled();
+    expect(calls).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the request's cache mode and referrer", async () => {
+  it("checks integrity on the final response, not on the redirect", async () => {
     const { impl, calls } = recordingFetch({
-      "https://a.services.sapiom.ai/x": ok(),
+      "https://a.services.sapiom.ai/x": redirect(302, "/y"),
+      "https://a.services.sapiom.ai/y": ok(),
+    });
+    const request = new Request("https://a.services.sapiom.ai/x", {
+      headers: { "Sapiom-Identity": "jwt" },
+      integrity: "sha256-AAAA",
+    });
+
+    await expect(
+      fetchDroppingIdentityCrossOrigin(impl, request, "test"),
+    ).rejects.toThrow(/does not match the request's integrity/);
+    expect(calls).toHaveBeenCalledTimes(2);
+    expect((calls.mock.calls[0]![1] as RequestInit).integrity).toBe("");
+  });
+
+  it("keeps the request's cache mode and referrer after a redirect", async () => {
+    const { impl, calls } = recordingFetch({
+      "https://a.services.sapiom.ai/x": redirect(302, "/y"),
+      "https://a.services.sapiom.ai/y": ok(),
     });
     const request = new Request("https://a.services.sapiom.ai/x", {
       headers: { "Sapiom-Identity": "jwt" },
@@ -198,7 +213,7 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
 
     await fetchDroppingIdentityCrossOrigin(impl, request, "test");
 
-    const init = calls.mock.calls[0]![1] as RequestInit & { cache?: string };
+    const init = calls.mock.calls[1]![1] as RequestInit & { cache?: string };
     expect(init.cache).toBe("no-cache");
     expect(init.referrer).toBe("https://a.services.sapiom.ai/from");
   });

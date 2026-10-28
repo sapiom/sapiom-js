@@ -4,24 +4,20 @@ import { fetchKeepingCredential } from "@sapiom/analytics-core/credential";
 const IDENTITY_HEADER = "sapiom-identity";
 
 export interface IdentityFetchOptions {
-  /**
-   * The caller's body was a stream: forward it as one instead of buffering, as
-   * `fetch` does (a 307/308 then fails rather than resending it).
-   */
-  streamBody?: boolean;
-  /** The caller's undici `dispatcher`, which a rebuilt request would otherwise lose. */
+  /** The caller's undici `dispatcher`, which a request rebuilt for a redirect would otherwise lose. */
   dispatcher?: unknown;
+  /**
+   * An unsent clone of the request, read only when a 307/308 resends the body.
+   * Without it that redirect fails, as `fetch` fails for a stream body.
+   */
+  replay?: Request;
 }
 
-/**
- * Send `request` as `fetch` would, except that the first redirect to another origin
- * drops `Sapiom-Identity` (fetch only drops `authorization`, `cookie` and
- * `proxy-authorization`). A request without the header, or with a `manual` or
- * `error` redirect mode, goes to `fetchImpl` untouched.
- *
- * No channel is refused here: `allowInsecureHttp` keeps every http(s) hop that
- * `fetch` itself would follow.
- */
+/** Tells the redirect loop a body exists; `send` reads it only if a hop resends it. */
+const REPLAYED_BODY = new ArrayBuffer(0);
+
+/** `fetch` keeps `Sapiom-Identity` across a redirect to another origin, so the hops
+ * are followed here, without any Sapiom credential once the origin changes. */
 export async function fetchDroppingIdentityCrossOrigin(
   fetchImpl: typeof globalThis.fetch,
   request: Request,
@@ -31,21 +27,40 @@ export async function fetchDroppingIdentityCrossOrigin(
   if (!request.headers.has(IDENTITY_HEADER) || request.redirect !== "follow") {
     return fetchImpl(request);
   }
-  // Buffered because a 307/308 resends the body, which `fetch` can replay for
-  // every body type except a stream.
-  const body =
-    request.body === null
-      ? undefined
-      : options.streamBody
-        ? request.body
-        : await readBody(request);
+  const dispatcher: RequestInit =
+    options.dispatcher !== undefined
+      ? ({ dispatcher: options.dispatcher } as RequestInit)
+      : {};
+  let sent = false;
+  let replayed: Promise<ArrayBuffer> | undefined;
+  const send: typeof globalThis.fetch = (url, init) => {
+    if (!sent) {
+      sent = true;
+      // Sent as is so its body streams; `fetch` would check `integrity` against a
+      // redirect's own body, so the loop checks the final response instead.
+      return fetchImpl(request, {
+        ...dispatcher,
+        redirect: "manual",
+        integrity: "",
+      });
+    }
+    if (init?.body !== REPLAYED_BODY) {
+      return fetchImpl(url, { ...init, ...dispatcher });
+    }
+    replayed ??= readBody(options.replay!.clone());
+    return replayed.then((body) =>
+      fetchImpl(url, { ...init, ...dispatcher, body }),
+    );
+  };
   const init: RequestInit = {
     method: request.method,
-    body,
-    ...(options.streamBody && body !== undefined ? { duplex: "half" } : {}),
-    ...(options.dispatcher !== undefined
-      ? ({ dispatcher: options.dispatcher } as RequestInit)
-      : {}),
+    // A stream makes the loop refuse a 307/308, as `fetch` does without a copy to resend.
+    body:
+      request.body === null
+        ? undefined
+        : options.replay
+          ? REPLAYED_BODY
+          : request.body,
     signal: request.signal,
     mode: request.mode,
     credentials: request.credentials,
@@ -58,19 +73,21 @@ export async function fetchDroppingIdentityCrossOrigin(
     ...(request.integrity ? { integrity: request.integrity } : {}),
   };
   return fetchKeepingCredential(
-    fetchImpl,
+    send,
     request.url,
     init,
     Object.fromEntries(request.headers),
+    // `fetch` follows http hops too, so no channel is refused here.
     { allowInsecureHttp: true, label },
   );
 }
 
-/** `request.arrayBuffer()`, except that an abort rejects at once and cancels the source, as `fetch` does. */
+/** An abort must end the read even when the body never closes, as it would end `fetch`. */
 async function readBody(request: Request): Promise<ArrayBuffer> {
   const { signal } = request;
   signal.throwIfAborted();
-  const reader = request.body!.getReader();
+  if (request.body === null) return new ArrayBuffer(0);
+  const reader = request.body.getReader();
   const onAbort = () =>
     void reader.cancel(signal.reason).catch(() => undefined);
   signal.addEventListener("abort", onAbort, { once: true });
