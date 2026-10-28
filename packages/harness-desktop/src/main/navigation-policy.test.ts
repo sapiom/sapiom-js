@@ -1,7 +1,6 @@
 /**
- * Only the harness origin may stay in the main window (it keeps the preload).
- * Other local origins go to the sandboxed preview window, everything else to the
- * system browser.
+ * Only the harness origin may keep the main window's preload; other local origins go to the
+ * preview window. Which external schemes may reach the OS is windows.ts's call.
  */
 import { describe, expect, it } from "vitest";
 import { classifyNavigation, isLocalUrl } from "./navigation-policy.js";

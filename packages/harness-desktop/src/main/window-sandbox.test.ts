@@ -1,9 +1,6 @@
 /**
- * Every window that carries a preload runs sandboxed, with context isolation on
- * and Node integration off. windows.ts and update-window.ts import `electron`,
- * so their `webPreferences` are asserted as TEXT, like window-background.test.ts
- * (see vitest.config.ts). The packaged `--smoke` checks then prove the bundled
- * preloads actually load in those sandboxed windows.
+ * windows.ts and update-window.ts import `electron`, so their webPreferences are asserted as text.
+ * The packaged smoke checks prove the bundled preloads load in the setup and main windows.
  */
 import { readFileSync } from "node:fs";
 
@@ -14,7 +11,6 @@ const sources = {
   "update-window.ts": readFileSync(new URL("./update-window.ts", import.meta.url), "utf8"),
 };
 
-/** The body of every `webPreferences: { ... }` object literal, braces balanced. */
 function webPreferenceBlocks(src: string): string[] {
   const blocks: string[] = [];
   for (const match of src.matchAll(/webPreferences:\s*\{/g)) {

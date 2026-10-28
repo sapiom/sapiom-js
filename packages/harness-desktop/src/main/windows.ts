@@ -32,10 +32,8 @@ export function createSetupWindow(): BrowserWindow {
       preload: setupPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // Sandboxed like every preload window: the preload is the CommonJS bundle
-      // from scripts/build-preloads.mjs, since a sandboxed preload cannot be ESM.
-      // If it fails to load, the bridge is missing and onboarding stalls at the
-      // consent prompt (the renderer can't send CONSENT_SUBMIT).
+      // A sandboxed preload cannot be ESM, hence the scripts/build-preloads.mjs bundle; without
+      // its bridge onboarding stalls at consent (the renderer can't send CONSENT_SUBMIT).
       sandbox: true,
     },
   });
@@ -50,14 +48,13 @@ export function createSetupWindow(): BrowserWindow {
 
 /**
  * The main window: loads the harness SPA from the local server at its
- * boot-token URL. External (non-localhost) links open in the system browser,
- * other local origins in a preview window; in-app navigation is confined to the
- * harness origin.
+ * boot-token URL. Navigation stays on the harness origin: other local origins open
+ * in a preview window, web links in the system browser.
  *
  * It carries a preload — a deliberately minimal one. The SPA is the same bundle
  * `npx @sapiom/harness` serves to a plain browser, so this window is the only
  * place it can offer anything desktop-specific (today: "Check for updates" in the
- * Settings popover). The SPA feature-detects `window.sapiomDesktop` and simply
+ * profile menu). The SPA feature-detects `window.sapiomDesktop` and simply
  * omits those affordances in a browser — see `harness/web/src/lib/desktop.ts`.
  */
 export function createMainWindow(loadUrl: string): BrowserWindow {
@@ -89,8 +86,8 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
       preload: desktopPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // Sandboxed, with the same bundled CommonJS preload as the setup window: the
-      // page may end up showing agent-served content, so its renderer gets no Node.
+      // Same bundled preload as the setup window: the page may end up showing
+      // agent-served content, so its renderer gets no Node.
       sandbox: true,
       // How the preload learns the app version. `process.env` would mean relying
       // on a renderer inheriting a variable mutated after startup; this is the

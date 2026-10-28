@@ -23,9 +23,9 @@ const { revealPath } = await import("./dialogs.js");
 const { setTrustedWindow } = await import("./trusted-sender.js");
 
 function fakeWindow(url: string): { win: BrowserWindow; event: IpcMainInvokeEvent } {
-  const webContents = { mainFrame: { url } };
+  const webContents = { mainFrame: { url, parent: null } };
   const win = { isDestroyed: () => false, webContents } as unknown as BrowserWindow;
-  return { win, event: { sender: webContents } as unknown as IpcMainInvokeEvent };
+  return { win, event: { sender: webContents, senderFrame: webContents.mainFrame } as unknown as IpcMainInvokeEvent };
 }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-reveal-"));

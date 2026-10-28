@@ -1,11 +1,6 @@
 /**
- * These paths look trivial and have each broken the app once:
- *  - the preload's extension: the windows are sandboxed, so each preload is the
- *    single CommonJS bundle `.cjs` that scripts/build-preloads.mjs writes. A
- *    preload Electron cannot load fails silently: `window.sapiomSetup` never
- *    existed and onboarding hung on a frozen window with no error anywhere.
- *  - the web dir: pointed at the wrong place, the app boots and serves a blank
- *    page (the smoke check's http-spa covers the packaged case).
+ * A preload Electron cannot load fails silently, so sandboxed windows must point at the bundled
+ * `.cjs` preloads; a wrong web dir serves a blank page (smoke's http-spa covers the packaged case).
  */
 import { describe, expect, it } from "vitest";
 import * as path from "node:path";

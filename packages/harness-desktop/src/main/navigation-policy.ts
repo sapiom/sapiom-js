@@ -1,21 +1,10 @@
 /**
- * Where a URL may open from the main window. Kept free of an `electron` import so
- * the rules are unit-tested (see vitest.config.ts); `windows.ts` applies them.
- *
- * "Local" is not "ours": agents run dev servers on other localhost ports, and only
- * the harness origin the main window loaded may keep its preload (SAP-4382).
+ * Only the harness origin the main window loaded may keep its preload: agents run dev servers on
+ * other localhost ports (SAP-4382). No `electron` import, so the rules are unit-tested.
  */
 
-/** Where a navigation from the main window should land. */
-export type NavigationTarget =
-  /** The harness origin itself: stays in the main window. */
-  | "harness"
-  /** Another 127.0.0.1/localhost origin: the sandboxed preview window. */
-  | "local"
-  /** Anything else: the system browser (or nowhere, for a non-web scheme). */
-  | "external";
+export type NavigationTarget = "harness" | "local" | "external";
 
-/** An http(s) URL on 127.0.0.1 or localhost, any port. */
 export function isLocalUrl(url: string): boolean {
   try {
     const u = new URL(url);
@@ -28,7 +17,6 @@ export function isLocalUrl(url: string): boolean {
   }
 }
 
-/** Classify `url` against the harness origin (`http://127.0.0.1:<port>`). */
 export function classifyNavigation(url: string, harnessOrigin: string): NavigationTarget {
   let origin: string;
   try {

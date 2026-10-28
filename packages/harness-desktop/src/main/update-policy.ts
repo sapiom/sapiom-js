@@ -191,7 +191,6 @@ export function shouldEnableUpdater(input: UpdaterGateInput): UpdaterGate {
 }
 
 export interface AutoInstallInput {
-  /** `process.platform`. */
   platform: NodeJS.Platform;
   /** Raw `resources/app-update.yml`, or null when it could not be read. */
   updateConfig: string | null;
@@ -204,18 +203,12 @@ export interface AutoInstallDecision {
 }
 
 /**
- * Whether a downloaded update may install itself on an ordinary quit.
- *
- * On Windows, electron-updater 6.x verifies the installer's Authenticode signature
- * only when `app-update.yml` names a `publisherName`; without one, nothing but the
- * release's own sha512 vouches for the file. Such an update must wait for the user's
- * explicit "Restart now" instead of installing silently (SAP-4382). Keyed on the
- * baked config rather than on the platform alone, so a signed build that bakes a
- * `publisherName` gets install-on-quit back with no code change.
+ * electron-updater checks a Windows installer's signature only when `app-update.yml` names a
+ * `publisherName`, so without one an update waits for an explicit "Restart now" (SAP-4382).
  */
 export function autoInstallAllowed(input: AutoInstallInput): AutoInstallDecision {
   if (input.platform !== "win32") return { allowed: true };
-  if (input.updateConfig !== null && /^publisherName:/m.test(input.updateConfig)) {
+  if (input.updateConfig !== null && namesPublisher(input.updateConfig)) {
     return { allowed: true };
   }
   return {
@@ -224,18 +217,23 @@ export function autoInstallAllowed(input: AutoInstallInput): AutoInstallDecision
   };
 }
 
-/**
- * The Darwin release of macOS 13, the oldest macOS Electron 45 runs on. It is a Darwin
- * version, not "13.0", because electron-updater compares a manifest's
- * `minimumSystemVersion` with `os.release()`.
- */
+/** A YAML null (`publisherName:` alone, `~`, `null`) also skips verification in electron-updater. */
+function namesPublisher(updateConfig: string): boolean {
+  const match = /^publisherName:[ \t]*(.*)$/m.exec(updateConfig);
+  if (!match) return false;
+  const value = match[1].replace(/(^|\s+)#.*$/, "").trim();
+  if (value === "") {
+    return /^\r?\n[ \t]+-[ \t]*[^\s#]/.test(updateConfig.slice(match.index + match[0].length));
+  }
+  return !/^(~|null|Null|NULL)$/.test(value);
+}
+
+/** macOS 13, Electron 45's floor, as a Darwin version: electron-updater compares it with `os.release()`. */
 export const MAC_MINIMUM_DARWIN_VERSION = "22.0.0";
 
 /**
- * Stamp a mac update manifest (`latest-mac.yml` / `beta-mac.yml`) with
- * `minimumSystemVersion`, so an install on an older macOS skips the update instead of
- * replacing a working app with one it cannot launch. electron-builder writes no such
- * key itself; `scripts/pack.mjs` applies this after packaging.
+ * An install on an older macOS must skip an update it cannot launch, and electron-builder writes
+ * no `minimumSystemVersion`; `scripts/pack.mjs` stamps the mac manifests with this.
  */
 export function withMinimumSystemVersion(manifest: string, version: string): string {
   const line = `minimumSystemVersion: ${version}`;

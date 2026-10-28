@@ -1,8 +1,6 @@
 /**
- * The guard every privileged renderer→main channel shares. A sender qualifies only
- * as the main window, on the harness origin it loaded, at the SPA root `/`: a page
- * on another localhost port (an agent's dev server) or agent content on the harness
- * origin must both be refused.
+ * Agent pages must not reach privileged IPC from another local origin, a subframe or a
+ * path other than the SPA root; electron is mocked, so the guard is tested on its own.
  */
 import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,12 +8,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type Fake = { win: BrowserWindow; event: IpcMainInvokeEvent; setUrl(url: string): void; destroy(): void };
 
 function fakeWindow(url: string): Fake {
-  const webContents = { mainFrame: { url } };
+  const webContents = { mainFrame: { url, parent: null } };
   let destroyed = false;
   const win = { isDestroyed: () => destroyed, webContents } as unknown as BrowserWindow;
   return {
     win,
-    event: { sender: webContents } as unknown as IpcMainInvokeEvent,
+    event: { sender: webContents, senderFrame: webContents.mainFrame } as unknown as IpcMainInvokeEvent,
     setUrl: (next) => {
       webContents.mainFrame.url = next;
     },
@@ -66,6 +64,23 @@ describe("isTrustedSender", () => {
     const other = fakeWindow(`${HARNESS}/`);
     setTrustedWindow(main.win, HARNESS);
     expect(isTrustedSender(other.event)).toBe(false);
+  });
+
+  it("rejects a subframe of the main window while the top frame is the harness root", async () => {
+    const { setTrustedWindow, isTrustedSender } = await guard();
+    const main = fakeWindow(`${HARNESS}/`);
+    setTrustedWindow(main.win, HARNESS);
+    const subframe = { url: `${HARNESS}/`, parent: main.win.webContents.mainFrame };
+    const event = { sender: main.win.webContents, senderFrame: subframe } as unknown as IpcMainInvokeEvent;
+    expect(isTrustedSender(event)).toBe(false);
+  });
+
+  it("rejects an event whose frame is gone", async () => {
+    const { setTrustedWindow, isTrustedSender } = await guard();
+    const main = fakeWindow(`${HARNESS}/`);
+    setTrustedWindow(main.win, HARNESS);
+    const event = { sender: main.win.webContents, senderFrame: null } as unknown as IpcMainInvokeEvent;
+    expect(isTrustedSender(event)).toBe(false);
   });
 
   it("rejects everything once the main window is destroyed", async () => {

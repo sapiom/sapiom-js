@@ -153,9 +153,8 @@ run(
   deployDir,
 );
 
-// Installs on a macOS older than the app supports must not auto-update into a build
-// they cannot launch; the updater honours `minimumSystemVersion`, which
-// electron-builder does not write. Failing here beats publishing an unstamped manifest.
+// An older macOS must skip an update it cannot launch (see withMinimumSystemVersion);
+// failing here beats publishing an unstamped manifest.
 if (platform === "--mac") {
   const manifests = readdirSync(outputDir).filter((name) => name.endsWith("-mac.yml"));
   if (manifests.length === 0) throw new Error(`[pack] no *-mac.yml update manifest in ${outputDir}`);

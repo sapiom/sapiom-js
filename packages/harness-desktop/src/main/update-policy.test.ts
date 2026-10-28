@@ -440,6 +440,16 @@ describe("autoInstallAllowed", () => {
     expect(autoInstallAllowed({ platform: "win32", updateConfig: commented }).allowed).toBe(false);
   });
 
+  it.each([
+    ["an empty key", "publisherName:\n"],
+    ["an empty key before another key", "publisherName:\nchannel: latest\n"],
+    ["a tilde", "publisherName: ~\n"],
+    ["a null", "publisherName: null\n"],
+    ["a commented-out value", "publisherName: # Sapiom, Inc.\n"],
+  ])("keeps install-on-quit off on Windows for %s", (_label, tail) => {
+    expect(autoInstallAllowed({ platform: "win32", updateConfig: unsigned + tail }).allowed).toBe(false);
+  });
+
   it("allows on Windows once the baked config names a publisher (list or scalar)", () => {
     expect(autoInstallAllowed({ platform: "win32", updateConfig: signedList })).toEqual({ allowed: true });
     expect(autoInstallAllowed({ platform: "win32", updateConfig: signedScalar })).toEqual({ allowed: true });

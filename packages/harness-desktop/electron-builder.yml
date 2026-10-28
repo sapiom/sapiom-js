@@ -95,6 +95,8 @@ mac:
     - dmg
     - zip
   category: public.app-category.developer-tools
+  # LSMinimumSystemVersion: Electron 45 needs macOS 13. Updates are gated separately (pack.mjs).
+  minimumSystemVersion: "13.0"
   # macOS gets its own artwork: the same mark inset to ~82% of the canvas with a
   # transparent margin, per Apple's icon grid, so the app sits the same visual
   # size as its neighbours in the Dock. A full-bleed tile (correct on Linux and

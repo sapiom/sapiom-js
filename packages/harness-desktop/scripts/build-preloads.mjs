@@ -1,14 +1,5 @@
-// Bundles each preload into ONE classic script: dist/preload/<name>.cjs.
-//
-// Every window that carries a preload runs with `sandbox: true`, and a sandboxed
-// preload is a non-ESM script whose `require` loads only `electron`, never a file.
-// Our preloads import their channel names from `../main/ipc.ts`, so that module is
-// inlined here and `electron` is left as the one external require. IIFE rather
-// than `cjs` output: it needs no `module`/`exports` from the preload wrapper.
-//
-// tsc still compiles src/preload (it typechecks them, and the renderers import
-// their bridge types), so its ESM output is removed afterwards: nothing loads it,
-// and leaving it in dist/ would ship dead preloads that look like the real ones.
+// A sandboxed preload's `require` loads only `electron`, so ipc.ts is inlined into one
+// script per preload; IIFE, not `cjs`, so it needs no `module`/`exports` from the wrapper.
 import { readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,10 +10,7 @@ const outDir = join(root, "dist", "preload");
 
 export const PRELOADS = ["desktop", "setup", "update"];
 
-/**
- * Bundle the preloads. With `write: false` nothing touches disk and the bundles
- * come back as `{ name, text }` (what preload-bundle.test.ts asserts on).
- */
+/** `write: false` lets preload-bundle.test.ts inspect the bundles without touching dist/. */
 export async function buildPreloads({ write = true } = {}) {
   const result = await build({
     absWorkingDir: root,
@@ -43,7 +31,7 @@ export async function buildPreloads({ write = true } = {}) {
   }));
 }
 
-/** Drop tsc's ESM preload output so only the bundles remain in dist/preload. */
+/** tsc still emits ESM preloads (it typechecks them); nothing loads them, so don't ship them. */
 async function removeTscPreloadOutput() {
   for (const entry of await readdir(outDir)) {
     if (!entry.endsWith(".cjs")) await rm(join(outDir, entry));

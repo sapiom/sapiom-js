@@ -1,12 +1,8 @@
 packages:
   - "packages/*"
 
-# node-pty needs its postinstall (chmods spawn-helper +x); pnpm skips build
-# scripts by default, which leaves it silently non-functional on fresh installs.
-# esbuild needs its postinstall too. electron has none since v42: its binary
-# downloads on the first run of its `bin` (`pnpm dev`), and electron-builder
-# fetches its own copy when packaging. @electron/rebuild recompiles node-pty
-# against Electron's ABI during packaging.
+# pnpm skips dependency build scripts by default; without theirs these break silently (node-pty's spawn-helper stays non-executable).
+# electron is absent on purpose: since v42 it downloads its binary on first run, not in postinstall.
 onlyBuiltDependencies:
   - node-pty
   - esbuild

@@ -1,8 +1,6 @@
 /**
- * Every preload window is sandboxed, and a sandboxed preload is one CommonJS
- * script whose `require` loads `electron` and nothing else. A bundle that still
- * required a file (or kept an ESM statement) would load in no window at all, and
- * the bridge would be silently missing. Bundled in memory: nothing is written.
+ * A sandboxed preload must be one classic script requiring only `electron`, or its bridge is
+ * silently missing. Bundled in memory so these checks never touch dist/.
  */
 import { describe, expect, it } from "vitest";
 // @ts-expect-error: plain .mjs build script, no type declarations.

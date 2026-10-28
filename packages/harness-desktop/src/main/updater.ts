@@ -109,11 +109,7 @@ let host: UpdaterDeps | null = null;
 /** Live updater, once initialised. Null means checks are off — `disabledReason` says why. */
 let active: { autoUpdater: typeof electronUpdater.autoUpdater; channel: string; deps: UpdaterDeps } | null = null;
 let disabledReason: string | null = null;
-/**
- * Whether this build may install a downloaded update on quit (see
- * `autoInstallAllowed`). Every place that can turn install-on-quit ON goes
- * through it, so the user's toggle never overrides it.
- */
+/** Build policy for install-on-quit: every opt-in goes through it so the user's toggle never overrides it. */
 let autoInstall: AutoInstallDecision = { allowed: true };
 /**
  * An update that has finished downloading and is waiting for a restart. Held so
@@ -541,15 +537,8 @@ function startUpdater(deps: UpdaterDeps): void {
   autoUpdater.channel = decision.channel;
   autoUpdater.allowPrerelease = decision.allowPrerelease;
   autoUpdater.autoDownload = true;
-  // Whether an ordinary quit installs a downloaded update is now USER-controlled,
-  // via the update window's "Automatically download and install updates" toggle
-  // (persisted in update-prefs). Default ON: a ready update installs on the next
-  // quit — never a surprise mid-session restart, since the running app is only ever
-  // restarted by an explicit "Restart now". This reverses the former hardcoded
-  // `false` ("the behaviour we deliberately declined"), now that the user owns it.
-  // Set the default synchronously (loading prefs is async and the first check is
-  // 30s out), then reconcile with the persisted value; a failed read keeps the
-  // default — prefs are a convenience, never load-bearing.
+  // Install-on-quit follows the user's toggle (update-prefs, default on) unless build policy
+  // forbids it. Set synchronously, then reconcile once the async prefs load; a failed read keeps it.
   autoInstall = autoInstallAllowed({
     platform: process.platform,
     updateConfig: gate.forced ? null : readBakedUpdateConfig(),

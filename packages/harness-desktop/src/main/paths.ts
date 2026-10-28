@@ -22,15 +22,12 @@ export function setupHtmlPath(): string {
   return path.join(mainDir, "..", "renderer", "setup.html");
 }
 
-/** This app's preload script for the setup window. `.cjs`: every preload window
- *  is sandboxed, and a sandboxed preload must be one CommonJS file, which
- *  `scripts/build-preloads.mjs` bundles. */
+/** Sandboxed preloads must be the classic-script bundle `scripts/build-preloads.mjs` emits. */
 export function setupPreloadPath(): string {
   return path.join(mainDir, "..", "preload", "setup.cjs");
 }
 
-/** Preload for the MAIN window (the harness SPA) — exposes `window.sapiomDesktop`.
- *  Same bundled `.cjs` as the setup preload. */
+/** Preload for the MAIN window (the harness SPA): exposes `window.sapiomDesktop`. Same bundle as setup. */
 export function desktopPreloadPath(): string {
   return path.join(mainDir, "..", "preload", "desktop.cjs");
 }
@@ -40,8 +37,7 @@ export function updateHtmlPath(): string {
   return path.join(mainDir, "..", "renderer", "update.html");
 }
 
-/** Preload for the update window: exposes `window.sapiomUpdate`. Same bundled
- *  `.cjs` as the setup preload. */
+/** Preload for the update window: exposes `window.sapiomUpdate`. Same bundle as setup. */
 export function updatePreloadPath(): string {
   return path.join(mainDir, "..", "preload", "update.cjs");
 }

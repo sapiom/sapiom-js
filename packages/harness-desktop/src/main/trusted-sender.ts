@@ -14,12 +14,12 @@
  *  - the main window itself after navigating to agent-authored content, which the
  *    harness serves at `/canvas/:sessionId/*` on this same origin.
  *
- * Hence an identity check (the sender IS the main window's webContents), an origin
- * check (its top frame is on the harness origin the window loaded, not another
- * localhost port such as an agent's dev server, SAP-4382) and a path check (`/`). The SPA lives at `/` and never navigates the
- * top frame over http (its one `location.href` is an editor scheme, which
- * `will-navigate` hands to the OS), so requiring `/` is exact today. If the SPA
- * ever adopts routing this fails CLOSED and logs why, rather than quietly widening.
+ * Hence an identity check (the sender IS the main window's webContents), a frame
+ * check (the call comes from its top frame), an origin check (the harness origin the
+ * window loaded, not another localhost port such as an agent's dev server, SAP-4382)
+ * and a path check (`/`). The SPA lives at `/` and never navigates its top frame over
+ * http, so requiring `/` is exact today. If the SPA ever adopts routing this fails
+ * CLOSED and logs why, rather than quietly widening.
  *
  * Electron is imported for TYPES ONLY (erased at build), so this module stays free
  * of a runtime `electron` dependency and can be unit-tested.
@@ -58,9 +58,13 @@ export function isTrustedSender(event: IpcMainInvokeEvent): boolean {
     log("rejected a privileged IPC from a non-main-window renderer");
     return false;
   }
-  // The top frame, not the calling frame: a subframe must never qualify even if
-  // `nodeIntegrationInSubFrames` is switched on later.
-  const frameUrl = event.sender.mainFrame.url;
+  // A subframe must never qualify, even if `nodeIntegrationInSubFrames` is switched on later.
+  const frame = event.senderFrame;
+  if (!frame || frame.parent !== null) {
+    log("rejected a privileged IPC from a subframe of the main window");
+    return false;
+  }
+  const frameUrl = frame.url;
   try {
     const url = new URL(frameUrl);
     if (!trustedOrigin || url.origin !== trustedOrigin) {
