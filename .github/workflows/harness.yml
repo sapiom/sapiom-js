@@ -99,14 +99,18 @@ jobs:
       # package.json range needs new browsers too.
       - name: Resolve Playwright version
         id: playwright-version
-        run: echo "version=$(pnpm --filter @sapiom/harness exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          v="$(pnpm --filter @sapiom/harness exec playwright --version | awk '{print $2}')"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::could not resolve the Playwright version: '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ steps.playwright-version.outputs.version }}
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
