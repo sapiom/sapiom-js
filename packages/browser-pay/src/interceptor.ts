@@ -56,7 +56,7 @@ export type FailureReason =
   | "network"
   | "response_credential";
 
-const KNOWN_REFUSAL_REASONS = [
+export const KNOWN_REFUSAL_REASONS = [
   "unknown_injection",
   "injection_expired",
   "payment_released",
@@ -70,12 +70,19 @@ const KNOWN_REFUSAL_REASONS = [
   "card_fields_invalid",
   "merchant_mismatch",
   "provider_unavailable",
+  "merchant_unavailable",
+  "card_unavailable",
+  "payments_stopped",
+  "sapiom_error",
+  "relaying_under_other_key",
+  "stale_generation",
 ] as const;
 
-/** A relay refusal reason. Any reason outside the known set is `unrecognized`. */
-export type RefusalReason =
-  | (typeof KNOWN_REFUSAL_REASONS)[number]
-  | "unrecognized";
+export type KnownRefusalReason = (typeof KNOWN_REFUSAL_REASONS)[number];
+
+// `{}` keeps autocomplete on the known reasons without closing the union.
+// eslint-disable-next-line @typescript-eslint/ban-types
+export type RefusalReason = KnownRefusalReason | (string & {});
 
 /**
  * Event `url` is the request origin (`scheme://host[:port]`) with any held
@@ -87,8 +94,21 @@ export type InterceptorEvent =
   | { type: "paused"; url: string; method: string; targetType: string }
   | { type: "relayed"; url: string; status: number }
   | { type: "relayed_unfulfilled"; url: string; status: number }
-  | { type: "refused"; url: string; reason: RefusalReason }
+  | {
+      type: "refused";
+      url: string;
+      reason: RefusalReason;
+      /** Missing when the relay did not send a boolean. The SDK does not invent one. */
+      retryable?: boolean;
+      /** Present only when the id passes the redaction checks. Not logged. */
+      requestId?: string;
+    }
   | { type: "failed"; url: string; reason: FailureReason };
+
+type PublicRefusal = Omit<
+  Extract<InterceptorEvent, { type: "refused" }>,
+  "type" | "url"
+>;
 
 export interface InterceptorHandle {
   detach(): Promise<void>;
@@ -127,10 +147,40 @@ function eventUrl(value: string, number: string): string {
   return textHoldsPlaceholderNumber(redacted, number) ? "" : redacted;
 }
 
+const REASON_SHAPE = /^[a-z]+(_[a-z]+)*$/;
+const REASON_MAX_LENGTH = 48;
+const REQUEST_ID_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
+const SEPARATED_PAN = /^\d{13,19}$/;
+const RAW_PAN_RUN = /\d{13,}/;
+
 function publicReason(reason: string): RefusalReason {
-  return (KNOWN_REFUSAL_REASONS as readonly string[]).includes(reason)
-    ? (reason as RefusalReason)
+  return reason.length <= REASON_MAX_LENGTH && REASON_SHAPE.test(reason)
+    ? reason
     : "unrecognized";
+}
+
+function publicRequestId(id: unknown, heldNumber: string): string | undefined {
+  if (typeof id !== "string") return undefined;
+  if (!REQUEST_ID_SHAPE.test(id)) return undefined;
+  const collapsed = id.replace(/[_-]/g, "");
+  const held = heldNumber.replace(/[^A-Za-z0-9]/g, "");
+  if (held.length > 0 && collapsed.includes(held)) return undefined;
+  if (SEPARATED_PAN.test(collapsed) || RAW_PAN_RUN.test(id)) return undefined;
+  return id;
+}
+
+function publicRefusal(
+  refusal: Extract<RelayResponse, { outcome: "refused" }>,
+  heldNumber: string,
+): PublicRefusal {
+  const reason = refusal.reason;
+  const retryable = refusal.retryable;
+  const requestId = publicRequestId(refusal.requestId, heldNumber);
+  return {
+    reason: publicReason(typeof reason === "string" ? reason : ""),
+    ...(typeof retryable === "boolean" ? { retryable } : {}),
+    ...(requestId !== undefined ? { requestId } : {}),
+  };
 }
 
 /** GET/HEAD with no body and no held number in the URL. Safe to continue immediately. */
@@ -248,7 +298,7 @@ type HeldRead =
 type Decision =
   | { action: "continue" }
   | { action: "fail"; reason: FailureReason }
-  | { action: "refused"; reason: RefusalReason }
+  | { action: "refused"; refusal: PublicRefusal }
   | { action: "relayed"; response: RelayedHttpResponse };
 
 type SettleAction = "continue" | "fail" | { fulfill: RelayedHttpResponse };
@@ -770,9 +820,9 @@ class PaymentInterceptor {
       return { action: "fail", reason: "unknown" };
     }
     if (response.outcome === "refused") {
-      const reason = publicReason(response.reason);
-      this.logRefusalOnce(idempotencyKey, reason);
-      return { action: "refused", reason };
+      const refusal = publicRefusal(response, this.number);
+      this.logRefusalOnce(idempotencyKey, refusal.reason);
+      return { action: "refused", refusal };
     }
     if (textHoldsPlaceholderNumber(response.response.body, this.number)) {
       return { action: "fail", reason: "response_credential" };
@@ -802,7 +852,7 @@ class PaymentInterceptor {
     }
     if (decision.action === "refused") {
       await this.settle(entry, "fail");
-      this.emit({ type: "refused", url, reason: decision.reason });
+      this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
     const fulfilled = await this.settle(entry, { fulfill: decision.response });

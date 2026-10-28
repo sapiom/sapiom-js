@@ -160,6 +160,69 @@ describe("httpPaymentRelay", () => {
     }
   });
 
+  it("keeps boolean retryable and string requestId on a refusal and drops other keys", async () => {
+    const cases = [
+      {
+        sent: {
+          outcome: "refused",
+          reason: "future_reason",
+          retryable: false,
+          requestId: "req_future",
+        },
+        seen: {
+          outcome: "refused",
+          reason: "future_reason",
+          retryable: false,
+          requestId: "req_future",
+        },
+      },
+      {
+        sent: {
+          outcome: "refused",
+          reason: "future_reason",
+          retryable: "true",
+          requestId: 42,
+        },
+        seen: { outcome: "refused", reason: "future_reason" },
+      },
+      {
+        sent: {
+          outcome: "refused",
+          reason: "future_reason",
+          requestId: "",
+        },
+        seen: { outcome: "refused", reason: "future_reason" },
+      },
+      {
+        sent: {
+          outcome: "refused",
+          reason: "future_reason",
+          echo: "not-forwarded",
+        },
+        seen: { outcome: "refused", reason: "future_reason" },
+      },
+    ];
+    let index = 0;
+    const server = await listen((_req, res) => {
+      const payload = cases[index];
+      index += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(payload?.sent));
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      for (const entry of cases) {
+        await expect(relay.relay(REQUEST)).resolves.toStrictEqual(entry.seen);
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("aborts when the caller signal fires", async () => {
     let arrived: () => void = () => {};
     const requestArrived = new Promise<void>((resolve) => {

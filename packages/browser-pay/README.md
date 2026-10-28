@@ -47,13 +47,48 @@ Success:
 
 `response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself.
 
-Refusal, nothing forwarded:
+Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay may omit either field.
 
 ```json
-{ "outcome": "refused", "reason": "already_relayed" }
+{
+  "outcome": "refused",
+  "reason": "already_relayed",
+  "retryable": false,
+  "requestId": "req_example"
+}
 ```
 
-The `refused` event and logger pass through only these known reasons: `unknown_injection`, `injection_expired`, `payment_released`, `key_rotated`, `already_relayed`, `relay_in_progress`, `card_removed`, `payment_not_authorized`, `total_changed`, `destination_not_allowed`, `card_fields_invalid`, `merchant_mismatch`, and `provider_unavailable`. Any other reason becomes `unrecognized`. `relay_in_progress` is not terminal. The paused request stays open and the same idempotency key is posted again until the outcome is terminal or the deadline passes.
+### Known refusal reasons
+
+- `unknown_injection`
+- `injection_expired`
+- `payment_released`
+- `key_rotated`
+- `already_relayed`
+- `relay_in_progress`
+- `card_removed`
+- `payment_not_authorized`
+- `total_changed`
+- `destination_not_allowed`
+- `card_fields_invalid`
+- `merchant_mismatch`
+- `provider_unavailable`
+- `merchant_unavailable`
+- `card_unavailable`
+- `payments_stopped`
+- `sapiom_error`
+- `relaying_under_other_key`
+- `stale_generation`
+
+### Refusal event
+
+On the `refused` event, a reason passes through when it matches `/^[a-z]+(_[a-z]+)*$/` and is at most 48 characters. The SDK replaces every other reason with `unrecognized`. `httpPaymentRelay().relay()` still returns the reason and `requestId` the relay sent, after it drops a non-boolean `retryable`, a `requestId` that is empty or not a string, and any other key.
+
+If you do not handle a reason, stop and read the purchase.
+
+`retryable` is optional. If it is missing, the relay did not say whether to try again. The SDK does not invent `retryable` and does not retry on it. Only `relay_in_progress` keeps the pause. The paused request stays open and the same idempotency key is posted again until the outcome is terminal or the deadline passes.
+
+On that event, `requestId` is present only when it passes these checks. The id is 1 to 64 characters from `[A-Za-z0-9_-]`. It has no run of 13 or more digits. Removing `_` and `-` does not leave only digits when the result is 13 to 19 characters. A longer all-digit result, including the nil UUID, is kept. The id does not contain the held placeholder after every character outside `[A-Za-z0-9]` is removed from the placeholder and `_` and `-` are removed from the id. The SDK omits any other id. `requestId` is not logged. An id-shaped secret is not distinguishable from a request id.
 
 Event `url` is origin-only (`scheme://host[:port]`), with any held placeholder masked. An opaque origin uses its scheme (for example, `about:`); an unparseable URL is `""`. Paths, queries, fragments, and userinfo are never included. Attach errors use fixed messages and do not include transport details. CDP command failures and timeouts name the method that was sent (`CDP command failed: Target.setAutoAttach`, `CDP command timed out: Target.setAutoAttach`) and do not include the browser's error text.
 
