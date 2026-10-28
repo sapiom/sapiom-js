@@ -1,6 +1,6 @@
 /**
- * Every privileged channel shares this guard: other windows, subframes, other local origins and pages
- * other than the SPA root must not get privileged IPC (SAP-4382). It fails closed and logs why.
+ * The SPA's privileged IPC must reject other windows, subframes and off-origin or non-root pages,
+ * so agent-controlled pages cannot gain desktop privileges (SAP-4382).
  */
 import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
 
