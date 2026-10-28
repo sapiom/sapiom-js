@@ -4,7 +4,8 @@
  * `registerTool` forwards the registration to
  * `server.tool(name, description, schema, handler)` and wraps the handler to
  * emit one `tool.call` usage-analytics event per invocation — tool name,
- * arguments, duration, ok/error class — via the process-wide emitter in
+ * arguments (or, for local-only tools, only their names and sizes), duration,
+ * ok/error class — via the process-wide emitter in
  * `./analytics.ts` (the envelope's `source: "mcp"` disambiguates same-named
  * events from other producers).
  *
@@ -34,6 +35,18 @@ type AnyToolHandler = (
 ) => CallToolResult | Promise<CallToolResult>;
 
 /**
+ * How a tool's arguments appear in its `tool.call` event. `"full"` sends the
+ * values; `"shape"` sends only each argument's name and serialized byte size,
+ * for local-only tools whose inputs (test inputs, stubs) never reach Sapiom
+ * otherwise and can hold real secrets.
+ */
+export type TelemetryArgs = "full" | "shape";
+
+export interface RegisterToolOptions {
+  telemetryArgs?: TelemetryArgs;
+}
+
+/**
  * Register one MCP tool. Wire-identical to calling
  * `server.tool(name, description, schema, handler)` directly, plus one
  * `tool.call` analytics event per invocation.
@@ -49,15 +62,17 @@ export function registerTool<Args extends ZodRawShape>(
   description: string,
   schema: Args,
   handler: ToolCallback<Args>,
+  options: RegisterToolOptions = {},
 ): void {
+  const mode = options.telemetryArgs ?? "full";
   const wrapped = (async (args: unknown, extra: unknown) => {
     const startedAt = performance.now();
     try {
       const result = await (handler as AnyToolHandler)(args, extra);
-      emitToolCall(name, args, startedAt, resultOutcome(result));
+      emitToolCall(name, args, mode, startedAt, resultOutcome(result));
       return result;
     } catch (error) {
-      emitToolCall(name, args, startedAt, {
+      emitToolCall(name, args, mode, startedAt, {
         ok: false,
         errorClass: classifyThrown(error),
       });
@@ -74,24 +89,23 @@ interface CallOutcome {
 }
 
 /**
- * Synchronous, never throws. These are Sapiom's own developer tools
- * (Sapiom-bound calls), so arguments are captured in full per the
- * analytics contract; the emitter size-caps each `data` field (~16 KB)
- * and flags truncation.
+ * Synchronous, never throws. Sapiom-bound tools capture arguments in full
+ * per the analytics contract (the emitter size-caps each `data` field at
+ * ~16 KB and flags truncation); `"shape"` tools send `arg_sizes` instead.
  */
 function emitToolCall(
   tool: string,
   args: unknown,
+  mode: TelemetryArgs,
   startedAt: number,
   outcome: CallOutcome,
 ): void {
   try {
-    const data: Record<string, unknown> = {
-      tool,
-      args: args ?? {},
-      duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
-      ok: outcome.ok,
-    };
+    const data: Record<string, unknown> = { tool };
+    if (mode === "shape") data.arg_sizes = argSizes(args);
+    else data.args = args ?? {};
+    data.duration_ms = Math.max(0, Math.round(performance.now() - startedAt));
+    data.ok = outcome.ok;
     if (outcome.errorClass !== undefined) {
       data.error_class = outcome.errorClass;
     }
@@ -99,6 +113,21 @@ function emitToolCall(
   } catch {
     // Telemetry must never affect the tool result.
   }
+}
+
+/** Each top-level argument's UTF-8 byte size once serialized; `null` if it cannot be. */
+function argSizes(args: unknown): Record<string, number | null> {
+  const sizes: Record<string, number | null> = {};
+  if (args === null || typeof args !== "object") return sizes;
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined) continue;
+    try {
+      sizes[key] = Buffer.byteLength(JSON.stringify(value), "utf8");
+    } catch {
+      sizes[key] = null;
+    }
+  }
+  return sizes;
 }
 
 function resultOutcome(result: CallToolResult): CallOutcome {

@@ -226,7 +226,9 @@ invocation: tool name, arguments, duration, ok/error class) via
 [`@sapiom/analytics-core`](../analytics-core) to the hosted Sapiom collector
 by default. Opt out at any time with `SAPIOM_TELEMETRY_DISABLED=1` or
 `DO_NOT_TRACK=1` — either makes the emitter a complete no-op (nothing is sent,
-nothing is written to disk). `SAPIOM_ANALYTICS_ENDPOINT` overrides the
+nothing is written to disk). Local-only tools (`sapiom_dev_agents_scaffold`,
+`sapiom_dev_agents_check`, `sapiom_dev_agents_run_local`) report only each
+argument's name and size, never its value. `SAPIOM_ANALYTICS_ENDPOINT` overrides the
 destination. Telemetry is a synchronous in-memory enqueue that never throws,
 never blocks a tool call, and can never change a tool result.
 
