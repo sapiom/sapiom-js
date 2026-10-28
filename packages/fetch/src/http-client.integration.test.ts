@@ -808,4 +808,92 @@ describe("HTTP Client Integration Tests", () => {
       }
     });
   });
+
+  describe("Transaction facts redaction", () => {
+    const PAYMENT_REQUIRED = {
+      x402Version: 1,
+      accepts: [
+        {
+          scheme: "exact",
+          network: "base",
+          maxAmountRequired: "1000000",
+          resource: "https://api.example.com/paid",
+          payTo: "0x123",
+          asset: "0xUSDC",
+        },
+      ],
+    };
+
+    it("records no credential headers and no query values", async () => {
+      mocks.create.mockResolvedValue({
+        id: "tx-1",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
+      mocks.complete.mockResolvedValue({} as any);
+      fetchMock.get("begin:https://api.example.com/p", {
+        status: 200,
+        body: "ok",
+        headers: { "set-cookie": "s=1", "content-type": "text/plain" },
+      });
+
+      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      await fetch("https://api.example.com/p?q=secret", {
+        headers: {
+          Cookie: "c=1",
+          "Sapiom-Identity": "jwt",
+          "x-sapiom-api-key": "sk_1",
+          Accept: "text/plain",
+        },
+      });
+      await flushPromises();
+
+      const request = (mocks.create.mock.calls[0]![0].requestFacts as any)
+        .request;
+      expect(request.url).toBe("https://api.example.com/p?q=");
+      expect(request.urlParsed.search).toBe("?q=");
+      expect(JSON.stringify(request)).not.toContain("secret");
+      expect(Object.keys(request.headers)).toEqual(["accept"]);
+
+      const responseFacts = (mocks.complete.mock.calls[0]![1]
+        .responseFacts as any).facts;
+      expect(Object.keys(responseFacts.headers)).not.toContain("set-cookie");
+      expect(responseFacts.headers["content-type"]).toBe("text/plain");
+    });
+
+    it("filters the 402 response headers and redacts the original URL", async () => {
+      mocks.create.mockResolvedValue({
+        id: "tx-auth",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
+      mocks.reauthorizeWithPayment.mockResolvedValue({
+        id: "tx-auth",
+        status: TransactionStatus.AUTHORIZED,
+        payment: { authorizationPayload: "payment-token" },
+      } as any);
+      mocks.complete.mockResolvedValue({} as any);
+      fetchMock.getOnce("begin:https://api.example.com/paid", {
+        status: 402,
+        body: PAYMENT_REQUIRED,
+        headers: { "set-cookie": "s=1", "x-trace": "t" },
+      });
+      fetchMock.get("begin:https://api.example.com/paid", {
+        status: 200,
+        body: { paid: true },
+      });
+
+      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      await fetch("https://api.example.com/paid?token=secret");
+      await flushPromises();
+
+      const metadata = (mocks.reauthorizeWithPayment.mock.calls[0]![1] as any)
+        .metadata;
+      expect(metadata.originalRequest.url).toBe(
+        "https://api.example.com/paid?token=",
+      );
+      expect(Object.keys(metadata.responseHeaders)).not.toContain(
+        "set-cookie",
+      );
+      expect(metadata.responseHeaders["x-trace"]).toBe("t");
+    });
+  });
 });

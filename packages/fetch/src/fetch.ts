@@ -1,6 +1,7 @@
 import { SapiomClient } from "@sapiom/core";
 import {
   BaseSapiomIntegrationConfig,
+  fetchDroppingIdentityCrossOrigin,
   initializeSapiomClient,
 } from "@sapiom/core";
 import type { TransactionPollingConfig } from "@sapiom/core";
@@ -79,10 +80,11 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
  * };
  * await fetch(request);
  *
- * // Disable Sapiom for specific request
+ * // Disable Sapiom for specific request (on the Request or in init)
  * const publicRequest = new Request('/api/public');
  * (publicRequest as any).__sapiom = { enabled: false };
  * await fetch(publicRequest);
+ * await fetch('/api/public', { __sapiom: { enabled: false } } as RequestInit);
  * ```
  */
 export function createFetch(config?: SapiomFetchConfig): typeof fetch {
@@ -120,14 +122,18 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    let request = new Request(input, init);
-
-    const requestMetadata = (request as any).__sapiom || {};
+    // Read before `new Request(...)`: a copied Request does not carry the expando.
+    const requestMetadata =
+      (init as any)?.__sapiom ??
+      (input instanceof Request ? (input as any).__sapiom : undefined) ??
+      {};
     const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
     if (userMetadata?.enabled === false) {
-      return globalThis.fetch(request);
+      return globalThis.fetch(input, init);
     }
+
+    let request = new Request(input, init);
 
     // Attach identity header if target matches token audience
     if (sapiomClient.identity) {
@@ -141,7 +147,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       }
     }
 
-    request = await handleAuthorization(request, authConfig, defaultMetadata);
+    request = await handleAuthorization(request, authConfig, userMetadata);
 
     const startTime = Date.now();
     let response: Response | null = null;
@@ -150,7 +156,11 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     try {
       // Clone before sending so we have an unconsumed body for 402 retry
       const requestForRetry = request.clone();
-      response = await globalThis.fetch(request);
+      response = await fetchDroppingIdentityCrossOrigin(
+        globalThis.fetch,
+        request,
+        "@sapiom/fetch",
+      );
 
       if (response.status === 402) {
         response = await handlePayment(
@@ -158,7 +168,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
           response,
           paymentConfig,
           request,
-          defaultMetadata,
+          userMetadata,
         );
       }
 
@@ -174,7 +184,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
         error,
         completionConfig,
         startTime,
-        defaultMetadata,
+        userMetadata,
       );
     }
   };

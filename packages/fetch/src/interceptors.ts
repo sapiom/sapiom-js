@@ -8,6 +8,10 @@ import {
   HttpClientRequestFacts,
   HttpClientResponseFacts,
   HttpClientErrorFacts,
+  fetchDroppingIdentityCrossOrigin,
+  redactSearch,
+  redactUrlForFacts,
+  sanitizeFactHeaders,
 } from "@sapiom/core";
 
 import type { FailureMode, TransactionPollingConfig } from "@sapiom/core";
@@ -191,27 +195,15 @@ export async function handleAuthorization(
     protocol: parsedUrl.protocol.replace(":", ""),
     hostname: parsedUrl.hostname,
     pathname: parsedUrl.pathname,
-    search: parsedUrl.search,
+    search: redactSearch(parsedUrl.search),
     port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
   };
 
-  const sanitizedHeaders: Record<string, string> = {};
-  const sensitiveHeaders = new Set([
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-  ]);
-
-  for (const [key, value] of request.headers.entries()) {
-    if (!sensitiveHeaders.has(key.toLowerCase())) {
-      sanitizedHeaders[key] = value;
-    }
-  }
+  const sanitizedHeaders = sanitizeFactHeaders(request.headers);
 
   const requestFacts: HttpClientRequestFacts = {
     method,
-    url,
+    url: redactUrlForFacts(url),
     urlParsed,
     headers: sanitizedHeaders,
     hasBody: request.body !== null,
@@ -388,12 +380,12 @@ export async function handlePayment(
           }),
           request: {
             method: request.method.toUpperCase(),
-            url: request.url,
+            url: redactUrlForFacts(request.url),
             urlParsed: {
               protocol: parsedUrl.protocol.replace(":", ""),
               hostname: parsedUrl.hostname,
               pathname: parsedUrl.pathname,
-              search: parsedUrl.search,
+              search: redactSearch(parsedUrl.search),
               port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
             },
             headers: {},
@@ -442,10 +434,10 @@ export async function handlePayment(
         x402: x402Response,
         metadata: {
           originalRequest: {
-            url: request.url,
+            url: redactUrlForFacts(request.url),
             method: request.method,
           },
-          responseHeaders: Object.fromEntries(response.headers.entries()),
+          responseHeaders: sanitizeFactHeaders(response.headers),
           httpStatusCode: 402,
         },
       },
@@ -502,8 +494,10 @@ export async function handlePayment(
   const retryHeaders = new Headers(requestForRetry.headers);
   setHeader(retryHeaders, headerName, paymentHeaderValue);
 
-  return await globalThis.fetch(
+  return await fetchDroppingIdentityCrossOrigin(
+    globalThis.fetch,
     new Request(requestForRetry, { headers: retryHeaders }),
+    "@sapiom/fetch",
   );
 }
 
@@ -537,19 +531,7 @@ export function handleCompletion(
   const durationMs = Date.now() - startTime;
   const isSuccess = response !== null && response.ok;
 
-  const sanitizedHeaders: Record<string, string> = {};
-  if (response) {
-    const sensitiveHeaders = new Set([
-      "set-cookie",
-      "authorization",
-      "x-api-key",
-    ]);
-    for (const [key, value] of response.headers.entries()) {
-      if (!sensitiveHeaders.has(key.toLowerCase())) {
-        sanitizedHeaders[key] = value;
-      }
-    }
-  }
+  const sanitizedHeaders = sanitizeFactHeaders(response?.headers);
 
   let responseFacts:
     | { source: string; version: string; facts: Record<string, any> }

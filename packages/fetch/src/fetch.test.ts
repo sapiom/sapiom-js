@@ -1,5 +1,7 @@
+import http from "http";
+import { AddressInfo } from "net";
 import { createFetch } from "./fetch";
-import { SapiomClient, TransactionAPI } from "@sapiom/core";
+import { SapiomClient, TransactionAPI, TransactionStatus } from "@sapiom/core";
 
 describe("createFetch", () => {
   let mockSapiomClient: SapiomClient;
@@ -46,5 +48,164 @@ describe("createFetch", () => {
     });
 
     expect(typeof fetch).toBe("function");
+  });
+});
+
+const PAYMENT_REQUIRED = JSON.stringify({
+  x402Version: 1,
+  accepts: [
+    {
+      scheme: "exact",
+      network: "base",
+      maxAmountRequired: "1000000",
+      resource: "http://127.0.0.1/paid",
+      payTo: "0x123",
+      asset: "0xUSDC",
+    },
+  ],
+});
+
+/** Local servers that record each request's headers; closed after every test. */
+const servers: http.Server[] = [];
+const received: Record<string, http.IncomingHttpHeaders[]> = {};
+
+async function listen(
+  name: string,
+  handle: (req: http.IncomingMessage, res: http.ServerResponse) => void,
+): Promise<string> {
+  received[name] = [];
+  const server = http.createServer((req, res) => {
+    received[name]!.push(req.headers);
+    handle(req, res);
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))),
+  );
+});
+
+function createSapiomClient() {
+  const transactions = {
+    create: jest.fn().mockResolvedValue({
+      id: "tx-1",
+      status: TransactionStatus.AUTHORIZED,
+    }),
+    complete: jest.fn().mockResolvedValue({}),
+    reauthorizeWithPayment: jest.fn().mockResolvedValue({
+      id: "tx-1",
+      status: TransactionStatus.AUTHORIZED,
+      payment: { authorizationPayload: "payment-token" },
+    }),
+  };
+  const identity = {
+    getHeaderIfMatch: jest.fn(async (url: string) =>
+      new URL(url).hostname === "127.0.0.1"
+        ? { "Sapiom-Identity": "identity-jwt" }
+        : {},
+    ),
+  };
+  return {
+    client: { transactions, identity } as unknown as SapiomClient,
+    transactions,
+    identity,
+  };
+}
+
+describe("createFetch per-request metadata", () => {
+  it("honours __sapiom.enabled false set on a Request", async () => {
+    const origin = await listen("a", (_req, res) => {
+      res.writeHead(402, { "content-type": "application/json" });
+      res.end(PAYMENT_REQUIRED);
+    });
+    const { client, transactions, identity } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+    const request = new Request(`${origin}/paid`);
+    (request as any).__sapiom = { enabled: false };
+
+    const response = await fetch(request);
+
+    expect(response.status).toBe(402);
+    expect(transactions.create).not.toHaveBeenCalled();
+    expect(transactions.reauthorizeWithPayment).not.toHaveBeenCalled();
+    expect(identity.getHeaderIfMatch).not.toHaveBeenCalled();
+    expect(received.a![0]!["sapiom-identity"]).toBeUndefined();
+  });
+
+  it("honours __sapiom.enabled false passed in init", async () => {
+    const origin = await listen("a", (_req, res) => {
+      res.writeHead(402, { "content-type": "application/json" });
+      res.end(PAYMENT_REQUIRED);
+    });
+    const { client, transactions } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+
+    const response = await fetch(`${origin}/paid`, {
+      __sapiom: { enabled: false },
+    } as RequestInit);
+
+    expect(response.status).toBe(402);
+    expect(transactions.create).not.toHaveBeenCalled();
+    expect(transactions.reauthorizeWithPayment).not.toHaveBeenCalled();
+  });
+
+  it("forwards per-request metadata set on a Request", async () => {
+    const origin = await listen("a", (_req, res) => res.end("ok"));
+    const { client, transactions } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+    const request = new Request(`${origin}/x`);
+    (request as any).__sapiom = { serviceName: "svc" };
+
+    await fetch(request);
+
+    expect(transactions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ serviceName: "svc" }),
+    );
+  });
+});
+
+describe("createFetch identity across redirects", () => {
+  it("drops Sapiom-Identity on a redirect to another origin", async () => {
+    const target = await listen("b", (_req, res) => res.end("ok"));
+    const origin = await listen("a", (_req, res) => {
+      res.writeHead(302, { location: `${target}/landing` });
+      res.end();
+    });
+    const { client } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+
+    const response = await fetch(`${origin}/start`);
+
+    expect(response.status).toBe(200);
+    expect(received.a![0]!["sapiom-identity"]).toBe("identity-jwt");
+    expect(received.b![0]!["sapiom-identity"]).toBeUndefined();
+  });
+
+  it("drops Sapiom-Identity when the paid retry is redirected to another origin", async () => {
+    const target = await listen("b", (_req, res) => res.end("paid"));
+    const origin = await listen("a", (req, res) => {
+      if (req.headers["x-payment"]) {
+        res.writeHead(302, { location: `${target}/receipt` });
+        res.end();
+      } else {
+        res.writeHead(402, { "content-type": "application/json" });
+        res.end(PAYMENT_REQUIRED);
+      }
+    });
+    const { client, transactions } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+
+    const response = await fetch(`${origin}/paid`);
+
+    expect(transactions.reauthorizeWithPayment).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    expect(received.a).toHaveLength(2);
+    expect(received.a![1]!["sapiom-identity"]).toBe("identity-jwt");
+    expect(received.b).toHaveLength(1);
+    expect(received.b![0]!["sapiom-identity"]).toBeUndefined();
   });
 });
