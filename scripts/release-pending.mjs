@@ -3,6 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REGISTRY = "https://registry.npmjs.org";
+// Bounded so a stalled registry lands in the "treat as pending" path before
+// the job timeout cancels the whole check.
+const LOOKUP_TIMEOUT_MS = 30_000;
 
 // Same selection as `changeset publish`: every non-private workspace package.
 export function publicPackages(root) {
@@ -31,31 +34,41 @@ export function publicPackages(root) {
 
 // Any answer other than "the version exists" counts as pending: a registry
 // hiccup must ask a reviewer, never silently skip a release.
-export async function pendingPackages({ root, fetchImpl = fetch, warn }) {
-  const pending = [];
-  for (const pkg of publicPackages(root)) {
-    const url = `${REGISTRY}/${pkg.name.replaceAll("/", "%2f")}`;
-    try {
-      const response = await fetchImpl(url, {
-        headers: { accept: "application/vnd.npm.install-v1+json" },
-      });
-      if (response.status === 404) {
-        pending.push(pkg);
-        continue;
-      }
-      if (!response.ok) {
-        warn?.(`${pkg.name}: registry answered HTTP ${response.status}`);
-        pending.push(pkg);
-        continue;
-      }
-      const packument = await response.json();
-      if (!packument?.versions?.[pkg.version]) pending.push(pkg);
-    } catch (error) {
-      warn?.(`${pkg.name}: registry lookup failed (${error.message})`);
-      pending.push(pkg);
+export async function pendingPackages({
+  root,
+  fetchImpl = fetch,
+  warn,
+  timeoutMs = LOOKUP_TIMEOUT_MS,
+}) {
+  const results = await Promise.all(
+    publicPackages(root).map(async (pkg) =>
+      (await isPublished(pkg, fetchImpl, warn, timeoutMs)) ? null : pkg,
+    ),
+  );
+  return results.filter(Boolean);
+}
+
+async function isPublished(pkg, fetchImpl, warn, timeoutMs) {
+  // `?write=true` is how the npm CLI asks for an uncached packument: the CDN
+  // copy can lag a publish that just happened, and a stale answer would ask
+  // reviewers to approve a release that already shipped.
+  const url = `${REGISTRY}/${pkg.name.replaceAll("/", "%2f")}?write=true`;
+  try {
+    const response = await fetchImpl(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (response.status === 404) return false;
+    if (!response.ok) {
+      warn?.(`${pkg.name}: registry answered HTTP ${response.status}`);
+      return false;
     }
+    const packument = await response.json();
+    return Boolean(packument?.versions?.[pkg.version]);
+  } catch (error) {
+    warn?.(`${pkg.name}: registry lookup failed (${error.message})`);
+    return false;
   }
-  return pending;
 }
 
 async function main() {

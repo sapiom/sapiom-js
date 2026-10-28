@@ -85,11 +85,12 @@ publishing.
   missing or mismatched trusted publisher is the usual cause of a publish
   **E404**, and the reason a brand-new package needs a manual first publish.
 - The `publish` job runs in the **`npm-publish` environment** (`main` only,
-  required reviewers). A read-only `check` job runs first and only starts
-  `publish` when a public package version is missing from npm, so a release push
-  waits for one approval and ordinary pushes ask for none. A run waiting for
-  approval holds the workflow's concurrency group and later publish runs queue
-  behind it: approve or reject promptly.
+  required reviewers). A read-only `check` job runs first; `publish` starts only
+  when a public package version is missing from npm (or on a
+  `publish_mcp_registry` dispatch), so a release push waits for one approval and
+  ordinary pushes ask for none. A run waiting for approval holds the workflow's
+  concurrency group: only the newest later run waits behind it (GitHub cancels
+  older waiting ones), so approve or reject promptly.
 - Toolchain in the workflow: Node 24 and npm >= 11.5 (OIDC support) + pnpm 10+.
   `packageManager` in the root `package.json` must stay in sync.
 - The job grants `id-token: write` so the runner can mint the short-lived OIDC
@@ -161,9 +162,10 @@ Publisher → Add**:
 - Workflow filename: `publish.yml`
 - Environment: `npm-publish`
 
-Until this publisher exists, every push to `main` finds the new version missing
-and asks for an `npm-publish` approval that can only fail with E404: reject those
-until the manual first publish is done.
+Until the manual first publish lands, every push to `main` finds the new version
+missing and asks for an `npm-publish` approval. Approving publishes any other
+pending versions and fails with E404 on the new package; reject it when nothing
+else is waiting to ship.
 
 From here on, the package publishes automatically via the normal flow.
 

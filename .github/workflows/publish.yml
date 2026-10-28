@@ -4,8 +4,8 @@ name: Publish
 #
 # Prerequisites (one-time):
 #   - A Trusted Publisher configured PER PACKAGE on npmjs.com, pointing at
-#     repo `sapiom/sapiom-js` + workflow file `.github/workflows/publish.yml`.
-#     A mismatch (repo/workflow/env) is the usual cause of a publish E404.
+#     repo `sapiom/sapiom-js` + workflow file `.github/workflows/publish.yml` +
+#     environment `npm-publish`. A mismatch (repo/workflow/env) is the usual cause of a publish E404.
 #   - Toolchain: Node > 22 and npm >= 11.5 (OIDC support) + a pnpm that supports
 #     trusted publishing (pnpm 10+). `packageManager` in package.json must match.
 #   - The OIDC grant (below) exists only in the `publish` job, which runs in the
@@ -13,8 +13,9 @@ name: Publish
 #     package's Trusted Publisher names that environment, so a token minted
 #     anywhere else is refused by npm.
 #   - The `check` job holds no OIDC grant. It refuses dispatches from other
-#     branches and only lets `publish` start when a public package version is
-#     missing from npm, so ordinary pushes to main never wait for an approval.
+#     branches and reports whether a public package version is missing from npm;
+#     `publish` starts only then or on a `publish_mcp_registry` dispatch, so
+#     ordinary pushes to main never wait for an approval.
 #
 # npm generates provenance attestations automatically under trusted publishing
 # (no --provenance flag needed). `changeset publish` runs through pnpm so it

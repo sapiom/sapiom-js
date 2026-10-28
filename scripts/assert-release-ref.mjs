@@ -1,6 +1,6 @@
 // Release workflows only run reviewed code: a manual dispatch must come from
-// main. The protected environments enforce this too; this fails earlier and
-// says why instead of leaving a job stuck on a deployment policy.
+// main. This fails in the first job and names the ref, before any job reaches
+// a protected environment.
 const event = process.env.GITHUB_EVENT_NAME ?? "";
 const ref = process.env.GITHUB_REF ?? "";
 

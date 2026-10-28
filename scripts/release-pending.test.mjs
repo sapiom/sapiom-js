@@ -28,8 +28,10 @@ async function packageRoot(t) {
 
 function registry(answers) {
   const requested = [];
-  const fetchImpl = async (url) => {
+  const inits = [];
+  const fetchImpl = async (url, init) => {
     requested.push(url);
+    inits.push(init);
     const answer = answers[url];
     if (answer instanceof Error) throw answer;
     const { status = 200, versions = {} } = answer ?? { status: 404 };
@@ -39,11 +41,11 @@ function registry(answers) {
       json: async () => ({ versions }),
     };
   };
-  return { fetchImpl, requested };
+  return { fetchImpl, requested, inits };
 }
 
-const CORE = "https://registry.npmjs.org/@sapiom%2fcore";
-const CLI = "https://registry.npmjs.org/@sapiom%2fcli";
+const CORE = "https://registry.npmjs.org/@sapiom%2fcore?write=true";
+const CLI = "https://registry.npmjs.org/@sapiom%2fcli?write=true";
 
 test("nothing is pending when every public version is on npm", async (t) => {
   const root = await packageRoot(t);
@@ -92,6 +94,43 @@ test("private packages are never looked up", async (t) => {
   const { fetchImpl, requested } = registry({});
   await pendingPackages({ root, fetchImpl });
   assert.ok(requested.every((url) => !url.includes("desktop")));
+});
+
+test("lookups bypass the registry CDN cache and carry a timeout", async (t) => {
+  const root = await packageRoot(t);
+  const { fetchImpl, requested, inits } = registry({});
+  await pendingPackages({ root, fetchImpl });
+  assert.ok(requested.every((url) => url.endsWith("?write=true")));
+  for (const init of inits) {
+    assert.equal(init.headers.accept, "application/json");
+    assert.ok(init.signal instanceof AbortSignal);
+  }
+});
+
+test("a stalled lookup times out and counts as pending", async (t) => {
+  const root = await packageRoot(t);
+  const warnings = [];
+  // A real stalled socket keeps the process alive; AbortSignal.timeout's own
+  // timer does not, so hold the loop open until the abort fires.
+  const stalled = (url, init) =>
+    new Promise((resolve, reject) => {
+      const keepAlive = setTimeout(() => {}, 10_000);
+      init.signal.addEventListener("abort", () => {
+        clearTimeout(keepAlive);
+        reject(init.signal.reason);
+      });
+    });
+  const pending = await pendingPackages({
+    root,
+    fetchImpl: stalled,
+    warn: (message) => warnings.push(message),
+    timeoutMs: 20,
+  });
+  assert.equal(pending.length, 2);
+  assert.equal(warnings.length, 2);
+  assert.ok(
+    warnings.every((message) => /registry lookup failed/.test(message)),
+  );
 });
 
 test("the CLI writes the step output and warns on registry errors", async (t) => {
