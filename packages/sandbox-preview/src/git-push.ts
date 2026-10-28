@@ -1,7 +1,7 @@
 // A throwaway git-dir leaves the user's directory untouched; force-push because a new repo is
 // auto-initialized and the local working tree is the preview's source of truth.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -10,6 +10,14 @@ import { PreviewOperationError } from './errors.js';
 const NEVER_PUSHED = [':(exclude,glob)**/.*', ':(exclude,glob)**/.*/**', ':(exclude,glob)**/node_modules/**'];
 
 export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string, branch = 'main'): void {
+  // git runs with this directory as cwd, so a missing one would otherwise surface as "git not found".
+  if (!existsSync(sourceDir) || !statSync(sourceDir).isDirectory()) {
+    throw new PreviewOperationError({
+      code: 'NO_SOURCE_DIR',
+      message: `Source directory not found: ${sourceDir}`,
+      hint: 'Fix `source.path` on the sandbox resource in sapiom.json.',
+    });
+  }
   const gitDir = mkdtempSync(path.join(tmpdir(), 'sbxprev-git-'));
   const git = (args: string[]): void => {
     try {

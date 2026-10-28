@@ -73,6 +73,12 @@ describe('pushLocalDir', () => {
     expect(files).toEqual(['index.js', 'link.txt', 'src/app.js']);
   });
 
+  it('names a missing source directory instead of failing to start git', () => {
+    expect(() => pushLocalDir(path.join(base, 'missing'), bare, 'sk_test')).toThrow(
+      expect.objectContaining({ code: 'NO_SOURCE_DIR' }),
+    );
+  });
+
   it('commits a symlink as a link, never the content it points at', () => {
     pushLocalDir(src, bare, 'sk_test');
 

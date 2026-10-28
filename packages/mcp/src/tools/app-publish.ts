@@ -380,26 +380,8 @@ function requireAppLink(data: unknown): AppLinkWire {
 
 // ─── Bundle collection ───────────────────────────────────────────────────────
 
-/**
- * Walk the resource's source directory into the `{ path: contents }` map the
- * bundle endpoint takes.
- *
- * Not `collectDirFiles` from `@sapiom/tools`: that reads with a lossy `utf8`
- * decode, which turns a binary into U+FFFD soup instead of an error — exactly
- * the corruption `BUNDLE_BINARY_FILE` exists to prevent. Skips (like it does)
- * `node_modules`, `.git`, and dotfiles/dot-dirs, plus THE PROJECT'S OWN
- * `sapiom.json` — matched by absolute path, not by name or depth, because it is
- * only config at `<projectDir>/sapiom.json`. That file's `env` block holds the
- * app's own secrets, which a static `start` command would serve to every visitor
- * of a public link. Any other `sapiom.json` in the tree — a nested one, or
- * `web/sapiom.json` under a `source.path` of `web` — is ordinary app content.
- *
- * Symlinks INSIDE the tree are skipped (a public link must not publish their target); the
- * root comes from `resolveSourceDir` and is walked by its real path so `web -> .` still skips the config.
- *
- * A `git`-source resource is read from the same local working tree: the bundle
- * store takes a file map, so there is nothing for a server-side checkout to do.
- */
+// Decode strictly so a binary fails instead of publishing U+FFFD; skip nested symlinks and, by real path,
+// the project's own sapiom.json, whose `env` holds app secrets a public link would otherwise serve.
 export function collectBundleFiles(
   projectDir: string,
   cfg: SandboxConfig,

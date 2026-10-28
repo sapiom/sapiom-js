@@ -626,10 +626,7 @@ export class Sandbox {
     return (await res.json()) as DeployPreviewResult;
   }
 
-  /**
-   * Upload a local directory into the sandbox, skipping `node_modules`, `.git`, dotfiles and
-   * symlinks: dependencies install in the sandbox, and a link could point outside `localDir`.
-   */
+  /** Skip dependency trees (the sandbox build installs them) and symlinks (a link can point outside `localDir`). */
   async uploadDir(localDir: string, opts?: UploadDirOptions): Promise<void> {
     const files = collectDirFiles(localDir, opts?.ignore);
     for (const f of files) {
