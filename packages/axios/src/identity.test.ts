@@ -120,6 +120,35 @@ describe("withSapiom identity header", () => {
       expect(cross.headers["Sapiom-Identity"]).toBeUndefined();
     });
 
+    it("drops the header when the caller's hook retargets the hop", async () => {
+      const { client } = createClient();
+      const instance = axios.create();
+      const mock = new MockAdapter(instance);
+      let hook: ((options: any, details: any) => void) | undefined;
+      mock.onGet("http://127.0.0.1:3000/start").reply((config) => {
+        hook = config.beforeRedirect as typeof hook;
+        return [200, "ok"];
+      });
+      withSapiom(instance, { sapiomClient: client });
+      await instance.get("http://127.0.0.1:3000/start", {
+        beforeRedirect: (options: Record<string, unknown>) => {
+          options.port = "4000";
+        },
+      });
+      const options = {
+        protocol: "http:",
+        hostname: "127.0.0.1",
+        port: "3000",
+        href: "http://127.0.0.1:3000/landing",
+        headers: { "Sapiom-Identity": JWT },
+      };
+
+      hook!(options, { headers: {} });
+
+      expect(options.port).toBe("4000");
+      expect(options.headers["Sapiom-Identity"]).toBeUndefined();
+    });
+
     it("keeps the header on a same-origin IPv6 hop described without href", async () => {
       const hook = await hookFor("http://[::1]:3000/start");
       const options = {
