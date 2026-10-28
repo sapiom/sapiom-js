@@ -111,7 +111,8 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
   ).toString("base64");
   parsed.username = "";
   parsed.password = "";
-  return { url: parsed.toString(), env: gitHeaderEnv(`Authorization: Basic ${basic}`) };
+  const tokenless = parsed.toString();
+  return { url: tokenless, env: gitHeaderEnv(`Authorization: Basic ${basic}`, tokenless) };
 }
 
 /**
@@ -119,9 +120,12 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
  * `GIT_CONFIG_*` pairs the user already set. Without userinfo a rejected
  * header makes git fall back to credential helpers, askpass and the terminal,
  * which could hang or send a different credential: the helper list is reset
- * and both prompts are disabled so a 401 fails fast.
+ * and both prompts are disabled so a 401 fails fast. The tokenless URL also
+ * matches the user's `insteadOf`/`pushInsteadOf` rules (e.g. HTTPS to SSH),
+ * which ignore the header: an exact-URL identity rewrite wins over them as the
+ * longest match.
  */
-function gitHeaderEnv(header: string): NodeJS.ProcessEnv {
+function gitHeaderEnv(header: string, url: string): NodeJS.ProcessEnv {
   const existing = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "", 10);
   const base = Number.isInteger(existing) && existing > 0 ? existing : 0;
   return {
@@ -132,7 +136,11 @@ function gitHeaderEnv(header: string): NodeJS.ProcessEnv {
     [`GIT_CONFIG_VALUE_${base}`]: "",
     [`GIT_CONFIG_KEY_${base + 1}`]: "http.extraHeader",
     [`GIT_CONFIG_VALUE_${base + 1}`]: header,
-    GIT_CONFIG_COUNT: String(base + 2),
+    [`GIT_CONFIG_KEY_${base + 2}`]: `url.${url}.insteadOf`,
+    [`GIT_CONFIG_VALUE_${base + 2}`]: url,
+    [`GIT_CONFIG_KEY_${base + 3}`]: `url.${url}.pushInsteadOf`,
+    [`GIT_CONFIG_VALUE_${base + 3}`]: url,
+    GIT_CONFIG_COUNT: String(base + 4),
   };
 }
 

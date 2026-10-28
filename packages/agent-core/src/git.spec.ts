@@ -5,7 +5,7 @@
  * Fully offline: git operations are exercised against local repos (a file path
  * is a valid git clone/push source), so no network is required.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -305,11 +305,39 @@ describe('credentials never reach git argv', () => {
     }
 
     const env = calls[0].env!;
-    expect(env.GIT_CONFIG_COUNT).toBe('4');
+    expect(env.GIT_CONFIG_COUNT).toBe('6');
     expect(env.GIT_CONFIG_KEY_0).toBe('user.name');
     expect(env.GIT_CONFIG_VALUE_1).toBe('false');
     expect(env.GIT_CONFIG_KEY_2).toBe('credential.helper');
     expect(env.GIT_CONFIG_KEY_3).toBe('http.extraHeader');
+  });
+
+  it('pins the tokenless URL against the user\'s insteadOf rewrites', () => {
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+
+    const env = calls[0].env!;
+    const url = 'https://git.example/git/repo';
+    expect(env.GIT_CONFIG_KEY_2).toBe(`url.${url}.insteadOf`);
+    expect(env.GIT_CONFIG_VALUE_2).toBe(url);
+    expect(env.GIT_CONFIG_KEY_3).toBe(`url.${url}.pushInsteadOf`);
+    expect(env.GIT_CONFIG_VALUE_3).toBe(url);
+
+    // Real git: a global HTTPS-to-SSH rule must not reroute the request away
+    // from the header-authenticated HTTPS remote.
+    const dir = makeTmp('sapiom-git-cfg-');
+    try {
+      const globalConfig = path.join(dir, 'gitconfig');
+      writeFileSync(globalConfig, '[url "ssh://git@git.example/"]\n\tinsteadOf = https://git.example/\n');
+      const getUrl = (extra: NodeJS.ProcessEnv) =>
+        spawnSync('git', ['ls-remote', '--get-url', url], {
+          encoding: 'utf8',
+          env: { ...extra, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' },
+        }).stdout.trim();
+      expect(getUrl({ ...process.env })).toBe('ssh://git@git.example/git/repo');
+      expect(getUrl(env)).toBe(url);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('passes a URL without userinfo or a local path through unchanged, with no env', () => {
