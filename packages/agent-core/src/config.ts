@@ -20,6 +20,10 @@ export interface SapiomConfig {
   definitionId?: string;
   /** Agent name, cached by `link` (matches `defineAgent({ name })`). */
   name?: string;
+  /**
+   * @deprecated Ignored. The CLI never routes the API key to a host read from
+   * this committed file; use `SAPIOM_HOST`, `--host` or `sapiom config set-target`.
+   */
   host?: string;
   /**
    * Template-clone provenance (SAP-1357). Written by `sapiom_dev_agents_clone`

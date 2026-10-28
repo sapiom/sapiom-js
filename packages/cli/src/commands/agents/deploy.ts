@@ -16,7 +16,7 @@ export async function runDeploy(opts: { branch?: string; host?: string; target?:
   try {
     const dir = process.cwd();
     const cfg = requireConfig(dir);
-    const client = makeClient({ projectHost: cfg.host, flagHost: opts.host, flagTarget: opts.target });
+    const client = makeClient({ flagHost: opts.host, flagTarget: opts.target });
 
     const result = await deploy({ projectDir: dir, definitionId: cfg.definitionId, branch: opts.branch }, client);
 

@@ -19,7 +19,7 @@ import { runSignal } from "./signal.js";
 
 /**
  * Attach the shared --host / --target flags to a command. These override the
- * machine-level config and sapiom.json host for a single invocation.
+ * machine-level config for a single invocation.
  */
 function withHostFlags(cmd: Command): Command {
   return cmd

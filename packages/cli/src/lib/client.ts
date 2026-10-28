@@ -1,7 +1,6 @@
 /**
- * CLI-level client factory. Resolves host and API key from the environment,
- * stored CLI config, and the optional project-level host — then delegates to
- * @sapiom/agent-core's GatewayClient.
+ * CLI-level client factory. Resolves host and API key from the environment and
+ * stored CLI config, then delegates to @sapiom/agent-core's GatewayClient.
  *
  * Auth resolution stays here (in the CLI) because it reads process.env and the
  * local session store — both are CLI concerns. The core client itself is stateless.
@@ -38,22 +37,16 @@ export function resolveApiKey(): string {
 }
 
 /**
- * Build a GatewayClient for a CLI command. Resolves host from env / CLI config /
- * project override; resolves credentials from env or stored session.
+ * Build a GatewayClient for a CLI command. Resolves host from env / flags / CLI
+ * config; resolves credentials from env or stored session.
  *
- * @param projectHost  Optional host stored in the project's `sapiom.json`.
  * @param flagHost     Optional `--host <url>` flag value.
  * @param flagTarget   Optional `--target local|prod` flag value.
  */
-export function makeClient(opts?: {
-  projectHost?: string;
-  flagHost?: string;
-  flagTarget?: CliTarget;
-}): GatewayClient {
+export function makeClient(opts?: { flagHost?: string; flagTarget?: CliTarget }): GatewayClient {
   const host = resolveHost({
     flagHost: opts?.flagHost,
     flagTarget: opts?.flagTarget,
-    projectHost: opts?.projectHost,
   });
   return createClient({ host, apiKey: resolveApiKey() });
 }

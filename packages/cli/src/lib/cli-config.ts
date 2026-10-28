@@ -73,14 +73,12 @@ export function writeCliConfig(patch: Partial<CliConfig>): void {
  * 2. An explicit `--host <url>` flag (passed as `flagHost`)
  * 3. The `--target local|staging|prod` flag (passed as `flagTarget`)
  * 4. The `host` or `target` stored in `~/.sapiom/config.json`
- * 5. The project-level `host` from `sapiom.json` (passed as `projectHost`)
- * 6. Default: production backend
+ * 5. Default: production backend
+ *
+ * The project's `sapiom.json` is never a host source: it is committed and can
+ * come from a cloned template, and the resolved host receives the API key.
  */
-export function resolveHost(opts: {
-  flagHost?: string;
-  flagTarget?: CliTarget;
-  projectHost?: string;
-}): string {
+export function resolveHost(opts: { flagHost?: string; flagTarget?: CliTarget }): string {
   // Env var always wins
   if (process.env.SAPIOM_HOST) return process.env.SAPIOM_HOST.replace(/\/$/, '');
   // Explicit --host flag
@@ -92,9 +90,6 @@ export function resolveHost(opts: {
   const cfg = load();
   if (cfg.host) return cfg.host.replace(/\/$/, '');
   if (cfg.target) return hostForTarget(cfg.target);
-
-  // Project-level sapiom.json host
-  if (opts.projectHost) return opts.projectHost.replace(/\/$/, '');
 
   return PROD_HOST;
 }

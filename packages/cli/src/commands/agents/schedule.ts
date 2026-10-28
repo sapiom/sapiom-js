@@ -15,7 +15,6 @@ import {
 } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
-import { readConfig } from '../../lib/config.js';
 import { CliError, ok } from '../../lib/output.js';
 
 interface HostOpts {
@@ -23,9 +22,9 @@ interface HostOpts {
   target?: CliTarget;
 }
 
-/** A client scoped to the project's host (if linked) with per-invocation flag overrides. */
+/** A client for the configured host, with per-invocation flag overrides. */
 function clientFor(opts: HostOpts) {
-  return makeClient({ projectHost: readConfig(process.cwd())?.host, flagHost: opts.host, flagTarget: opts.target });
+  return makeClient({ flagHost: opts.host, flagTarget: opts.target });
 }
 
 function rethrow(err: unknown): never {

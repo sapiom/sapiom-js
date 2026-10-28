@@ -6,7 +6,6 @@ import {
 } from "@sapiom/agent-core";
 
 import { type CliTarget, makeClient } from "../../lib/client.js";
-import { readConfig } from "../../lib/config.js";
 import { CliError, ok } from "../../lib/output.js";
 
 /**
@@ -28,9 +27,7 @@ export async function runEmit(
   },
 ): Promise<void> {
   try {
-    const cfg = readConfig(process.cwd());
     const client = makeClient({
-      projectHost: cfg?.host,
       flagHost: opts.host,
       flagTarget: opts.target,
     });
