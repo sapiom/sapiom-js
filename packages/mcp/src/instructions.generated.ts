@@ -19,6 +19,7 @@ step's \`run(input, ctx)\` does work and returns a directive. All from the termi
 dashboard required.
 
 ## Two ways to use Sapiom
+
 Use **the local authoring server** (this one) to **author agents** — the \`sapiom_dev_agents_*\`
 tools scaffold, typecheck, run with stubs, and deploy from a local checkout. For a **one-off
 capability call** without an agent (a search, a scrape, one image), use **the hosted capability
@@ -26,15 +27,24 @@ server** at \`https://api.sapiom.ai/v1/mcp\`. Agent Studio pre-wires it too; in 
 register it with
 \`claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp --header "x-api-key: $SAPIOM_API_KEY"\`.
 Its runtime \`tools/list\` response is authoritative; use \`tool_discover\` to find a direct
-\`sapiom_*\` capability tool. The endpoint may also advertise implemented cloud workflow and
-governance tools, but the supported public authoring route is this local MCP or Agent Studio.
+\`sapiom_*\` capability tool.
+If the hosted \`sapiom_check_transaction_compatibility\` tool is in your tools, call it with the
+merchant's domain before buying, and use UCP checkout only when \`status\` is \`supported\`.
+Otherwise use browser checkout only with Sapiom's browser SDK integration, ready for the merchant's
+payment flow. If the integration is unavailable or the payment flow is unsupported, stop.
+If the hosted capability server lists a transactions guide resource, it is an optional guide to
+the full transaction flow; tool descriptions and results stay authoritative.
+The endpoint may also advertise implemented cloud tools for
+deployed agents and governance tools, but the supported public authoring route is this local
+MCP or Agent Studio.
 Rule of thumb: author an agent for anything multi-step, scheduled, or deployable; use the
 hosted capability server or the TypeScript SDK for a single action.
 
 ## Lifecycle (in order)
+
 1. Start a project — \`sapiom_dev_agents_scaffold\` (a fresh starter) or \`sapiom_dev_agents_clone\`
    (materialize a gallery template or an existing fork — the "use this template" handoff).
-   READ the project's \`AGENTS.md\` first, plus the \`sapiom-agent-authoring\` skill in
+   Read the project's \`AGENTS.md\` first, plus the \`sapiom-agent-authoring\` skill in
    \`.claude/skills/\` where present (scaffolded projects include it; auto-loads in Claude Code).
    Then \`npm install\`.
 2. Test locally: \`npm run typecheck\` → \`sapiom_dev_agents_check\` (bundles and imports the
@@ -49,6 +59,7 @@ hosted capability server or the TypeScript SDK for a single action.
    depend on the work performed) → \`_inspect\`.
 
 ## Preview a web app
+
 From inside the project: \`sapiom_dev_sandbox_configure\` (writes the validated \`sapiom.json\`
 resource — source, start command, port, optional build/tier/ttl/env) →
 \`sapiom_dev_sandbox_check\` (optional) → \`sapiom_dev_sandbox_preview\` (uploads, builds, starts,
@@ -74,15 +85,17 @@ publish mints the link its own key in the publishing org, injects it at wake as
 published it), and revokes the previous one; deleting the link revokes it too. The key is
 least-privilege: it reads only the publishing agent's own secrets, so
 \`vault.get("workflow:" + process.env.SAPIOM_DEFINITION_ID, key)\` from \`@sapiom/tools\` works
-with no setup, and no other Vault ref does; it holds \`org.read\` only if the publisher did, and
-it cannot write or spend.
+with no setup, and no other Vault ref does. What else it may do follows who can reach the link and
+never exceeds what the publisher holds: org-only links with webhooks off: read and write, as the
+publisher; public links, and any link with webhooks on: read only. Making a link public or turning
+its webhooks on narrows its key at once.
 
 An App Link is a wake-on-visit **redirector, not a reverse proxy**: no sub-path is forwarded,
 so the app's own API lives at whichever preview URL is serving the app, never under the link.
-To get that address, request the root WITHOUT following redirects — a WARM app answers 302 and
-\`Location\` is the address; a COLD one answers 200 with the "Starting …" page and starts a
-wake, and \`{link}/__status\` then polls to \`{"status":"ready","url":…}\`. Do NOT make
-\`__status\` your FIRST call: with no wake in flight it starts one and answers \`waking\` with
+To get that address, request the root without following redirects — a warm app answers 302 and
+\`Location\` is the address; a cold one answers 200 with the "Starting …" page and starts a
+wake, and \`{link}/__status\` then polls to \`{"status":"ready","url":…}\`. Don't make
+\`__status\` your first call: with no wake in flight it starts one and answers \`waking\` with
 no url. Re-read the address per use rather than storing it — it changes when a wake recreates
 the sandbox and, for an org-scoped app, carries a short-lived token that expires. The check on
 both is the link's own, so an org-scoped app's API is browser-only: a logged-in member's
@@ -108,7 +121,68 @@ where a sub-path IS forwarded — with no caller auth at either visibility, and 
 app with no wake or spend cap either. Enable it only for an app whose own handler
 authenticates the caller, and treat the URL as a secret.
 
+## Cards and transactions
+
+Payment cards, card spending limits and transactions run on the hosted capability server
+(\`sapiom_list_payment_methods\`, \`sapiom_add_payment_method\`, \`sapiom_delete_payment_method\`,
+\`sapiom_get_card_spending_limits\`, \`sapiom_set_card_spending_limits\`, \`sapiom_request_transaction\`,
+\`sapiom_get_transaction\`, \`sapiom_update_transaction\` and \`sapiom_cancel_transaction\`). Follow that
+server's instructions. Follow each result's \`nextAction\` or \`nextStep\`. When its actor is \`human\`,
+stop: a person or trusted integrator must reconcile through the existing REST/merchant recovery;
+do not act on it yourself. The update and cancel tools change only unfinished checkouts and never
+place or refund an order. A \`payment_ready\` next action is not an order confirmation, and no tool
+returns card details: finish paying at \`continueUrl\` with Sapiom's browser SDK integration, which
+supplies the card. If it is unavailable or the merchant's payment flow is unsupported, cancel the
+transaction, then stop.
+A \`payment_submitted\` next action means the card went to the merchant's
+payment provider, which ends Sapiom's part: stop polling, and never pay or buy again for it.
+An \`update_checkout\` next action is a normal checkout step, not a failure: the merchant needs more
+(often a shipping address or delivery option), which you send with \`sapiom_update_transaction\`.
+
+\`sapiom_request_transaction\` takes an optional \`shipping\`: \`shipping.address\` is where the order
+ships (with no fulfillment in the checkout, it becomes a shipping method for every line item), and
+\`shipping.contact\` is how the merchant reaches the buyer. Send each only when it applies. Sapiom adds
+them to the checkout create and every update.
+
+\`nextAction.type: wait\` with \`reason: complete_in_progress\` means the merchant is completing the
+order: poll \`sapiom_get_transaction\` with \`since\` (each poll also asks the merchant whether it
+finished) and do not retry, change, cancel or buy again. An update or cancel refused with
+\`completion_in_progress\` was not sent and is not retryable; wait on the transaction the same way. If
+the checkout reopens instead of completing and the buyer still wants it, make it as a new change
+under a new idempotency key. \`operation_in_flight\` means another call held the checkout; that change
+was not sent and can be retried with the same idempotency key. \`internal_error\` whose message says
+Sapiom failed sent nothing to the merchant: stop and report its \`requestId\` to support@sapiom.ai.
+Only an \`internal_error\` that says the transaction may still be opening, or that a change may have
+applied, has an unknown outcome; follow its \`nextStep\`. A \`sapiom_request_transaction\` that timed out
+or may still be opening is resumed only by sending the same request with the same idempotency key,
+never under a new key.
+
+When a transaction returns \`nextAction.type: closed\` with \`reason: buyer_canceled\` or
+\`confirmation_expired\`, tell the buyer the reason and stop. Do not revise or retry that transaction.
+Start a new transaction with a new idempotency key only if the buyer still wants to buy. Merchant
+checkout cancellation runs separately; its retries never reopen the closed transaction.
+
+\`nextAction.type: closed\` with \`reason: sapiom_error\` means the transaction failed on Sapiom's side. Tell
+the buyer, stop, and report the \`requestId\` to support@sapiom.ai. Do not
+revise or retry that transaction. A \`revise\` action's \`reasons\` list \`{ruleId, code, message}\` per rule
+that denied the cart; tell the buyer, then change the cart with \`sapiom_update_transaction\` if they
+want to, or stop.
+
+\`nextAction.type: closed\` with \`reason: payments_paused\` means Sapiom has paused card payments and
+closed the transaction. Tell the buyer and stop. Do not revise or retry it: a new
+card transaction ends the same way until Sapiom resumes card payments.
+
+A card that can't pay says why in its \`readinessCodes\`: \`card_removed\`, \`card_failed\`,
+\`brand_not_supported\` and \`wrong_environment\` need a new card setup link; \`enrollment_pending\`
+needs the same setup link submitted again; \`setup_pending\` needs the cardholder to finish adding the
+card. \`agentic_route_off\` is informational: the card pays with its card number.
+
+When \`sapiom_add_payment_method\` returns \`setup_unavailable\`, card setup is broken on Sapiom's
+side: do not retry. Tell the user and give them the \`requestId\` from the error's \`details\` to
+report to Sapiom support. Only \`provider_unavailable\` is worth retrying, after a minute.
+
 ## Triggers (run a deployed agent without a human)
+
 \`sapiom_dev_agents_schedule\` creates a trigger of one of four kinds on a deployed agent:
 \`schedule_cron\` (recurring), \`schedule_once\` (one future time), \`event\` (fires whenever this
 tenant emits its \`eventType\` through the tenant events API), and \`webhook\` (fires whenever an
@@ -121,10 +195,25 @@ Only a sender you control can sign that way; Slack, Meta, Stripe and GitHub sign
 schemes and cannot produce our HMAC, so route those to an App Link \`/hook/*\` receiver
 (\`webhooksEnabled\`) that verifies their signature, or through a small translator that re-signs
 into a webhook trigger.
+A \`webhook\` trigger can resume a run instead of starting one: create it through the REST
+trigger route (\`POST /v1/workflows/definitions/{slug}/triggers\`) with \`target: 'signal'\`,
+\`signalName\` and \`correlationPath\` (a dot path into the delivered JSON, e.g. \`threadId\`). Each
+verified delivery then resumes this tenant's runs paused on
+\`pauseUntilSignal({ signal: signalName, resumeStep, correlationId })\` whose \`correlationId\`
+equals the payload value at that path, with the whole payload as the resumed step's input. It
+starts no run and takes no \`input\`; a delivery nothing is waiting on is dropped, and its fire
+reads \`skipped\` with \`resumedCount: 0\`.
+Sapiom email webhooks sign the trigger way: register \`POST /v1/webhooks\` on the email
+capability with the trigger's URL as \`url\`, its shown-once secret as \`secret\`, and
+\`signatureVersion: 'v2'\` (the default for new registrations; \`v1\` signs the body alone and
+a trigger rejects it). \`message.received\` then starts the agent with the message in its input,
+or, pointed at a signal trigger with \`correlationPath: 'threadId'\`, resumes the run paused on
+that thread.
 \`_schedule_inspect\` / \`_schedule_cancel\` cover every kind; \`sapiom_dev_agents_schedule_secret\`
 rotates or revokes a webhook secret. The \`event\` and \`webhook\` kinds and the secret tool need
-\`@sapiom/mcp\` >= 0.15 — on an older client, use the REST trigger routes in the guide:
-https://docs.sapiom.ai/guides/triggers.
+\`@sapiom/mcp\` >= 0.16 — on an older client, use the REST trigger routes instead:
+\`POST /v1/workflows/definitions/{slug}/triggers\` creates one, and
+\`POST /v1/workflows/triggers/{id}/secret/rotate\` or \`.../secret/revoke\` manages its secret.
 \`sapiom.*\` event types are reserved, except \`sapiom.run.failed\`: the platform emits it when a run
 of another agent in this tenant ends \`failed\` (never to the failing agent, and never again from a
 run it started), with \`definitionId\`, \`slug\`, \`definitionName\`, \`executionId\`, \`failedStep\`,
@@ -132,6 +221,7 @@ run it started), with \`definitionId\`, \`slug\`, \`definitionName\`, \`executio
 Listen with an \`event\` trigger; the events API refuses it.
 
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
+
 - Import \`defineAgent\`, \`defineStep\`, and the directives
   (\`goto\` / \`terminate\` / \`fail\` / \`retry\` / \`pauseUntilSignal\`) from \`@sapiom/agent\`.
   Import Zod from \`zod/v4\`.
@@ -149,8 +239,13 @@ Listen with an \`event\` trigger; the events API refuses it.
 - A Sapiom Postgres (\`ctx.sapiom.database.create\`) is permanent: it lives until you delete
   it, holds one slot of your plan's database limit while held, and never expires — there is
   no lifetime to pick and no \`duration\` to pass.
+- \`ctx.sapiom.memory.forget({ ids, namespace })\` deletes 1–100 memories by id, each id at most
+  64 Unicode code points; pass the namespace they were written under.
+- \`ctx.sapiom.fileStorage.upload(…)\` returns \`uploadUrl\`, \`requiredHeaders\` and \`expiresAt\`: PUT
+  the file bytes to \`uploadUrl\` yourself, with exactly those headers, before \`expiresAt\`.
 
 ## Secrets, inbound events, receipts
+
 - **Secrets** set in the dashboard per deployed agent reach a step only as env vars
   (\`process.env.SLACK_BOT_TOKEN\`); their Vault ref is derived server-side, so step code cannot
   name it. \`ctx.sapiom.vault.get(ref, key)\` is for tenant secrets stored under your own ref
@@ -165,7 +260,8 @@ Listen with an \`event\` trigger; the events API refuses it.
   triggers), \`POST /v1/workflows/fires/{id}/replay\` (re-drive a failed or stranded fire;
   \`{"rerun":true}\` to repeat one that succeeded).
 
-## Calling LLMs and running agent loops (from agent code)
+## Calling LLMs and the managed loop (from agent code)
+
 - **One LLM call → \`ctx.sapiom.llm.run\`** — summarize, extract, classify, one-shot generate.
   For a plain-text reply, read only \`type === 'text'\` content blocks (a \`thinking\` block
   may be present). For structured/JSON output, use the \`output\` param — it forces a tool
@@ -175,14 +271,21 @@ Listen with an \`event\` trigger; the events API refuses it.
   rubric score with a System One decision model. Ask all independent questions over the same state
   in one call. Use separate calls when a question needs an earlier answer. It is not a security
   boundary and is weak at arithmetic/date math — keep those in code.
-- **Platform-driven agent loop → \`ctx.sapiom.models.run\`** — a multi-turn reasoning +
-  tool-calling task (minutes, not seconds). \`models.coding.run\` for sandboxed coding tasks.
+- **The managed loop → \`ctx.sapiom.models.run\`** — a platform-driven multi-turn reasoning +
+  tool-calling task (minutes, not seconds); pass remote MCP servers as \`mcps\` to give it
+  tools. \`models.coding.run\` for sandboxed coding tasks.
   Never use this for a one-shot completion — it will loop and overthink.
 - **Dispatch a deployed agent by slug → \`ctx.sapiom.agents.run\`** — compose systems from
-  small deployed agents rather than one large monolith. \`agents.run\` waits for the terminal
-  state; **\`ctx.sapiom.agents.launch\`** takes the same spec and returns a handle at once
-  (fire-and-forget). Use \`launch\` from anything that must return fast — a webhook receiver —
-  or with \`pauseUntilSignal(handle, …)\` for a long-running child.
+  small deployed agents rather than one large monolith. \`agents.run\` waits by polling the
+  child's status every 3 s from the caller's sandbox; each poll counts against the agents
+  API's 3,000 requests a minute per credential, and the step holds its sandbox for the whole
+  wait. **\`ctx.sapiom.agents.launch\`** takes the same spec and returns a handle at once. Use
+  \`launch\` from anything that must return fast — a webhook receiver — and, from a step, wait on
+  a child with \`pauseUntilSignal(handle, …)\`: the paused step makes no requests and holds no
+  sandbox, and a child that finishes before the pause lands has its result parked and
+  delivered. To fan out, launch every child with an \`idempotencyKey\`, then pause on them one at
+  a time. The \`agent-composition\` section of the authoring rules
+  (\`GET /v1/agents/authoring-rules\`) has the full pattern.
 - **You never pick a model.** The platform picks it. \`llm.run\`/\`models.run\` report the
   served class and lane on the result (absent on older servers — treat missing as unknown);
   \`models.coding.run\` reports both as \`null\` today.
@@ -190,16 +293,17 @@ Listen with an \`event\` trigger; the events API refuses it.
   are never honored.
 - **Debugging a run:** open the Run Inspector, or fetch a step's full input/output via
   the per-step endpoint documented in the guide.
+- **Words:** a deployed program is an **agent**, one execution of it a **run**, a unit inside
+  it a **step**, one model request a **call**, what \`model\` takes a **model label**, and what
+  starts a run without a human a **trigger**. Say "agent", not "workflow" or "orchestration";
+  the authoring rules' \`platform-vocabulary\` section has the full table.
 
-Full reference: https://docs.sapiom.ai/agents/quick-start,
-https://docs.sapiom.ai/agents/authoring, and
-https://docs.sapiom.ai/guides/connect-claude-code-with-mcp, plus the \`AGENTS.md\` and
-\`sapiom-agent-authoring\` skill inside
-your scaffolded project.`;
+Full reference: the \`AGENTS.md\` and \`sapiom-agent-authoring\` skill inside your scaffolded
+project.`;
 
 /** `X-Sapiom-Content-Release` of the response this snapshot was taken from. */
-export const AUTHORING_INSTRUCTIONS_RELEASE = "2026-10-03";
+export const AUTHORING_INSTRUCTIONS_RELEASE = "2026-10-27.7";
 
 /** Full sha-256 hex of {@link AUTHORING_INSTRUCTIONS}; the served header carries its first 12 characters. */
 export const AUTHORING_INSTRUCTIONS_DIGEST =
-  "00bebe154f800dac263cd875b151ae647b8eb66bd914ae996c82ecc8f9f8be6e";
+  "09951c71847789d4b5616a101eccd4568ba73c11cdd35af140f47f9aab2c71ed";
