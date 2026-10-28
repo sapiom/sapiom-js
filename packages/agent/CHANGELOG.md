@@ -1,5 +1,15 @@
 # @sapiom/orchestration
 
+## 0.14.12
+
+### Patch Changes
+
+- 1b9a5f6: Stop linking docs.sapiom.ai pages that no longer exist. The `sapiom-agent-authoring` skill and its scaffold copies, the Agent Studio system prompt, help palette and welcome screen, and the `@sapiom/agent` README drop links to the agent quick start, authoring guide, MCP setup, call-surface, credentials and signals guides. The first-run telemetry notice drops its link to a `/telemetry` page that never existed. Links to `/capabilities` pages are unchanged.
+- Updated dependencies [89f1829]
+- Updated dependencies [a76b8bd]
+- Updated dependencies [ec08398]
+  - @sapiom/tools@0.48.0
+
 ## 0.14.11
 
 ### Patch Changes

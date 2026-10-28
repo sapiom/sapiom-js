@@ -1,5 +1,43 @@
 # @sapiom/analytics-core
 
+## 0.3.0
+
+### Minor Changes
+
+- a76b8bd: The tenant API key now only travels over HTTPS, or plain HTTP to a loopback
+  host, from every SDK client, and never follows a redirect to another origin.
+  One function, `credentialFetch` from the new `@sapiom/analytics-core/credential`
+  subpath, is the only code that sets the key header.
+
+  Behavior changes, shipped as 0.x minor bumps: a plain `http://` URL to a
+  non-loopback host is now refused, and the key headers are stripped on a
+  cross-origin redirect. `@sapiom/core` and `@sapiom/browser-pay` gain their
+  first runtime dependency, `@sapiom/analytics-core`.
+
+  - `@sapiom/core`, `@sapiom/agent-core` and `@sapiom/mcp`: a plain `http://`
+    URL to a non-loopback host (for example a Docker service name or a LAN IP)
+    now fails before the request is sent. On a trusted private network, opt in
+    with `new SapiomClient({ allowInsecureHttp: true })` (core),
+    `createClient({ allowInsecureHttp: true })` (agent-core) or
+    `SAPIOM_ALLOW_INSECURE_HTTP=1` (all clients). `localhost`, `*.localhost`,
+    `127.0.0.1` and `[::1]` work as before. Core does not retry a refused channel.
+  - `@sapiom/analytics-core`: on such an endpoint the batch is still sent, without
+    the key. A redirect to a refused channel drops the batch.
+  - Every client follows redirects itself: the first hop to another origin drops
+    `x-api-key`, `x-sapiom-api-key` and every `x-sapiom-*` header.
+  - `@sapiom/core`: `getHttpClient().defaults.headers` no longer carries the key;
+    read `defaults.credential` instead.
+  - `@sapiom/browser-pay`: the payment relay uses the shared rule, so a
+    `*.localhost` base URL and `SAPIOM_ALLOW_INSECURE_HTTP=1` are now accepted, and
+    a refused base URL throws a `CredentialChannelError`. Redirects are still
+    refused.
+  - `@sapiom/tools`: no behavior change. A refused call now throws a
+    `CredentialChannelError`, a `TypeError` subclass that keeps `name: "TypeError"`.
+
+### Patch Changes
+
+- 1b9a5f6: Stop linking docs.sapiom.ai pages that no longer exist. The `sapiom-agent-authoring` skill and its scaffold copies, the Agent Studio system prompt, help palette and welcome screen, and the `@sapiom/agent` README drop links to the agent quick start, authoring guide, MCP setup, call-surface, credentials and signals guides. The first-run telemetry notice drops its link to a `/telemetry` page that never existed. Links to `/capabilities` pages are unchanged.
+
 ## 0.2.1
 
 ### Patch Changes
