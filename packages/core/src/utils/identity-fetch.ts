@@ -38,10 +38,13 @@ export async function fetchDroppingIdentityCrossOrigin(
       sent = true;
       // Sent as is so its body streams; `fetch` would check `integrity` against a
       // redirect's own body, so the loop checks the final response instead.
+      // A non-empty init resets the referrer, so it is passed back explicitly.
       return fetchImpl(request, {
         ...dispatcher,
         redirect: "manual",
         integrity: "",
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
       });
     }
     if (init?.body !== REPLAYED_BODY) {

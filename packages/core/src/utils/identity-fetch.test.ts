@@ -200,6 +200,23 @@ describe("fetchDroppingIdentityCrossOrigin", () => {
     expect((calls.mock.calls[0]![1] as RequestInit).integrity).toBe("");
   });
 
+  it("keeps the request's referrer on the first hop", async () => {
+    const { impl, calls } = recordingFetch({
+      "https://a.services.sapiom.ai/x": ok(),
+    });
+    const request = new Request("https://a.services.sapiom.ai/x", {
+      headers: { "Sapiom-Identity": "jwt" },
+      referrer: "https://a.services.sapiom.ai/from",
+      referrerPolicy: "origin",
+    });
+
+    await fetchDroppingIdentityCrossOrigin(impl, request, "test");
+
+    const init = calls.mock.calls[0]![1] as RequestInit;
+    expect(init.referrer).toBe("https://a.services.sapiom.ai/from");
+    expect(init.referrerPolicy).toBe("origin");
+  });
+
   it("keeps the request's cache mode and referrer after a redirect", async () => {
     const { impl, calls } = recordingFetch({
       "https://a.services.sapiom.ai/x": redirect(302, "/y"),
