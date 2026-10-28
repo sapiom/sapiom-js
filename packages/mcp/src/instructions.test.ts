@@ -235,7 +235,11 @@ describe("server instructions", () => {
       expect(AUTHORING_INSTRUCTIONS).toContain(h);
     }
     expect(AUTHORING_INSTRUCTIONS).toContain("App Link `/hook/*` receiver");
-    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
+    // Gate the trigger kinds by their own sentence: a bare version would also match the
+    // App Link tools' `>= 0.15` and let this floor slip unnoticed.
+    expect(flat).toContain(
+      "The `event` and `webhook` kinds and the secret tool need `@sapiom/mcp` >= 0.16",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "POST /v1/workflows/definitions/{slug}/triggers",
     );
