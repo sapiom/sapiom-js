@@ -51,6 +51,15 @@ describe('pushLocalDir', () => {
     expect(files).toEqual(['index.js', 'link.txt', 'src/app.js']);
   });
 
+  it('skips dotfiles even when the project .gitignore re-includes them', () => {
+    write(src, '.gitignore', '!.env\n!.npmrc\n!src/.secret\n!.github/\n!node_modules/\n');
+
+    pushLocalDir(src, bare, 'sk_test');
+
+    const files = git(bare, 'ls-tree', '-r', '--name-only', 'main').trim().split('\n').sort();
+    expect(files).toEqual(['ignored.txt', 'index.js', 'link.txt', 'src/app.js']);
+  });
+
   it('commits a symlink as a link, never the content it points at', () => {
     pushLocalDir(src, bare, 'sk_test');
 
