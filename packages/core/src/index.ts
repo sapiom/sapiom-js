@@ -61,6 +61,7 @@ export {
   redactSearch,
 } from "./utils/facts-redaction.js";
 export { fetchDroppingIdentityCrossOrigin } from "./utils/identity-fetch.js";
+export type { IdentityFetchOptions } from "./utils/identity-fetch.js";
 
 // Types
 export {

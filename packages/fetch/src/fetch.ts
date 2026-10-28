@@ -4,6 +4,7 @@ import {
   fetchDroppingIdentityCrossOrigin,
   initializeSapiomClient,
 } from "@sapiom/core";
+import type { IdentityFetchOptions } from "@sapiom/core";
 import type { TransactionPollingConfig } from "@sapiom/core";
 import {
   handleAuthorization,
@@ -13,6 +14,20 @@ import {
   PaymentConfig,
   CompletionConfig,
 } from "./interceptors.js";
+
+/** What the identity redirect path must keep from the caller's `init` once it rebuilds the request. */
+function identityFetchOptions(init?: RequestInit): IdentityFetchOptions {
+  const body = init?.body as
+    | { getReader?: unknown; [Symbol.asyncIterator]?: unknown }
+    | null
+    | undefined;
+  const streamBody =
+    typeof body === "object" &&
+    body !== null &&
+    (typeof body.getReader === "function" ||
+      typeof body[Symbol.asyncIterator] === "function");
+  return { streamBody, dispatcher: (init as any)?.dispatcher };
+}
 
 /**
  * Configuration for Sapiom-enabled Fetch client
@@ -134,6 +149,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     }
 
     let request = new Request(input, init);
+    const identityOptions = identityFetchOptions(init);
 
     // Attach identity header if target matches token audience
     if (sapiomClient.identity) {
@@ -160,6 +176,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
         globalThis.fetch,
         request,
         "@sapiom/fetch",
+        identityOptions,
       );
 
       if (response.status === 402) {
@@ -169,6 +186,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
           paymentConfig,
           request,
           userMetadata,
+          identityOptions,
         );
       }
 

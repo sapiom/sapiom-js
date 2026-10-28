@@ -208,4 +208,39 @@ describe("createFetch identity across redirects", () => {
     expect(received.b).toHaveLength(1);
     expect(received.b![0]!["sapiom-identity"]).toBeUndefined();
   });
+
+  it("keeps the caller's dispatcher and streams its stream body", async () => {
+    const spy = jest
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("ok"));
+    try {
+      const { client } = createSapiomClient();
+      const fetch = createFetch({ sapiomClient: client });
+      const dispatcher = { name: "proxy-agent" };
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("chunk"));
+          controller.close();
+        },
+      });
+
+      await fetch("http://127.0.0.1:9/upload", {
+        method: "POST",
+        body,
+        duplex: "half",
+        dispatcher,
+      } as unknown as RequestInit);
+
+      const init = spy.mock.calls[0]![1] as RequestInit & {
+        dispatcher?: unknown;
+        duplex?: string;
+      };
+      expect(init.headers).toMatchObject({ "sapiom-identity": "identity-jwt" });
+      expect(init.dispatcher).toBe(dispatcher);
+      expect(init.body).toBeInstanceOf(ReadableStream);
+      expect(init.duplex).toBe("half");
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

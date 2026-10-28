@@ -9,6 +9,7 @@ import {
   HttpClientResponseFacts,
   HttpClientErrorFacts,
   fetchDroppingIdentityCrossOrigin,
+  type IdentityFetchOptions,
   redactSearch,
   redactUrlForFacts,
   sanitizeFactHeaders,
@@ -313,6 +314,7 @@ export async function handlePayment(
   config: PaymentConfig,
   request: Request,
   defaultMetadata?: Record<string, any>,
+  identityOptions?: IdentityFetchOptions,
 ): Promise<Response> {
   if (response.status !== 402) {
     return response;
@@ -498,6 +500,7 @@ export async function handlePayment(
     globalThis.fetch,
     new Request(requestForRetry, { headers: retryHeaders }),
     "@sapiom/fetch",
+    identityOptions,
   );
 }
 
