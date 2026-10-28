@@ -1,6 +1,6 @@
 /**
- * The single seam every tool registration goes through, so argument privacy and
- * telemetry isolation from tool results follow one policy.
+ * Wraps tool registration so argument privacy and telemetry isolation from tool
+ * results follow one policy for every tool registered through it.
  */
 import type {
   McpServer,

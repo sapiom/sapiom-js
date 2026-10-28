@@ -17,7 +17,7 @@ import {
 } from "./schedule.js";
 import { runSignal } from "./signal.js";
 
-/** Shared so every agents command exposes the same per-invocation routing. */
+/** Shared so every networked agents command offers the same per-invocation host selection. */
 function withHostFlags(cmd: Command): Command {
   return cmd
     .option("--host <url>", "API host URL (overrides config and SAPIOM_HOST)")
