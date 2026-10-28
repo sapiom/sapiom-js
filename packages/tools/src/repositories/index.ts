@@ -8,6 +8,7 @@
  *   await repo.pushFromSandbox(box, { message: "build: page" });
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import type { Sandbox } from "../sandboxes/index.js";
 
@@ -91,7 +92,7 @@ export class Repository {
     baseUrl = DEFAULT_BASE_URL,
   ): Promise<Repository> {
     const r = await transport.request<RepoSummary>(
-      `${baseUrl}/v1/git/repositories/${encodeURIComponent(slug)}`,
+      `${baseUrl}/v1/git/repositories/${encodeSegment(slug, "slug")}`,
     );
     return new Repository(r, transport, baseUrl);
   }
@@ -112,9 +113,12 @@ export class Repository {
     baseUrl = DEFAULT_BASE_URL,
   ): Promise<void> {
     await transport
-      .request(`${baseUrl}/v1/git/repositories/${encodeURIComponent(slug)}`, {
-        method: "DELETE",
-      })
+      .request(
+        `${baseUrl}/v1/git/repositories/${encodeSegment(slug, "slug")}`,
+        {
+          method: "DELETE",
+        },
+      )
       .catch(() => undefined);
   }
 
@@ -151,7 +155,7 @@ export class Repository {
     opts: { message?: string; workingDirectory?: string } = {},
   ): Promise<PushResult> {
     return this.transport.request<PushResult>(
-      `${this.baseUrl}/v1/git/repositories/${encodeURIComponent(this.slug)}/push-from-sandbox`,
+      `${this.baseUrl}/v1/git/repositories/${encodeSegment(this.slug, "slug")}/push-from-sandbox`,
       {
         method: "POST",
         body: JSON.stringify({

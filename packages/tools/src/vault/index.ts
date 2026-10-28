@@ -17,6 +17,7 @@
  * call it. Values are credentials: use them, don't persist or echo them.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, VaultHttpError } from "./errors.js";
 
@@ -41,7 +42,7 @@ interface VaultSecretResponse {
 
 /** Build the `/v2/secrets/:ref` URL, optionally narrowed to a `keys=` subset. */
 function secretsUrl(baseUrl: string, ref: string, keys?: string[]): string {
-  const path = `${baseUrl}/v2/secrets/${encodeURIComponent(ref)}`;
+  const path = `${baseUrl}/v2/secrets/${encodeSegment(ref, "ref")}`;
   if (keys === undefined) return path;
   const params = new URLSearchParams();
   params.set("keys", keys.join(","));
@@ -93,7 +94,7 @@ export async function get(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<string | null> {
-  const url = `${baseUrl}/v2/secrets/${encodeURIComponent(ref)}/${encodeURIComponent(key)}`;
+  const url = `${baseUrl}/v2/secrets/${encodeSegment(ref, "ref")}/${encodeSegment(key, "key")}`;
   try {
     const res = await ensureOk(
       await transport.fetch(url),

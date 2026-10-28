@@ -40,6 +40,7 @@ import {
   TransportHttpError,
   defaultTransport,
 } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import type { DispatchHandle } from "../dispatch.js";
 import { resolveToolsBaseUrl } from "../_client/tools-base.js";
 
@@ -599,7 +600,7 @@ async function launchScheduled(
   let res: { id: string };
   try {
     res = await transport.request<{ id: string }>(
-      `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/triggers`,
+      `${baseUrl}/agents/v1/definitions/${encodeSegment(spec.definition, "definition")}/triggers`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -642,7 +643,7 @@ export async function launch(
   let res: StartResponse;
   try {
     res = await transport.request<StartResponse>(
-      `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/executions`,
+      `${baseUrl}/agents/v1/definitions/${encodeSegment(spec.definition, "definition")}/executions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -664,7 +665,7 @@ export async function launch(
 
   const fetchDoc = () =>
     transport.request<ExecutionDoc>(
-      `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`,
+      `${baseUrl}/agents/v1/executions/${encodeSegment(executionId, "executionId")}`,
     );
 
   // `status()` is a direct query, so it rides out only a short run of transient

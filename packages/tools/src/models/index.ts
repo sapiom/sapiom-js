@@ -22,6 +22,7 @@
  * wire; this module maps them to the camelCase SDK surface below.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import type { DispatchHandle } from "../dispatch.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { Repository } from "../repositories/index.js";
@@ -502,7 +503,7 @@ export async function codingLaunch(
 
   const fetchDoc = () =>
     codingRequest<RunDoc>(
-      `${baseUrl}/models/v1/coding/runs/${encodeURIComponent(runId)}`,
+      `${baseUrl}/models/v1/coding/runs/${encodeSegment(runId, "runId")}`,
       {},
       transport,
     );
@@ -741,7 +742,9 @@ export class ModelRunResultSchemaError extends Error {}
  * `if (outcome.warnings)` would misread.
  */
 function normalizeWarnings(value: unknown): string[] | undefined {
-  const warnings = Array.isArray(value) ? value.filter((w): w is string => typeof w === "string") : [];
+  const warnings = Array.isArray(value)
+    ? value.filter((w): w is string => typeof w === "string")
+    : [];
   return warnings.length ? warnings : undefined;
 }
 
@@ -749,16 +752,31 @@ function normalizeWarnings(value: unknown): string[] | undefined {
 export const modelRunResultSchema = {
   parse(value: unknown): ModelRunResultPayload {
     const fail = (msg: string): never => {
-      throw new ModelRunResultSchemaError(`invalid agent run result payload: ${msg}`);
+      throw new ModelRunResultSchemaError(
+        `invalid agent run result payload: ${msg}`,
+      );
     };
     if (!value || typeof value !== "object") fail("not an object");
     const v = value as Record<string, unknown>;
     if (typeof v.runId !== "string") fail("runId must be a string");
-    if (!(["pending", "awaiting_capacity", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
+    if (
+      !(
+        [
+          "pending",
+          "awaiting_capacity",
+          "running",
+          "completed",
+          "failed",
+        ] as ModelRunStatus[]
+      ).includes(v.status as ModelRunStatus)
+    )
       fail("status must be a valid ModelRunStatus");
-    if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
-    if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
-    if (v.error !== null && (typeof v.error !== "object" || !v.error)) fail("error must be an object or null");
+    if (v.output !== null && typeof v.output !== "string")
+      fail("output must be a string or null");
+    if (v.result !== null && (typeof v.result !== "object" || !v.result))
+      fail("result must be an object or null");
+    if (v.error !== null && (typeof v.error !== "object" || !v.error))
+      fail("error must be an object or null");
     if (v.result) {
       // Same warnings encoding as the polled path (mapModelResult): the resume
       // payload is server-serialized, so a wire `[]` would otherwise reach the
@@ -813,7 +831,9 @@ interface ModelRunDoc {
   };
 }
 
-function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome | null {
+function mapModelResult(
+  r: ModelWireResult | null | undefined,
+): ModelRunOutcome | null {
   if (!r) return null;
   return {
     success: r.success,
@@ -867,15 +887,20 @@ export async function launch(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ModelRunHandle> {
-  const doc = await transport.request<ModelRunDoc>(`${baseUrl}/models/v1/runs`, {
-    method: "POST",
-    body: JSON.stringify(buildModelBody(spec)),
-    headers: workflowResumeHeaders(transport.resumeToken),
-  });
+  const doc = await transport.request<ModelRunDoc>(
+    `${baseUrl}/models/v1/runs`,
+    {
+      method: "POST",
+      body: JSON.stringify(buildModelBody(spec)),
+      headers: workflowResumeHeaders(transport.resumeToken),
+    },
+  );
   const runId = doc.data.id;
 
   const fetchDoc = () =>
-    transport.request<ModelRunDoc>(`${baseUrl}/models/v1/runs/${encodeURIComponent(runId)}`);
+    transport.request<ModelRunDoc>(
+      `${baseUrl}/models/v1/runs/${encodeSegment(runId, "runId")}`,
+    );
   const toResult = (d: ModelRunDoc): ModelRunResult => ({
     runId,
     status: d.data.attributes.status,

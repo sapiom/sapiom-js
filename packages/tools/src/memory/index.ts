@@ -16,6 +16,7 @@
  * response objects 1:1 with the wire contract.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { capabilityCall } from "../_client/capability-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, MemoryHttpError } from "./errors.js";
@@ -346,7 +347,7 @@ export async function drop(
       errorPrefix: "Failed to drop namespace",
       legacyCall: async () => {
         const res = await transport.fetch(
-          `${baseUrl}/v1/memory/namespaces/${encodeURIComponent(namespace)}`,
+          `${baseUrl}/v1/memory/namespaces/${encodeSegment(namespace, "namespace")}`,
           { method: "DELETE" },
         );
         await ensureOk(res, `Failed to drop namespace '${namespace}'`);

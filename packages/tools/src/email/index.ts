@@ -27,6 +27,7 @@
  * {@link EmailHttpError} (carries `status` + parsed `body`).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, EmailHttpError } from "./errors.js";
 
@@ -905,15 +906,6 @@ function assertId(value: unknown, label: string): string {
   return value;
 }
 
-/**
- * Percent-encode a path segment while preserving the address form of an inbox id
- * (which contains `@` and may contain `.`): encode the whole segment. An inbox id
- * is a single segment, so a plain `encodeURIComponent` is correct.
- */
-function encodeSegment(id: string): string {
-  return encodeURIComponent(id);
-}
-
 /** Append `limit` / `pageToken` to a URL when present (each a truthy check → null/undefined dropped). */
 function appendPageParams(
   url: URL,
@@ -1027,7 +1019,7 @@ export async function getInbox(
 ): Promise<Inbox> {
   const id = assertId(inboxId, "inboxId");
   const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/inboxes/${encodeSegment(id)}`),
+    await transport.fetch(`${baseUrl}/v1/inboxes/${encodeSegment(id, "id")}`),
     `Failed to get inbox '${id}'`,
   );
   return mapInbox((await res.json()) as RawInbox);
@@ -1041,7 +1033,7 @@ async function deleteInbox(
 ): Promise<void> {
   const id = assertId(inboxId, "inboxId");
   await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/inboxes/${encodeSegment(id)}`, {
+    await transport.fetch(`${baseUrl}/v1/inboxes/${encodeSegment(id, "id")}`, {
       method: "DELETE",
     }),
     `Failed to delete inbox '${id}'`,
@@ -1064,7 +1056,7 @@ export async function sendMessage(
   const id = assertId(inboxId, "inboxId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/inboxes/${encodeSegment(id)}/messages`,
+      `${baseUrl}/v1/inboxes/${encodeSegment(id, "id")}/messages`,
       {
         method: "POST",
         headers: JSON_HEADERS,
@@ -1085,7 +1077,9 @@ export async function listMessages(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<MessageList> {
   const id = assertId(inboxId, "inboxId");
-  const url = new URL(`${baseUrl}/v1/inboxes/${encodeSegment(id)}/messages`);
+  const url = new URL(
+    `${baseUrl}/v1/inboxes/${encodeSegment(id, "id")}/messages`,
+  );
   appendPageParams(url, opts);
   const res = await ensureOk(
     await transport.fetch(url.toString()),
@@ -1112,7 +1106,7 @@ export async function getMessage(
   const message = assertId(messageId, "messageId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/inboxes/${encodeSegment(inbox)}/messages/${encodeSegment(message)}`,
+      `${baseUrl}/v1/inboxes/${encodeSegment(inbox, "inbox")}/messages/${encodeSegment(message, "message")}`,
     ),
     `Failed to get message '${message}'`,
   );
@@ -1131,7 +1125,7 @@ export async function replyMessage(
   const message = assertId(messageId, "messageId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/inboxes/${encodeSegment(inbox)}/messages/${encodeSegment(message)}/reply`,
+      `${baseUrl}/v1/inboxes/${encodeSegment(inbox, "inbox")}/messages/${encodeSegment(message, "message")}/reply`,
       {
         method: "POST",
         headers: JSON_HEADERS,
@@ -1156,7 +1150,7 @@ export async function replyAllMessage(
   const message = assertId(messageId, "messageId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/inboxes/${encodeSegment(inbox)}/messages/${encodeSegment(message)}/reply-all`,
+      `${baseUrl}/v1/inboxes/${encodeSegment(inbox, "inbox")}/messages/${encodeSegment(message, "message")}/reply-all`,
       {
         method: "POST",
         headers: JSON_HEADERS,
@@ -1181,7 +1175,7 @@ export async function forwardMessage(
   const message = assertId(messageId, "messageId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/inboxes/${encodeSegment(inbox)}/messages/${encodeSegment(message)}/forward`,
+      `${baseUrl}/v1/inboxes/${encodeSegment(inbox, "inbox")}/messages/${encodeSegment(message, "message")}/forward`,
       {
         method: "POST",
         headers: JSON_HEADERS,
@@ -1206,7 +1200,9 @@ export async function listThreads(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ThreadList> {
   const id = assertId(inboxId, "inboxId");
-  const url = new URL(`${baseUrl}/v1/inboxes/${encodeSegment(id)}/threads`);
+  const url = new URL(
+    `${baseUrl}/v1/inboxes/${encodeSegment(id, "id")}/threads`,
+  );
   appendPageParams(url, opts);
   const res = await ensureOk(
     await transport.fetch(url.toString()),
@@ -1233,7 +1229,7 @@ export async function getThread(
   const thread = assertId(threadId, "threadId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/inboxes/${encodeSegment(inbox)}/threads/${encodeSegment(thread)}`,
+      `${baseUrl}/v1/inboxes/${encodeSegment(inbox, "inbox")}/threads/${encodeSegment(thread, "thread")}`,
     ),
     `Failed to get thread '${thread}'`,
   );
@@ -1275,9 +1271,12 @@ export async function verifyDomain(
 ): Promise<void> {
   const id = assertId(domainId, "domainId");
   await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/domains/${encodeSegment(id)}/verify`, {
-      method: "POST",
-    }),
+    await transport.fetch(
+      `${baseUrl}/v1/domains/${encodeSegment(id, "id")}/verify`,
+      {
+        method: "POST",
+      },
+    ),
     `Failed to verify domain '${id}'`,
   );
 }
@@ -1290,7 +1289,7 @@ export async function getDomain(
 ): Promise<Domain> {
   const id = assertId(domainId, "domainId");
   const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/domains/${encodeSegment(id)}`),
+    await transport.fetch(`${baseUrl}/v1/domains/${encodeSegment(id, "id")}`),
     `Failed to get domain '${id}'`,
   );
   return mapDomain((await res.json()) as RawDomain);
@@ -1317,7 +1316,7 @@ async function deleteDomain(
 ): Promise<void> {
   const id = assertId(domainId, "domainId");
   await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/domains/${encodeSegment(id)}`, {
+    await transport.fetch(`${baseUrl}/v1/domains/${encodeSegment(id, "id")}`, {
       method: "DELETE",
     }),
     `Failed to delete domain '${id}'`,
@@ -1374,7 +1373,7 @@ export async function getWebhook(
   assertWebhookId(id);
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/webhooks/${encodeURIComponent(String(id))}`,
+      `${baseUrl}/v1/webhooks/${encodeSegment(String(id), "id")}`,
     ),
     `Failed to get webhook '${id}'`,
   );
@@ -1390,7 +1389,7 @@ async function deleteWebhook(
   assertWebhookId(id);
   await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/webhooks/${encodeURIComponent(String(id))}`,
+      `${baseUrl}/v1/webhooks/${encodeSegment(String(id), "id")}`,
       { method: "DELETE" },
     ),
     `Failed to delete webhook '${id}'`,

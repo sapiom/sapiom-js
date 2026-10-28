@@ -20,6 +20,7 @@
  * regular `number`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { capabilityCall } from "../_client/capability-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, FileStorageHttpError } from "./errors.js";
@@ -223,7 +224,9 @@ export async function getDownloadUrl(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<DownloadUrlResponse> {
   const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/download/${encodeURIComponent(fileId)}`),
+    await transport.fetch(
+      `${baseUrl}/download/${encodeSegment(fileId, "fileId")}`,
+    ),
     `Failed to get download URL for file '${fileId}'`,
   );
   const raw = (await res.json()) as RawDownloadResponse;
@@ -246,7 +249,7 @@ export function getPublicUrl(
   fileId: string,
   baseUrl = DEFAULT_BASE_URL,
 ): string {
-  return `${baseUrl}/public/${encodeURIComponent(fileId)}`;
+  return `${baseUrl}/public/${encodeSegment(fileId, "fileId")}`;
 }
 
 /** List files owned by the authenticated tenant. */
@@ -283,7 +286,7 @@ export async function setVisibility(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<FileMetadata> {
   const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/${encodeURIComponent(fileId)}`, {
+    await transport.fetch(`${baseUrl}/${encodeSegment(fileId, "fileId")}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ visibility }),
@@ -305,7 +308,7 @@ async function deleteFile(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<void> {
   const res = await transport.fetch(
-    `${baseUrl}/${encodeURIComponent(fileId)}`,
+    `${baseUrl}/${encodeSegment(fileId, "fileId")}`,
     { method: "DELETE" },
   );
   await ensureOk(res, `Failed to delete file '${fileId}'`);

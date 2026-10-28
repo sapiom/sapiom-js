@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Transport, resolveCoreBaseUrl } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import {
   ExecutionHttpError,
   ExecutionInterruptedError,
@@ -126,7 +127,7 @@ export class ExecutionClient {
       try {
         const raw = await executionRequest(
           transport,
-          `${saved.coreBaseUrl}/v1/capabilities/${encodeURIComponent(saved.capabilityId)}/executions`,
+          `${saved.coreBaseUrl}/v1/capabilities/${encodeSegment(saved.capabilityId, "capabilityId")}/executions`,
           {
             method: "POST",
             headers: {

@@ -23,6 +23,7 @@
  *   `createClient({ apiKey }).browserAutomation.sessions.create()`
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import {
   managedBrowserApi,
@@ -504,7 +505,7 @@ export async function closeSession(
 ): Promise<SessionSettlement> {
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}`,
+      `${baseUrl}/v1/sessions/${encodeSegment(sessionId, "sessionId")}`,
       {
         method: "DELETE",
         headers: { accept: "application/json" },

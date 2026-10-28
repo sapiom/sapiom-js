@@ -27,6 +27,7 @@
  * {@link DomainsHttpError} (carries `status` + parsed `body`).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { capabilityCall } from "../_client/capability-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, DomainsHttpError } from "./errors.js";
@@ -298,11 +299,6 @@ function assertString(value: unknown, label: string): string {
   return value;
 }
 
-/** Percent-encode a single path segment (a domain name is one segment; dots are preserved). */
-function encodeSegment(value: string): string {
-  return encodeURIComponent(value);
-}
-
 /** Copy a value onto `body` only when it is neither undefined nor null. */
 function set(body: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined && value !== null) body[key] = value;
@@ -415,7 +411,7 @@ export async function renew(
   const domainName = assertString(input?.domainName, "domainName");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}/renew`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}/renew`,
       { method: "POST", headers: JSON_HEADERS, body: "{}" },
     ),
     `Failed to renew domain '${domainName}'`,
@@ -464,7 +460,9 @@ export async function get(
 ): Promise<Domain> {
   const domainName = assertString(input?.domainName, "domainName");
   const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/domains/${encodeSegment(domainName)}`),
+    await transport.fetch(
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}`,
+    ),
     `Failed to get domain '${domainName}'`,
   );
   return mapDomain((await res.json()) as RawDomain);
@@ -491,7 +489,7 @@ export async function transferOut(
   const domainName = assertString(input?.domainName, "domainName");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}`,
       { method: "DELETE" },
     ),
     `Failed to transfer out domain '${domainName}'`,
@@ -536,7 +534,7 @@ export async function createDnsRecord(
 
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}/records`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}/records`,
       { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) },
     ),
     `Failed to create DNS record on '${domainName}'`,
@@ -563,7 +561,7 @@ export async function listDnsRecords(
   const domainName = assertString(input?.domainName, "domainName");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}/records`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}/records`,
     ),
     `Failed to list DNS records on '${domainName}'`,
   );
@@ -591,7 +589,7 @@ export async function getDnsRecord(
   const recordId = assertString(input?.recordId, "recordId");
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}/records/${encodeSegment(recordId)}`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}/records/${encodeSegment(recordId, "recordId")}`,
     ),
     `Failed to get DNS record '${recordId}'`,
   );
@@ -630,7 +628,7 @@ export async function updateDnsRecord(
 
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}/records/${encodeSegment(recordId)}`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}/records/${encodeSegment(recordId, "recordId")}`,
       { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body) },
     ),
     `Failed to update DNS record '${recordId}'`,
@@ -658,7 +656,7 @@ async function deleteDnsRecord(
   const recordId = assertString(input?.recordId, "recordId");
   await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/domains/${encodeSegment(domainName)}/records/${encodeSegment(recordId)}`,
+      `${baseUrl}/v1/domains/${encodeSegment(domainName, "domainName")}/records/${encodeSegment(recordId, "recordId")}`,
       { method: "DELETE" },
     ),
     `Failed to delete DNS record '${recordId}'`,

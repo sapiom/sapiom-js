@@ -21,6 +21,7 @@
  * credentials and you run your own SQL with the client of your choice.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { capabilityCall } from "../_client/capability-call.js";
 import { ensureOk, DatabaseHttpError } from "./errors.js";
 
@@ -259,7 +260,7 @@ export async function get(
 ): Promise<Database> {
   const res = await ensureOk(
     await transport.fetch(
-      `${baseUrl}/v1/databases/${encodeURIComponent(idOrHandle)}`,
+      `${baseUrl}/v1/databases/${encodeSegment(idOrHandle, "idOrHandle")}`,
     ),
     `Failed to get database '${idOrHandle}'`,
   );
@@ -295,7 +296,7 @@ async function deleteDatabase(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<void> {
   const res = await transport.fetch(
-    `${baseUrl}/v1/databases/${encodeURIComponent(idOrHandle)}`,
+    `${baseUrl}/v1/databases/${encodeSegment(idOrHandle, "idOrHandle")}`,
     { method: "DELETE" },
   );
   await ensureOk(res, `Failed to delete database '${idOrHandle}'`);

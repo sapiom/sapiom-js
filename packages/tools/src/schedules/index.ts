@@ -11,6 +11,7 @@
  * `/agents/v1/triggers`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveToolsBaseUrl } from "../_client/tools-base.js";
 
 const DEFAULT_BASE_URL = resolveToolsBaseUrl(process.env.SAPIOM_AGENTS_URL);
@@ -80,7 +81,7 @@ export async function create(
 ): Promise<ScheduleDetail> {
   const { definition, ...body } = spec;
   return transport.request<ScheduleDetail>(
-    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definition)}/triggers`,
+    `${baseUrl}/agents/v1/definitions/${encodeSegment(definition, "definition")}/triggers`,
     { method: "POST", body: JSON.stringify(body) },
   );
 }
@@ -93,7 +94,7 @@ export async function list(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ScheduleSummary[]> {
   return transport.request<ScheduleSummary[]>(
-    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definition)}/triggers${toQuery(opts)}`,
+    `${baseUrl}/agents/v1/definitions/${encodeSegment(definition, "definition")}/triggers${toQuery(opts)}`,
   );
 }
 
@@ -104,7 +105,7 @@ export async function get(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ScheduleDetail> {
   return transport.request<ScheduleDetail>(
-    `${baseUrl}/agents/v1/triggers/${encodeURIComponent(scheduleId)}`,
+    `${baseUrl}/agents/v1/triggers/${encodeSegment(scheduleId, "scheduleId")}`,
   );
 }
 
@@ -115,7 +116,7 @@ export async function cancel(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<{ id: string; status: ScheduleStatus }> {
   return transport.request<{ id: string; status: ScheduleStatus }>(
-    `${baseUrl}/agents/v1/triggers/${encodeURIComponent(scheduleId)}`,
+    `${baseUrl}/agents/v1/triggers/${encodeSegment(scheduleId, "scheduleId")}`,
     { method: "DELETE" },
   );
 }

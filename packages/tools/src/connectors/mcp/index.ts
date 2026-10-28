@@ -33,6 +33,7 @@ import {
   TransportHttpError,
   defaultTransport,
 } from "../../_client/index.js";
+import { encodeSegment } from "../../_client/path-segment.js";
 import { parseRetryAfterMs, readErrorBody } from "../../_client/errors.js";
 import { resolveToolsBaseUrl } from "../../_client/tools-base.js";
 
@@ -146,7 +147,7 @@ async function rpc<T>(
   transport: Transport,
 ): Promise<T> {
   const id = nextId++;
-  const url = `${DEFAULT_BASE_URL}/connectors/v1/${encodeURIComponent(slug)}/mcp`;
+  const url = `${DEFAULT_BASE_URL}/connectors/v1/${encodeSegment(slug, "slug")}/mcp`;
   const res = await transport.fetch(url, {
     method: "POST",
     headers: {

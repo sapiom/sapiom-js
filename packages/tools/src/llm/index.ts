@@ -66,6 +66,7 @@
  * (SAP-3280).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import type { DispatchHandle } from "../dispatch.js";
 
@@ -405,7 +406,10 @@ export interface LlmDisclosureResult {
 export function readDisclosure(result: unknown): LlmDisclosureResult {
   const body = (result ?? {}) as LlmDisclosure;
   return {
-    servedClass: typeof body.served_class === "string" && body.served_class ? body.served_class : null,
+    servedClass:
+      typeof body.served_class === "string" && body.served_class
+        ? body.served_class
+        : null,
     lane: typeof body.lane === "string" && body.lane ? body.lane : null,
   };
 }
@@ -424,11 +428,16 @@ interface AnthropicContentBlock {
 }
 
 function isContentBlock(value: unknown): value is AnthropicContentBlock {
-  return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
 }
 
 function contentBlocksOf(response: unknown): AnthropicContentBlock[] {
-  const content = (response as { content?: unknown } | null | undefined)?.content;
+  const content = (response as { content?: unknown } | null | undefined)
+    ?.content;
   return Array.isArray(content) ? content.filter(isContentBlock) : [];
 }
 
@@ -451,7 +460,10 @@ export function textOf(response: unknown): string | undefined {
  * `tool_use` block wins. Returns `undefined` when no matching block is
  * present — never guesses at a shape the response didn't actually return.
  */
-export function structuredOf<TSchema = unknown>(response: unknown, name?: string): TSchema | undefined {
+export function structuredOf<TSchema = unknown>(
+  response: unknown,
+  name?: string,
+): TSchema | undefined {
   const block = contentBlocksOf(response).find(
     (b) => b.type === "tool_use" && (name === undefined || b.name === name),
   );
@@ -508,7 +520,10 @@ export class LlmStructuredOutputTruncatedError extends Error {
     missingPath?: string,
   ) {
     const cap = maxTokens === undefined ? "" : ` (${maxTokens})`;
-    const missing = missingPath === undefined ? "required fields" : `the required field "${missingPath}"`;
+    const missing =
+      missingPath === undefined
+        ? "required fields"
+        : `the required field "${missingPath}"`;
     super(
       (reason === "no-tool-call"
         ? `Structured output "${outputName}" was never emitted: the model hit max_tokens${cap} before the forced tool call. `
@@ -555,7 +570,8 @@ export class LlmStructuredOutputMissingError extends Error {
 
   constructor(outputName: string, response: unknown) {
     const body = (response ?? {}) as { stop_reason?: unknown };
-    const stopReason = typeof body.stop_reason === "string" ? body.stop_reason : undefined;
+    const stopReason =
+      typeof body.stop_reason === "string" ? body.stop_reason : undefined;
     const { servedClass, model, label: served } = servedByOf(response);
     const blockTypes = contentBlocksOf(response).map((block) => block.type);
     super(
@@ -600,9 +616,13 @@ export class LlmRefusalError extends Error {
 
   constructor(response: unknown) {
     const body = (response ?? {}) as { stop_details?: unknown };
-    const details: Record<string, unknown> = isRecord(body.stop_details) ? body.stop_details : {};
-    const category = typeof details.category === "string" ? details.category : undefined;
-    const explanation = typeof details.explanation === "string" ? details.explanation : undefined;
+    const details: Record<string, unknown> = isRecord(body.stop_details)
+      ? body.stop_details
+      : {};
+    const category =
+      typeof details.category === "string" ? details.category : undefined;
+    const explanation =
+      typeof details.explanation === "string" ? details.explanation : undefined;
     const { servedClass, model, label: served } = servedByOf(response);
     super(
       `The model declined the request (stop_reason: refusal${category ? `; category: ${category}` : ""}` +
@@ -623,16 +643,27 @@ export class LlmRefusalError extends Error {
  * Who served a response, for the error classes above: the disclosed class, the reported
  * model, and both joined as `label` (`"class large, model smart"`; `""` when neither is set).
  */
-function servedByOf(response: unknown): { servedClass: string | null; model: string | undefined; label: string } {
+function servedByOf(response: unknown): {
+  servedClass: string | null;
+  model: string | undefined;
+  label: string;
+} {
   const body = (response ?? {}) as { model?: unknown };
   const model = typeof body.model === "string" ? body.model : undefined;
   const servedClass = readDisclosure(response).servedClass;
-  const label = [servedClass && `class ${servedClass}`, model && `model ${model}`].filter(Boolean).join(", ");
+  const label = [
+    servedClass && `class ${servedClass}`,
+    model && `model ${model}`,
+  ]
+    .filter(Boolean)
+    .join(", ");
   return { servedClass, model, label };
 }
 
 /** `max_tokens` off a caller's verbatim request body, when it declared a numeric one. */
-function declaredMaxTokens(request: Record<string, unknown>): number | undefined {
+function declaredMaxTokens(
+  request: Record<string, unknown>,
+): number | undefined {
   const value = request.max_tokens;
   return typeof value === "number" ? value : undefined;
 }
@@ -640,7 +671,9 @@ function declaredMaxTokens(request: Record<string, unknown>): number | undefined
 /** The `required` field names a schema node declares, when it declares any. */
 function requiredKeysOf(schema: Record<string, unknown>): string[] {
   const required = schema.required;
-  return Array.isArray(required) ? required.filter((key): key is string => typeof key === "string") : [];
+  return Array.isArray(required)
+    ? required.filter((key): key is string => typeof key === "string")
+    : [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -708,7 +741,13 @@ function firstMissingRequiredPath(
   if (typeof schema.$ref === "string" && !seen.has(schema.$ref)) {
     const target = resolveLocalRef(root, schema.$ref);
     if (target !== undefined) {
-      const missing = firstMissingRequiredPath(target, value, root, path, new Set([...seen, schema.$ref]));
+      const missing = firstMissingRequiredPath(
+        target,
+        value,
+        root,
+        path,
+        new Set([...seen, schema.$ref]),
+      );
       if (missing) return missing;
     }
   }
@@ -722,7 +761,9 @@ function firstMissingRequiredPath(
   for (const combinator of ["anyOf", "oneOf"] as const) {
     const branches = schema[combinator];
     if (!Array.isArray(branches) || branches.length === 0) continue;
-    const gaps = branches.map((branch) => firstMissingRequiredPath(branch, value, root, path, seen));
+    const gaps = branches.map((branch) =>
+      firstMissingRequiredPath(branch, value, root, path, seen),
+    );
     if (gaps.every((gap) => gap !== undefined)) return gaps[0];
   }
 
@@ -733,7 +774,10 @@ function firstMissingRequiredPath(
     if (isRecord(schema.properties)) {
       for (const [key, subschema] of Object.entries(schema.properties)) {
         if (!(key in value)) continue;
-        const missing = firstMissingRequiredPath(subschema, value[key], root, [...path, key]);
+        const missing = firstMissingRequiredPath(subschema, value[key], root, [
+          ...path,
+          key,
+        ]);
         if (missing) return missing;
       }
     }
@@ -751,7 +795,10 @@ function firstMissingRequiredPath(
     for (let i = 0; i < value.length; i += 1) {
       const subschema = tuple && i < tuple.length ? tuple[i] : rest;
       if (subschema === undefined) continue;
-      const missing = firstMissingRequiredPath(subschema, value[i], root, [...path, String(i)]);
+      const missing = firstMissingRequiredPath(subschema, value[i], root, [
+        ...path,
+        String(i),
+      ]);
       if (missing) return missing;
     }
   }
@@ -785,15 +832,22 @@ function truncationOf(
   response: unknown,
   output: LlmStructuredOutputSpec,
 ): Truncation | undefined {
-  const stopReason = (response as { stop_reason?: unknown } | null | undefined)?.stop_reason;
+  const stopReason = (response as { stop_reason?: unknown } | null | undefined)
+    ?.stop_reason;
   if (stopReason !== "max_tokens") return undefined;
 
   const structured = structuredOf(response, output.name);
   if (structured === undefined) return { reason: "no-tool-call" };
   if (!isRecord(structured)) return { reason: "incomplete-input" };
 
-  const missing = firstMissingRequiredPath(output.schema, structured, output.schema);
-  return missing ? { reason: "incomplete-input", missingPath: formatPath(missing) } : undefined;
+  const missing = firstMissingRequiredPath(
+    output.schema,
+    structured,
+    output.schema,
+  );
+  return missing
+    ? { reason: "incomplete-input", missingPath: formatPath(missing) }
+    : undefined;
 }
 
 /**
@@ -802,11 +856,17 @@ function truncationOf(
  * caller-declared tools, and forces `tool_choice` onto it — the blessed
  * tool-calling pattern for structured output, automated.
  */
-function withStructuredOutput(request: Record<string, unknown>, output: LlmStructuredOutputSpec): Record<string, unknown> {
+function withStructuredOutput(
+  request: Record<string, unknown>,
+  output: LlmStructuredOutputSpec,
+): Record<string, unknown> {
   const existingTools = Array.isArray(request.tools) ? request.tools : [];
   return {
     ...request,
-    tools: [...existingTools, { name: output.name, input_schema: output.schema }],
+    tools: [
+      ...existingTools,
+      { name: output.name, input_schema: output.schema },
+    ],
     tool_choice: { type: "tool", name: output.name },
   };
 }
@@ -855,19 +915,29 @@ export async function run<T = Record<string, unknown>>(
   headers["x-sapiom-never-fail"] = String(spec.neverFail ?? true);
   if (spec.complexity !== undefined)
     headers["x-sapiom-complexity"] = String(spec.complexity);
-  const request = spec.output ? withStructuredOutput(spec.request, spec.output) : spec.request;
-  const response = await transport.request<T>(`${baseUrl}/v2/anthropic/v1/messages`, {
-    method: "POST",
-    body: JSON.stringify(request),
-    headers,
-  });
+  const request = spec.output
+    ? withStructuredOutput(spec.request, spec.output)
+    : spec.request;
+  const response = await transport.request<T>(
+    `${baseUrl}/v2/anthropic/v1/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+      headers,
+    },
+  );
   // A refusal is an HTTP 200, so it has to be read off the body; never return one as an answer.
-  if ((response as { stop_reason?: unknown } | null | undefined)?.stop_reason === "refusal") {
+  if (
+    (response as { stop_reason?: unknown } | null | undefined)?.stop_reason ===
+    "refusal"
+  ) {
     throw new LlmRefusalError(response);
   }
   // Only when the caller forced a tool call: a plain-text turn that hit the cap is
   // truncated but still readable, and it is the caller's to judge.
-  const truncation = spec.output ? truncationOf(response, spec.output) : undefined;
+  const truncation = spec.output
+    ? truncationOf(response, spec.output)
+    : undefined;
   if (spec.output && truncation !== undefined) {
     throw new LlmStructuredOutputTruncatedError(
       spec.output.name,
@@ -901,7 +971,7 @@ export async function submit(
 
   const fetchDoc = () =>
     transport.request<StatusDoc>(
-      `${baseUrl}/v2/route/async/${encodeURIComponent(executionId)}`,
+      `${baseUrl}/v2/route/async/${encodeSegment(executionId, "executionId")}`,
     );
 
   return {
@@ -1041,7 +1111,11 @@ export interface LlmSession {
    */
   baseUrls?: { anthropic: string; openai: string };
   expiresAtMs?: number;
-  budget?: { maxTokens: number | null; usedTokens?: number; ttlMinutes?: number | null };
+  budget?: {
+    maxTokens: number | null;
+    usedTokens?: number;
+    ttlMinutes?: number | null;
+  };
   /** Set when `state === "failed"` (e.g. `deadline_exhausted`, `released_by_client`). */
   error?: string;
 }
@@ -1189,7 +1263,9 @@ export async function createSession(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<LlmSessionHandle> {
   if (spec.label !== undefined && spec.model !== undefined) {
-    throw new Error("llm.createSession: `label` and `model` are mutually exclusive");
+    throw new Error(
+      "llm.createSession: `label` and `model` are mutually exclusive",
+    );
   }
   const body: Record<string, unknown> = {};
   if (spec.label) body.label = spec.label;
@@ -1198,8 +1274,10 @@ export async function createSession(
     body.deadline_minutes = spec.deadlineMinutes;
   if (spec.budget) {
     const budget: Record<string, unknown> = {};
-    if (spec.budget.maxTokens !== undefined) budget.max_tokens = spec.budget.maxTokens;
-    if (spec.budget.ttlMinutes !== undefined) budget.ttl_minutes = spec.budget.ttlMinutes;
+    if (spec.budget.maxTokens !== undefined)
+      budget.max_tokens = spec.budget.maxTokens;
+    if (spec.budget.ttlMinutes !== undefined)
+      budget.ttl_minutes = spec.budget.ttlMinutes;
     body.budget = budget;
   }
   if (spec.neverFail !== undefined) body.never_fail = spec.neverFail;
@@ -1221,7 +1299,7 @@ export async function createSession(
 
   const fetchDoc = () =>
     transport.request<SessionDoc>(
-      `${baseUrl}/v2/sessions/${encodeURIComponent(sessionId)}`,
+      `${baseUrl}/v2/sessions/${encodeSegment(sessionId, "sessionId")}`,
     );
 
   return {
@@ -1258,7 +1336,7 @@ export async function getSession(
 ): Promise<LlmSession> {
   return mapSession(
     await transport.request<SessionDoc>(
-      `${baseUrl}/v2/sessions/${encodeURIComponent(sessionId)}`,
+      `${baseUrl}/v2/sessions/${encodeSegment(sessionId, "sessionId")}`,
     ),
   );
 }
@@ -1287,7 +1365,7 @@ export async function callSession<T = Record<string, unknown>>(
       ? "openai/v1/chat/completions"
       : "anthropic/v1/messages";
   return transport.request<T>(
-    `${baseUrl}/v2/sessions/${encodeURIComponent(sessionId)}/${suffix}`,
+    `${baseUrl}/v2/sessions/${encodeSegment(sessionId, "sessionId")}/${suffix}`,
     { method: "POST", body: JSON.stringify(request) },
   );
 }
@@ -1304,7 +1382,7 @@ export async function releaseSession(
   const sessionId = typeof session === "string" ? session : session.sessionId;
   return mapSession(
     await transport.request<SessionDoc>(
-      `${baseUrl}/v2/sessions/${encodeURIComponent(sessionId)}`,
+      `${baseUrl}/v2/sessions/${encodeSegment(sessionId, "sessionId")}`,
       { method: "DELETE" },
     ),
   );

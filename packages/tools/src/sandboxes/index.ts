@@ -13,6 +13,7 @@
  *   await box.destroy();
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { encodeSegment } from "../_client/path-segment.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import {
   DEFAULT_CONCURRENCY,
@@ -218,7 +219,7 @@ export class Sandbox {
   ): Promise<SandboxInfo> {
     const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
     return transport.request<SandboxInfo>(
-      `${baseUrl}/v1/sandboxes/${encodeURIComponent(name)}`,
+      `${baseUrl}/v1/sandboxes/${encodeSegment(name, "name")}`,
     );
   }
 
@@ -241,15 +242,15 @@ export class Sandbox {
       : this.workspaceRoot;
     const rel = path.startsWith("/") ? path.slice(1) : path;
     const abs = `${base}/${rel}`.replace(/^\//, "");
-    return `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/filesystem/${encodePathSegments(abs)}`;
+    return `${this.baseUrl}/v1/sandboxes/${encodeSegment(this.name, "name")}/filesystem/${encodePathSegments(abs)}`;
   }
 
   private procUrl(suffix = ""): string {
-    return `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process${suffix}`;
+    return `${this.baseUrl}/v1/sandboxes/${encodeSegment(this.name, "name")}/process${suffix}`;
   }
 
   private multipartUrl(suffix: string): string {
-    return `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/filesystem/multipart${suffix}`;
+    return `${this.baseUrl}/v1/sandboxes/${encodeSegment(this.name, "name")}/filesystem/multipart${suffix}`;
   }
 
   /** Write a file (path relative to the workspace root). */
@@ -386,7 +387,7 @@ export class Sandbox {
     opts?: { signal?: AbortSignal },
   ): Promise<MultipartUploadedPart> {
     const url =
-      this.multipartUrl(`/${encodeURIComponent(uploadId)}/part`) +
+      this.multipartUrl(`/${encodeSegment(uploadId, "uploadId")}/part`) +
       `?partNumber=${encodeURIComponent(String(partNumber))}`;
 
     const form = new FormData();
@@ -413,7 +414,9 @@ export class Sandbox {
     parts: Array<{ partNumber: number; etag: string }>,
     opts?: { signal?: AbortSignal },
   ): Promise<{ message: string; path: string }> {
-    const url = this.multipartUrl(`/${encodeURIComponent(uploadId)}/complete`);
+    const url = this.multipartUrl(
+      `/${encodeSegment(uploadId, "uploadId")}/complete`,
+    );
     const res = await ensureOk(
       await this.transport.fetch(url, {
         method: "POST",
@@ -431,7 +434,7 @@ export class Sandbox {
     uploadId: string,
     opts?: { signal?: AbortSignal },
   ): Promise<void> {
-    const url = this.multipartUrl(`/${encodeURIComponent(uploadId)}`);
+    const url = this.multipartUrl(`/${encodeSegment(uploadId, "uploadId")}`);
     await ensureOk(
       await this.transport.fetch(url, {
         method: "DELETE",
@@ -449,7 +452,9 @@ export class Sandbox {
     uploadId: string,
     opts?: { signal?: AbortSignal },
   ): Promise<MultipartPartInfo[]> {
-    const url = this.multipartUrl(`/${encodeURIComponent(uploadId)}/parts`);
+    const url = this.multipartUrl(
+      `/${encodeSegment(uploadId, "uploadId")}/parts`,
+    );
     const res = await ensureOk(
       await this.transport.fetch(url, { signal: opts?.signal }),
       `Failed to list parts for multipart upload '${uploadId}'`,
@@ -580,7 +585,7 @@ export class Sandbox {
    * For a full "build + run + expose" flow, use {@link deployPreview}.
    */
   async createPublicUrl(opts: PublicUrlOptions): Promise<PublicUrlInfo> {
-    const url = `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/previews`;
+    const url = `${this.baseUrl}/v1/sandboxes/${encodeSegment(this.name, "name")}/previews`;
     const body = {
       metadata: { name: opts.name ?? "default" },
       spec: {
@@ -609,8 +614,10 @@ export class Sandbox {
    * (not a thrown error), so callers can inspect and retry. Upload the source
    * first with {@link uploadDir} (or `writeFile`).
    */
-  async deployPreview(opts: DeployPreviewOptions): Promise<DeployPreviewResult> {
-    const url = `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/preview/deploy`;
+  async deployPreview(
+    opts: DeployPreviewOptions,
+  ): Promise<DeployPreviewResult> {
+    const url = `${this.baseUrl}/v1/sandboxes/${encodeSegment(this.name, "name")}/preview/deploy`;
     const res = await this.transport.fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -642,7 +649,7 @@ export class Sandbox {
   /** Destroy the sandbox and release its resources. */
   async destroy(): Promise<void> {
     const res = await this.transport.fetch(
-      `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}`,
+      `${this.baseUrl}/v1/sandboxes/${encodeSegment(this.name, "name")}`,
       { method: "DELETE" },
     );
     await ensureOk(res, "Failed to destroy sandbox");

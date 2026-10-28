@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Transport, defaultTransport } from "../_client/index.js";
+import { isUnsafeSegment } from "../_client/path-segment.js";
 import { BrowserAutomationHttpError, ensureOk } from "./errors.js";
 
 /** Reuse this key for retries of the same mutation and input. */
@@ -144,7 +145,7 @@ const route = <T extends string>(
 function pathOf({ template, ids }: Route): string {
   return template.replace(/:(\w+)/g, (_, name: string) => {
     const id = (ids as Record<string, unknown>)[name];
-    if (typeof id !== "string" || id === "" || id === "." || id === "..")
+    if (typeof id !== "string" || isUnsafeSegment(id))
       throw new BrowserAutomationHttpError(
         `${name} is required and must be a non-empty string other than . or ..`,
         400,
