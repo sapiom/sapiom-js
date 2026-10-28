@@ -118,10 +118,20 @@ async function readCredentialsFile(): Promise<CredentialsFile | null> {
 
 async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
   const filePath = credentialsFilePath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const dir = path.dirname(filePath);
+  // Creation modes don't apply to an existing dir/file (e.g. one created by
+  // hand), so lock both down explicitly, before the key is written and after.
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.chmod(dir, 0o700);
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch (error) {
+    if (!isMissingCredentialsFile(error)) throw error;
+  }
   await fs.writeFile(filePath, JSON.stringify(file, null, 2) + "\n", {
     mode: 0o600,
   });
+  await fs.chmod(filePath, 0o600);
 }
 
 /**

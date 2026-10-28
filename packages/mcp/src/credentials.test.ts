@@ -49,6 +49,7 @@ beforeEach(() => {
   );
   vi.mocked(fs.writeFile).mockResolvedValue();
   vi.mocked(fs.mkdir).mockResolvedValue(undefined);
+  vi.mocked(fs.chmod).mockResolvedValue();
 });
 
 it("exposes the shared credential-store path", () => {
@@ -251,6 +252,61 @@ describe("writeCredentials", () => {
     expect(written.environments.production.credentials).toEqual(
       sampleCredentials,
     );
+  });
+
+  it("locks down a pre-existing dir and file before and after writing the key", async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sampleFile));
+
+    await writeCredentials(
+      "production",
+      "https://app.sapiom.ai",
+      "https://api.sapiom.ai",
+      sampleCredentials,
+    );
+
+    const chmod = vi.mocked(fs.chmod);
+    expect(chmod).toHaveBeenCalledWith(path.join(mockHomedir, ".sapiom"), 0o700);
+    const fileChmods = chmod.mock.calls
+      .map((call, i) => ({ call, order: chmod.mock.invocationCallOrder[i] }))
+      .filter(({ call }) => call[0] === credentialsPath);
+    expect(fileChmods.map(({ call }) => call[1])).toEqual([0o600, 0o600]);
+    const writeOrder = vi.mocked(fs.writeFile).mock.invocationCallOrder[0];
+    expect(fileChmods[0].order).toBeLessThan(writeOrder);
+    expect(fileChmods[1].order).toBeGreaterThan(writeOrder);
+  });
+
+  it("still writes when there is no file to chmod yet", async () => {
+    vi.mocked(fs.chmod).mockImplementation(async (target) => {
+      if (target === credentialsPath && !vi.mocked(fs.writeFile).mock.calls.length) {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+    });
+
+    await writeCredentials(
+      "production",
+      "https://app.sapiom.ai",
+      "https://api.sapiom.ai",
+      sampleCredentials,
+    );
+
+    expect(fs.writeFile).toHaveBeenCalledTimes(1);
+    expect(fs.chmod).toHaveBeenLastCalledWith(credentialsPath, 0o600);
+  });
+
+  it("fails rather than leave the key at an unknown mode when chmod is refused", async () => {
+    vi.mocked(fs.chmod).mockRejectedValue(
+      Object.assign(new Error("refused"), { code: "EPERM" }),
+    );
+
+    await expect(
+      writeCredentials(
+        "production",
+        "https://app.sapiom.ai",
+        "https://api.sapiom.ai",
+        sampleCredentials,
+      ),
+    ).rejects.toThrow("refused");
+    expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
   it("should update existing file preserving other environments", async () => {
