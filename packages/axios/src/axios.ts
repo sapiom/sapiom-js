@@ -35,11 +35,19 @@ function dropIdentityOnCrossOriginRedirect(
   const callerHook = config.beforeRedirect;
   config.beforeRedirect = (options, responseDetails, ...rest: unknown[]) => {
     (callerHook as any)?.(options, responseDetails, ...rest);
+    // `href` is the redirect target; axios's proxy hook may already have pointed
+    // protocol/hostname/port at the proxy.
+    const href = (options as { href?: unknown }).href;
     const port = options.port ? `:${options.port}` : "";
+    // follow-redirects gives an IPv6 hostname without its brackets.
+    const host = options.hostname?.includes(":")
+      ? `[${options.hostname}]`
+      : options.hostname;
     let hopOrigin: string | undefined;
     try {
-      hopOrigin = new URL(`${options.protocol}//${options.hostname}${port}`)
-        .origin;
+      hopOrigin = new URL(
+        typeof href === "string" ? href : `${options.protocol}//${host}${port}`,
+      ).origin;
     } catch {
       hopOrigin = undefined;
     }

@@ -16,7 +16,9 @@ const JWT = "identity-jwt";
 function createClient() {
   const getHeaderIfMatch = jest.fn(async (url: string) => {
     const { hostname } = new URL(url);
-    return hostname.endsWith("services.sapiom.ai") || hostname === "127.0.0.1"
+    return hostname.endsWith("services.sapiom.ai") ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]"
       ? { "Sapiom-Identity": JWT }
       : {};
   });
@@ -80,6 +82,56 @@ describe("withSapiom identity header", () => {
 
       expect(getHeaderIfMatch).not.toHaveBeenCalled();
       expect(mock.history.get[0]!.headers?.["Sapiom-Identity"]).toBeUndefined();
+    });
+  });
+
+  describe("redirect hop origin", () => {
+    /** The `beforeRedirect` hook the identity interceptor installed on a request to `url`. */
+    async function hookFor(url: string) {
+      const { client } = createClient();
+      const instance = axios.create();
+      const mock = new MockAdapter(instance);
+      let hook: ((options: any, details: any) => void) | undefined;
+      mock.onGet(url).reply((config) => {
+        hook = config.beforeRedirect as typeof hook;
+        return [200, "ok"];
+      });
+      withSapiom(instance, { sapiomClient: client });
+      await instance.get(url);
+      return hook!;
+    }
+
+    it("judges the hop by its href when a proxy rewrote hostname and port", async () => {
+      const hook = await hookFor("https://x.services.sapiom.ai/v1/a");
+      const proxied = (href: string) => ({
+        protocol: "http:",
+        hostname: "proxy.internal",
+        port: "3128",
+        href,
+        headers: { "Sapiom-Identity": JWT },
+      });
+
+      const same = proxied("https://x.services.sapiom.ai/v1/b");
+      hook(same, { headers: {} });
+      expect(same.headers["Sapiom-Identity"]).toBe(JWT);
+
+      const cross = proxied("https://evil.example/v1/b");
+      hook(cross, { headers: {} });
+      expect(cross.headers["Sapiom-Identity"]).toBeUndefined();
+    });
+
+    it("keeps the header on a same-origin IPv6 hop described without href", async () => {
+      const hook = await hookFor("http://[::1]:3000/start");
+      const options = {
+        protocol: "http:",
+        hostname: "::1",
+        port: "3000",
+        headers: { "Sapiom-Identity": JWT },
+      };
+
+      hook(options, { headers: {} });
+
+      expect(options.headers["Sapiom-Identity"]).toBe(JWT);
     });
   });
 
