@@ -190,6 +190,40 @@ export function shouldEnableUpdater(input: UpdaterGateInput): UpdaterGate {
   return { enabled: true };
 }
 
+export interface AutoInstallInput {
+  /** `process.platform`. */
+  platform: NodeJS.Platform;
+  /** Raw `resources/app-update.yml`, or null when it could not be read. */
+  updateConfig: string | null;
+}
+
+export interface AutoInstallDecision {
+  allowed: boolean;
+  /** Why install-on-quit is off, for the log. Absent when allowed. */
+  reason?: string;
+}
+
+/**
+ * Whether a downloaded update may install itself on an ordinary quit.
+ *
+ * On Windows, electron-updater 6.x verifies the installer's Authenticode signature
+ * only when `app-update.yml` names a `publisherName`; without one, nothing but the
+ * release's own sha512 vouches for the file. Such an update must wait for the user's
+ * explicit "Restart now" instead of installing silently (SAP-4382). Keyed on the
+ * baked config rather than on the platform alone, so a signed build that bakes a
+ * `publisherName` gets install-on-quit back with no code change.
+ */
+export function autoInstallAllowed(input: AutoInstallInput): AutoInstallDecision {
+  if (input.platform !== "win32") return { allowed: true };
+  if (input.updateConfig !== null && /^publisherName:/m.test(input.updateConfig)) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    reason: "unsigned Windows build: no publisherName, so the update's signature is not verified",
+  };
+}
+
 /** What went wrong with a check, in terms a user can act on. */
 export type UpdateErrorKind =
   /** The channel has no release to offer — not a fault, just nothing published. */

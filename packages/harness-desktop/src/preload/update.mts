@@ -10,6 +10,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   UPDATE_AUTO_ARG,
+  UPDATE_AUTO_AVAILABLE_ARG,
   UPDATE_DECIDE,
   UPDATE_SET_AUTO,
   UPDATE_VERSION_ARG,
@@ -25,6 +26,8 @@ const api = {
   version: argValue(UPDATE_VERSION_ARG),
   /** Initial state of the "auto-install on quit" toggle. */
   autoUpdate: argValue(UPDATE_AUTO_ARG) === "1",
+  /** False when this build may not install on quit; the toggle is then hidden. */
+  autoUpdateAvailable: argValue(UPDATE_AUTO_AVAILABLE_ARG) !== "0",
   /**
    * Persist a toggle change immediately — independent of the eventual button
    * choice, so flipping it and then just closing the window still keeps the change.

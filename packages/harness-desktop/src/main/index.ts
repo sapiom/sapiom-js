@@ -207,7 +207,7 @@ if (lock.action === "fail") {
       // (update checks, the native folder picker). Set it before registering any
       // handler that validates the sender, and on every boot path — including
       // --smoke, which round-trips the bridge to prove the wiring.
-      setTrustedWindow(bootResult.mainWindow);
+      setTrustedWindow(bootResult.mainWindow, new URL(bootResult.url).origin);
       initUpdater({
         mainWindow: bootResult.mainWindow,
         devMode,

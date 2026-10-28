@@ -1,5 +1,6 @@
 import { BrowserWindow, app, shell } from "electron";
 import { APP_VERSION_ARG } from "./ipc.js";
+import { classifyNavigation, isLocalUrl } from "./navigation-policy.js";
 import { desktopPreloadPath, setupHtmlPath, setupPreloadPath } from "./paths.js";
 
 /**
@@ -31,13 +32,11 @@ export function createSetupWindow(): BrowserWindow {
       preload: setupPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // The setup window loads only our own bundled HTML (no remote/user
-      // content), and its preload is ESM. Electron won't load an ESM preload in
-      // a sandboxed renderer (sandboxed preloads must be CommonJS), so disable
-      // the sandbox here — safe for this trusted local page. contextIsolation
-      // stays on. Without this the bridge never loads and onboarding stalls at
-      // the consent prompt (renderer can't send CONSENT_SUBMIT).
-      sandbox: false,
+      // Sandboxed like every preload window: the preload is the CommonJS bundle
+      // from scripts/build-preloads.mjs, since a sandboxed preload cannot be ESM.
+      // If it fails to load, the bridge is missing and onboarding stalls at the
+      // consent prompt (the renderer can't send CONSENT_SUBMIT).
+      sandbox: true,
     },
   });
   // Surface a failing preload loudly: without the bridge the renderer can't
@@ -51,8 +50,9 @@ export function createSetupWindow(): BrowserWindow {
 
 /**
  * The main window: loads the harness SPA from the local server at its
- * boot-token URL. External (non-localhost) links open in the system browser;
- * in-app navigation is confined to the local server.
+ * boot-token URL. External (non-localhost) links open in the system browser,
+ * other local origins in a preview window; in-app navigation is confined to the
+ * harness origin.
  *
  * It carries a preload — a deliberately minimal one. The SPA is the same bundle
  * `npx @sapiom/harness` serves to a plain browser, so this window is the only
@@ -89,10 +89,9 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
       preload: desktopPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // Same constraint as the setup window: Electron will not load an ESM
-      // preload in a sandboxed renderer. contextIsolation stays ON, so the page
-      // still gets only the frozen bridge and never `ipcRenderer` itself.
-      sandbox: false,
+      // Sandboxed, with the same bundled CommonJS preload as the setup window: the
+      // page may end up showing agent-served content, so its renderer gets no Node.
+      sandbox: true,
       // How the preload learns the app version. `process.env` would mean relying
       // on a renderer inheriting a variable mutated after startup; this is the
       // documented channel. See APP_VERSION_ARG.
@@ -130,11 +129,15 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
     openInSystemBrowser(url);
     return { action: "deny" };
   });
+  // Only the harness origin itself stays in this window: a page on another local
+  // port (an agent's dev server) would otherwise keep `window.sapiomDesktop`.
+  const harnessOrigin = new URL(loadUrl).origin;
   win.webContents.on("will-navigate", (event, url) => {
-    if (!isLocalUrl(url)) {
-      event.preventDefault();
-      openInSystemBrowser(url);
-    }
+    const target = classifyNavigation(url, harnessOrigin);
+    if (target === "harness") return;
+    event.preventDefault();
+    if (target === "local") createPreviewWindow(url);
+    else openInSystemBrowser(url);
   });
 
   // Hand the SPA its frame so it clears the traffic lights and drags by its top
@@ -201,17 +204,5 @@ function openInSystemBrowser(url: string): void {
     }
   } catch {
     // Not a parseable URL — nothing the OS could open.
-  }
-}
-
-function isLocalUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return (
-      (u.protocol === "http:" || u.protocol === "https:") &&
-      (u.hostname === "127.0.0.1" || u.hostname === "localhost")
-    );
-  } catch {
-    return false;
   }
 }

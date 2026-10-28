@@ -128,6 +128,9 @@ smoke check starts two real runtimes, creates independent sessions, and requires
   short.
 - **Python 3.12+ removed `distutils`** (PEP 632) and node-gyp@9 imports it → the rebuild dies. CI
   pins Python 3.11.
+- **macOS 13 (Ventura) is the minimum.** Electron 44+ dropped macOS 12, and the app runs on
+  Electron 45. Keep `electronVersion` in `electron-builder.yml` equal to the exact `electron`
+  devDependency.
 - **Only arm64 is built today.** `macos-14` is Apple Silicon and electron-builder defaults to the
   host arch, so **Intel Macs get no artifact**. Add an `x64`/universal target before GA if Intel users
   are in scope.
@@ -228,6 +231,12 @@ our JS. Policy lives in `src/main/update-policy.ts` (pure, unit-tested), wiring 
 `src/main/updater.ts` (electron-facing, covered by `--smoke`). That split is required: `vitest.config.ts`
 only tests modules that don't import `electron`.
 
+**Install-on-quit is off for an unsigned Windows build.** electron-updater 6.x checks a Windows
+installer's Authenticode signature only when the baked `app-update.yml` has a `publisherName`, and our
+Windows build has none yet. `autoInstallAllowed` (`update-policy.ts`) reads that file at start and keeps
+`autoInstallOnAppQuit` off until it does; the update window hides its toggle, and an update installs only
+through an explicit "Restart now". Once a signed build bakes a `publisherName`, this lifts by itself.
+
 Things that will bite you:
 
 - **`import { autoUpdater } from "electron-updater"` does not work.** It's CommonJS and `autoUpdater`
@@ -298,8 +307,13 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
   `npx @sapiom/harness`. Everything exposed here must be feature-detected on the SPA side
   (`harness/web/src/lib/desktop.ts`), and the contract is *mirrored* there, not imported: the
   dependency runs desktop → harness, never back.
-- **`sandbox: false` is required**, as for the setup window — Electron will not load an ESM preload
-  in a sandboxed renderer. `contextIsolation` stays on; the page never gets `ipcRenderer`.
+- **Every preload window is sandboxed** (main, setup, update). A sandboxed preload cannot be ESM and
+  its `require` loads only `electron`, so `scripts/build-preloads.mjs` bundles each `src/preload/*.mts`
+  into one IIFE script, `dist/preload/<name>.cjs`, with `ipc.ts` inlined. A preload may therefore
+  import only `electron` and code that can be inlined, and may use only the sandboxed `process`
+  subset (`process.argv` is fine; no `Buffer`, `setImmediate` or Node modules). `preload-bundle.test.ts`
+  and `window-sandbox.test.ts` pin both halves. `contextIsolation` stays on; the page never gets
+  `ipcRenderer`.
 - **Never `{ action: "allow" }` a window from the main window.** An allowed child window INHERITS the
   parent's `webPreferences`, preload included — and "local" is not "ours": the harness serves
   agent-authored files at `/canvas/:sessionId/*` on the same origin, and xterm linkifies whatever the
@@ -317,9 +331,12 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
   subscriptions `onDeepLink` / `onUpdateState` (main → renderer pushes; nothing to invoke), so a
   future addition has to be deliberate.
 - **Validate the IPC sender.** `isTrustedSender` (`trusted-sender.ts`, shared by the updater and the
-  folder-picker channels) requires the main window's `webContents` *and* a top frame at `/`, because
-  the main window could itself navigate to agent content on the same origin. It reads the window set
-  once at boot by `index.ts` via `setTrustedWindow`, so it works even in a build with updates disabled
+  folder-picker channels) requires the main window's `webContents`, a top frame on the harness origin
+  the window loaded (`http://127.0.0.1:<port>`, not another localhost port), *and* a top frame at `/`,
+  because the main window could itself navigate to agent content on the same origin. `will-navigate`
+  keeps only that origin in the main window: other local origins open in the preview window
+  (`navigation-policy.ts`). It reads the window and origin set once at boot by `index.ts` via
+  `setTrustedWindow`, so it works even in a build with updates disabled
   — deriving it from the updater's `active` state once made a disabled build reject every sender and
   report "not available here" instead of the real reason.
 - **The app version reaches the preload via `webPreferences.additionalArguments`**, not `process.env`.

@@ -170,6 +170,11 @@ export const UPDATE_SET_AUTO = "update:set-auto";
  */
 export const UPDATE_VERSION_ARG = "--sapiom-update-version=";
 export const UPDATE_AUTO_ARG = "--sapiom-update-auto=";
+/**
+ * "0" when this build may not install on quit (see `autoInstallAllowed`), so the
+ * window hides a toggle that could not take effect.
+ */
+export const UPDATE_AUTO_AVAILABLE_ARG = "--sapiom-update-auto-available=";
 
 /**
  * main → renderer (push): the downloaded-update state changed, or a freshly

@@ -20,6 +20,7 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import {
   UPDATE_AUTO_ARG,
+  UPDATE_AUTO_AVAILABLE_ARG,
   UPDATE_DECIDE,
   UPDATE_SET_AUTO,
   UPDATE_VERSION_ARG,
@@ -62,6 +63,8 @@ export interface UpdatePromptOptions {
   version: string;
   /** Initial state of the "auto-install on quit" toggle. */
   autoUpdate: boolean;
+  /** False hides the toggle: this build may not install on quit. Defaults to true. */
+  autoUpdateAvailable?: boolean;
   /**
    * Called when the toggle changes. `updater.ts` supplies this to persist the
    * preference AND apply it live to `autoUpdater.autoInstallOnAppQuit` (it owns
@@ -107,12 +110,12 @@ export async function showUpdatePrompt(parent: BrowserWindow, opts: UpdatePrompt
       preload: updatePreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // ESM preload → sandbox must be off (same constraint as the setup window);
-      // contextIsolation stays on, so the page only ever sees the frozen bridge.
-      sandbox: false,
+      // Sandboxed, with the bundled CommonJS preload (see scripts/build-preloads.mjs).
+      sandbox: true,
       additionalArguments: [
         `${UPDATE_VERSION_ARG}${opts.version}`,
         `${UPDATE_AUTO_ARG}${opts.autoUpdate ? "1" : "0"}`,
+        `${UPDATE_AUTO_AVAILABLE_ARG}${opts.autoUpdateAvailable === false ? "0" : "1"}`,
       ],
     },
   });

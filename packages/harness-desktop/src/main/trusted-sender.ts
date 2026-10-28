@@ -14,8 +14,9 @@
  *  - the main window itself after navigating to agent-authored content, which the
  *    harness serves at `/canvas/:sessionId/*` on this same origin.
  *
- * Hence both an identity check (the sender IS the main window's webContents) and a
- * path check (its top frame is `/`). The SPA lives at `/` and never navigates the
+ * Hence an identity check (the sender IS the main window's webContents), an origin
+ * check (its top frame is on the harness origin the window loaded, not another
+ * localhost port such as an agent's dev server, SAP-4382) and a path check (`/`). The SPA lives at `/` and never navigates the
  * top frame over http (its one `location.href` is an editor scheme, which
  * `will-navigate` hands to the OS), so requiring `/` is exact today. If the SPA
  * ever adopts routing this fails CLOSED and logs why, rather than quietly widening.
@@ -31,10 +32,16 @@ import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
  * closed.
  */
 let trustedWindow: BrowserWindow | null = null;
+/** The harness origin (`http://127.0.0.1:<port>`) the trusted window loaded. */
+let trustedOrigin: string | null = null;
 
-/** Record the main window as the sole trusted IPC origin. Called once, at boot. */
-export function setTrustedWindow(win: BrowserWindow): void {
+/**
+ * Record the main window, and the harness origin it loaded, as the sole trusted
+ * IPC sender. Called once, at boot.
+ */
+export function setTrustedWindow(win: BrowserWindow, origin: string): void {
   trustedWindow = win;
+  trustedOrigin = origin;
 }
 
 function log(message: string): void {
@@ -43,7 +50,7 @@ function log(message: string): void {
   console.error(`[ipc-guard] ${message}`);
 }
 
-/** True only for the harness SPA in the main window's top frame at `/`. */
+/** True only for the harness SPA in the main window's top frame at `/`, on the harness origin. */
 export function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   const win = trustedWindow;
   if (!win || win.isDestroyed()) return false;
@@ -55,7 +62,12 @@ export function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   // `nodeIntegrationInSubFrames` is switched on later.
   const frameUrl = event.sender.mainFrame.url;
   try {
-    if (new URL(frameUrl).pathname !== "/") {
+    const url = new URL(frameUrl);
+    if (!trustedOrigin || url.origin !== trustedOrigin) {
+      log(`rejected a privileged IPC from ${frameUrl}: not the harness origin`);
+      return false;
+    }
+    if (url.pathname !== "/") {
       log(`rejected a privileged IPC from ${frameUrl} — only the SPA root may ask`);
       return false;
     }

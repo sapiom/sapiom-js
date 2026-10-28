@@ -4,7 +4,7 @@ copyright: Copyright © Sapiom
 # Pinned because packaging runs against a `pnpm deploy --prod` dir that has no
 # `electron` devDep for electron-builder to infer the version from. Keep in sync
 # with the `electron` devDependency.
-electronVersion: 33.4.11
+electronVersion: 45.1.0
 
 # Custom URL scheme for web→desktop deep links (the dashboard's "Open in Studio").
 # Populates macOS CFBundleURLTypes (Info.plist) and the Linux .desktop MimeType.

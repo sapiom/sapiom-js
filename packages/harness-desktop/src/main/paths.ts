@@ -22,17 +22,17 @@ export function setupHtmlPath(): string {
   return path.join(mainDir, "..", "renderer", "setup.html");
 }
 
-/** This app's preload script for the setup window. `.mjs`: the preload is ESM,
- *  and Electron only loads an ESM preload from a `.mjs` file (with sandbox off
- *  on the window). */
+/** This app's preload script for the setup window. `.cjs`: every preload window
+ *  is sandboxed, and a sandboxed preload must be one CommonJS file, which
+ *  `scripts/build-preloads.mjs` bundles. */
 export function setupPreloadPath(): string {
-  return path.join(mainDir, "..", "preload", "setup.mjs");
+  return path.join(mainDir, "..", "preload", "setup.cjs");
 }
 
 /** Preload for the MAIN window (the harness SPA) — exposes `window.sapiomDesktop`.
- *  Same `.mjs` + sandbox-off requirement as the setup preload. */
+ *  Same bundled `.cjs` as the setup preload. */
 export function desktopPreloadPath(): string {
-  return path.join(mainDir, "..", "preload", "desktop.mjs");
+  return path.join(mainDir, "..", "preload", "desktop.cjs");
 }
 
 /** This app's update-window HTML (copied to dist/renderer by the build). */
@@ -40,8 +40,8 @@ export function updateHtmlPath(): string {
   return path.join(mainDir, "..", "renderer", "update.html");
 }
 
-/** Preload for the update window — exposes `window.sapiomUpdate`. Same `.mjs` +
- *  sandbox-off requirement as the setup preload. */
+/** Preload for the update window: exposes `window.sapiomUpdate`. Same bundled
+ *  `.cjs` as the setup preload. */
 export function updatePreloadPath(): string {
-  return path.join(mainDir, "..", "preload", "update.mjs");
+  return path.join(mainDir, "..", "preload", "update.cjs");
 }

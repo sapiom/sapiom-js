@@ -11,7 +11,7 @@
   "type": "module",
   "main": "./dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-renderer.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-preloads.mjs && node scripts/copy-renderer.mjs",
     "dev": "node scripts/assert-harness-version.mjs --build && pnpm run build && electron . --dev",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "pnpm run build && node scripts/pack.mjs",
@@ -30,8 +30,9 @@
     "@electron/notarize": "^2.5.0",
     "@electron/rebuild": "^3.7.0",
     "@types/node": "^20.11.30",
-    "electron": "^33.0.0",
+    "electron": "45.1.0",
     "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.1",
     "typescript": "^5.4.2",
     "vitest": "^3.0.0"
   },

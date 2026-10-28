@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  autoInstallAllowed,
   CHANNEL_ENV_VAR,
   classifyUpdateError,
   DISABLE_ENV_VAR,
@@ -405,5 +406,38 @@ describe("classifyUpdateError: a network answering for GitHub", () => {
     expect(detail).toBe("status=403 server=corp-proxy/2.1 content-type=text/html; charset=utf-8");
     expect(classifyUpdateError("403 Forbidden").detail).toBe("status=403");
     expect(classifyUpdateError("connect ECONNREFUSED 140.82.121.3:443").detail).toBeUndefined();
+  });
+});
+
+describe("autoInstallAllowed", () => {
+  const unsigned = "owner: sapiom\nrepo: sapiom-js\nprovider: github\nupdaterCacheDirName: sapiom-updater\n";
+  const signedList = unsigned + "publisherName:\n  - Sapiom, Inc.\n";
+  const signedScalar = unsigned + "publisherName: Sapiom, Inc.\n";
+
+  it.each(["darwin", "linux"] as const)("always allows install-on-quit on %s", (platform) => {
+    expect(autoInstallAllowed({ platform, updateConfig: null })).toEqual({ allowed: true });
+    expect(autoInstallAllowed({ platform, updateConfig: unsigned })).toEqual({ allowed: true });
+  });
+
+  it("refuses on Windows when app-update.yml could not be read", () => {
+    const decision = autoInstallAllowed({ platform: "win32", updateConfig: null });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain("publisherName");
+  });
+
+  it("refuses on Windows when the baked config names no publisherName", () => {
+    expect(autoInstallAllowed({ platform: "win32", updateConfig: unsigned }).allowed).toBe(false);
+  });
+
+  it("refuses a publisherName that is only nested or commented out", () => {
+    const nested = unsigned + "extra:\n  publisherName: Sapiom, Inc.\n";
+    const commented = unsigned + "# publisherName: Sapiom, Inc.\n";
+    expect(autoInstallAllowed({ platform: "win32", updateConfig: nested }).allowed).toBe(false);
+    expect(autoInstallAllowed({ platform: "win32", updateConfig: commented }).allowed).toBe(false);
+  });
+
+  it("allows on Windows once the baked config names a publisher (list or scalar)", () => {
+    expect(autoInstallAllowed({ platform: "win32", updateConfig: signedList })).toEqual({ allowed: true });
+    expect(autoInstallAllowed({ platform: "win32", updateConfig: signedScalar })).toEqual({ allowed: true });
   });
 });

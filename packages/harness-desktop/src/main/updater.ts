@@ -29,16 +29,20 @@
  *    installer is trying to replace. So the update path calls the caller's
  *    `shutdown()` and awaits it, rather than relying on the quit hook.
  */
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { BrowserWindow, app, dialog, ipcMain } from "electron";
 // CJS: default-import then read the property. See trap 1 above.
 import electronUpdater from "electron-updater";
 import type { UpdateInfo } from "electron-updater";
+import type { AutoInstallDecision } from "./update-policy.js";
 import { UPDATE_CHECK, UPDATE_STATE, type UpdateCheckOutcome, type UpdateStatePayload } from "./ipc.js";
 // Shared with the folder-picker channel — the "only the SPA at `/` may ask" rule
 // lives in one place rather than being copied per privileged channel.
 import { isTrustedSender } from "./trusted-sender.js";
 import {
   CHANNEL_ENV_VAR,
+  autoInstallAllowed,
   classifyUpdateError,
   resolveUpdateChannel,
   shouldEnableUpdater,
@@ -105,6 +109,12 @@ let host: UpdaterDeps | null = null;
 /** Live updater, once initialised. Null means checks are off — `disabledReason` says why. */
 let active: { autoUpdater: typeof electronUpdater.autoUpdater; channel: string; deps: UpdaterDeps } | null = null;
 let disabledReason: string | null = null;
+/**
+ * Whether this build may install a downloaded update on quit (see
+ * `autoInstallAllowed`). Every place that can turn install-on-quit ON goes
+ * through it, so the user's toggle never overrides it.
+ */
+let autoInstall: AutoInstallDecision = { allowed: true };
 /**
  * An update that has finished downloading and is waiting for a restart. Held so
  * an on-demand check can answer "ready — restart" instead of "up to date", which
@@ -235,7 +245,7 @@ function updatePrefsFile(): string {
 async function setAutoUpdatePref(on: boolean): Promise<void> {
   const prefs = await loadUpdatePrefs(updatePrefsFile());
   await saveUpdatePrefs({ ...prefs, autoUpdate: on }, updatePrefsFile());
-  if (active) active.autoUpdater.autoInstallOnAppQuit = on;
+  if (active) active.autoUpdater.autoInstallOnAppQuit = on && autoInstall.allowed;
   log(`auto-install on quit ${on ? "enabled" : "disabled"} by user`);
 }
 
@@ -276,7 +286,8 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
   try {
     const choice = await showUpdatePrompt(deps.mainWindow, {
       version,
-      autoUpdate: prefs.autoUpdate,
+      autoUpdate: prefs.autoUpdate && autoInstall.allowed,
+      autoUpdateAvailable: autoInstall.allowed,
       onAutoUpdateChange: setAutoUpdatePref,
     });
 
@@ -491,6 +502,15 @@ function registerHandlers(): void {
  */
 let updaterStarted = false;
 
+/** The `app-update.yml` packaging baked into this install, or null if unreadable. */
+function readBakedUpdateConfig(): string | null {
+  try {
+    return readFileSync(path.join(process.resourcesPath, "app-update.yml"), "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function startUpdater(deps: UpdaterDeps): void {
   if (updaterStarted) {
     log("startUpdater called twice — ignoring the second (timers are already armed)");
@@ -530,10 +550,15 @@ function startUpdater(deps: UpdaterDeps): void {
   // Set the default synchronously (loading prefs is async and the first check is
   // 30s out), then reconcile with the persisted value; a failed read keeps the
   // default — prefs are a convenience, never load-bearing.
-  autoUpdater.autoInstallOnAppQuit = DEFAULT_UPDATE_PREFS.autoUpdate;
+  autoInstall = autoInstallAllowed({
+    platform: process.platform,
+    updateConfig: gate.forced ? null : readBakedUpdateConfig(),
+  });
+  if (!autoInstall.allowed) log(`install-on-quit off: ${autoInstall.reason}`);
+  autoUpdater.autoInstallOnAppQuit = DEFAULT_UPDATE_PREFS.autoUpdate && autoInstall.allowed;
   void loadUpdatePrefs(updatePrefsFile())
     .then((prefs) => {
-      autoUpdater.autoInstallOnAppQuit = prefs.autoUpdate;
+      autoUpdater.autoInstallOnAppQuit = prefs.autoUpdate && autoInstall.allowed;
       // Re-resolve the channel now that the persisted opt-in is known. Same
       // async-after-sync shape as the toggle above and safe for the same reason:
       // the first check is FIRST_CHECK_DELAY_MS (30s) out, and this read takes

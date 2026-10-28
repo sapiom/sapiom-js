@@ -31,8 +31,8 @@ function fakeWindow(url: string): { win: BrowserWindow; event: IpcMainInvokeEven
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-reveal-"));
 
 describe("revealPath (REVEAL_PATH handler)", () => {
-  const main = fakeWindow("http://localhost:5400/?token=t");
-  setTrustedWindow(main.win);
+  const main = fakeWindow("http://127.0.0.1:5400/?token=t");
+  setTrustedWindow(main.win, "http://127.0.0.1:5400");
 
   beforeEach(() => {
     showItemInFolder.mockClear();
@@ -49,19 +49,30 @@ describe("revealPath (REVEAL_PATH handler)", () => {
   });
 
   it("refuses a sender that is not the main window", () => {
-    const other = fakeWindow("http://localhost:5400/");
+    const other = fakeWindow("http://127.0.0.1:5400/");
     expect(revealPath(other.event, dir)).toBe(false);
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
 
   it("refuses the main window once it has navigated to agent-authored content", () => {
     const webContents = main.win.webContents as unknown as { mainFrame: { url: string } };
-    webContents.mainFrame.url = "http://localhost:5400/canvas/s1/index.html";
+    webContents.mainFrame.url = "http://127.0.0.1:5400/canvas/s1/index.html";
     try {
       expect(revealPath(main.event, dir)).toBe(false);
       expect(showItemInFolder).not.toHaveBeenCalled();
     } finally {
-      webContents.mainFrame.url = "http://localhost:5400/?token=t";
+      webContents.mainFrame.url = "http://127.0.0.1:5400/?token=t";
+    }
+  });
+
+  it("refuses the main window once it is on another localhost port", () => {
+    const webContents = main.win.webContents as unknown as { mainFrame: { url: string } };
+    webContents.mainFrame.url = "http://localhost:3000/";
+    try {
+      expect(revealPath(main.event, dir)).toBe(false);
+      expect(showItemInFolder).not.toHaveBeenCalled();
+    } finally {
+      webContents.mainFrame.url = "http://127.0.0.1:5400/?token=t";
     }
   });
 

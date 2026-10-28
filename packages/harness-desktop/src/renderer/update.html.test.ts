@@ -81,6 +81,12 @@ describe("update.html controls the renderer + updater rely on", () => {
     }
   });
 
+  it("wraps the toggle in the .toggle-row the renderer hides when install-on-quit is unavailable", () => {
+    expect(html).toMatch(/<label class="toggle-row" for="auto-update">[\s\S]*?id="auto-update"[\s\S]*?<\/label>/);
+    const renderer = readFileSync(new URL("./update.ts", import.meta.url), "utf8");
+    expect(renderer).toMatch(/if \(!bridge\.autoUpdateAvailable\)[^\n]*closest<HTMLElement>\("\.toggle-row"\)/);
+  });
+
   it("loads its module renderer", () => {
     expect(html).toMatch(/<script type="module" src="\.\/update\.js"><\/script>/);
   });

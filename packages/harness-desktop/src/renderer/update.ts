@@ -31,6 +31,8 @@ versionBodyEl.textContent = bridge.version || "A new version";
 // independent of which button the user ends on, so closing the window still keeps
 // a toggle change.
 autoUpdateEl.checked = bridge.autoUpdate;
+// Inline style, not `hidden`: `.toggle-row` sets its own `display`, which would win.
+if (!bridge.autoUpdateAvailable) autoUpdateEl.closest<HTMLElement>(".toggle-row")!.style.display = "none";
 autoUpdateEl.addEventListener("change", () => {
   void bridge.setAutoUpdate(autoUpdateEl.checked);
 });
