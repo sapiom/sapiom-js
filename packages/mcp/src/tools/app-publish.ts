@@ -380,7 +380,7 @@ function requireAppLink(data: unknown): AppLinkWire {
 
 // ─── Bundle collection ───────────────────────────────────────────────────────
 
-// Decode strictly so a binary fails instead of publishing U+FFFD; skip nested symlinks and, by real path,
+// Decode strictly so invalid UTF-8 fails instead of publishing U+FFFD; skip nested symlinks and, by real path,
 // the project's own sapiom.json, whose `env` holds app secrets a public link would otherwise serve.
 export function collectBundleFiles(
   projectDir: string,
