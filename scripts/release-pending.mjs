@@ -49,9 +49,8 @@ export async function pendingPackages({
 }
 
 async function isPublished(pkg, fetchImpl, warn, timeoutMs) {
-  // `?write=true` is how the npm CLI asks for an uncached packument: the CDN
-  // copy can lag a publish that just happened, and a stale answer would ask
-  // reviewers to approve a release that already shipped.
+  // `?write=true` skips the registry CDN, whose copy can lag a publish that just
+  // finished and ask reviewers to approve a release that already shipped.
   const url = `${REGISTRY}/${pkg.name.replaceAll("/", "%2f")}?write=true`;
   try {
     const response = await fetchImpl(url, {
