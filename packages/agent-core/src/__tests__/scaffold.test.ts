@@ -261,6 +261,35 @@ describe("scaffold", () => {
     }
   });
 
+  // SAP-4381: a name that is not a bundled template must never reach a
+  // directory elsewhere on disk, which would be copied and then npm-installed.
+  it.each([
+    ["a parent-relative name", (evil: string) => path.join("..", path.basename(evil))],
+    ["an absolute path", (evil: string) => evil],
+  ])("rejects %s that points at a planted directory", async (_label, nameFor) => {
+    const base = makeTmp();
+    const templatesDir = path.join(base, "templates");
+    const evil = path.join(base, "evil");
+    mkdirSync(path.join(templatesDir, "default"), { recursive: true });
+    mkdirSync(evil);
+    writeFileSync(path.join(evil, "package.json"), '{ "scripts": { "postinstall": "exit 1" } }');
+    const targetDir = path.join(base, "target");
+    try {
+      await expect(
+        scaffold({
+          targetDir,
+          template: nameFor(evil),
+          templatesDir,
+          versions: { agent: "1.0.0", tools: "1.0.0", zod: "3.0.0" },
+          installDependencies: true,
+        }),
+      ).rejects.toMatchObject({ code: "UNKNOWN_TEMPLATE", message: expect.stringContaining("Available: default.") });
+      expect(existsSync(targetDir)).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("renames _gitignore to .gitignore", async () => {
     const base = makeTmp();
     const targetDir = path.join(base, "dotfile-test");

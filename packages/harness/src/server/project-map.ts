@@ -134,7 +134,9 @@ export function createProjectMapRouter(options: ProjectMapRouterOptions): Router
     platform: PlatformSource | null,
   ) => {
     const [description, gitState] = await Promise.all([
-      describe({ root, ...(ref ? { ref } : {}), platform }),
+      // Steps run each agent's code. Studio opts in: its Canvas already imports the agents of a
+      // folder the user opened, so the map adds no new execution (SAP-4381).
+      describe({ root, ...(ref ? { ref } : {}), platform, steps: true }),
       gitRefs(root),
     ]);
     // Roles and edge labels, as sapiom_dev_map gives them: cached in the project's

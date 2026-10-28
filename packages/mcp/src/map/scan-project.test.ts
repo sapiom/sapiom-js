@@ -26,7 +26,7 @@ async function copyFixture(name: string): Promise<string> {
   return dir;
 }
 
-async function mapOf(root: string, options: { ref?: string; platform?: PlatformSource | null; steps?: StepSource | false } = {}) {
+async function mapOf(root: string, options: { ref?: string; platform?: PlatformSource | null; steps?: StepSource | boolean } = {}) {
   return buildMap(await describeProject({ root, steps: false, ...options }));
 }
 
@@ -355,6 +355,44 @@ export async function notOwn(ctx: any) { await ctx.sapiom.agents.run({ definitio
       code: "UNKNOWN_REF",
     });
   });
+});
+
+/** A project whose one agent writes `marker` the moment its code is imported. */
+async function markerProject(): Promise<{ root: string; marker: string }> {
+  const root = await project({
+    "sapiom.json": '{ "name": "loud" }',
+    "index.ts": "",
+  });
+  const marker = path.join(root, "ran.txt");
+  await fs.writeFile(
+    path.join(root, "index.ts"),
+    `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`,
+  );
+  return { root, marker };
+}
+
+const exists = (file: string) => fs.stat(file).then(() => true, () => false);
+
+describe("describeProject step execution (SAP-4381)", () => {
+  it("runs no project code when steps are not requested", async () => {
+    const { root, marker } = await markerProject();
+
+    const description = await describeProject({ root });
+
+    expect(await exists(marker)).toBe(false);
+    expect(description.agents.map((agent) => [agent.slug, agent.stepsUnavailable])).toEqual([
+      ["loud", "steps not requested"],
+    ]);
+    expect(buildMap(description)).toEqual(buildMap(await describeProject({ root, steps: false })));
+  });
+
+  it("runs each agent's code through agents check with steps: true", async () => {
+    const { root, marker } = await markerProject();
+
+    await describeProject({ root, steps: true });
+
+    expect(await fs.readFile(marker, "utf8")).toBe("ran");
+  }, 60_000);
 });
 
 describe("checkSteps", () => {

@@ -94,7 +94,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_map",
-    "The agent map: which agents call, launch, schedule or trigger each other, grouped into systems, with every agent's steps. Computed from code each call; nothing about agents or edges is stored. Pass `root` (a project folder; default the working directory) and optionally a git `ref` to draw that version, or pass `agents` to map your own description without scanning. Systems are connected components over code-proven calls, events, signals and timers; shared vault keys, databases and connectors show as `shared` chips and never join agents. Every edge carries the code location that proves it; calls whose target the code does not make knowable are listed under `unresolved`. When signed in, platform triggers and deploy state come from the account, and Jev labels an agent's `role` and a launch or event edge's `label` where its probability `p` is at least 0.8 (`labels: \"ok\"`; signed out or Jev unreachable: `labels: \"unavailable\"`, the map otherwise unchanged). Set `platform: false` to skip both.",
+    "The agent map: which agents call, launch, schedule or trigger each other, grouped into systems. Computed from code each call by reading the source, without running it; nothing about agents or edges is stored. Pass `root` (a project folder; default the working directory) and optionally a git `ref` to draw that version, or pass `agents` to map your own description without scanning. Each agent's steps come only with `steps: true`, which imports and runs every discovered agent's code (`agents check`, needs its dependencies installed): pass it only for a project you trust; without it each agent reads `stepsUnavailable: \"steps not requested\"`. Systems are connected components over code-proven calls, events, signals and timers; shared vault keys, databases and connectors show as `shared` chips and never join agents. Every edge carries the code location that proves it; calls whose target the code does not make knowable are listed under `unresolved`. When signed in, platform triggers and deploy state come from the account, and Jev labels an agent's `role` and a launch or event edge's `label` where its probability `p` is at least 0.8 (`labels: \"ok\"`; signed out or Jev unreachable: `labels: \"unavailable\"`, the map otherwise unchanged). Set `platform: false` to skip both.",
     {
       root: z
         .string()
@@ -118,8 +118,14 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "Read triggers and deploy state from the signed-in account and ask Jev for labels (default true).",
         ),
+      steps: z
+        .boolean()
+        .optional()
+        .describe(
+          "Draw each agent's steps by importing and running its code (`agents check`). Default false: no project code runs.",
+        ),
     },
-    async ({ root, ref, agents, platform }) => {
+    async ({ root, ref, agents, platform, steps }) => {
       try {
         if (agents && (root !== undefined || ref !== undefined)) {
           throw new AgentOperationError({
@@ -144,6 +150,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
                   ? root.replace(/^~(?=$|[\\/])/, os.homedir())
                   : process.cwd(),
                 ref,
+                steps: steps === true,
                 platform:
                   platform === false
                     ? undefined

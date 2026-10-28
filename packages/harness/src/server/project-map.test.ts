@@ -143,7 +143,8 @@ describe("createProjectMapRouter", () => {
     // The scan reported `${root}-real`; the response keeps the opened folder.
     expect(body.map).toEqual({ ...buildMap(description(`${f.root}-real`)), root: f.root });
     expect(body.map.root).toBe(f.root);
-    expect(f.describeSpy).toHaveBeenCalledWith({ root: f.root, platform: null });
+    // Studio opts into steps, which run the agents' code (SAP-4381).
+    expect(f.describeSpy).toHaveBeenCalledWith({ root: f.root, platform: null, steps: true });
   });
 
   it("passes a valid ref through to describe", async () => {
@@ -155,6 +156,7 @@ describe("createProjectMapRouter", () => {
       root: f.root,
       ref: "feature/x~2",
       platform: null,
+      steps: true,
     });
   });
 

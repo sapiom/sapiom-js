@@ -18,6 +18,8 @@ import type {
   AttachFileRequest,
   AttachFileResponse,
   BindWorkflowRequest,
+  ClaudeCodeTrustResponse,
+  ClaudeCodeTrustStatus,
   CreateSessionRequest,
   FsDirEntry,
   FsListResponse,
@@ -363,6 +365,10 @@ export interface HarnessApi {
     selection: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
+  /** Whether Claude Code already trusts the added project root holding `cwd`. */
+  claudeCodeTrustStatus(cwd: string): Promise<ClaudeCodeTrustStatus>;
+  /** Trust an added project root for Claude Code, only once the user confirmed. */
+  trustClaudeCodeFolder(root: string): Promise<ClaudeCodeTrustResponse>;
   attachFile(id: string, req: AttachFileRequest): Promise<AttachFileResponse>;
   listSessions(): Promise<HarnessSession[]>;
   sessionHistory(cwd: string): Promise<SessionSummary[]>;
@@ -641,6 +647,19 @@ class RealApi implements HarnessApi {
     return this.request<HarnessSession>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ theme: getTheme(), ...req }),
+    });
+  }
+
+  claudeCodeTrustStatus(cwd: string): Promise<ClaudeCodeTrustStatus> {
+    return this.request<ClaudeCodeTrustStatus>(
+      `/api/claude-code-trust?cwd=${encodeURIComponent(cwd)}`,
+    );
+  }
+
+  trustClaudeCodeFolder(root: string): Promise<ClaudeCodeTrustResponse> {
+    return this.request<ClaudeCodeTrustResponse>("/api/claude-code-trust", {
+      method: "POST",
+      body: JSON.stringify({ root }),
     });
   }
 
@@ -2029,6 +2048,45 @@ export class MockApi implements HarnessApi {
     this.saveStudioPreference(projectId, selection);
     await delay();
     return { ...current, selection, repaired: !valid };
+  }
+
+  /**
+   * Every folder reads as trusted unless an e2e spec lists it in
+   * `__MOCK_UNTRUSTED_ROOTS__`, so specs that never think about trust never
+   * meet the dialog. Trust calls are recorded in `__HARNESS_TEST__.trustCalls`.
+   */
+  async claudeCodeTrustStatus(cwd: string): Promise<ClaudeCodeTrustStatus> {
+    await delay(50);
+    const win = (typeof window === "undefined" ? {} : window) as {
+      __MOCK_UNTRUSTED_ROOTS__?: string[];
+      __MOCK_TRUST_STATUS_FAIL__?: boolean;
+    };
+    if (win.__MOCK_TRUST_STATUS_FAIL__) throw new Error("mock: trust status unavailable");
+    const root = (win.__MOCK_UNTRUSTED_ROOTS__ ?? []).find(
+      (candidate) => cwd === candidate || cwd.startsWith(`${candidate}/`),
+    );
+    return root
+      ? { root, trusted: false, trustable: true }
+      : { root: cwd, trusted: true, trustable: false };
+  }
+
+  async trustClaudeCodeFolder(root: string): Promise<ClaudeCodeTrustResponse> {
+    await delay(50);
+    const win = (typeof window === "undefined" ? {} : window) as {
+      __HARNESS_TEST__?: Record<string, unknown>;
+      __MOCK_UNTRUSTED_ROOTS__?: string[];
+      __MOCK_TRUST_FAIL_ONCE__?: boolean;
+    };
+    win.__HARNESS_TEST__ = {
+      ...(win.__HARNESS_TEST__ ?? {}),
+      trustCalls: [...((win.__HARNESS_TEST__?.trustCalls as string[] | undefined) ?? []), root],
+    };
+    if (win.__MOCK_TRUST_FAIL_ONCE__) {
+      win.__MOCK_TRUST_FAIL_ONCE__ = false;
+      throw new Error("mock: couldn't trust the folder");
+    }
+    win.__MOCK_UNTRUSTED_ROOTS__ = (win.__MOCK_UNTRUSTED_ROOTS__ ?? []).filter((candidate) => candidate !== root);
+    return { result: "trusted" };
   }
 
   async createSession(req: CreateSessionRequest): Promise<HarnessSession> {

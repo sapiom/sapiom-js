@@ -11,6 +11,7 @@ import {
 } from "./ProjectFolderDialog";
 import { RemoveProjectConfirm } from "./RemoveProjectConfirm";
 import { RunSheet } from "./RunSheet";
+import { TrustFolderConfirm } from "./TrustFolderConfirm";
 import { getDesktopBridge, type DeepLinkAgentTarget } from "../lib/desktop";
 import type { PaletteAction } from "../lib/palette";
 import { planProjectRemoval } from "../lib/project-membership";
@@ -23,8 +24,8 @@ import type { SessionActions, ShellNav } from "../lib/use-session-actions";
 
 /**
  * The cards ON TOP of the shell: the Overview, the folder step's web dialog,
- * the one-time explainer, the command palette, the clone and remove confirms,
- * and the run sheet. They mount beside the centre rather than standing in for
+ * the one-time explainer, the command palette, the clone, remove and folder
+ * trust confirms, and the run sheet. They mount beside the centre rather than standing in for
  * it, and each outlives whichever control opened it.
  */
 export function ShellDialogs({
@@ -225,6 +226,15 @@ export function ShellDialogs({
           returnFocus={runRequest.returnFocus}
           onClose={() => setRunRequest(null)}
           onRun={verbs.handleLaunchRun}
+        />
+      )}
+
+      {harness.folderTrustPrompt && (
+        <TrustFolderConfirm
+          /* Keyed by root: a queued prompt for another folder is a new dialog. */
+          key={harness.folderTrustPrompt.root}
+          root={harness.folderTrustPrompt.root}
+          onAnswer={harness.answerFolderTrust}
         />
       )}
 

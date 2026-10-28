@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,7 +83,54 @@ describe("sapiom_dev_map", () => {
     const map = parse(res);
     expect(map.platform).toBe("signed-out");
     expect(map.systems.map((system: { agents: string[] }) => system.agents)).toEqual([["award", "payout"]]);
-    expect(map.agents.find((agent: { slug: string }) => agent.slug === "dashboard").stepsUnavailable).toMatch(/no index\.ts/);
+    expect(map.agents.find((agent: { slug: string }) => agent.slug === "dashboard").stepsUnavailable).toBe("steps not requested");
+  });
+
+  describe("step execution (SAP-4381)", () => {
+    async function markerProject(): Promise<{ root: string; marker: string }> {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "sapiom-map-tool-"));
+      temps.push(root);
+      const marker = path.join(root, "ran.txt");
+      await fs.writeFile(path.join(root, "sapiom.json"), '{ "name": "loud" }');
+      await fs.writeFile(
+        path.join(root, "index.ts"),
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`,
+      );
+      return { root, marker };
+    }
+    const temps: string[] = [];
+    afterEach(async () => {
+      await Promise.all(temps.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    it("runs no project code by default", async () => {
+      const { root, marker } = await markerProject();
+
+      const map = parse(await mapTool()({ root }));
+
+      await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(map.agents.map((agent: { stepsUnavailable?: string }) => agent.stepsUnavailable)).toEqual([
+        "steps not requested",
+      ]);
+    });
+
+    it("runs the agents' code only with steps: true", async () => {
+      const { root, marker } = await markerProject();
+
+      await mapTool()({ root, steps: true });
+
+      expect(await fs.readFile(marker, "utf8")).toBe("ran");
+    }, 60_000);
+
+    it("says in its description that steps: true runs the project's code", () => {
+      const descriptions = new Map<string, string>();
+      const server = {
+        tool: vi.fn((name: string, description: string) => descriptions.set(name, description)),
+      } as unknown as McpServer;
+      register(server, env);
+
+      expect(descriptions.get("sapiom_dev_map")).toMatch(/steps: true`, which imports and runs every discovered agent's code/);
+    });
   });
 
   it("skips the account when platform is false, even when signed in", async () => {

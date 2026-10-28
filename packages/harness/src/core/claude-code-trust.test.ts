@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acquireConfigLock,
   claudeCodeConfigPath,
+  claudeCodeTrustState,
   trustClaudeCodeProject,
 } from "./claude-code-trust.js";
 
@@ -186,6 +187,47 @@ describe("trustClaudeCodeProject (SAP-3879)", () => {
     );
     expect((await readConfig()).projects).toEqual({});
     await expect(fs.stat(lock)).resolves.toBeDefined();
+  });
+});
+
+describe("claudeCodeTrustState (SAP-4381)", () => {
+  it("reads trusted, untrusted and untrustable without writing or locking", async () => {
+    await writeConfig({ projects: { "/elsewhere": { hasTrustDialogAccepted: true } } });
+    const before = await fs.readFile(configFile, "utf8");
+    // A held lock must not delay a read-only status.
+    await fs.mkdir(`${configFile}.lock`);
+
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrusted");
+    await writeConfig({ projects: { [project]: { hasTrustDialogAccepted: true } } });
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("trusted");
+    await writeConfig({ projects: { [project]: { hasTrustDialogAccepted: false } } });
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrusted");
+
+    await writeConfig({ projects: { "/elsewhere": { hasTrustDialogAccepted: true } } });
+    expect(await fs.readFile(configFile, "utf8")).toBe(before);
+  });
+
+  it("is untrustable for home, a folder above it, a filesystem root, or no usable config", async () => {
+    await writeConfig({ projects: {} });
+    for (const folder of [home, dir, path.parse(dir).root]) {
+      expect(await claudeCodeTrustState(folder, { env, home })).toBe("untrustable");
+    }
+    await fs.writeFile(configFile, "not json");
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrustable");
+    await writeConfig([]);
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrustable");
+    await fs.rm(configFile);
+    expect(await claudeCodeTrustState(project, { env, home })).toBe("untrustable");
+  });
+
+  it("needs the resolved spelling trusted too when the root is a symlink", async () => {
+    const linked = path.join(dir, "linked");
+    await fs.symlink(project, linked);
+    await writeConfig({ projects: { [linked]: { hasTrustDialogAccepted: true } } });
+    expect(await claudeCodeTrustState(linked, { env, home })).toBe("untrusted");
+
+    await trustClaudeCodeProject(linked, { env, home });
+    expect(await claudeCodeTrustState(linked, { env, home })).toBe("trusted");
   });
 });
 

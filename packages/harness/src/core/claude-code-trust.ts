@@ -13,10 +13,12 @@ import { homedir } from "node:os";
 import { join, parse, resolve } from "node:path";
 
 /**
- * PRE-TRUST A PROJECT ROOT FOR CLAUDE CODE (flow-map-chat-overlay.md §4.7
- * item 5). A hand-off or Open in session session would otherwise start
+ * TRUST A PROJECT ROOT FOR CLAUDE CODE, once the user has confirmed it in
+ * Studio (SAP-4381; the dialog and its reason: flow-map-chat-overlay.md §4.7
+ * item 5). Without the record a hand-off or Open in session session starts
  * behind Claude Code's "Do you trust the files in this folder?" dialog, and
- * its first message waits there.
+ * its first message waits there. The record also lets the folder's
+ * `.claude/settings.json` hooks run, so it is never written without asking.
  *
  * Verified against Claude Code 2.1.289:
  * - Trust is `projects[<absolute path>].hasTrustDialogAccepted: true` in the
@@ -43,12 +45,7 @@ export async function trustClaudeCodeProject(
   const env = options.env ?? process.env;
   const home = options.home ?? homedir();
   const keys = await trustKeys(root);
-  const homeKey = spell(home);
-  const covers = (key: string) =>
-    key === spell(parse(key).root) ||
-    homeKey === key ||
-    homeKey.startsWith(key.endsWith("/") ? key : `${key}/`);
-  if (keys.some(covers)) return "skipped";
+  if (keys.some(coversHome(home))) return "skipped";
   const file = await claudeCodeConfigPath(env, home);
   const release = await acquireConfigLock(`${file}.lock`);
   if (!release) return "skipped";
@@ -100,6 +97,47 @@ export async function trustClaudeCodeProject(
   } finally {
     await release();
   }
+}
+
+/**
+ * Whether Claude Code already trusts `root`, read without the lock and
+ * without writing. "untrustable" is every case `trustClaudeCodeProject`
+ * would skip: home, a folder above it, a filesystem root, or a config that
+ * is missing, unreadable or not an object.
+ */
+export async function claudeCodeTrustState(
+  root: string,
+  options: { env?: NodeJS.ProcessEnv; home?: string } = {},
+): Promise<"trusted" | "untrusted" | "untrustable"> {
+  const env = options.env ?? process.env;
+  const home = options.home ?? homedir();
+  const keys = await trustKeys(root);
+  if (keys.some(coversHome(home))) return "untrustable";
+  let config: unknown;
+  try {
+    const file = await realpath(await claudeCodeConfigPath(env, home));
+    config = JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return "untrustable";
+  }
+  if (!isRecord(config)) return "untrustable";
+  const projects = config.projects ?? {};
+  if (!isRecord(projects)) return "untrustable";
+  return keys.every((key) => {
+    const entry = projects[key];
+    return isRecord(entry) && entry.hasTrustDialogAccepted === true;
+  })
+    ? "trusted"
+    : "untrusted";
+}
+
+/** A key whose trust would cover every project under home: a filesystem root, home or above. */
+function coversHome(home: string): (key: string) => boolean {
+  const homeKey = spell(home);
+  return (key) =>
+    key === spell(parse(key).root) ||
+    homeKey === key ||
+    homeKey.startsWith(key.endsWith("/") ? key : `${key}/`);
 }
 
 /** The global config file Claude Code 2.1.289 reads (`getGlobalClaudeFile`). */

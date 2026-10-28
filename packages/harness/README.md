@@ -121,10 +121,9 @@ for the job, and **Start session**. The map chat offers one on its own for the
 work above, and when you ask for it.
 
 **Start session** creates a Claude Code terminal session at the project root
-with that prompt as its first message. Adding a project to Studio marks its root
-as trusted for Claude Code, so this session (and **Open in session**) starts
-without the "Do you trust the files in this folder?" dialog, including in
-projects added earlier. The session appears on the rail and its
+with that prompt as its first message. If Claude Code does not trust the project
+yet, Studio first asks **Trust this folder?** (see
+[Folder trust](#folder-trust)). The session appears on the rail and its
 row pulses once. Nothing navigates: you stay on the map with the chat open. The
 card then shows **Open session**, which takes you to it.
 
@@ -189,6 +188,16 @@ agent it finds under the session's folder.
 To end a live session, press **×** on its rail row or **End session** in the
 session menu. It ends at once, with no confirmation. The row stays, marked
 exited; **×** on the exited row hides it, and History keeps it.
+
+### Folder trust
+
+Before a Claude Code session starts in a project Claude Code does not trust yet,
+Studio asks **Trust this folder?**, naming the project root. **Trust folder**
+records the trust in Claude Code's own config, so the folder's Claude Code
+settings and hooks run without its prompt, in Studio and in any later `claude`
+run there. **Not now** (or Escape) records nothing: the session still starts and
+Claude Code asks in the terminal. Adding a project, or opening its map, never
+trusts it. Studio does not offer it for your home folder or a folder above it.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
@@ -530,7 +539,10 @@ The map is computed from the project's code by `sapiom_dev_map` in
 `@sapiom/mcp`, the same tool a coding agent can call; nothing about agents or
 edges is stored. `GET /api/projects/:projectId/map` (optionally `?ref=`) runs the
 tool's scan in process for the project's folder and returns its output with the
-folder's git refs ([`docs/agent-map-api.md`](docs/agent-map-api.md)). While a
+folder's git refs ([`docs/agent-map-api.md`](docs/agent-map-api.md)). Studio asks
+the scan for each agent's steps, which imports and runs the agents' code the way
+the Canvas does; the tool itself reads code without running it unless its caller
+passes `steps: true`. While a
 map is open, Studio watches the folder and the map reads again after a change.
 
 - **Systems** are agents joined by code-proven launches, events, signals and

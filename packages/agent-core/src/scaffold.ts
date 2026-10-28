@@ -162,11 +162,14 @@ export function listTemplates(templatesDir?: string): string[] {
   );
 }
 
-/** Absolute path to a bundled template directory. Throws on an unknown name. */
+/**
+ * Absolute path to a bundled template directory. Throws on an unknown name: only a direct child
+ * of the templates directory counts, so `..` or an absolute path cannot copy (and then
+ * `npm install`) a directory from elsewhere on disk (SAP-4381).
+ */
 export function resolveTemplate(name: string, templatesDir?: string): string {
-  const dir = path.join(getTemplatesDir(templatesDir), name);
-  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    const available = listTemplates(templatesDir);
+  const available = listTemplates(templatesDir);
+  if (!available.includes(name)) {
     throw new AgentOperationError({
       code: "UNKNOWN_TEMPLATE",
       message:
@@ -176,7 +179,7 @@ export function resolveTemplate(name: string, templatesDir?: string): string {
           : " No templates are bundled."),
     });
   }
-  return dir;
+  return path.join(getTemplatesDir(templatesDir), name);
 }
 
 function applyReplacements(

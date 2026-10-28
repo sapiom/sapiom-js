@@ -109,7 +109,7 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_app_list`                | ✓                | List the org's App Links: URL, visibility, webhooks, spend cap, wake state      |
 | `sapiom_dev_app_settings`            | ✓                | Change a link's `webhooksEnabled`, visibility, spend cap, wake rate limit       |
 | `sapiom_dev_app_delete`              | ✓                | Delete a link (URL stops resolving, slug freed); `confirm: true` required       |
-| `sapiom_dev_map`                     | optional         | The agent map: systems, agents, steps and the code-proven edges between them    |
+| `sapiom_dev_map`                     | optional         | The agent map: systems, agents and the code-proven edges between them           |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
@@ -134,7 +134,7 @@ naming the permission and the fields, for the agent to relay rather than retry.
 ## The agent map
 
 `sapiom_dev_map` returns the map Agent Studio draws, computed from code on every
-call; nothing about agents or edges is stored. Pass a project folder (`root`, default the working
+call by reading it, without running it; nothing about agents or edges is stored. Pass a project folder (`root`, default the working
 directory) and optionally a git `ref` (`HEAD`, a branch, a commit) to draw that
 version:
 
@@ -155,7 +155,10 @@ The scan finds every folder with a `sapiom.json` or a `defineAgent` and reads:
   vault key, database or connector are not joined; the shared resource shows in
   each agent's `shared` list. Name a system in a committed `.sapiom/map.json`:
   `{ "systems": [{ "agent": "intake", "name": "Support desk" }] }`.
-- **Steps** from `agents check` (needs the agent's dependencies installed).
+- **Steps** from `agents check`, only with `"steps": true`. That imports and runs
+  every discovered agent's code (and needs its dependencies installed), so pass it
+  only for a project you trust. Without it, each agent reads
+  `stepsUnavailable: "steps not requested"`.
 - **Triggers and deploy state** from the signed-in account, plus a `fleet.json`'s
   declared triggers. Signed out, `platform` says so and the map still draws.
 - **`changedSinceRef`**: the agent's folder differs from `ref` (from `HEAD` when

@@ -17,6 +17,8 @@ import type {
   AttachFileRequest,
   BackgroundTask,
   BindWorkflowRequest,
+  ClaudeCodeTrustResponse,
+  ClaudeCodeTrustStatus,
   CreateSessionRequest,
   HarnessAdapter,
   HarnessKind,
@@ -231,6 +233,15 @@ export interface RestRouterOptions {
   onTelemetryOptInChange?: (optIn: boolean) => void;
   /** Called only for roots newly added to the user's durable project list. */
   onRecentDirAdded?: (root: string) => Promise<void> | void;
+  /**
+   * Claude Code folder trust for added project roots. `trust` writes only
+   * after the user confirmed in Studio, and answers null for a folder that is
+   * not an added root (SAP-4381).
+   */
+  claudeCodeTrust?: {
+    status: (cwd: string) => Promise<ClaudeCodeTrustStatus>;
+    trust: (root: string) => Promise<ClaudeCodeTrustResponse | null>;
+  };
   /** Called (fire-and-forget) after a session is created, with its cwd and id
    * — lets the integrator scan that directory for workflows (so opening a
    * session in a new project discovers them without a manual "+ Connect")
@@ -435,6 +446,54 @@ export function createRestRouter(options: RestRouterOptions): Router {
         }
       }
       res.json(committed);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  const trustFolderSchema = z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((text) => !text.includes("\0"));
+
+  router.get("/claude-code-trust", async (req, res, next) => {
+    const cwd = trustFolderSchema.safeParse(req.query.cwd);
+    if (!options.claudeCodeTrust) {
+      res.status(404).json({ error: "Claude Code trust is unavailable" });
+      return;
+    }
+    if (!cwd.success) {
+      res.status(400).json({ error: "cwd is required" });
+      return;
+    }
+    try {
+      res.json(await options.claudeCodeTrust.status(cwd.data));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post("/claude-code-trust", async (req, res, next) => {
+    const root = trustFolderSchema.safeParse(req.body?.root);
+    if (!options.claudeCodeTrust) {
+      res.status(404).json({ error: "Claude Code trust is unavailable" });
+      return;
+    }
+    if (!root.success) {
+      res.status(400).json({ error: "root is required" });
+      return;
+    }
+    try {
+      const trusted = await options.claudeCodeTrust.trust(root.data);
+      if (!trusted) {
+        res.status(404).json({
+          code: "not_an_added_project",
+          error: "Only an added project folder can be trusted",
+        });
+        return;
+      }
+      res.json(trusted);
     } catch (err) {
       next(err);
     }

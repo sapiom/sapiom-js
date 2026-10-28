@@ -7,6 +7,7 @@ import type {
   BackgroundTask,
   BusMessage,
   RunView,
+  ClaudeCodeTrustStatus,
   CreateSessionRequest,
   HarnessKind,
   HarnessSession,
@@ -54,6 +55,7 @@ import { rootContains } from "./session-scope";
 import { loadUiPrefs, saveUiPrefs } from "./ui-prefs";
 import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
+import { shouldAskFolderTrust } from "./folder-trust";
 import { subscribeEvents } from "./events";
 import { WorkflowProjectionOrder } from "./workflow-projection-order";
 import { track as trackProduct } from "./analytics/events";
@@ -182,6 +184,11 @@ export interface HarnessStateHook {
      *  session itself once it is ready to be seen. */
     options?: { select?: boolean },
   ) => Promise<HarnessSession>;
+  /** The added project root a Claude Code session is waiting to have trusted
+   *  ("Trust this folder?"), or null when nothing is asking (SAP-4381). */
+  folderTrustPrompt: { root: string } | null;
+  /** The user's answer to `folderTrustPrompt`: true writes the trust. */
+  answerFolderTrust: (trust: boolean) => void;
   attachFile: (
     sessionId: string,
     request: AttachFileRequest,
@@ -520,6 +527,11 @@ export function useHarnessState(): HarnessStateHook {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  // One "Trust this folder?" at a time; creations for the same root share its
+  // answer and its single trust write (SAP-4381).
+  const [folderTrustPrompt, setFolderTrustPrompt] = useState<{ root: string } | null>(null);
+  const folderTrustQueueRef = useRef<Array<{ root: string; answer: (trust: boolean) => void }>>([]);
+  const folderTrustByRootRef = useRef(new Map<string, Promise<void>>());
   const [historyLoading, setHistoryLoading] = useState(false);
   // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
   // affects the render, and both are read/written within a single call.
@@ -1504,12 +1516,52 @@ export function useHarnessState(): HarnessStateHook {
     [refreshWorkspaceScopes, reopenProjects],
   );
 
+  const answerFolderTrust = useCallback((trust: boolean) => {
+    const queue = folderTrustQueueRef.current;
+    queue.shift()?.answer(trust);
+    setFolderTrustPrompt(queue[0] ? { root: queue[0].root } : null);
+  }, []);
+
+  /**
+   * Claude Code runs a trusted folder's project hooks without asking, so
+   * Studio writes that trust only when the user says so (SAP-4381). Declining,
+   * or any failure here, starts the session untrusted: Claude Code then asks
+   * in the terminal itself.
+   */
+  const settleFolderTrust = useCallback(async (cwd: string): Promise<void> => {
+    let status: ClaudeCodeTrustStatus;
+    try {
+      status = await api.claudeCodeTrustStatus(cwd);
+    } catch {
+      return;
+    }
+    if (!shouldAskFolderTrust("claude-code", status)) return;
+    const { root } = status;
+    const pending = folderTrustByRootRef.current.get(root);
+    if (pending) return pending;
+    const settled = (async () => {
+      const trust = await new Promise<boolean>((answer) => {
+        folderTrustQueueRef.current.push({ root, answer });
+        if (folderTrustQueueRef.current.length === 1) setFolderTrustPrompt({ root });
+      });
+      if (!trust) return;
+      try {
+        await api.trustClaudeCodeFolder(root);
+      } catch {
+        setToast(createToastMessage("Couldn't trust this folder. Claude Code will ask in the terminal."));
+      }
+    })().finally(() => folderTrustByRootRef.current.delete(root));
+    folderTrustByRootRef.current.set(root, settled);
+    return settled;
+  }, []);
+
   const createSession = useCallback(
     async (
       req: CreateSessionRequest,
       onCreated?: (session: HarnessSession) => void,
       options: { select?: boolean } = {},
     ): Promise<HarnessSession> => {
+      if (req.harness === "claude-code") await settleFolderTrust(req.cwd);
       const session = await api.createSession(req);
       // The response is the first unambiguous client-side correlation between
       // this explicit request and its session. Notify its owner before
@@ -1536,7 +1588,7 @@ export function useHarnessState(): HarnessStateHook {
       await rememberProjectDir(req.cwd);
       return session;
     },
-    [selectSession, rememberProjectDir],
+    [selectSession, rememberProjectDir, settleFolderTrust],
   );
 
   const attachFile = useCallback(
@@ -2442,6 +2494,8 @@ export function useHarnessState(): HarnessStateHook {
     historyLoading,
     loadHistory,
     createSession,
+    folderTrustPrompt,
+    answerFolderTrust,
     attachFile,
     listTemplates,
     getTemplate,

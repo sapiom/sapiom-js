@@ -1,8 +1,9 @@
 /**
  * `{ root, ref? }` → the map description: find the agents under `root`, read what their code
- * proves (code-facts.ts), their steps (`agents check`), the project's declared triggers
- * (`fleet.json`), and, when signed in, the platform's triggers and deploy state. Nothing is
- * stored; the same tree and account give the same description.
+ * proves (code-facts.ts), the project's declared triggers (`fleet.json`), and, when signed in,
+ * the platform's triggers and deploy state. Steps come from `agents check` only when the caller
+ * asks (`steps`), since it imports and runs each agent's code. Nothing is stored; the same tree
+ * and account give the same description.
  */
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -73,7 +74,11 @@ export interface ScanOptions {
   ref?: string;
   /** null: signed out. undefined: platform facts skipped. */
   platform?: PlatformSource | null;
-  steps?: StepSource | false;
+  /**
+   * `true`: `agents check` each agent, which imports and runs its code. A function: that source.
+   * Omitted or `false`: no project code runs and every agent reads "steps not requested".
+   */
+  steps?: StepSource | boolean;
 }
 
 interface FoundAgent {
@@ -656,9 +661,11 @@ async function describeAt(
 
   // Steps first: their names bound which `defineStep` block a call is attributed to.
   const stepSource =
-    options.steps === false
-      ? null
-      : (options.steps ?? cachedCheckSteps(scanRoot));
+    typeof options.steps === "function"
+      ? options.steps
+      : options.steps === true
+        ? cachedCheckSteps(scanRoot)
+        : null;
   const stepResults = new Map<
     string,
     { manifest: unknown } | { unavailable: string }
