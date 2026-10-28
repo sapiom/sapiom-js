@@ -15,17 +15,23 @@ import {
   CompletionConfig,
 } from "./interceptors.js";
 
-/** What the identity redirect path must keep from the caller's `init` once it rebuilds the request. */
-function identityFetchOptions(init?: RequestInit): IdentityFetchOptions {
+/** What the identity redirect path must keep from the caller's request once it rebuilds it. */
+function identityFetchOptions(
+  input: string | URL | Request,
+  init?: RequestInit,
+): IdentityFetchOptions {
   const body = init?.body as
     | { getReader?: unknown; [Symbol.asyncIterator]?: unknown }
     | null
     | undefined;
+  // A Request does not say what its body was built from, so it is streamed like
+  // one: buffering could hold an endless upload back.
   const streamBody =
-    typeof body === "object" &&
-    body !== null &&
-    (typeof body.getReader === "function" ||
-      typeof body[Symbol.asyncIterator] === "function");
+    (typeof body === "object" &&
+      body !== null &&
+      (typeof body.getReader === "function" ||
+        typeof body[Symbol.asyncIterator] === "function")) ||
+    (body === undefined && input instanceof Request && input.body !== null);
   return { streamBody, dispatcher: (init as any)?.dispatcher };
 }
 
@@ -149,7 +155,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     }
 
     let request = new Request(input, init);
-    const identityOptions = identityFetchOptions(init);
+    const identityOptions = identityFetchOptions(input, init);
 
     // Attach identity header if target matches token audience
     if (sapiomClient.identity) {

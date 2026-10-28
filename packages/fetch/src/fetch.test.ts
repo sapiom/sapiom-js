@@ -243,4 +243,38 @@ describe("createFetch identity across redirects", () => {
       spy.mockRestore();
     }
   });
+
+  it("starts sending a Request input's stream body before it ends", async () => {
+    let firstChunk: () => void;
+    const chunkArrived = new Promise<void>((resolve) => (firstChunk = resolve));
+    const server = await listen("a", (req, res) => {
+      req.once("data", () => {
+        firstChunk();
+      });
+      req.on("end", () => res.end("ok"));
+    });
+    const { client } = createSapiomClient();
+    const fetch = createFetch({ sapiomClient: client });
+    let close: () => void;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("first"));
+        close = () => controller.close();
+      },
+    });
+
+    const pending = fetch(
+      new Request(`${server}/upload`, {
+        method: "POST",
+        body,
+        duplex: "half",
+      } as unknown as RequestInit),
+    );
+    await chunkArrived;
+    close!();
+    const response = await pending;
+
+    expect(response.status).toBe(200);
+    expect(received.a![0]!["sapiom-identity"]).toBe("identity-jwt");
+  });
 });
