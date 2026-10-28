@@ -60,6 +60,19 @@ describe('pushLocalDir', () => {
     expect(files).toEqual(['ignored.txt', 'index.js', 'link.txt', 'src/app.js']);
   });
 
+  it('pushes the whole source tree even when the process runs from one of its subdirectories', () => {
+    const cwd = process.cwd();
+    process.chdir(path.join(src, 'src'));
+    try {
+      pushLocalDir(src, bare, 'sk_test');
+    } finally {
+      process.chdir(cwd);
+    }
+
+    const files = git(bare, 'ls-tree', '-r', '--name-only', 'main').trim().split('\n').sort();
+    expect(files).toEqual(['index.js', 'link.txt', 'src/app.js']);
+  });
+
   it('commits a symlink as a link, never the content it points at', () => {
     pushLocalDir(src, bare, 'sk_test');
 

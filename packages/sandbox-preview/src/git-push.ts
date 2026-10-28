@@ -24,7 +24,8 @@ export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string,
   const gitDir = mkdtempSync(path.join(tmpdir(), 'sbxprev-git-'));
   const git = (args: string[]): void => {
     try {
-      execFileSync('git', ['--git-dir', gitDir, '--work-tree', sourceDir, ...args], { stdio: 'pipe' });
+      // cwd = sourceDir: pathspecs (`.` and the excludes below) resolve against the cwd, not the work tree.
+      execFileSync('git', ['--git-dir', gitDir, '--work-tree', sourceDir, ...args], { cwd: sourceDir, stdio: 'pipe' });
     } catch (err) {
       const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim();
       throw new PreviewOperationError({
