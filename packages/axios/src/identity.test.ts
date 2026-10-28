@@ -82,7 +82,10 @@ describe("withSapiom identity header", () => {
   });
 
   describe("redirect hop origin", () => {
-    async function hookFor(url: string) {
+    async function hookFor(
+      url: string,
+      beforeRedirect?: (options: Record<string, unknown>) => void,
+    ) {
       const { client } = createClient();
       const instance = axios.create();
       const mock = new MockAdapter(instance);
@@ -92,7 +95,7 @@ describe("withSapiom identity header", () => {
         return [200, "ok"];
       });
       withSapiom(instance, { sapiomClient: client });
-      await instance.get(url);
+      await instance.get(url, { beforeRedirect });
       return hook!;
     }
 
@@ -142,6 +145,43 @@ describe("withSapiom identity header", () => {
 
       expect(options.port).toBe("4000");
       expect(options.headers["Sapiom-Identity"]).toBeUndefined();
+    });
+
+    it("drops the header when the caller's hook retargets a proxied hop's path", async () => {
+      const hook = await hookFor("http://x.services.sapiom.ai/v1/a", (o) => {
+        o.path = "http://evil.example/v1/b";
+      });
+      const options = {
+        protocol: "http:",
+        hostname: "proxy.internal",
+        port: "3128",
+        path: "http://x.services.sapiom.ai/v1/b",
+        href: "http://x.services.sapiom.ai/v1/b",
+        headers: { "Sapiom-Identity": JWT },
+      };
+
+      hook(options, { headers: {} });
+
+      expect(options.path).toBe("http://evil.example/v1/b");
+      expect(options.headers["Sapiom-Identity"]).toBeUndefined();
+    });
+
+    it("keeps the header when the caller's hook only changes the path on the same host", async () => {
+      const hook = await hookFor("http://127.0.0.1:3000/start", (o) => {
+        o.path = "/elsewhere";
+      });
+      const options = {
+        protocol: "http:",
+        hostname: "127.0.0.1",
+        port: "3000",
+        path: "/landing",
+        href: "http://127.0.0.1:3000/landing",
+        headers: { "Sapiom-Identity": JWT },
+      };
+
+      hook(options, { headers: {} });
+
+      expect(options.headers["Sapiom-Identity"]).toBe(JWT);
     });
 
     it("keeps the header on a same-origin IPv6 hop described without href", async () => {
