@@ -34,7 +34,7 @@ export function publicPackages(root) {
 export async function pendingPackages({ root, fetchImpl = fetch, warn }) {
   const pending = [];
   for (const pkg of publicPackages(root)) {
-    const url = `${REGISTRY}/${pkg.name.replace("/", "%2f")}`;
+    const url = `${REGISTRY}/${pkg.name.replaceAll("/", "%2f")}`;
     try {
       const response = await fetchImpl(url, {
         headers: { accept: "application/vnd.npm.install-v1+json" },
