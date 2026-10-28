@@ -12,6 +12,9 @@ import {
   HttpClientResponseFacts,
   HttpClientErrorFacts,
   FailureMode,
+  redactSearch,
+  redactUrlForFacts,
+  sanitizeFactHeaders,
 } from "@sapiom/core";
 
 import type { TransactionPollingConfig } from "@sapiom/core";
@@ -196,29 +199,15 @@ export async function handleAuthorization(
     protocol: parsedUrl.protocol.replace(":", ""),
     hostname: parsedUrl.hostname,
     pathname: parsedUrl.pathname,
-    search: parsedUrl.search,
+    search: redactSearch(parsedUrl.search),
     port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
   };
 
-  const sanitizedHeaders: Record<string, string> = {};
-  const sensitiveHeaders = new Set([
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-  ]);
-
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (!sensitiveHeaders.has(key.toLowerCase())) {
-      sanitizedHeaders[key] = value;
-    }
-  }
-
   const requestFacts: HttpClientRequestFacts = {
     method,
-    url,
+    url: redactUrlForFacts(url),
     urlParsed,
-    headers: sanitizedHeaders,
+    headers: sanitizeFactHeaders(request.headers),
     hasBody: !!request.body,
     bodySizeBytes: undefined,
     contentType: request.headers["content-type"] || undefined,
@@ -358,10 +347,10 @@ export async function handlePayment(
         x402: x402Response,
         metadata: {
           originalRequest: {
-            url: originalRequest.url,
+            url: redactUrlForFacts(originalRequest.url),
             method: originalRequest.method,
           },
-          responseHeaders: error.response?.headers,
+          responseHeaders: sanitizeFactHeaders(error.response?.headers),
           httpStatusCode: 402,
         },
       },
@@ -459,19 +448,7 @@ export function handleCompletion<T>(
   const isSuccess =
     response !== null && response.status >= 200 && response.status < 300;
 
-  const sanitizedHeaders: Record<string, string> = {};
-  if (response?.headers) {
-    const sensitiveHeaders = new Set([
-      "set-cookie",
-      "authorization",
-      "x-api-key",
-    ]);
-    Object.entries(response.headers).forEach(([key, value]) => {
-      if (!sensitiveHeaders.has(key.toLowerCase())) {
-        sanitizedHeaders[key] = String(value);
-      }
-    });
-  }
+  const sanitizedHeaders = sanitizeFactHeaders(response?.headers);
 
   let responseFacts:
     | { source: string; version: string; facts: Record<string, any> }
