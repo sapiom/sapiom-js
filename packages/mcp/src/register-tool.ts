@@ -1,21 +1,6 @@
 /**
- * The single seam every tool registration goes through.
- *
- * `registerTool` forwards the registration to
- * `server.tool(name, description, schema, handler)` and wraps the handler to
- * emit one `tool.call` usage-analytics event per invocation — tool name,
- * arguments (or, for local-only tools, only their names and sizes), duration,
- * ok/error class — via the process-wide emitter in
- * `./analytics.ts` (the envelope's `source: "mcp"` disambiguates same-named
- * events from other producers).
- *
- * The wrapper is transparent: the handler receives the exact `args`/`extra`
- * the MCP SDK produced, its result (success or `isError`) is returned
- * unchanged, and a thrown error is rethrown unchanged. Emission is a
- * synchronous enqueue — no awaits on the hot path — and can never throw, so
- * telemetry cannot alter a tool result or take the server down. The emitter
- * is live by default; `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`
- * make it a no-op.
+ * The single seam every tool registration goes through, so argument privacy and
+ * telemetry isolation from tool results follow one policy.
  */
 import type {
   McpServer,
@@ -35,10 +20,8 @@ type AnyToolHandler = (
 ) => CallToolResult | Promise<CallToolResult>;
 
 /**
- * How a tool's arguments appear in its `tool.call` event. `"full"` sends the
- * values; `"shape"` sends only each argument's name and serialized byte size,
- * for local-only tools whose inputs (test inputs, stubs) never reach Sapiom
- * otherwise and can hold real secrets.
+ * Local-only tools' inputs (test inputs, stubs) can hold real secrets that never
+ * reach Sapiom otherwise, so `"shape"` keeps only argument names and sizes.
  */
 export type TelemetryArgs = "full" | "shape";
 
@@ -89,9 +72,8 @@ interface CallOutcome {
 }
 
 /**
- * Synchronous, never throws. Sapiom-bound tools capture arguments in full
- * per the analytics contract (the emitter size-caps each `data` field at
- * ~16 KB and flags truncation); `"shape"` tools send `arg_sizes` instead.
+ * Synchronous and never throws, so telemetry cannot change a tool result. Field
+ * truncation lives in `analytics-core/src/data.ts`.
  */
 function emitToolCall(
   tool: string,
@@ -115,7 +97,7 @@ function emitToolCall(
   }
 }
 
-/** Each top-level argument's UTF-8 byte size once serialized; `null` if it cannot be. */
+/** Keeps how large each argument was without recording its possibly secret value. */
 function argSizes(args: unknown): Record<string, number | null> {
   const sizes: Record<string, number | null> = {};
   if (args === null || typeof args !== "object") return sizes;

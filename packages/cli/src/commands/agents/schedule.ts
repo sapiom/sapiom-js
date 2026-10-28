@@ -22,7 +22,6 @@ interface HostOpts {
   target?: CliTarget;
 }
 
-/** A client for the configured host, with per-invocation flag overrides. */
 function clientFor(opts: HostOpts) {
   return makeClient({ flagHost: opts.host, flagTarget: opts.target });
 }

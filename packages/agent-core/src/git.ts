@@ -1,8 +1,6 @@
 /**
- * Minimal git helpers for `deploy`. The push targets the minted credential URL
- * directly rather than persisting it via `remote set-url`, so the short-lived
- * token never lands in `.git/config`. The URL's credential is moved into the
- * child's environment (see {@link gitAuth}) so it never appears in argv.
+ * Minimal git helpers for `deploy`. Minted credentials reach git only through the
+ * child's environment, never argv (readable by every local user) or `.git/config`.
  */
 import { execFileSync } from "node:child_process";
 
@@ -92,11 +90,8 @@ export function redactCredentials(text: string): string {
 }
 
 /**
- * Split a token-bearing `https://user:token@host/...` URL into the tokenless
- * URL (safe for argv, which every local user can read through `ps`) and an
- * environment that hands git the same credential as an `Authorization: Basic`
- * header. Anything without userinfo (a plain URL, a local path) is returned
- * unchanged with no environment.
+ * argv is readable by every local user, so the password moves to an env header.
+ * The non-secret username stays: a bare URL could match the user's `insteadOf` rewrites.
  */
 function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
   let parsed: URL;
@@ -110,17 +105,13 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
   const basic = Buffer.from(
     `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`,
   ).toString("base64");
-  parsed.username = "";
   parsed.password = "";
-  const tokenless = parsed.toString();
-  return { url: tokenless, env: gitHeaderEnv(`Authorization: Basic ${basic}`, tokenless) };
+  return { url: parsed.toString(), env: gitHeaderEnv(`Authorization: Basic ${basic}`) };
 }
 
 /**
- * git before 2.31 silently ignores `GIT_CONFIG_COUNT`/`KEY`/`VALUE`, so the
- * credential header is dropped and the request fails like a rejected token.
- * Fail with the real cause instead. An unreadable version is let through: the
- * command itself then reports what is wrong.
+ * git before 2.31 ignores `GIT_CONFIG_*` env, so the header would be dropped and
+ * fail like a rejected token: name the real cause instead.
  */
 function assertGitReadsEnvConfig(): void {
   let out: string;
@@ -147,16 +138,10 @@ function assertGitReadsEnvConfig(): void {
 }
 
 /**
- * Process env plus a command-scoped `http.extraHeader`, appended after any
- * `GIT_CONFIG_*` pairs the user already set. Without userinfo a rejected
- * header makes git fall back to credential helpers, askpass and the terminal,
- * which could hang or send a different credential: the helper list is reset
- * and both prompts are disabled so a 401 fails fast. The tokenless URL also
- * matches the user's `insteadOf`/`pushInsteadOf` rules (e.g. HTTPS to SSH),
- * which ignore the header: an exact-URL identity rewrite wins over them as the
- * longest match.
+ * A rejected header must fail fast instead of falling back to a credential helper
+ * or a prompt, which could hang or send a different credential.
  */
-function gitHeaderEnv(header: string, url: string): NodeJS.ProcessEnv {
+function gitHeaderEnv(header: string): NodeJS.ProcessEnv {
   const existing = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "", 10);
   const base = Number.isInteger(existing) && existing > 0 ? existing : 0;
   return {
@@ -167,11 +152,7 @@ function gitHeaderEnv(header: string, url: string): NodeJS.ProcessEnv {
     [`GIT_CONFIG_VALUE_${base}`]: "",
     [`GIT_CONFIG_KEY_${base + 1}`]: "http.extraHeader",
     [`GIT_CONFIG_VALUE_${base + 1}`]: header,
-    [`GIT_CONFIG_KEY_${base + 2}`]: `url.${url}.insteadOf`,
-    [`GIT_CONFIG_VALUE_${base + 2}`]: url,
-    [`GIT_CONFIG_KEY_${base + 3}`]: `url.${url}.pushInsteadOf`,
-    [`GIT_CONFIG_VALUE_${base + 3}`]: url,
-    GIT_CONFIG_COUNT: String(base + 4),
+    GIT_CONFIG_COUNT: String(base + 2),
   };
 }
 
@@ -196,15 +177,8 @@ export interface CloneRepoOptions {
 }
 
 /**
- * Clone a per-fork repo from a token-bearing URL into `targetDir` and check out
- * `branch`. Used during the template-clone handoff to materialize a fork locally.
- *
- * Security: the credential is redacted from any error output, and after a
- * successful clone the origin remote is rewritten to the tokenless HTTPS URL so
- * the short-lived token never lands on disk.
- *
- * Throws `AgentOperationError` (code `GIT_CLONE`) on failure — with the credential
- * scrubbed from the hint.
+ * Clone a per-fork repo for the template-clone handoff. Throws `GIT_CLONE` (hint
+ * redacted), `GIT_TOO_OLD` or `GIT_NOT_INSTALLED`.
  */
 export function cloneRepo(opts: CloneRepoOptions): void {
   const { cloneUrl, targetDir, branch, repoFullName, cwd } = opts;
@@ -241,11 +215,8 @@ export function cloneRepo(opts: CloneRepoOptions): void {
     });
   }
 
-  // Scrub the token from the checkout: reset origin to the tokenless URL. This is
-  // hygiene, not correctness — the clone already succeeded — so a failure here
-  // must not fail the whole operation. We can't log (core is console-free), so a
-  // best-effort attempt is the right trade-off: worst case the ~1h token lingers
-  // in .git/config, which the caller was told to treat as ephemeral anyway.
+  // Canonicalize origin to the public repository URL. The clone already
+  // succeeded, so a failure here must not fail the operation.
   try {
     git(
       ["remote", "set-url", "origin", `https://github.com/${repoFullName}.git`],

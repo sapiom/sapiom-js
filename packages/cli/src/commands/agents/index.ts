@@ -17,10 +17,7 @@ import {
 } from "./schedule.js";
 import { runSignal } from "./signal.js";
 
-/**
- * Attach the shared --host / --target flags to a command. These override the
- * machine-level config for a single invocation.
- */
+/** Shared so every agents command exposes the same per-invocation routing. */
 function withHostFlags(cmd: Command): Command {
   return cmd
     .option("--host <url>", "API host URL (overrides config and SAPIOM_HOST)")

@@ -1,9 +1,6 @@
 /**
- * A project's `sapiom.json` is committed and can come from a cloned template,
- * so a `host` in it must never decide where the API key is sent. Every command
- * that builds an authenticated client is run against a project whose
- * `sapiom.json` names a foreign host, and the host each client was built for
- * is asserted.
+ * A cloned project's committed `sapiom.json` is untrusted, so its `host` must
+ * never decide where the API key is sent.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';

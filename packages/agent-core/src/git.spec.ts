@@ -221,7 +221,6 @@ describe('credentials never reach git argv', () => {
     else process.env.GIT_CONFIG_COUNT = savedCount;
   });
 
-  /** The `http.extraHeader` value git receives through the environment. */
   function headerFrom(env: NodeJS.ProcessEnv | undefined): string | undefined {
     const count = Number(env?.GIT_CONFIG_COUNT ?? 0);
     for (let i = 0; i < count; i++) {
@@ -259,7 +258,7 @@ describe('credentials never reach git argv', () => {
 
     expectNoTokenInArgv();
     const clone = calls.find((c) => c.args[0] === 'clone')!;
-    expect(clone.args).toContain('https://git.example/git/repo');
+    expect(clone.args).toContain('https://x-access-token@git.example/git/repo');
     expect(decodedBasic(clone.env)).toBe('x-access-token:ghs_SECRET');
     expectLockedDown(clone.env);
   });
@@ -269,7 +268,7 @@ describe('credentials never reach git argv', () => {
 
     expectNoTokenInArgv();
     expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual(['push', '--force', 'https://git.example/git/repo', 'HEAD:main']);
+    expect(calls[0].args).toEqual(['push', '--force', 'https://x-access-token@git.example/git/repo', 'HEAD:main']);
     expect(decodedBasic(calls[0].env)).toBe('x-access-token:ghs_SECRET');
     expectLockedDown(calls[0].env);
   });
@@ -279,7 +278,7 @@ describe('credentials never reach git argv', () => {
 
     expectNoTokenInArgv();
     const push = calls.find((c) => c.args[0] === 'push')!;
-    expect(push.args).toContain('https://git.example/git/repo');
+    expect(push.args).toContain('https://x-access-token@git.example/git/repo');
     expect(decodedBasic(push.env)).toBe('x-access-token:ghs_SECRET');
     expectLockedDown(push.env);
     for (const call of calls.filter((c) => c.args[0] !== 'push')) {
@@ -309,36 +308,34 @@ describe('credentials never reach git argv', () => {
     }
 
     const env = calls[0].env!;
-    expect(env.GIT_CONFIG_COUNT).toBe('6');
+    expect(env.GIT_CONFIG_COUNT).toBe('4');
     expect(env.GIT_CONFIG_KEY_0).toBe('user.name');
     expect(env.GIT_CONFIG_VALUE_1).toBe('false');
     expect(env.GIT_CONFIG_KEY_2).toBe('credential.helper');
     expect(env.GIT_CONFIG_KEY_3).toBe('http.extraHeader');
   });
 
-  it('pins the tokenless URL against the user\'s insteadOf rewrites', () => {
+  it('keeps the push URL out of reach of the user\'s HTTPS-to-SSH rewrites', () => {
     pushHead('/tmp/tree', TOKEN_URL, 'main');
+    const pushUrl = calls[0].args[2];
 
-    const env = calls[0].env!;
-    const url = 'https://git.example/git/repo';
-    expect(env.GIT_CONFIG_KEY_2).toBe(`url.${url}.insteadOf`);
-    expect(env.GIT_CONFIG_VALUE_2).toBe(url);
-    expect(env.GIT_CONFIG_KEY_3).toBe(`url.${url}.pushInsteadOf`);
-    expect(env.GIT_CONFIG_VALUE_3).toBe(url);
-
-    // Real git: a global HTTPS-to-SSH rule must not reroute the request away
-    // from the header-authenticated HTTPS remote.
+    // Real git: rules on the host and on the exact repository URL would reroute a
+    // bare URL to SSH, where the header is never sent.
     const dir = makeTmp('sapiom-git-cfg-');
     try {
       const globalConfig = path.join(dir, 'gitconfig');
-      writeFileSync(globalConfig, '[url "ssh://git@git.example/"]\n\tinsteadOf = https://git.example/\n');
-      const getUrl = (extra: NodeJS.ProcessEnv) =>
+      writeFileSync(
+        globalConfig,
+        '[url "ssh://git@git.example/git/repo"]\n\tinsteadOf = https://git.example/git/repo\n' +
+          '[url "ssh://git@git.example/"]\n\tinsteadOf = https://git.example/\n\tpushInsteadOf = https://git.example/\n',
+      );
+      const getUrl = (url: string) =>
         spawnSync('git', ['ls-remote', '--get-url', url], {
           encoding: 'utf8',
-          env: { ...extra, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' },
+          env: { ...calls[0].env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' },
         }).stdout.trim();
-      expect(getUrl({ ...process.env })).toBe('ssh://git@git.example/git/repo');
-      expect(getUrl(env)).toBe(url);
+      expect(getUrl('https://git.example/git/repo')).toBe('ssh://git@git.example/git/repo');
+      expect(getUrl(pushUrl)).toBe(pushUrl);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

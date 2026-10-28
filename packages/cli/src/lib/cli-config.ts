@@ -68,15 +68,8 @@ export function writeCliConfig(patch: Partial<CliConfig>): void {
 }
 
 /**
- * Resolve the effective API host from (in precedence order):
- * 1. An explicit `SAPIOM_HOST` environment variable
- * 2. An explicit `--host <url>` flag (passed as `flagHost`)
- * 3. The `--target local|staging|prod` flag (passed as `flagTarget`)
- * 4. The `host` or `target` stored in `~/.sapiom/config.json`
- * 5. Default: production backend
- *
- * The project's `sapiom.json` is never a host source: it is committed and can
- * come from a cloned template, and the resolved host receives the API key.
+ * Committed project config can come from an untrusted template, so it must
+ * never choose the host that receives the API key.
  */
 export function resolveHost(opts: { flagHost?: string; flagTarget?: CliTarget }): string {
   // Env var always wins

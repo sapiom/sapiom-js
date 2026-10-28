@@ -1,15 +1,6 @@
 /**
- * Push a local directory's current contents to a Sapiom git repo — without
- * touching the user's directory (no `.git` created there).
- *
- * Uses a throwaway git-dir in the OS temp area with the source as the work-tree,
- * so `git add -A` snapshots the current files (respecting an exclude for
- * node_modules/.git), commits, and force-pushes to the repo's clone URL. Auth is
- * the caller's credential sent as the `x-sapiom-git-token` header (the git
- * smart-HTTP data plane accepts it), passed through the environment rather than
- * argv, which every local user can read. Force-push because a freshly-created repo is
- * auto-initialized, so a plain push is non-fast-forward — the local working tree
- * is the source of truth for a preview.
+ * A throwaway git-dir leaves the user's checkout untouched, and the token travels
+ * in the environment, not argv. Force-push: the local tree replaces the auto-initialized remote.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -48,10 +39,8 @@ export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string,
 }
 
 /**
- * git before 2.31 silently ignores `GIT_CONFIG_COUNT`/`KEY`/`VALUE`, so the
- * token header is dropped and the push fails like a rejected token. Fail with
- * the real cause instead. An unreadable version is let through: the push itself
- * then reports what is wrong.
+ * git before 2.31 ignores `GIT_CONFIG_*` env, so the header would be dropped and
+ * fail like a rejected token: name the real cause instead.
  */
 function assertGitReadsEnvConfig(): void {
   let out: string;
@@ -72,10 +61,8 @@ function assertGitReadsEnvConfig(): void {
 }
 
 /**
- * Process env plus a command-scoped `http.extraHeader` carrying the token,
- * appended after any `GIT_CONFIG_*` pairs the user already set. A rejected
- * header would otherwise send git to credential helpers, askpass and the
- * terminal: the helper list is reset and both prompts are disabled.
+ * Keeps the token out of argv, and stops a rejected header from falling back to a
+ * credential helper or a prompt.
  */
 function tokenHeaderEnv(token: string): NodeJS.ProcessEnv {
   const existing = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? '', 10);

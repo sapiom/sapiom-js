@@ -208,7 +208,7 @@ describe("analytics e2e (real stdio server)", () => {
         expect((checkEvent!.data.error_class as string).length).toBeGreaterThan(
           0,
         );
-        // Local-only tools report argument names and sizes, never values.
+        // Local test inputs can hold secrets, so analytics must exclude their values.
         expect(checkEvent!.data).not.toHaveProperty("args");
         expect(checkEvent!.data.arg_sizes).toEqual({
           dir: Buffer.byteLength(JSON.stringify(missingDir)),

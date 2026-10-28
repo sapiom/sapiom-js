@@ -1,13 +1,6 @@
 /**
- * Tests for host-switch resolution and CLI-level configuration.
- *
- * The key invariants:
- *   - SAPIOM_HOST env always wins
- *   - --host flag beats --target flag
- *   - --target local maps to localhost:3000, prod to api.sapiom.ai
- *   - Persisted config (target / host) is the last fallback before default
- *   - Default is the production backend (a project's sapiom.json is never a
- *     host source; see project-host.test.ts)
+ * Host selection must not depend on committed project config, because the
+ * selected host receives the API key (see project-host.test.ts).
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
