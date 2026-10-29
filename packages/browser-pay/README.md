@@ -13,6 +13,11 @@ limits responses to 64 KiB, rejects redirects, and requires `wss://` after
 HTTPS discovery. Endpoint credentials and discovery response bodies are never
 included in errors. Local Chrome can use HTTP discovery.
 
+The connection budget covers discovery and the WebSocket handshake together.
+Incoming handshake data does not reset it. On expiry the pending request is
+destroyed; a late upgrade is rejected. Timeout callbacks run when the Node.js
+event loop can process them. Once connected, this timer is cleared.
+
 1. The agent creates a checkout (UCP `create_checkout`).
 2. Governance arms a placeholder and returns it with `continue_url`.
 3. The agent opens a browser session and drives checkout, typing the placeholder.

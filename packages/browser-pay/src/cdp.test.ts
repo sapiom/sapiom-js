@@ -22,13 +22,20 @@ function serverFrame(payload: Buffer): Buffer {
   return Buffer.concat([header, payload]);
 }
 
-function listen(): Promise<{
+function listen(
+  options: {
+    discoveryDelayMs?: number;
+    handshakeDelayMs?: number;
+    trickle?: boolean;
+  } = {},
+): Promise<{
   url: string;
   onceSocket: Promise<Duplex>;
   close: () => Promise<void>;
 }> {
   let capture: (socket: Duplex) => void = () => {};
   let active: Duplex | undefined;
+  const timers = new Set<NodeJS.Timeout>();
   const onceSocket = new Promise<Duplex>((resolve) => {
     capture = (socket) => {
       active = socket;
@@ -42,17 +49,34 @@ function listen(): Promise<{
     }
     const address = server.address() as AddressInfo;
     response.setHeader("Content-Type", "application/json");
-    response.end(
-      JSON.stringify({
-        webSocketDebuggerUrl: `ws://127.0.0.1:${address.port}/browser`,
-      }),
+    timers.add(
+      setTimeout(() => {
+        response.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${address.port}/browser`,
+          }),
+        );
+      }, options.discoveryDelayMs ?? 0),
     );
   });
   server.on("upgrade", (request, socket) => {
     const key = String(request.headers["sec-websocket-key"] ?? "");
     socket.on("error", () => {});
-    socket.write(
-      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
+    if (options.trickle) {
+      socket.write("HTTP/1.1 101 Switching Protocols\r\n");
+      const trickle = setInterval(() => {
+        socket.write("X-Keepalive: partial-handshake\r\n");
+      }, 20);
+      timers.add(trickle);
+      socket.once("close", () => clearInterval(trickle));
+    }
+    timers.add(
+      setTimeout(() => {
+        for (const timer of timers) clearTimeout(timer);
+        socket.write(
+          `${options.trickle ? "" : "HTTP/1.1 101 Switching Protocols\r\n"}Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
+        );
+      }, options.handshakeDelayMs ?? 0),
     );
     capture(socket);
   });
@@ -64,7 +88,9 @@ function listen(): Promise<{
         onceSocket,
         close: () =>
           new Promise((done) => {
+            for (const timer of timers) clearTimeout(timer);
             active?.destroy();
+            server.closeAllConnections();
             server.close(() => done());
           }),
       });
@@ -73,6 +99,72 @@ function listen(): Promise<{
 }
 
 describe("CdpConnection", () => {
+  it("times out and closes a handshake even while partial headers keep arriving", async () => {
+    const stub = await listen({ handshakeDelayMs: 900, trickle: true });
+    let connection: CdpConnection | undefined;
+    try {
+      const pending = CdpConnection.connect(stub.url, 300).then((value) => {
+        connection = value;
+        return value;
+      });
+      const rejected = expect(pending).rejects.toThrow(
+        /^CDP websocket connect timeout$/,
+      );
+      const socket = await stub.onceSocket;
+      const closed = new Promise<void>((resolve) =>
+        socket.once("close", resolve),
+      );
+      await rejected;
+      await closed;
+    } finally {
+      connection?.close();
+      await stub.close();
+    }
+  });
+
+  it("shares one timeout budget between discovery and the handshake", async () => {
+    const stub = await listen({ discoveryDelayMs: 200, handshakeDelayMs: 200 });
+    let connection: CdpConnection | undefined;
+    try {
+      const pending = CdpConnection.connect(
+        `${stub.url.replace("ws:", "http:")}?token=synthetic`,
+        300,
+      ).then((value) => {
+        connection = value;
+        return value;
+      });
+      await expect(pending).rejects.toThrow(/^CDP websocket connect timeout$/);
+    } finally {
+      connection?.close();
+      await stub.close();
+    }
+  });
+
+  it("keeps an established connection usable after the connect deadline", async () => {
+    const stub = await listen();
+    let connection: CdpConnection | undefined;
+    try {
+      connection = await CdpConnection.connect(stub.url, 200);
+      const socket = await stub.onceSocket;
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      const pending = connection.send("Browser.getVersion", {});
+      socket.write(
+        serverFrame(
+          Buffer.from(
+            JSON.stringify({
+              id: 1,
+              result: { product: "still-connected" },
+            }),
+          ),
+        ),
+      );
+      await expect(pending).resolves.toEqual({ product: "still-connected" });
+    } finally {
+      connection?.close();
+      await stub.close();
+    }
+  });
+
   it("discovers an HTTP endpoint and exchanges a real CDP command", async () => {
     const stub = await listen();
     try {

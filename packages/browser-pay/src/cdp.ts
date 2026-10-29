@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
+import { performance } from "node:perf_hooks";
 import type { Duplex } from "node:stream";
 import { isRecord } from "./guards.js";
 import { resolveCdpEndpoint } from "./cdp-endpoint.js";
@@ -108,7 +109,7 @@ class WebSocketClient {
     });
   }
 
-  static connect(url: string, timeoutMs: number): Promise<WebSocketClient> {
+  static connect(url: string, deadline: number): Promise<WebSocketClient> {
     return new Promise((resolve, reject) => {
       let target: URL;
       try {
@@ -123,7 +124,6 @@ class WebSocketClient {
         host: target.hostname,
         port: target.port || (target.protocol === "wss:" ? 443 : 80),
         path: `${target.pathname}${target.search}`,
-        timeout: timeoutMs,
         headers: {
           Connection: "Upgrade",
           Upgrade: "websocket",
@@ -131,11 +131,26 @@ class WebSocketClient {
           "Sec-WebSocket-Key": key,
         },
       });
+      let settled = false;
+      // Socket timeouts measure inactivity; partial headers must not extend
+      // the shared discovery/handshake budget.
+      const timer = setTimeout(
+        () => fail(new Error("CDP websocket connect timeout")),
+        Math.max(0, deadline - performance.now()),
+      );
       const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         request.destroy();
         reject(error);
       };
       request.on("upgrade", (response, socket, head) => {
+        if (settled || performance.now() >= deadline) {
+          socket.destroy();
+          fail(new Error("CDP websocket connect timeout"));
+          return;
+        }
         if (response.statusCode !== 101) {
           socket.destroy();
           fail(
@@ -147,6 +162,8 @@ class WebSocketClient {
         }
         const client = new WebSocketClient(socket);
         if (head?.length) client.append(Buffer.from(head));
+        settled = true;
+        clearTimeout(timer);
         resolve(client);
       });
       request.on("response", (response) => {
@@ -156,9 +173,6 @@ class WebSocketClient {
           ),
         );
       });
-      request.on("timeout", () =>
-        fail(new Error("CDP websocket connect timeout")),
-      );
       request.on("error", () =>
         fail(new Error("CDP websocket connect failed")),
       );
@@ -405,13 +419,11 @@ export class CdpConnection {
     url: string,
     timeoutMs = 15_000,
   ): Promise<CdpConnection> {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     const endpoint = await resolveCdpEndpoint(url, timeoutMs);
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error("CDP websocket connect timeout");
-    return new CdpConnection(
-      await WebSocketClient.connect(endpoint, remaining),
-    );
+    if (performance.now() >= deadline)
+      throw new Error("CDP websocket connect timeout");
+    return new CdpConnection(await WebSocketClient.connect(endpoint, deadline));
   }
 
   send(
