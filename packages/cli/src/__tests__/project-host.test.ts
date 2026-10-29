@@ -41,6 +41,7 @@ describe('sapiom.json host is never a credential destination', () => {
   let originalCwd: string;
   let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   let stdout: jest.SpyInstance;
+  let stderr: jest.SpyInstance;
 
   beforeEach(() => {
     savedEnv = {};
@@ -62,10 +63,12 @@ describe('sapiom.json host is never a credential destination', () => {
     mockCreateClient.mockClear();
     mockRun.mockReset().mockResolvedValue({ executionId: 'ex-1', raw: {} });
     stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
   afterEach(() => {
     stdout.mockRestore();
+    stderr.mockRestore();
     process.chdir(originalCwd);
     for (const key of ENV_KEYS) {
       if (savedEnv[key] === undefined) delete process.env[key];
@@ -94,6 +97,24 @@ describe('sapiom.json host is never a credential destination', () => {
       expect(opts.host).not.toContain('evil.example');
       expect(opts.apiKey).toBe('sk_test_key');
     }
+  });
+
+  it.each(commands)('%s warns once on stderr that the project host is ignored', async (_name, command) => {
+    await command();
+
+    const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).filter((line) => line.includes('sapiom.json'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`requests go to ${PROD}`);
+    expect(warnings[0]).toContain('SAPIOM_HOST');
+    for (const [chunk] of stdout.mock.calls) expect(String(chunk)).not.toContain('is ignored');
+  });
+
+  it('does not warn when sapiom.json has no host', async () => {
+    writeFileSync(path.join(process.cwd(), 'sapiom.json'), JSON.stringify({ definitionId: 'def-1', name: 'agent' }));
+
+    await runRun({});
+
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).not.toContain('sapiom.json');
   });
 
   it('still reads the linked definition from the same sapiom.json', async () => {
