@@ -8,7 +8,9 @@
 #   devid.key                     the private key the CSR was generated from
 #   *.cer                         the Developer ID Application certificate
 #
-# Sets: CSC_LINK, CSC_KEY_PASSWORD, APPLE_TEAM_ID.
+# Sets: CSC_LINK, CSC_KEY_PASSWORD, APPLE_TEAM_ID, as secrets of the
+# `desktop-release` environment. Never as repository secrets: those reach any
+# branch's workflow run, environment secrets only reach the jobs it admits.
 # You must set APPLE_ID and APPLE_APP_SPECIFIC_PASSWORD yourself (or export them
 # before running and this will set them too) — they're account credentials, not
 # derivable from the certificate.
@@ -98,19 +100,19 @@ echo "wrote       : $p12 (gitignored, verified readable with a private key)"
 command -v gh >/dev/null || die "gh CLI not found — cannot set secrets"
 
 # Nothing sensitive is echoed: values go to gh over stdin.
-base64 -w0 "$p12" | gh secret set CSC_LINK
-printf '%s' "$P12_PASSWORD" | gh secret set CSC_KEY_PASSWORD
-printf '%s' "$team_id" | gh secret set APPLE_TEAM_ID
+base64 -w0 "$p12" | gh secret set --env desktop-release CSC_LINK
+printf '%s' "$P12_PASSWORD" | gh secret set --env desktop-release CSC_KEY_PASSWORD
+printf '%s' "$team_id" | gh secret set --env desktop-release APPLE_TEAM_ID
 echo "set secrets : CSC_LINK, CSC_KEY_PASSWORD, APPLE_TEAM_ID"
 
 # Optional convenience: if the account credentials are already exported, set them
 # too, so one run finishes the whole configuration.
 if [ -n "${APPLE_ID:-}" ]; then
-  printf '%s' "$APPLE_ID" | gh secret set APPLE_ID
+  printf '%s' "$APPLE_ID" | gh secret set --env desktop-release APPLE_ID
   echo "set secrets : APPLE_ID"
 fi
 if [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
-  printf '%s' "$APPLE_APP_SPECIFIC_PASSWORD" | gh secret set APPLE_APP_SPECIFIC_PASSWORD
+  printf '%s' "$APPLE_APP_SPECIFIC_PASSWORD" | gh secret set --env desktop-release APPLE_APP_SPECIFIC_PASSWORD
   echo "set secrets : APPLE_APP_SPECIFIC_PASSWORD"
 fi
 
@@ -118,10 +120,10 @@ echo
 if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
   echo "Still needed for NOTARIZATION (signing alone works without them, but the"
   echo "first launch still shows a Gatekeeper prompt):"
-  [ -n "${APPLE_ID:-}" ] || echo "  gh secret set APPLE_ID                     # Apple ID email on the developer account"
-  [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || echo "  gh secret set APPLE_APP_SPECIFIC_PASSWORD  # appleid.apple.com → Sign-In and Security"
+  [ -n "${APPLE_ID:-}" ] || echo "  gh secret set --env desktop-release APPLE_ID                     # Apple ID email on the developer account"
+  [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || echo "  gh secret set --env desktop-release APPLE_APP_SPECIFIC_PASSWORD  # appleid.apple.com → Sign-In and Security"
   echo
 else
   echo "All signing + notarization secrets are set."
 fi
-echo "Then tag to ship:  git tag harness-desktop-v0.1.0 && git push origin harness-desktop-v0.1.0"
+echo "Then tag to ship (see .claude/skills/release-desktop/SKILL.md):  git tag \"v<version>\" origin/main && git push origin \"v<version>\""

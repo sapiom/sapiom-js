@@ -23,7 +23,9 @@ version and update channel.
 | `v1.2.3-beta.1` | pre-release | `beta` (opted-in only) |
 
 `workflow_dispatch` (manual run of desktop-release.yml) builds artifacts only — no
-tag, no publish. Useful to smoke a build without releasing.
+tag, no publish. Useful to smoke a build without releasing. Dispatch from `main`
+only: `prepare` fails on any other branch, because the signing secrets live in the
+`desktop-release` environment, which admits only `v*` tags and `main`.
 
 ## The full flow
 
@@ -96,6 +98,10 @@ tag, no publish. Useful to smoke a build without releasing.
    This starts `desktop-release.yml`: `prepare` (version/channel + tag match) →
    one build job per OS (sign + notarize on macOS) → uploads the installers +
    `latest*.yml`/`*.blockmap` update metadata to the GitHub Release.
+
+   Only organization owners can push `v*` tags (tag ruleset); anyone else's push
+   is rejected. The build jobs then wait for a required reviewer to approve the
+   `desktop-release` environment in the run page before they start.
 
 6. **Watch it.** macOS notarization can take ~35 min (job cap is 75). Don't kill a
    build that looks stuck in signing — read the diagnostic first (see
