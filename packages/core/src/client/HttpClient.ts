@@ -180,7 +180,8 @@ export class HttpClient {
    */
   private async executeRequest<T = any>(config: HttpRequestConfig): Promise<T> {
     const url = this.buildUrl(config.url, config.params);
-    const headers = { ...this.headers, ...config.headers };
+    const body = this.prepareRequestBody(config.body);
+    const headers = this.buildHeaders(config.headers, body);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -192,7 +193,7 @@ export class HttpClient {
         {
           method: config.method || "GET",
           headers,
-          body: this.prepareRequestBody(config.body),
+          body,
           signal: controller.signal,
         },
         this.credential,
@@ -218,6 +219,40 @@ export class HttpClient {
       }
       throw error;
     }
+  }
+
+  /**
+   * Merge client and request headers.
+   *
+   * FormData, URLSearchParams and Blob bodies carry their own content type
+   * (a multipart boundary, form encoding, or the blob's type), which fetch
+   * sets only when no Content-Type header is present. The client-level
+   * `application/json` default would override it, so it is dropped for those
+   * bodies. A Content-Type passed on the request itself always wins, in any
+   * casing, so it never travels alongside the default.
+   */
+  private buildHeaders(
+    requestHeaders: Record<string, string> | undefined,
+    body: unknown,
+  ): Record<string, string> {
+    const hasOwnContentType =
+      body instanceof FormData ||
+      body instanceof URLSearchParams ||
+      body instanceof Blob;
+    const requestSetsContentType = Object.keys(requestHeaders ?? {}).some(
+      (k) => k.toLowerCase() === "content-type",
+    );
+
+    const defaults =
+      hasOwnContentType || requestSetsContentType
+        ? Object.fromEntries(
+            Object.entries(this.headers).filter(
+              ([k]) => k.toLowerCase() !== "content-type",
+            ),
+          )
+        : this.headers;
+
+    return { ...defaults, ...requestHeaders };
   }
 
   /**

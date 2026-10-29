@@ -794,6 +794,87 @@ describe("SapiomClient", () => {
         }),
       );
     });
+
+    describe("Content-Type for bodies that carry their own", () => {
+      const okJson = () => ({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({}),
+        text: jest.fn().mockResolvedValue("{}"),
+      });
+
+      const sentContentType = (): string | undefined => {
+        const headers: Record<string, string> =
+          mockFetch.mock.calls[0][1].headers;
+        const key = Object.keys(headers).find(
+          (k) => k.toLowerCase() === "content-type",
+        );
+        return key === undefined ? undefined : headers[key];
+      };
+
+      it.each([
+        ["FormData", () => new FormData()],
+        ["URLSearchParams", () => new URLSearchParams({ a: "1" })],
+        ["Blob", () => new Blob(["x"], { type: "text/plain" })],
+      ])(
+        "omits the default application/json Content-Type for %s so fetch sets it",
+        async (_name, makeBody) => {
+          mockFetch.mockResolvedValueOnce(okJson());
+
+          await client.request({
+            url: "/upload",
+            method: "POST",
+            body: makeBody(),
+          });
+
+          expect(sentContentType()).toBeUndefined();
+        },
+      );
+
+      it("keeps a Content-Type passed on the request for a FormData body", async () => {
+        mockFetch.mockResolvedValueOnce(okJson());
+
+        await client.request({
+          url: "/upload",
+          method: "POST",
+          body: new FormData(),
+          headers: { "content-type": "multipart/form-data; boundary=abc" },
+        });
+
+        expect(sentContentType()).toBe("multipart/form-data; boundary=abc");
+      });
+
+      it("keeps the default application/json Content-Type for object bodies", async () => {
+        mockFetch.mockResolvedValueOnce(okJson());
+
+        await client.request({ url: "/json", method: "POST", body: { a: 1 } });
+
+        expect(sentContentType()).toBe("application/json");
+      });
+
+      it("keeps other default headers for a FormData body", async () => {
+        const withHeaders = new SapiomClient({
+          apiKey: "test-api-key",
+          baseURL: "https://api.test.com",
+          retry: { maxAttempts: 1, baseDelayMs: 0 },
+          headers: { "X-Custom": "yes" },
+        });
+        mockFetch.mockResolvedValueOnce(okJson());
+
+        await withHeaders.request({
+          url: "/upload",
+          method: "POST",
+          body: new FormData(),
+        });
+
+        expect(mockFetch.mock.calls[0][1].headers["X-Custom"]).toBe("yes");
+        expect(sentContentType()).toBeUndefined();
+      });
+    });
   });
 
   describe("retry logic", () => {
