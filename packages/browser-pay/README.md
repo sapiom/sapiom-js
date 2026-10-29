@@ -13,6 +13,11 @@ limits responses to 64 KiB, rejects redirects, and requires `wss://` after
 HTTPS discovery. Endpoint credentials and discovery response bodies are never
 included in errors. Local Chrome can use HTTP discovery.
 
+For example, Browser Use can return an HTTPS `cdpUrl` when creating a browser
+session. The partner can pass that URL directly to
+`attachInterceptor(session.cdpUrl, options)`; the SDK discovers the WebSocket
+endpoint. Creating and stopping the provider session stays in the partner's code.
+
 The connection budget covers discovery and the WebSocket handshake together.
 Incoming handshake data does not reset it. On expiry the pending request is
 destroyed; a late upgrade is rejected. Timeout callbacks run when the Node.js

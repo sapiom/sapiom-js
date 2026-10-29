@@ -25,13 +25,11 @@ describe("CDP endpoint discovery", () => {
     ],
     ["https://provider.example/json/version?token=secret", "/json/version"],
   ])("discovers a secure endpoint from %s", async (input, pathname) => {
-    const fetch = jest
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        Response.json({
-          webSocketDebuggerUrl: "wss://browser.example/owned?key=other",
-        }),
-      );
+    const fetch = jest.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        webSocketDebuggerUrl: "wss://browser.example/owned?key=other",
+      }),
+    );
     await expect(resolveCdpEndpoint(input, 1000)).resolves.toBe(
       "wss://browser.example/owned?key=other",
     );
