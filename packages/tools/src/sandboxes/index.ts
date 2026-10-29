@@ -626,7 +626,10 @@ export class Sandbox {
     return (await res.json()) as DeployPreviewResult;
   }
 
-  /** Skip dependency trees (the sandbox build installs them) and symlinks (a link can point outside `localDir`). */
+  /**
+   * Skip dependency trees (the sandbox build installs them), dotfiles, and nested symlinks
+   * (a link can point outside `localDir`).
+   */
   async uploadDir(localDir: string, opts?: UploadDirOptions): Promise<void> {
     const files = collectDirFiles(localDir, opts?.ignore);
     for (const f of files) {
