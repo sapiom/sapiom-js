@@ -292,6 +292,18 @@ describe('credentials never reach git argv', () => {
     expect(decodedBasic(calls[0].env)).toBe('x-access-token:a%zz');
   });
 
+  it('still decodes the valid escapes next to a malformed one, as git does', () => {
+    pushHead('/tmp/tree', 'https://x-access-token:a%2Fb%zz@git.example/git/repo', 'main');
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:a/b%zz');
+  });
+
+  it('decodes multi-byte escapes to their UTF-8 bytes', () => {
+    pushHead('/tmp/tree', 'https://x-access-token:caf%C3%A9@git.example/git/repo', 'main');
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:café');
+  });
+
   it('decodes a percent-encoded password once', () => {
     pushHead('/tmp/tree', 'https://x-access-token:a%2Fb%3Dc@git.example/git/repo', 'main');
 

@@ -102,20 +102,22 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
   }
   if (!/^https?:$/.test(parsed.protocol) || !parsed.username || !parsed.password) return { url };
   assertGitReadsEnvConfig();
-  const basic = Buffer.from(
-    `${decodeUserinfo(parsed.username)}:${decodeUserinfo(parsed.password)}`,
-  ).toString("base64");
+  const basic = Buffer.concat([
+    decodeUserinfo(parsed.username),
+    Buffer.from(":"),
+    decodeUserinfo(parsed.password),
+  ]).toString("base64");
   parsed.password = "";
   return { url: parsed.toString(), env: gitHeaderEnv(`Authorization: Basic ${basic}`) };
 }
 
-/** Like git, keep a malformed escape as typed rather than fail with a raw `URIError`. */
-function decodeUserinfo(part: string): string {
-  try {
-    return decodeURIComponent(part);
-  } catch {
-    return part;
-  }
+/** Like git, decode each valid escape to its byte and keep a malformed one as typed. */
+function decodeUserinfo(part: string): Buffer {
+  return Buffer.concat(
+    part
+      .split(/(%[0-9A-Fa-f]{2})/)
+      .map((piece, i) => (i % 2 ? Buffer.from([parseInt(piece.slice(1), 16)]) : Buffer.from(piece))),
+  );
 }
 
 /**
