@@ -3,6 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import { isRecord } from "./guards.js";
+import { resolveCdpEndpoint } from "./cdp-endpoint.js";
 
 /**
  * A small CDP client so the interceptor can open its own connection to a
@@ -404,7 +405,13 @@ export class CdpConnection {
     url: string,
     timeoutMs = 15_000,
   ): Promise<CdpConnection> {
-    return new CdpConnection(await WebSocketClient.connect(url, timeoutMs));
+    const deadline = Date.now() + timeoutMs;
+    const endpoint = await resolveCdpEndpoint(url, timeoutMs);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("CDP websocket connect timeout");
+    return new CdpConnection(
+      await WebSocketClient.connect(endpoint, remaining),
+    );
   }
 
   send(

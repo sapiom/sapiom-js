@@ -117,7 +117,7 @@ export interface InterceptorHandle {
 }
 
 /**
- * A browser CDP websocket URL, or a Playwright/Puppeteer browser or page that
+ * A browser CDP WebSocket or HTTP(S) discovery URL, or a browser or page that
  * can provide one. The interceptor always opens its own connection.
  */
 export type InterceptorTarget =
@@ -1485,7 +1485,7 @@ function assertAttachOptions(options: AttachOptions): void {
 
 function resolveCdpUrl(target: InterceptorTarget): string {
   if (typeof target === "string") {
-    if (!target) throw new Error("A CDP websocket URL is required");
+    if (!target) throw new Error("A CDP endpoint URL is required");
     return target;
   }
   const direct = callString(target, "wsEndpoint");
@@ -1498,7 +1498,7 @@ function resolveCdpUrl(target: InterceptorTarget): string {
   const fromContext = nested ? callString(nested, "wsEndpoint") : undefined;
   if (fromContext) return fromContext;
   throw new Error(
-    "Pass a CDP websocket URL, or a Playwright/Puppeteer browser or page whose browser exposes wsEndpoint()",
+    "Pass a CDP WebSocket or HTTP(S) discovery URL, or a browser or page whose browser exposes wsEndpoint()",
   );
 }
 

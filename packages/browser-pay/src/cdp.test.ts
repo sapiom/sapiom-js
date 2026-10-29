@@ -35,7 +35,19 @@ function listen(): Promise<{
       resolve(socket);
     };
   });
-  const server = http.createServer();
+  const server = http.createServer((request, response) => {
+    if (request.url !== "/json/version?token=synthetic") {
+      response.writeHead(404).end();
+      return;
+    }
+    const address = server.address() as AddressInfo;
+    response.setHeader("Content-Type", "application/json");
+    response.end(
+      JSON.stringify({
+        webSocketDebuggerUrl: `ws://127.0.0.1:${address.port}/browser`,
+      }),
+    );
+  });
   server.on("upgrade", (request, socket) => {
     const key = String(request.headers["sec-websocket-key"] ?? "");
     socket.on("error", () => {});
@@ -61,6 +73,30 @@ function listen(): Promise<{
 }
 
 describe("CdpConnection", () => {
+  it("discovers an HTTP endpoint and exchanges a real CDP command", async () => {
+    const stub = await listen();
+    try {
+      const connection = await CdpConnection.connect(
+        `${stub.url.replace("ws:", "http:")}?token=synthetic`,
+      );
+      const socket = await stub.onceSocket;
+      const pending = connection.send("Browser.getVersion", {});
+      socket.write(
+        serverFrame(
+          Buffer.from(
+            JSON.stringify({
+              id: 1,
+              result: { product: "test-browser" },
+            }),
+          ),
+        ),
+      );
+      await expect(pending).resolves.toEqual({ product: "test-browser" });
+      connection.close();
+    } finally {
+      await stub.close();
+    }
+  });
   it("reassembles a result that arrives one byte at a time", async () => {
     const stub = await listen();
     try {

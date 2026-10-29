@@ -4,6 +4,15 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 
 ## Sequence
 
+`attachInterceptor` accepts either a `ws://` / `wss://` browser endpoint or an
+`http://` / `https://` CDP discovery endpoint. For discovery, it appends
+`/json/version` to the endpoint path (unless already present), preserves query
+parameters, and connects to the returned `webSocketDebuggerUrl`. Provider path
+prefixes are preserved. Discovery shares the connection's 15-second budget,
+limits responses to 64 KiB, rejects redirects, and requires `wss://` after
+HTTPS discovery. Endpoint credentials and discovery response bodies are never
+included in errors. Local Chrome can use HTTP discovery.
+
 1. The agent creates a checkout (UCP `create_checkout`).
 2. Governance arms a placeholder and returns it with `continue_url`.
 3. The agent opens a browser session and drives checkout, typing the placeholder.

@@ -1000,7 +1000,7 @@ describe("interceptor event redaction", () => {
         attachOptions(stubPaymentRelay(async () => success())),
       ),
     );
-    expect(invalidUrlError.message).toBe("CDP websocket URL is invalid");
+    expect(invalidUrlError.message).toBe("CDP endpoint URL is invalid");
     expect(Object.prototype.hasOwnProperty.call(invalidUrlError, "input")).toBe(
       false,
     );
