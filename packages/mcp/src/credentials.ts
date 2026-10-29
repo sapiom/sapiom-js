@@ -131,7 +131,20 @@ async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(file, null, 2) + "\n", {
     mode: 0o600,
   });
-  await fs.chmod(filePath, 0o600);
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch (error) {
+    throw new CredentialsLockError(filePath, error);
+  }
+}
+
+/** The key is already on disk here, so callers must not report it as not saved. */
+export class CredentialsLockError extends Error {
+  constructor(filePath: string, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`Credentials were saved to ${filePath}, but restricting it to owner-only access failed: ${reason}`);
+    this.name = "CredentialsLockError";
+  }
 }
 
 /**

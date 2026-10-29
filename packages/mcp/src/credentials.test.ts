@@ -8,6 +8,7 @@ vi.mock("node:os");
 
 // Import after mocking
 import {
+  CredentialsLockError,
   resolveEnvironment,
   readCredentials,
   readCredentialsOrThrow,
@@ -307,6 +308,24 @@ describe("writeCredentials", () => {
       ),
     ).rejects.toThrow("refused");
     expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("reports a refused post-write chmod as saved but not locked down", async () => {
+    vi.mocked(fs.chmod).mockImplementation(async (target) => {
+      if (target === credentialsPath && vi.mocked(fs.writeFile).mock.calls.length > 0) {
+        throw Object.assign(new Error("refused"), { code: "EPERM" });
+      }
+    });
+
+    const write = writeCredentials(
+      "production",
+      "https://app.sapiom.ai",
+      "https://api.sapiom.ai",
+      sampleCredentials,
+    );
+    await expect(write).rejects.toBeInstanceOf(CredentialsLockError);
+    await expect(write).rejects.toThrow(/were saved.*refused/);
+    expect(fs.writeFile).toHaveBeenCalledTimes(1);
   });
 
   it("should update existing file preserving other environments", async () => {
