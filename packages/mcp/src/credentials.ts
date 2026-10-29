@@ -116,23 +116,33 @@ async function readCredentialsFile(): Promise<CredentialsFile | null> {
   }
 }
 
-async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
+/**
+ * `requireLock: false` is for removing a key: logout is the remedy a lock
+ * failure points to, so a refused chmod must not block it.
+ */
+async function writeCredentialsFile(
+  file: CredentialsFile,
+  { requireLock = true } = {},
+): Promise<void> {
   const filePath = credentialsFilePath();
   const dir = path.dirname(filePath);
+  const lockDown = async (target: string, mode: number) => {
+    try {
+      await fs.chmod(target, mode);
+    } catch (error) {
+      if (requireLock && !isMissingCredentialsFile(error)) throw error;
+    }
+  };
   // Creation modes don't apply to an existing dir/file (e.g. one created by
   // hand), so lock both down explicitly, before the key is written and after.
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.chmod(dir, 0o700);
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch (error) {
-    if (!isMissingCredentialsFile(error)) throw error;
-  }
+  await lockDown(dir, 0o700);
+  await lockDown(filePath, 0o600);
   await fs.writeFile(filePath, JSON.stringify(file, null, 2) + "\n", {
     mode: 0o600,
   });
   try {
-    await fs.chmod(filePath, 0o600);
+    await lockDown(filePath, 0o600);
   } catch (error) {
     throw new CredentialsLockError(filePath, error);
   }
@@ -261,5 +271,5 @@ export async function clearCredentials(envName: string): Promise<void> {
 
   delete existing.environments[envName].credentials;
 
-  await writeCredentialsFile(existing);
+  await writeCredentialsFile(existing, { requireLock: false });
 }

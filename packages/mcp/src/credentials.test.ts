@@ -406,6 +406,19 @@ describe("clearCredentials", () => {
     );
   });
 
+  it("still removes the key when chmod is refused", async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sampleFile));
+    vi.mocked(fs.chmod).mockRejectedValue(
+      Object.assign(new Error("refused"), { code: "EPERM" }),
+    );
+
+    await expect(clearCredentials("production")).resolves.toBeUndefined();
+    const written = JSON.parse(
+      vi.mocked(fs.writeFile).mock.calls[0][1] as string,
+    );
+    expect(written.environments.production.credentials).toBeUndefined();
+  });
+
   it("should no-op when no file exists", async () => {
     await clearCredentials("production");
     expect(fs.writeFile).not.toHaveBeenCalled();
