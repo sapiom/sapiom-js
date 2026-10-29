@@ -103,10 +103,19 @@ function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
   if (!/^https?:$/.test(parsed.protocol) || !parsed.username || !parsed.password) return { url };
   assertGitReadsEnvConfig();
   const basic = Buffer.from(
-    `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`,
+    `${decodeUserinfo(parsed.username)}:${decodeUserinfo(parsed.password)}`,
   ).toString("base64");
   parsed.password = "";
   return { url: parsed.toString(), env: gitHeaderEnv(`Authorization: Basic ${basic}`) };
+}
+
+/** Like git, keep a malformed escape as typed rather than fail with a raw `URIError`. */
+function decodeUserinfo(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
 }
 
 /**
@@ -248,6 +257,8 @@ export function pushSynthesizedTree(
   pushUrl: string,
   branch: string,
 ): void {
+  // Before `init -b` (git 2.28+), so an old git reports GIT_TOO_OLD, not a failed init.
+  const auth = gitAuth(pushUrl);
   git(["init", "-q", "-b", branch], treeDir);
   git(["add", "-A"], treeDir);
   git(
@@ -263,6 +274,5 @@ export function pushSynthesizedTree(
     ],
     treeDir,
   );
-  const auth = gitAuth(pushUrl);
   git(["push", "--force", auth.url, `HEAD:${branch}`], treeDir, auth.env);
 }

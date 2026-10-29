@@ -85,6 +85,7 @@ describe('pushLocalDir credential handling', () => {
     expect(() => pushLocalDir(src, 'https://git.example/repo', 'sk_SECRET')).toThrow(
       expect.objectContaining({ code: 'GIT_TOO_OLD', message: expect.stringContaining('2.31') }),
     );
-    expect(calls.find((c) => c.args.includes('push'))).toBeUndefined();
+    // Checked before `git init -b`, which git older than 2.28 rejects on its own.
+    expect(calls).toHaveLength(0);
   });
 });

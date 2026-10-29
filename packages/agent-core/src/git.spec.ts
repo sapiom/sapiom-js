@@ -286,6 +286,12 @@ describe('credentials never reach git argv', () => {
     }
   });
 
+  it('keeps a malformed percent escape as typed instead of throwing', () => {
+    expect(() => pushHead('/tmp/tree', 'https://x-access-token:a%zz@git.example/git/repo', 'main')).not.toThrow();
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:a%zz');
+  });
+
   it('decodes a percent-encoded password once', () => {
     pushHead('/tmp/tree', 'https://x-access-token:a%2Fb%3Dc@git.example/git/repo', 'main');
 
@@ -350,6 +356,10 @@ describe('credentials never reach git argv', () => {
     expect(() =>
       cloneRepo({ cloneUrl: TOKEN_URL, targetDir: '/tmp/x', branch: 'main', repoFullName: 'o/r', cwd: '/tmp' }),
     ).toThrow(expect.objectContaining({ code: 'GIT_TOO_OLD' }));
+    // Checked before `git init -b`, which git older than 2.28 rejects on its own.
+    expect(() => pushSynthesizedTree('/tmp/tree', TOKEN_URL, 'main')).toThrow(
+      expect.objectContaining({ code: 'GIT_TOO_OLD' }),
+    );
     expect(calls).toHaveLength(0);
   });
 

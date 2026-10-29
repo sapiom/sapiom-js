@@ -25,13 +25,14 @@ export function pushLocalDir(sourceDir: string, cloneUrl: string, token: string,
   };
 
   try {
+    // Before `init -b` (git 2.28+), so an old git reports GIT_TOO_OLD, not a failed init.
+    assertGitReadsEnvConfig();
     git(['init', '-q', '-b', branch]);
     // Never upload deps / vcs metadata — the sandbox build installs deps.
     mkdirSync(path.join(gitDir, 'info'), { recursive: true });
     writeFileSync(path.join(gitDir, 'info', 'exclude'), 'node_modules/\n.git/\n');
     git(['add', '-A']);
     git(['-c', 'user.email=preview@sapiom.ai', '-c', 'user.name=sapiom-preview', 'commit', '-q', '-m', 'preview']);
-    assertGitReadsEnvConfig();
     git(['push', '--force', cloneUrl, `HEAD:${branch}`], tokenHeaderEnv(token));
   } finally {
     rmSync(gitDir, { recursive: true, force: true });
