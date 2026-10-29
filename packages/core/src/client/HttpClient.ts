@@ -182,11 +182,30 @@ export class HttpClient {
   }
 
   /**
+   * The client's default headers to merge under a request's own. When the
+   * request carries an idempotency key, a default key under either spelling is
+   * dropped: the request's key wins, and the API refuses two different keys.
+   */
+  private mergeableDefaults(
+    requestHeaders: Record<string, string> | undefined,
+  ): Record<string, string> {
+    const isKey = (k: string) =>
+      IDEMPOTENCY_KEY_HEADERS.includes(k.toLowerCase());
+    if (!Object.keys(requestHeaders ?? {}).some(isKey)) return this.headers;
+    return Object.fromEntries(
+      Object.entries(this.headers).filter(([k]) => !isKey(k)),
+    );
+  }
+
+  /**
    * Execute a single request using native fetch (no retry)
    */
   private async executeRequest<T = any>(config: HttpRequestConfig): Promise<T> {
     const url = this.buildUrl(config.url, config.params);
-    const headers = { ...this.headers, ...config.headers };
+    const headers = {
+      ...this.mergeableDefaults(config.headers),
+      ...config.headers,
+    };
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);

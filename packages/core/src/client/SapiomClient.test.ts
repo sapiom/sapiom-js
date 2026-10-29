@@ -1040,6 +1040,46 @@ describe("SapiomClient", () => {
       expect(headers["idempotency-key"]).toBe("my-lowercase-key");
     });
 
+    it("should send only the generated key when a default header sets X-Idempotency-Key", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+        headers: { "X-Idempotency-Key": "default-key" },
+      });
+
+      mockFetch.mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({ url: "/test", method: "POST", body: { a: 1 } });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      // The API refuses two different keys, so the default is dropped
+      expect(headers["Idempotency-Key"]).toBeDefined();
+      expect(headers["X-Idempotency-Key"]).toBeUndefined();
+    });
+
+    it("should send only the caller's key when a default header sets the other spelling", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+        headers: { "Idempotency-Key": "default-key" },
+      });
+
+      mockFetch.mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({
+        url: "/test",
+        method: "POST",
+        body: { a: 1 },
+        headers: { "X-Idempotency-Key": "my-older-key" },
+      });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      expect(headers["X-Idempotency-Key"]).toBe("my-older-key");
+      expect(headers["Idempotency-Key"]).toBeUndefined();
+    });
+
     it("maxAttempts: 1 means no retries", async () => {
       const client = new SapiomClient({
         apiKey: "test-api-key",
