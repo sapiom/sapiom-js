@@ -58,7 +58,7 @@ it("uses the public task contract and preserves one key across retries", async (
   for (const request of sent()) {
     expect(request.url).toBe("https://fixture.test/v1/browser/tasks");
     expect(request.headers.get("idempotency-key")).toBe("task-key");
-    expect(request.headers.get("x-idempotency-key")).toBe("task-key");
+    expect(request.headers.get("x-idempotency-key")).toBeNull();
     expect(request.headers.get("x-sapiom-api-key")).toBe("test-key");
     expect(request.body).toEqual({
       sessionId: "session-1",

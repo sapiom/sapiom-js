@@ -187,9 +187,7 @@ function browserRequests(baseUrl: string, transport?: Transport) {
         headers: {
           "content-type": "application/json",
           accept: "application/json",
-          ...(key !== undefined
-            ? { "idempotency-key": key, "x-idempotency-key": key }
-            : {}),
+          ...(key !== undefined ? { "idempotency-key": key } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         ...(signal !== undefined ? { signal } : {}),
