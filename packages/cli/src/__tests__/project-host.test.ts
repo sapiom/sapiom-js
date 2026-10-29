@@ -28,6 +28,7 @@ import { runLogs } from '../commands/agents/logs.js';
 import { runRun } from '../commands/agents/run.js';
 import { runScheduleList } from '../commands/agents/schedule.js';
 import { runSignal } from '../commands/agents/signal.js';
+import { setJsonMode } from '../lib/output.js';
 
 const PROD = 'https://api.sapiom.ai';
 const STAGING = 'https://api.sapiom.dev';
@@ -107,6 +108,18 @@ describe('sapiom.json host is never a credential destination', () => {
     expect(warnings[0]).toContain(`requests go to ${PROD}`);
     expect(warnings[0]).toContain('SAPIOM_HOST');
     for (const [chunk] of stdout.mock.calls) expect(String(chunk)).not.toContain('is ignored');
+  });
+
+  it('keeps stderr free of the plain-text warning under --json', async () => {
+    setJsonMode(true);
+    try {
+      await runRun({});
+    } finally {
+      setJsonMode(false);
+    }
+
+    expect(mockCreateClient).toHaveBeenCalledWith(expect.objectContaining({ host: PROD }));
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).not.toContain('sapiom.json');
   });
 
   it('does not warn when sapiom.json has no host', async () => {

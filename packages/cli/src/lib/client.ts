@@ -6,7 +6,7 @@ import { createClient, GatewayClient } from '@sapiom/agent-core';
 
 import { type CliTarget, resolveHost } from './cli-config.js';
 import { readConfig } from './config.js';
-import { CliError } from './output.js';
+import { CliError, isJsonMode } from './output.js';
 import { readCredential } from './session.js';
 
 export { resolveHost };
@@ -43,8 +43,12 @@ export function makeClient(opts?: { flagHost?: string; flagTarget?: CliTarget })
   return createClient({ host, apiKey: resolveApiKey() });
 }
 
-/** A project once pointed at staging or a local stack must not reach another host silently. */
+/**
+ * A project once pointed at staging or a local stack must not reach another host
+ * silently. Under `--json`, stderr stays a single structured error document.
+ */
 function warnIgnoredProjectHost(host: string): void {
+  if (isJsonMode()) return;
   let projectHost: string | undefined;
   try {
     projectHost = readConfig(process.cwd())?.host;
