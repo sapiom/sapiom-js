@@ -1002,7 +1002,7 @@ describe("interceptor CDP decisions", () => {
         "Fetch.enable",
       );
       const many = Object.fromEntries(
-        Array.from({ length: 40 }, (_, i) => [`x-extra-${i}`, "1"]),
+        Array.from({ length: 30 }, (_, i) => [`x-extra-${i}`, "1"]),
       );
       stub.emit({
         method: "Fetch.requestPaused",
@@ -1047,6 +1047,79 @@ describe("interceptor CDP decisions", () => {
       await stub.close();
     }
   });
+
+  it.each([
+    [
+      "more headers than the relay takes",
+      Object.fromEntries(
+        Array.from({ length: 31 }, (_, i) => [`x-extra-${i}`, "1"]),
+      ),
+    ],
+    ["a header longer than the relay takes", { "x-long": "a".repeat(8193) }],
+  ])(
+    "fails the paused request rather than relay it without a header, for %s",
+    async (_name, extra) => {
+      const stub = await startStub({ postData: CARD });
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async (request) => {
+            calls.push(request);
+            return success();
+          }),
+          placeholder: HELD,
+        });
+        handle.on((event) => events.push(event));
+        attachPage(stub.emit);
+        await waitFor(
+          () =>
+            stub.commands.some((command) => command.method === "Fetch.enable"),
+          "Fetch.enable",
+        );
+        stub.emit({
+          method: "Fetch.requestPaused",
+          sessionId: "page-1",
+          params: {
+            requestId: "req-1",
+            networkId: "net-1",
+            request: {
+              url: "https://api.pay.example/v1/tokens",
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...extra,
+                // Last, where a cap that kept the first headers would drop it.
+                "X-CSRF-Token": "csrf-example",
+              },
+              hasPostData: true,
+              postDataEntries: [{}],
+            },
+            resourceType: "Fetch",
+          },
+        });
+        await waitFor(
+          () => events.some((event) => event.type === "failed"),
+          "failed",
+        );
+        expect(calls).toHaveLength(0);
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "failed",
+            reason: "headers_unrelayable",
+          }),
+        );
+        expect(
+          stub.commands.some(
+            (command) => command.method === "Fetch.continueRequest",
+          ),
+        ).toBe(false);
+        await handle.detach();
+      } finally {
+        await stub.close();
+      }
+    },
+  );
 
   it("refuses an empty profileId", async () => {
     await expect(

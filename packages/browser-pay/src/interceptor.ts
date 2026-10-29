@@ -60,7 +60,8 @@ export type FailureReason =
   | "unknown"
   | "timeout"
   | "network"
-  | "response_credential";
+  | "response_credential"
+  | "headers_unrelayable";
 
 export const KNOWN_REFUSAL_REASONS = [
   "unknown_injection",
@@ -694,17 +695,36 @@ class PaymentInterceptor {
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
-    return this.awaitRelay(request, read.body, pageOrigin, idempotencyKey);
+    const headers = forwardedHeaders(
+      request.headers,
+      this.options.profileId ? profileHeader : genericHeader,
+    );
+    if (!headers) return { action: "fail", reason: "headers_unrelayable" };
+    return this.awaitRelay(
+      request,
+      headers,
+      read.body,
+      pageOrigin,
+      idempotencyKey,
+    );
   }
 
   private async awaitRelay(
     request: PausedRequest,
+    headers: Record<string, string>,
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
   ): Promise<Decision> {
     const flight = this.relayOnce(idempotencyKey, (signal) =>
-      this.pollRelay(request, body, pageOrigin, idempotencyKey, signal),
+      this.pollRelay(
+        request,
+        headers,
+        body,
+        pageOrigin,
+        idempotencyKey,
+        signal,
+      ),
     );
     let response: RelayResponse;
     try {
@@ -723,6 +743,7 @@ class PaymentInterceptor {
 
   private async pollRelay(
     request: PausedRequest,
+    headers: Record<string, string>,
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
@@ -737,6 +758,7 @@ class PaymentInterceptor {
       try {
         const response = await this.postAttempt(
           request,
+          headers,
           body,
           pageOrigin,
           idempotencyKey,
@@ -758,6 +780,7 @@ class PaymentInterceptor {
 
   private async postAttempt(
     request: PausedRequest,
+    headers: Record<string, string>,
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
@@ -784,10 +807,7 @@ class PaymentInterceptor {
           request: {
             method: request.method,
             url: request.url,
-            headers: forwardedHeaders(
-              request.headers,
-              this.options.profileId ? profileHeader : genericHeader,
-            ),
+            headers,
             body,
           },
           idempotencyKey,
@@ -1224,8 +1244,10 @@ const UNFORWARDED_HEADERS = new Set([
   "upgrade",
 ]);
 
-/** The relay accepts at most this many headers. */
+/** The relay accepts at most this many headers, each name and value within these lengths. */
 const MAX_FORWARDED_HEADERS = 32;
+const MAX_HEADER_NAME_LENGTH = 128;
+const MAX_HEADER_VALUE_LENGTH = 8192;
 
 const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
 const genericHeader = (key: string) =>
@@ -1234,15 +1256,28 @@ const genericHeader = (key: string) =>
   !key.startsWith("sec-ch-") &&
   !key.startsWith(":");
 
+/**
+ * The headers relayed with a paused request, or `undefined` when the relay
+ * can't take every one that should go: past its limits, a header would be
+ * dropped, and the merchant could refuse the changed request after the card
+ * was sent. Which header matters (a CSRF token, an authorization) can't be
+ * told from its name, so none is chosen.
+ */
 function forwardedHeaders(
   raw: unknown,
   forwarded: (key: string) => boolean,
-): Record<string, string> {
+): Record<string, string> | undefined {
   const out: Record<string, string> = {};
+  let unrelayable = false;
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();
-    if (!forwarded(key) || value.length > 8192) return;
-    if (!(key in out) && Object.keys(out).length >= MAX_FORWARDED_HEADERS) {
+    if (!forwarded(key)) return;
+    if (
+      key.length > MAX_HEADER_NAME_LENGTH ||
+      value.length > MAX_HEADER_VALUE_LENGTH ||
+      (!(key in out) && Object.keys(out).length >= MAX_FORWARDED_HEADERS)
+    ) {
+      unrelayable = true;
       return;
     }
     out[key] = value;
@@ -1262,14 +1297,14 @@ function forwardedHeaders(
         take(entry.name, typeof entry.value === "string" ? entry.value : "");
       }
     }
-    return out;
+    return unrelayable ? undefined : out;
   }
   if (isRecord(raw)) {
     for (const [key, value] of Object.entries(raw)) {
       if (typeof value === "string") take(key, value);
     }
   }
-  return out;
+  return unrelayable ? undefined : out;
 }
 
 function parseAttachedTarget(value: unknown):
