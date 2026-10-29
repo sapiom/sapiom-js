@@ -5,9 +5,11 @@
  *
  * A raw CDP URL works the same way: `attachInterceptor(process.env.CDP_URL, …)`.
  *
- *   SAPIOM_API_KEY=… TRANSACTION_ID=… INJECTION_REF=… PROFILE_ID=shopify-card-vault \
- *   PLACEHOLDER_NUMBER=… \
+ *   SAPIOM_API_KEY=… TRANSACTION_ID=… INJECTION_REF=… PLACEHOLDER_NUMBER=… \
  *   npx tsx examples/attach.ts
+ *
+ * Set PROFILE_ID=shopify-card-vault for a Shopify checkout; leave it unset for
+ * any other checkout.
  */
 import { randomUUID } from "node:crypto";
 import { createClient } from "@sapiom/tools";
@@ -32,10 +34,10 @@ async function main(): Promise<void> {
   const transactionId = process.env.TRANSACTION_ID;
   const injectionRef = process.env.INJECTION_REF;
   const number = process.env.PLACEHOLDER_NUMBER;
-  const profileId = process.env.PROFILE_ID;
-  if (!transactionId || !injectionRef || !number || !profileId) {
+  const profileId = process.env.PROFILE_ID || undefined;
+  if (!transactionId || !injectionRef || !number) {
     throw new Error(
-      "TRANSACTION_ID, INJECTION_REF, PROFILE_ID, and PLACEHOLDER_NUMBER are required",
+      "TRANSACTION_ID, INJECTION_REF, and PLACEHOLDER_NUMBER are required",
     );
   }
 
@@ -63,7 +65,7 @@ async function main(): Promise<void> {
         apiKey,
         transactionId,
       }),
-      profileId,
+      ...(profileId && { profileId }),
       placeholder: {
         number,
         injectionRef,

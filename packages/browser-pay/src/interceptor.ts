@@ -22,8 +22,14 @@ export interface AttachOptions {
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
   placeholder: HeldPlaceholder;
-  /** Relay profile, for example `shopify-card-vault`. */
-  profileId: string;
+  /**
+   * Relay profile, for example `shopify-card-vault`. Omit it for any other
+   * checkout: the relay sends the paused request to its own URL when that is
+   * https to a public host, and finds the card fields by the placeholder's
+   * values. Without a profile every header is forwarded but the connection's,
+   * `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints.
+   */
+  profileId?: string;
   /**
    * How long to wait for a terminal relay outcome before failing the paused
    * request. Defaults to 55 seconds. Identical pauses share one poll,
@@ -54,7 +60,8 @@ export type FailureReason =
   | "unknown"
   | "timeout"
   | "network"
-  | "response_credential";
+  | "response_credential"
+  | "headers_unrelayable";
 
 export const KNOWN_REFUSAL_REASONS = [
   "unknown_injection",
@@ -688,17 +695,36 @@ class PaymentInterceptor {
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
-    return this.awaitRelay(request, read.body, pageOrigin, idempotencyKey);
+    const headers = forwardedHeaders(
+      request.headers,
+      this.options.profileId ? profileHeader : genericHeader,
+    );
+    if (!headers) return { action: "fail", reason: "headers_unrelayable" };
+    return this.awaitRelay(
+      request,
+      headers,
+      read.body,
+      pageOrigin,
+      idempotencyKey,
+    );
   }
 
   private async awaitRelay(
     request: PausedRequest,
+    headers: Record<string, string>,
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
   ): Promise<Decision> {
     const flight = this.relayOnce(idempotencyKey, (signal) =>
-      this.pollRelay(request, body, pageOrigin, idempotencyKey, signal),
+      this.pollRelay(
+        request,
+        headers,
+        body,
+        pageOrigin,
+        idempotencyKey,
+        signal,
+      ),
     );
     let response: RelayResponse;
     try {
@@ -717,6 +743,7 @@ class PaymentInterceptor {
 
   private async pollRelay(
     request: PausedRequest,
+    headers: Record<string, string>,
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
@@ -731,6 +758,7 @@ class PaymentInterceptor {
       try {
         const response = await this.postAttempt(
           request,
+          headers,
           body,
           pageOrigin,
           idempotencyKey,
@@ -752,6 +780,7 @@ class PaymentInterceptor {
 
   private async postAttempt(
     request: PausedRequest,
+    headers: Record<string, string>,
     body: string,
     pageOrigin: string,
     idempotencyKey: string,
@@ -773,12 +802,12 @@ class PaymentInterceptor {
       return await this.options.relay.relay(
         {
           injectionRef: this.options.placeholder.injectionRef,
-          profileId: this.options.profileId,
+          ...(this.options.profileId && { profileId: this.options.profileId }),
           pageOrigin,
           request: {
             method: request.method,
             url: request.url,
-            headers: forwardedHeaders(request.headers),
+            headers,
             body,
           },
           idempotencyKey,
@@ -1200,11 +1229,59 @@ const FORWARDED_HEADERS = new Set([
   "shopify-identification-signature",
 ]);
 
-function forwardedHeaders(raw: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
+/** Headers of the connection, or set by whoever sends the request on. */
+const UNFORWARDED_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "cookie",
+  "host",
+  "keep-alive",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/** The relay accepts at most this many headers, each name and value within these lengths. */
+const MAX_FORWARDED_HEADERS = 32;
+const MAX_HEADER_NAME_LENGTH = 128;
+const MAX_HEADER_VALUE_LENGTH = 8192;
+
+const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
+const genericHeader = (key: string) =>
+  !UNFORWARDED_HEADERS.has(key) &&
+  !key.startsWith("sec-fetch-") &&
+  !key.startsWith("sec-ch-") &&
+  !key.startsWith(":");
+
+/**
+ * The headers relayed with a paused request, or `undefined` when the relay
+ * can't take every one that should go: past its limits, a header would be
+ * dropped, and the merchant could refuse the changed request after the card
+ * was sent. Which header matters (a CSRF token, an authorization) can't be
+ * told from its name, so none is chosen.
+ */
+function forwardedHeaders(
+  raw: unknown,
+  forwarded: (key: string) => boolean,
+): Record<string, string> | undefined {
+  // No prototype: a header named `__proto__` is kept, and one named
+  // `constructor` counts toward the limit like any other.
+  const out: Record<string, string> = Object.create(null);
+  let unrelayable = false;
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();
-    if (!FORWARDED_HEADERS.has(key) || value.length > 8192) return;
+    if (!forwarded(key)) return;
+    if (
+      key.length > MAX_HEADER_NAME_LENGTH ||
+      value.length > MAX_HEADER_VALUE_LENGTH ||
+      (!(key in out) && Object.keys(out).length >= MAX_FORWARDED_HEADERS)
+    ) {
+      unrelayable = true;
+      return;
+    }
     out[key] = value;
   };
   if (Array.isArray(raw)) {
@@ -1222,14 +1299,14 @@ function forwardedHeaders(raw: unknown): Record<string, string> {
         take(entry.name, typeof entry.value === "string" ? entry.value : "");
       }
     }
-    return out;
+    return unrelayable ? undefined : out;
   }
   if (isRecord(raw)) {
     for (const [key, value] of Object.entries(raw)) {
       if (typeof value === "string") take(key, value);
     }
   }
-  return out;
+  return unrelayable ? undefined : out;
 }
 
 function parseAttachedTarget(value: unknown):
@@ -1472,8 +1549,8 @@ function assertAttachOptions(options: AttachOptions): void {
   }
   assertPositiveDuration("timeoutMs", options.timeoutMs);
   assertPositiveDuration("attemptTimeoutMs", options.attemptTimeoutMs);
-  if (!options.profileId) {
-    throw new Error("profileId is required");
+  if (options.profileId !== undefined && options.profileId.length === 0) {
+    throw new Error("profileId must not be empty");
   }
   const digits = options.placeholder?.number?.replace(/\D/g, "") ?? "";
   if (!options.placeholder?.injectionRef || digits.length === 0) {

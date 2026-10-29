@@ -10,7 +10,8 @@ export interface RelayHttpRequest {
 
 export interface RelayRequest {
   injectionRef: string;
-  profileId: string;
+  /** Omitted when the request matched no relay profile; the relay then sends it to its own URL. */
+  profileId?: string;
   pageOrigin: string;
   request: RelayHttpRequest;
   idempotencyKey: string;
