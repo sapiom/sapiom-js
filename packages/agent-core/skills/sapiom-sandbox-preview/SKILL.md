@@ -141,8 +141,10 @@ Publishing is the only thing `sapiom_dev_app_publish` does. Everything else abou
 | `ttl`    | no       | Sandbox lifetime, e.g. `"1h"`, `"24h"`, `"7d"` — **preview only**; an App Link's URL is not bounded by it                        |
 | `env`    | no       | Environment variables (string map)                                                                                               |
 
-Uploads skip `node_modules`, `.git`, and dotfiles — dependencies install in the sandbox at
-build time; never upload them.
+Uploads skip `node_modules`, `.git`, dotfiles and symlinks; git pushes skip `node_modules` and
+dotfiles and commit symlinks as links, never their target. Dependencies install in the sandbox at
+build time, so never upload them. `source.path` must be a relative path that stays inside the
+project directory (a symlinked source folder must point inside it too).
 
 ## CLI alternative
 
