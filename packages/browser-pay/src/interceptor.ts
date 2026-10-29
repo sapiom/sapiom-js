@@ -1267,7 +1267,9 @@ function forwardedHeaders(
   raw: unknown,
   forwarded: (key: string) => boolean,
 ): Record<string, string> | undefined {
-  const out: Record<string, string> = {};
+  // No prototype: a header named `__proto__` is kept, and one named
+  // `constructor` counts toward the limit like any other.
+  const out: Record<string, string> = Object.create(null);
   let unrelayable = false;
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();

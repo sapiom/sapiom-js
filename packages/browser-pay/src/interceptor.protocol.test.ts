@@ -1002,7 +1002,7 @@ describe("interceptor CDP decisions", () => {
         "Fetch.enable",
       );
       const many = Object.fromEntries(
-        Array.from({ length: 30 }, (_, i) => [`x-extra-${i}`, "1"]),
+        Array.from({ length: 28 }, (_, i) => [`x-extra-${i}`, "1"]),
       );
       stub.emit({
         method: "Fetch.requestPaused",
@@ -1021,6 +1021,9 @@ describe("interceptor CDP decisions", () => {
               "Sec-Fetch-Site": "cross-site",
               "sec-ch-ua": '"Chromium"',
               ...many,
+              // Names an object inherits: kept, and counted like any other.
+              ["__proto__"]: "proto-example",
+              constructor: "constructor-example",
             },
             hasPostData: true,
             postDataEntries: [{}],
@@ -1041,6 +1044,9 @@ describe("interceptor CDP decisions", () => {
       for (const dropped of ["cookie", "host", "sec-fetch-site", "sec-ch-ua"]) {
         expect(headers).not.toHaveProperty(dropped);
       }
+      expect(Object.keys(headers)).toContain("__proto__");
+      expect(header(headers, "__proto__")).toBe("proto-example");
+      expect(header(headers, "constructor")).toBe("constructor-example");
       expect(Object.keys(headers)).toHaveLength(32);
       await handle.detach();
     } finally {
@@ -1054,11 +1060,23 @@ describe("interceptor CDP decisions", () => {
       Object.fromEntries(
         Array.from({ length: 31 }, (_, i) => [`x-extra-${i}`, "1"]),
       ),
+      {},
     ],
-    ["a header longer than the relay takes", { "x-long": "a".repeat(8193) }],
+    [
+      "a header longer than the relay takes",
+      { "x-long": "a".repeat(8193) },
+      {},
+    ],
+    [
+      "a 33rd header named like an object's own property",
+      Object.fromEntries(
+        Array.from({ length: 30 }, (_, i) => [`x-extra-${i}`, "1"]),
+      ),
+      { constructor: "1" },
+    ],
   ])(
     "fails the paused request rather than relay it without a header, for %s",
-    async (_name, extra) => {
+    async (_name, extra, after) => {
       const stub = await startStub({ postData: CARD });
       const calls: RelayRequest[] = [];
       const events: InterceptorEvent[] = [];
@@ -1089,8 +1107,9 @@ describe("interceptor CDP decisions", () => {
               headers: {
                 "Content-Type": "application/json",
                 ...extra,
-                // Last, where a cap that kept the first headers would drop it.
+                // After the extras, where a cap that kept the first headers would drop it.
                 "X-CSRF-Token": "csrf-example",
+                ...after,
               },
               hasPostData: true,
               postDataEntries: [{}],
