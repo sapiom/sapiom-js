@@ -1,5 +1,23 @@
 # @sapiom/orchestration-core
 
+## 0.16.1
+
+### Patch Changes
+
+- bc010c4: The CLI no longer reads `host` from a project's `sapiom.json`. The API host now
+  comes only from `SAPIOM_HOST`, `--host`, `--target` or `sapiom config set-target`,
+  and otherwise defaults to production. A `host` still present in `sapiom.json`
+  prints a one-line warning on stderr naming the host actually used.
+  `SapiomConfig.host` is kept as a deprecated, ignored field so existing files
+  still parse.
+- bc010c4: Git clone and push credentials are passed to `git` through the environment
+  instead of the command line. Credential helpers and interactive prompts are
+  disabled for those calls, so a rejected credential fails immediately (and
+  `deploy` still re-mints an expired push credential once). Requires git 2.31 or
+  newer: an older git now fails with a `GIT_TOO_OLD` error naming the version
+  instead of an authentication failure. Only the password leaves the URL; the
+  non-secret username stays, so a user's `insteadOf` rewrites apply as before.
+
 ## 0.16.0
 
 ### Minor Changes
