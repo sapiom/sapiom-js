@@ -470,8 +470,9 @@ Paths are relative to the service base URL the SDK already uses.
 | `recordings.fetch`                   | `GET /v1/browser/sessions/:sessionId/recordings/primary/fetch`     | No              |
 | `recordings.delete`                  | `DELETE /v1/browser/sessions/:sessionId/recordings/:recordingId`   | No              |
 
-The SDK sends each key as both `Idempotency-Key` and `X-Idempotency-Key`; on
-session creation the two must match.
+The SDK sends each key as `Idempotency-Key`, the API's one idempotency header.
+The API still accepts the older `X-Idempotency-Key` spelling with the same
+meaning; a request that carries both with different values is refused.
 
 After a lost response, retry the same operation with its original key and input.
 Do not generate a new key for an uncertain operation. Apart from

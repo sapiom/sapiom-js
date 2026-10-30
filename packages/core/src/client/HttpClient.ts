@@ -32,6 +32,11 @@ const DEFAULT_RETRY: RetryConfig = {
   baseDelayMs: 200,
 };
 
+// `Idempotency-Key` is the API's one idempotency header. `X-Idempotency-Key` is
+// its older spelling, which the API still accepts with the same meaning, so a
+// caller's key under either name is the request's key.
+const IDEMPOTENCY_KEY_HEADERS = ["idempotency-key", "x-idempotency-key"];
+
 /**
  * Configuration for creating an HttpClient
  */
@@ -112,7 +117,8 @@ export class HttpClient {
   /**
    * Make a request with automatic retry on transient failures.
    * Retries on 5xx and network TypeError. Does NOT retry 4xx or timeouts.
-   * Auto-generates X-Idempotency-Key header for POST/PUT/PATCH.
+   * Auto-generates an Idempotency-Key header for POST/PUT/PATCH, unless the
+   * caller already sent a key under either spelling.
    */
   async request<T = any>(config: HttpRequestConfig): Promise<T> {
     const method = (config.method || "GET").toUpperCase();
@@ -121,11 +127,11 @@ export class HttpClient {
     // Generate idempotency key once, reuse across retries
     const headers = { ...config.headers };
     if (needsIdempotencyKey) {
-      const hasKey = Object.keys(headers).some(
-        (k) => k.toLowerCase() === "x-idempotency-key",
+      const hasKey = Object.keys(headers).some((k) =>
+        IDEMPOTENCY_KEY_HEADERS.includes(k.toLowerCase()),
       );
       if (!hasKey) {
-        headers["X-Idempotency-Key"] = randomUUID();
+        headers["Idempotency-Key"] = randomUUID();
       }
     }
 
@@ -176,11 +182,30 @@ export class HttpClient {
   }
 
   /**
+   * The client's default headers to merge under a request's own. When the
+   * request carries an idempotency key, a default key under either spelling is
+   * dropped: the request's key wins, and the API refuses two different keys.
+   */
+  private mergeableDefaults(
+    requestHeaders: Record<string, string> | undefined,
+  ): Record<string, string> {
+    const isKey = (k: string) =>
+      IDEMPOTENCY_KEY_HEADERS.includes(k.toLowerCase());
+    if (!Object.keys(requestHeaders ?? {}).some(isKey)) return this.headers;
+    return Object.fromEntries(
+      Object.entries(this.headers).filter(([k]) => !isKey(k)),
+    );
+  }
+
+  /**
    * Execute a single request using native fetch (no retry)
    */
   private async executeRequest<T = any>(config: HttpRequestConfig): Promise<T> {
     const url = this.buildUrl(config.url, config.params);
-    const headers = { ...this.headers, ...config.headers };
+    const headers = {
+      ...this.mergeableDefaults(config.headers),
+      ...config.headers,
+    };
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
