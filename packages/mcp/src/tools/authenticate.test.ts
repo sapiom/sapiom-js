@@ -151,6 +151,8 @@ describe("sapiom_authenticate tool", () => {
     expect(result.content[0].text).not.toContain("Authentication failed");
     expect(result.content[0].text).toContain("Signed in");
     expect(result.content[0].text).toContain("credentials.json");
+    expect(result.content[0].text).toContain("chmod 600");
+    expect(result.content[0].text).toContain("sapiom_logout");
     expect(result.isError).toBe(true);
   });
 
