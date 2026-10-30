@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.8.7
+
+### Patch Changes
+
+- @sapiom/fetch@0.5.2
+
 ## 0.8.6
 
 ### Patch Changes

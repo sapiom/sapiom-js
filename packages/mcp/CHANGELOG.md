@@ -1,5 +1,11 @@
 # @sapiom/mcp
 
+## 0.20.3
+
+### Patch Changes
+
+- efa75d5: The bundled primer, used when the server's instructions can't be fetched and no cached copy exists, is refreshed to the current served release (2026-10-27.7). It no longer links retired docs.sapiom.ai pages, names the REST trigger routes an older client uses instead, and carries the transaction guidance added since the last snapshot.
+
 ## 0.20.2
 
 ### Patch Changes
