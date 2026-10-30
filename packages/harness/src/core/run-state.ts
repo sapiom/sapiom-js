@@ -17,6 +17,7 @@
  */
 
 import { decodeExecutionProjection } from "@sapiom/agent-core";
+import { credentialFetch } from "@sapiom/analytics-core/credential";
 
 import type { RunView } from "../shared/types.js";
 import { renderRunState } from "./render-run-state.js";
@@ -24,6 +25,7 @@ import {
   type ApiKeyProvider,
   staticApiKeyProvider,
 } from "./api-key-provider.js";
+import { harnessCredentialPolicy } from "./credential-policy.js";
 
 /**
  * Normalize the polymorphic `apiKey` option to an {@link ApiKeyProvider}. A
@@ -99,9 +101,12 @@ export function createRunStateFetcher(
     { kind: "ok"; res: Response } | { kind: "err"; result: RunStateResult }
   > => {
     try {
-      const res = await fetchImpl(
+      const res = await credentialFetch(
+        fetchImpl,
         `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`,
-        { headers: { "x-sapiom-api-key": apiKey } },
+        {},
+        { header: "x-sapiom-api-key", value: apiKey },
+        harnessCredentialPolicy(),
       );
       return { kind: "ok", res };
     } catch {

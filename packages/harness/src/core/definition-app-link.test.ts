@@ -6,7 +6,7 @@
  * Link", and the key contract (Bearer, `/v1`, one refresh on 401/403).
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiKeyProvider } from "./api-key-provider.js";
 import {
@@ -102,7 +102,7 @@ describe("createDefinitionAppLinkReader", () => {
     expect(fetchImpl).toHaveBeenCalledWith(
       `${BASE}/v1/workflows/definitions/886/app-link`,
       expect.objectContaining({
-        headers: { Authorization: "Bearer sk_a" },
+        headers: { authorization: "Bearer sk_a" },
         signal: expect.any(AbortSignal),
       }),
     );
@@ -143,7 +143,7 @@ describe("createDefinitionAppLinkReader", () => {
     expect(fetchImpl).toHaveBeenLastCalledWith(
       `${BASE}/v1/workflows/definitions/886/app-link`,
       expect.objectContaining({
-        headers: { Authorization: "Bearer sk_new" },
+        headers: { authorization: "Bearer sk_new" },
         signal: expect.any(AbortSignal),
       }),
     );
@@ -219,5 +219,22 @@ describe("createDefinitionAppLinkReader", () => {
     await expect(reader.read("886")).resolves.toEqual(NO_APP_LINK);
     expect(signals).toHaveLength(2);
     expect(signals[0]).toBe(signals[1]);
+  });
+});
+
+describe("createDefinitionAppLinkReader — credential channel", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("refuses plaintext http to a non-loopback host without calling fetch", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const reader = createDefinitionAppLinkReader({
+      apiKey: "sk_a",
+      baseUrl: "http://api.internal",
+      fetchImpl,
+    });
+
+    await expect(reader.read("886")).resolves.toEqual(NO_APP_LINK);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

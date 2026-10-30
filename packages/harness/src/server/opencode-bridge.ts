@@ -8,12 +8,14 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import express, { type Request, type Response, type Router } from "express";
 import rateLimit, { MemoryStore } from "express-rate-limit";
+import { credentialFetch } from "@sapiom/analytics-core/credential";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import {
   samePrincipal,
   type AssistantAccess,
   type AssistantGrant,
 } from "../core/assistant-access.js";
+import { harnessCredentialPolicy } from "../core/credential-policy.js";
 import {
   fetchOpenCodeModelResponse,
   openCodeModelCompletionToken,
@@ -299,7 +301,6 @@ export class OpenCodeBridge {
         "Accept-Encoding": "identity",
         Accept: req.header("Accept") ?? "application/json",
         "Content-Type": "application/json",
-        "x-api-key": key,
       });
       // Queued MCP tools close the POST stream and deliver results through
       // GET replay. Its cursor must survive the credential bridge.
@@ -341,13 +342,19 @@ export class OpenCodeBridge {
         completionToken = openCodeModelCompletionToken(request);
       }
       const request = () =>
-        fetch(upstream, {
-          method: req.method,
-          headers,
-          body: body as Uint8Array<ArrayBuffer> | undefined,
-          redirect: "error",
-          signal: abort.signal,
-        });
+        credentialFetch(
+          fetch,
+          upstream.href,
+          {
+            method: req.method,
+            headers,
+            body: body as Uint8Array<ArrayBuffer> | undefined,
+            redirect: "error",
+            signal: abort.signal,
+          },
+          { header: "x-api-key", value: key },
+          harnessCredentialPolicy(),
+        );
       const response = streamingModel
         ? await fetchOpenCodeModelResponse(
             request,

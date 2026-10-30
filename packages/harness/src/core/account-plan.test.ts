@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAccountPlanReader, extractBalance, extractLimit, extractPlan } from "./account-plan.js";
 import type { ApiKeyProvider } from "./api-key-provider.js";
@@ -142,7 +142,7 @@ describe("createAccountPlanReader", () => {
       ]),
     );
     for (const call of fetchImpl.mock.calls) {
-      expect((call[1] as RequestInit).headers).toEqual({ Authorization: "Bearer sk_live" });
+      expect((call[1] as RequestInit).headers).toEqual({ authorization: "Bearer sk_live" });
     }
   });
 
@@ -236,7 +236,7 @@ describe("createAccountPlanReader", () => {
   it("refreshes the key once on a 401 and retries", async () => {
     const keys = provider(["sk_stale", "sk_fresh"]);
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const auth = (init?.headers as Record<string, string>).Authorization;
+      const auth = (init?.headers as Record<string, string>).authorization;
       if (auth === "Bearer sk_stale") return jsonResponse({ error: "unauthorized" }, 401);
       const url = String(input);
       if (url.endsWith("/v1/dashboard/plan")) return jsonResponse(planBody());
@@ -251,5 +251,32 @@ describe("createAccountPlanReader", () => {
     expect(view.source).toBe("live");
     expect(view.readout).toEqual({ kind: "limit", usedUsd: 12.4, limitUsd: 50 });
     expect(keys.refreshCalls).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("createAccountPlanReader — credential channel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses plaintext http to a non-loopback host and logs why", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const reader = createAccountPlanReader({
+      apiKey: "sk_live",
+      baseUrl: "http://api.internal",
+      fetchImpl,
+    });
+
+    expect(await reader.view()).toEqual({
+      plan: null,
+      readout: { kind: "none" },
+      source: "fallback",
+      reason: "unreachable",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(String(errors.mock.calls[0]?.[0])).toContain("refusing plaintext HTTP");
   });
 });
