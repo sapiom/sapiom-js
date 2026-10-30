@@ -36,9 +36,8 @@ export async function fetchDroppingIdentityCrossOrigin(
   const send: typeof globalThis.fetch = (url, init) => {
     if (!sent) {
       sent = true;
-      // Sent as is so its body streams; `fetch` would check `integrity` against a
-      // redirect's own body, so the loop checks the final response instead.
-      // A non-empty init resets the referrer, so it is passed back explicitly.
+      // Sent as is so its body streams, with the referrer a non-empty init resets.
+      // `integrity` would be checked on a redirect's body: the loop checks the final one.
       return fetchImpl(request, {
         ...dispatcher,
         redirect: "manual",
