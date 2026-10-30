@@ -471,6 +471,71 @@ describe("Node-HTTP Client Integration Tests", () => {
         expect(error.response?.status).toBe(402);
       }
     });
+
+    it("reports the payment-handling failure to complete(), not the stale original 402 (regression)", async () => {
+      // failureMode: "closed" is what makes handlePayment throw the *actual*
+      // reauthorize failure instead of re-throwing the original 402 --
+      // exercising the exact path where the old code's `error = null` (never
+      // reached, since handlePayment threw) left `error` pointing at the
+      // stale original 402 instead of this failure.
+      mocks.create.mockResolvedValueOnce({
+        id: "tx-auth",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
+
+      const reauthorizeFailure = new Error("Sapiom API unavailable");
+      mocks.reauthorizeWithPayment.mockRejectedValue(reauthorizeFailure);
+
+      mocks.complete.mockResolvedValue({
+        transaction: { id: "tx-auth", status: "completed" },
+      } as any);
+
+      nock("https://api.example.com")
+        .get("/paid")
+        .reply(402, {
+          x402Version: 1,
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "1000000",
+              resource: "https://api.example.com/paid",
+              payTo: "0x123",
+              asset: "0xUSDC",
+            },
+          ],
+        });
+
+      const client = createClient({
+        sapiomClient: mockSapiomClient,
+        failureMode: "closed",
+      });
+
+      await expect(
+        client.request({
+          method: "GET",
+          url: "https://api.example.com/paid",
+          headers: {},
+        }),
+      ).rejects.toBe(reauthorizeFailure);
+      await flushPromises();
+
+      // The reported error must be the reauthorize failure, not the
+      // original 402 -- the old code reported httpStatus: 402 here even
+      // though the *actual* reason the request never completed was the
+      // Sapiom API being unavailable.
+      expect(mocks.complete).toHaveBeenCalledWith(
+        "tx-auth",
+        expect.objectContaining({
+          outcome: "error",
+          responseFacts: expect.objectContaining({
+            facts: expect.objectContaining({
+              errorMessage: "Sapiom API unavailable",
+            }),
+          }),
+        }),
+      );
+    });
   });
 
   // ============================================================================
