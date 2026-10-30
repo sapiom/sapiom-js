@@ -18,7 +18,7 @@ export async function runRun(opts: {
   try {
     const dir = process.cwd();
     const cfg = requireConfig(dir);
-    const client = makeClient({ projectHost: cfg.host, flagHost: opts.host, flagTarget: opts.target });
+    const client = makeClient({ flagHost: opts.host, flagTarget: opts.target });
     const input = resolveInput(opts);
 
     const result = await run({ definitionId: cfg.definitionId, input }, client);

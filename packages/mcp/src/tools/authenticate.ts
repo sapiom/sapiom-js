@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  CredentialsLockError,
   readCredentials,
   writeCredentials,
   type ResolvedEnvironment,
@@ -50,13 +51,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           err instanceof Error
             ? err.message
             : "Unknown error during authentication";
+        const text =
+          err instanceof CredentialsLockError
+            ? `Signed in, but the credentials file is not locked down. ${message}. Restrict it to your user (chmod 600) or run sapiom_logout.`
+            : `Authentication failed: ${message}`;
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Authentication failed: ${message}`,
-            },
-          ],
+          content: [{ type: "text" as const, text }],
           isError: true,
         };
       }

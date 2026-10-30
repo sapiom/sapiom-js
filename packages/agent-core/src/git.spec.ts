@@ -5,12 +5,12 @@
  * Fully offline: git operations are exercised against local repos (a file path
  * is a valid git clone/push source), so no network is required.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { cloneRepo, pushSynthesizedTree, redactCredentials } from './git';
+import { cloneRepo, pushHead, pushSynthesizedTree, redactCredentials } from './git';
 
 function makeTmp(prefix: string): string {
   return mkdtempSync(path.join(tmpdir(), prefix));
@@ -138,7 +138,8 @@ describe('pushSynthesizedTree — credential redaction', () => {
     // Any push failure surfaces as AgentOperationError{ code: 'GIT' } — the
     // shared git() helper wraps stderr and applies redactCredentials. A
     // credential-bearing URL in the hint must never appear raw.
-    const tokenUrl = 'https://x-access-token:ghs_SECRET@github.com/owner/repo.git';
+    // A closed local port: the push fails without any network round trip.
+    const tokenUrl = 'https://x-access-token:ghs_SECRET@127.0.0.1:9/owner/repo.git';
     const treeDir = makeTmp('sapiom-deploy-tree-');
     try {
       writeFileSync(path.join(treeDir, 'index.ts'), 'export const x = 1;\n');
@@ -184,5 +185,212 @@ describe('pushSynthesizedTree — credential redaction', () => {
       rmSync(bare, { recursive: true, force: true });
       rmSync(treeDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('credentials never reach git argv', () => {
+  const TOKEN_URL = 'https://x-access-token:ghs_SECRET@git.example/git/repo';
+  type Call = { args: string[]; env?: NodeJS.ProcessEnv };
+
+  let calls: Call[];
+  let spy: jest.SpyInstance;
+  let savedCount: string | undefined;
+  let gitVersion: string;
+
+  beforeEach(() => {
+    calls = [];
+    gitVersion = 'git version 2.53.0';
+    savedCount = process.env.GIT_CONFIG_COUNT;
+    delete process.env.GIT_CONFIG_COUNT;
+    const cp = jest.requireActual<typeof import('node:child_process')>('node:child_process');
+    spy = jest.spyOn(cp, 'execFileSync').mockImplementation(((
+      _file: string,
+      args: readonly string[],
+      options?: { env?: NodeJS.ProcessEnv },
+    ) => {
+      // The version probe is not a credential-bearing call: keep it out of `calls`.
+      if (args[0] === '--version') return gitVersion;
+      calls.push({ args: [...args], env: options?.env });
+      return '';
+    }) as unknown as typeof cp.execFileSync);
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
+    if (savedCount === undefined) delete process.env.GIT_CONFIG_COUNT;
+    else process.env.GIT_CONFIG_COUNT = savedCount;
+  });
+
+  function headerFrom(env: NodeJS.ProcessEnv | undefined): string | undefined {
+    const count = Number(env?.GIT_CONFIG_COUNT ?? 0);
+    for (let i = 0; i < count; i++) {
+      if (env?.[`GIT_CONFIG_KEY_${i}`] === 'http.extraHeader') return env[`GIT_CONFIG_VALUE_${i}`];
+    }
+    return undefined;
+  }
+
+  function decodedBasic(env: NodeJS.ProcessEnv | undefined): string {
+    const header = headerFrom(env) ?? '';
+    expect(header).toMatch(/^Authorization: Basic /);
+    return Buffer.from(header.replace('Authorization: Basic ', ''), 'base64').toString('utf8');
+  }
+
+  function expectNoTokenInArgv(): void {
+    for (const call of calls) {
+      for (const arg of call.args) expect(arg).not.toContain('ghs_SECRET');
+    }
+  }
+
+  function expectLockedDown(env: NodeJS.ProcessEnv | undefined): void {
+    expect(env?.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env?.GIT_ASKPASS).toBe('');
+    // The helper reset must come before the header so no helper is consulted.
+    const count = Number(env?.GIT_CONFIG_COUNT);
+    const keys = Array.from({ length: count }, (_, i) => env?.[`GIT_CONFIG_KEY_${i}`]);
+    const resetAt = keys.indexOf('credential.helper');
+    expect(resetAt).toBeGreaterThanOrEqual(0);
+    expect(env?.[`GIT_CONFIG_VALUE_${resetAt}`]).toBe('');
+    expect(resetAt).toBeLessThan(keys.indexOf('http.extraHeader'));
+  }
+
+  it('cloneRepo passes a tokenless URL and the credential as an env header', () => {
+    cloneRepo({ cloneUrl: TOKEN_URL, targetDir: '/tmp/x', branch: 'main', repoFullName: 'o/r', cwd: '/tmp' });
+
+    expectNoTokenInArgv();
+    const clone = calls.find((c) => c.args[0] === 'clone')!;
+    expect(clone.args).toContain('https://x-access-token@git.example/git/repo');
+    expect(decodedBasic(clone.env)).toBe('x-access-token:ghs_SECRET');
+    expectLockedDown(clone.env);
+  });
+
+  it('pushHead passes a tokenless URL and the credential as an env header', () => {
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+
+    expectNoTokenInArgv();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual(['push', '--force', 'https://x-access-token@git.example/git/repo', 'HEAD:main']);
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:ghs_SECRET');
+    expectLockedDown(calls[0].env);
+  });
+
+  it('pushSynthesizedTree only gives the credential to the push', () => {
+    pushSynthesizedTree('/tmp/tree', TOKEN_URL, 'main');
+
+    expectNoTokenInArgv();
+    const push = calls.find((c) => c.args[0] === 'push')!;
+    expect(push.args).toContain('https://x-access-token@git.example/git/repo');
+    expect(decodedBasic(push.env)).toBe('x-access-token:ghs_SECRET');
+    expectLockedDown(push.env);
+    for (const call of calls.filter((c) => c.args[0] !== 'push')) {
+      expect(headerFrom(call.env)).toBeUndefined();
+    }
+  });
+
+  it('keeps a malformed percent escape as typed instead of throwing', () => {
+    expect(() => pushHead('/tmp/tree', 'https://x-access-token:a%zz@git.example/git/repo', 'main')).not.toThrow();
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:a%zz');
+  });
+
+  it('still decodes the valid escapes next to a malformed one, as git does', () => {
+    pushHead('/tmp/tree', 'https://x-access-token:a%2Fb%zz@git.example/git/repo', 'main');
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:a/b%zz');
+  });
+
+  it('decodes multi-byte escapes to their UTF-8 bytes', () => {
+    pushHead('/tmp/tree', 'https://x-access-token:caf%C3%A9@git.example/git/repo', 'main');
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:café');
+  });
+
+  it('decodes a percent-encoded password once', () => {
+    pushHead('/tmp/tree', 'https://x-access-token:a%2Fb%3Dc@git.example/git/repo', 'main');
+
+    expect(decodedBasic(calls[0].env)).toBe('x-access-token:a/b=c');
+  });
+
+  it('appends after GIT_CONFIG pairs the caller already set', () => {
+    process.env.GIT_CONFIG_COUNT = '2';
+    const saved = { ...process.env };
+    process.env.GIT_CONFIG_KEY_0 = 'user.name';
+    process.env.GIT_CONFIG_VALUE_0 = 'me';
+    process.env.GIT_CONFIG_KEY_1 = 'core.autocrlf';
+    process.env.GIT_CONFIG_VALUE_1 = 'false';
+    try {
+      pushHead('/tmp/tree', TOKEN_URL, 'main');
+    } finally {
+      for (const key of ['GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1']) {
+        if (saved[key] === undefined) delete process.env[key];
+      }
+    }
+
+    const env = calls[0].env!;
+    expect(env.GIT_CONFIG_COUNT).toBe('4');
+    expect(env.GIT_CONFIG_KEY_0).toBe('user.name');
+    expect(env.GIT_CONFIG_VALUE_1).toBe('false');
+    expect(env.GIT_CONFIG_KEY_2).toBe('credential.helper');
+    expect(env.GIT_CONFIG_KEY_3).toBe('http.extraHeader');
+  });
+
+  it('keeps the push URL out of reach of the user\'s HTTPS-to-SSH rewrites', () => {
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+    const pushUrl = calls[0].args[2];
+
+    // Real git: rules on the host and on the exact repository URL would reroute a
+    // bare URL to SSH, where the header is never sent.
+    const dir = makeTmp('sapiom-git-cfg-');
+    try {
+      const globalConfig = path.join(dir, 'gitconfig');
+      writeFileSync(
+        globalConfig,
+        '[url "ssh://git@git.example/git/repo"]\n\tinsteadOf = https://git.example/git/repo\n' +
+          '[url "ssh://git@git.example/"]\n\tinsteadOf = https://git.example/\n\tpushInsteadOf = https://git.example/\n',
+      );
+      const getUrl = (url: string) =>
+        spawnSync('git', ['ls-remote', '--get-url', url], {
+          encoding: 'utf8',
+          env: { ...calls[0].env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' },
+        }).stdout.trim();
+      expect(getUrl('https://git.example/git/repo')).toBe('ssh://git@git.example/git/repo');
+      expect(getUrl(pushUrl)).toBe(pushUrl);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a credential push on git older than 2.31, before running git', () => {
+    gitVersion = 'git version 2.30.2';
+
+    expect(() => pushHead('/tmp/tree', TOKEN_URL, 'main')).toThrow(
+      expect.objectContaining({ code: 'GIT_TOO_OLD', message: expect.stringContaining('2.31') }),
+    );
+    expect(() =>
+      cloneRepo({ cloneUrl: TOKEN_URL, targetDir: '/tmp/x', branch: 'main', repoFullName: 'o/r', cwd: '/tmp' }),
+    ).toThrow(expect.objectContaining({ code: 'GIT_TOO_OLD' }));
+    // Checked before `git init -b`, which git older than 2.28 rejects on its own.
+    expect(() => pushSynthesizedTree('/tmp/tree', TOKEN_URL, 'main')).toThrow(
+      expect.objectContaining({ code: 'GIT_TOO_OLD' }),
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('accepts git 2.31 exactly and a vendor-suffixed version', () => {
+    gitVersion = 'git version 2.31.0';
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+    gitVersion = 'git version 2.39.5 (Apple Git-154)';
+    pushHead('/tmp/tree', TOKEN_URL, 'main');
+
+    expect(calls).toHaveLength(2);
+  });
+
+  it('passes a URL without userinfo or a local path through unchanged, with no env', () => {
+    pushHead('/tmp/tree', 'https://git.example/git/repo', 'main');
+    pushHead('/tmp/tree', '/srv/repos/bare.git', 'main');
+
+    expect(calls[0].args[2]).toBe('https://git.example/git/repo');
+    expect(calls[0].env).toBeUndefined();
+    expect(calls[1].args[2]).toBe('/srv/repos/bare.git');
+    expect(calls[1].env).toBeUndefined();
   });
 });

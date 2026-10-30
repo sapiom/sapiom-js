@@ -125,6 +125,63 @@ describe('deploy — push retry on auth failure', () => {
     expect(retryPushUrl).toContain('NEW_TOKEN');
   });
 
+  it('retries when git reports the rejected header as a disabled prompt', async () => {
+    // The push credential travels as a header with prompts disabled, so a 401
+    // surfaces as git failing to prompt rather than "Authentication failed".
+    pushSynthesizedTree.mockImplementation(() => {
+      throw new AgentOperationError({
+        code: 'GIT',
+        message: 'git push failed.',
+        hint: "fatal: could not read Username for 'https://host/git/r': terminal prompts disabled",
+      });
+    });
+
+    const client = makeClient({
+      pushCredentials: [
+        () => ({ pushUrl: 'https://x-access-token:OLD_TOKEN@host/git/r' }),
+        () => ({ pushUrl: 'https://x-access-token:NEW_TOKEN@host/git/r' }),
+      ],
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
+    await deploy(
+      { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+      client as unknown as GatewayClient,
+    );
+
+    const calls = client.post.mock.calls as Array<[string, ...unknown[]]>;
+    expect(calls.filter(([p]) => p.includes('push-credentials'))).toHaveLength(2);
+    expect(pushHead).toHaveBeenCalledTimes(1);
+    expect(pushHead.mock.calls[0][1]).toContain('NEW_TOKEN');
+  });
+
+  it('does NOT re-mint when git is too old to read the credential env', async () => {
+    pushSynthesizedTree.mockImplementation(() => {
+      throw new AgentOperationError({
+        code: 'GIT_TOO_OLD',
+        message: 'git 2.30 is too old: Sapiom needs git 2.31 or newer.',
+      });
+    });
+
+    const client = makeClient({
+      pushCredentials: [() => ({ pushUrl: 'https://x-access-token:OLD_TOKEN@host/git/r' })],
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
+    await expect(
+      deploy(
+        { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
+        client as unknown as GatewayClient,
+      ),
+    ).rejects.toMatchObject({ code: 'GIT_TOO_OLD' });
+
+    const calls = client.post.mock.calls as Array<[string, ...unknown[]]>;
+    expect(calls.filter(([p]) => p.includes('push-credentials'))).toHaveLength(1);
+    expect(pushHead).not.toHaveBeenCalled();
+  });
+
   it('does NOT retry on a non-auth push failure', async () => {
     const nonAuthErr = new AgentOperationError({
       code: 'GIT',

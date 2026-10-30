@@ -208,10 +208,11 @@ describe("analytics e2e (real stdio server)", () => {
         expect((checkEvent!.data.error_class as string).length).toBeGreaterThan(
           0,
         );
-        // Sapiom-bound tools capture arguments in full.
-        expect((checkEvent!.data.args as { dir?: string }).dir).toBe(
-          missingDir,
-        );
+        // Local test inputs can hold secrets, so analytics must exclude their values.
+        expect(checkEvent!.data).not.toHaveProperty("args");
+        expect(checkEvent!.data.arg_sizes).toEqual({
+          dir: Buffer.byteLength(JSON.stringify(missingDir)),
+        });
 
         // Both events share the server process's session.
         expect(checkEvent!.session_id).toBe(statusEvent!.session_id);

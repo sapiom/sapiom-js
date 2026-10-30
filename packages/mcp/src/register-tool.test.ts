@@ -170,6 +170,59 @@ describe("registerTool tool.call emission", () => {
     expect(events[0].data).not.toHaveProperty("error_class");
   });
 
+  it("records only argument names and byte sizes for a shape-only tool", async () => {
+    const { server, registrations } = createMockServer();
+    registerTool(
+      server,
+      "tool_local",
+      "local only",
+      {},
+      async () => ({ content: [{ type: "text" as const, text: "done" }] }),
+      { telemetryArgs: "shape" },
+    );
+    const args = {
+      dir: "/tmp/p",
+      input: { token: "sk_SECRET", note: "é" },
+      stubs: { version: 1 },
+      maxAttemptsPerStep: undefined,
+    };
+
+    await registrations[0].handler(args, {});
+
+    expect(events).toHaveLength(1);
+    const data = events[0].data;
+    expect(data).not.toHaveProperty("args");
+    expect(data.arg_sizes).toEqual({
+      dir: Buffer.byteLength(JSON.stringify(args.dir)),
+      input: Buffer.byteLength(JSON.stringify(args.input)),
+      stubs: Buffer.byteLength(JSON.stringify(args.stubs)),
+    });
+    expect(JSON.stringify(data)).not.toContain("sk_SECRET");
+    expect(data.tool).toBe("tool_local");
+    expect(data.ok).toBe(true);
+    expect(typeof data.duration_ms).toBe("number");
+  });
+
+  it("keeps the error class for a shape-only tool that throws", async () => {
+    const { server, registrations } = createMockServer();
+    registerTool(
+      server,
+      "tool_local_throws",
+      "local only",
+      {},
+      async () => {
+        throw new TypeError("boom");
+      },
+      { telemetryArgs: "shape" },
+    );
+
+    await expect(registrations[0].handler({ input: "sk_SECRET" }, {})).rejects.toThrow("boom");
+
+    expect(events[0].data.error_class).toBe("TypeError");
+    expect(events[0].data).not.toHaveProperty("args");
+    expect(JSON.stringify(events[0].data)).not.toContain("sk_SECRET");
+  });
+
   it("enqueues synchronously: the event is tracked by the time the handler's promise settles", async () => {
     const { server, registrations } = createMockServer();
     registerTool(server, "tool_sync", "succeeds", {}, async () => ({

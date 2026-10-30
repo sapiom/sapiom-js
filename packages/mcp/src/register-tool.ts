@@ -1,20 +1,6 @@
 /**
- * The single seam every tool registration goes through.
- *
- * `registerTool` forwards the registration to
- * `server.tool(name, description, schema, handler)` and wraps the handler to
- * emit one `tool.call` usage-analytics event per invocation — tool name,
- * arguments, duration, ok/error class — via the process-wide emitter in
- * `./analytics.ts` (the envelope's `source: "mcp"` disambiguates same-named
- * events from other producers).
- *
- * The wrapper is transparent: the handler receives the exact `args`/`extra`
- * the MCP SDK produced, its result (success or `isError`) is returned
- * unchanged, and a thrown error is rethrown unchanged. Emission is a
- * synchronous enqueue — no awaits on the hot path — and can never throw, so
- * telemetry cannot alter a tool result or take the server down. The emitter
- * is live by default; `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`
- * make it a no-op.
+ * Wraps tool registration so argument privacy and telemetry isolation from tool
+ * results follow one policy for every tool registered through it.
  */
 import type {
   McpServer,
@@ -34,6 +20,16 @@ type AnyToolHandler = (
 ) => CallToolResult | Promise<CallToolResult>;
 
 /**
+ * Local-only tools' inputs (test inputs, stubs) can hold real secrets that never
+ * reach Sapiom otherwise, so `"shape"` keeps only argument names and sizes.
+ */
+export type TelemetryArgs = "full" | "shape";
+
+export interface RegisterToolOptions {
+  telemetryArgs?: TelemetryArgs;
+}
+
+/**
  * Register one MCP tool. Wire-identical to calling
  * `server.tool(name, description, schema, handler)` directly, plus one
  * `tool.call` analytics event per invocation.
@@ -49,15 +45,17 @@ export function registerTool<Args extends ZodRawShape>(
   description: string,
   schema: Args,
   handler: ToolCallback<Args>,
+  options: RegisterToolOptions = {},
 ): void {
+  const mode = options.telemetryArgs ?? "full";
   const wrapped = (async (args: unknown, extra: unknown) => {
     const startedAt = performance.now();
     try {
       const result = await (handler as AnyToolHandler)(args, extra);
-      emitToolCall(name, args, startedAt, resultOutcome(result));
+      emitToolCall(name, args, mode, startedAt, resultOutcome(result));
       return result;
     } catch (error) {
-      emitToolCall(name, args, startedAt, {
+      emitToolCall(name, args, mode, startedAt, {
         ok: false,
         errorClass: classifyThrown(error),
       });
@@ -74,24 +72,22 @@ interface CallOutcome {
 }
 
 /**
- * Synchronous, never throws. These are Sapiom's own developer tools
- * (Sapiom-bound calls), so arguments are captured in full per the
- * analytics contract; the emitter size-caps each `data` field (~16 KB)
- * and flags truncation.
+ * Synchronous and never throws, so telemetry cannot change a tool result. Field
+ * truncation lives in `analytics-core/src/data.ts`.
  */
 function emitToolCall(
   tool: string,
   args: unknown,
+  mode: TelemetryArgs,
   startedAt: number,
   outcome: CallOutcome,
 ): void {
   try {
-    const data: Record<string, unknown> = {
-      tool,
-      args: args ?? {},
-      duration_ms: Math.max(0, Math.round(performance.now() - startedAt)),
-      ok: outcome.ok,
-    };
+    const data: Record<string, unknown> = { tool };
+    if (mode === "shape") data.arg_sizes = argSizes(args);
+    else data.args = args ?? {};
+    data.duration_ms = Math.max(0, Math.round(performance.now() - startedAt));
+    data.ok = outcome.ok;
     if (outcome.errorClass !== undefined) {
       data.error_class = outcome.errorClass;
     }
@@ -99,6 +95,21 @@ function emitToolCall(
   } catch {
     // Telemetry must never affect the tool result.
   }
+}
+
+/** Keeps how large each argument was without recording its possibly secret value. */
+function argSizes(args: unknown): Record<string, number | null> {
+  const sizes: Record<string, number | null> = {};
+  if (args === null || typeof args !== "object") return sizes;
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined) continue;
+    try {
+      sizes[key] = Buffer.byteLength(JSON.stringify(value), "utf8");
+    } catch {
+      sizes[key] = null;
+    }
+  }
+  return sizes;
 }
 
 function resultOutcome(result: CallToolResult): CallOutcome {

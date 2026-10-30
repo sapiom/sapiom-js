@@ -1,13 +1,6 @@
 /**
- * Tests for host-switch resolution and CLI-level configuration.
- *
- * The key invariants:
- *   - SAPIOM_HOST env always wins
- *   - --host flag beats --target flag
- *   - --target local maps to localhost:3000, prod to api.sapiom.ai
- *   - Persisted config (target / host) is the fallback before project host
- *   - Project host from sapiom.json is the last fallback before default
- *   - Default is the production backend
+ * Host selection must not depend on committed project config, because the
+ * selected host receives the API key (see project-host.test.ts).
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -122,15 +115,6 @@ describe('resolveHost', () => {
     process.env.XDG_CONFIG_HOME = tmp;
     writeConfigJson(tmp, { host: 'https://staging.example.com', target: 'local' });
     expect(resolveHost({})).toBe('https://staging.example.com');
-  });
-
-  it('project host from sapiom.json is last fallback before default', () => {
-    const tmp = makeTmpDir();
-    process.env.XDG_CONFIG_HOME = tmp;
-    // No config.json written — project host should apply
-    expect(resolveHost({ projectHost: 'https://project-host.example.com' })).toBe(
-      'https://project-host.example.com',
-    );
   });
 
   it('flag target beats persisted config', () => {

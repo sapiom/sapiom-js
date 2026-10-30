@@ -3,7 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedEnvironment } from "../credentials.js";
 
 // Mock dependencies
-vi.mock("../credentials.js", () => ({
+vi.mock("../credentials.js", async (importOriginal) => ({
+  CredentialsLockError: (await importOriginal<typeof import("../credentials.js")>())
+    .CredentialsLockError,
   readCredentials: vi.fn(),
   writeCredentials: vi.fn(),
 }));
@@ -13,7 +15,11 @@ vi.mock("../auth.js", () => ({
 }));
 
 import { register } from "./authenticate.js";
-import { readCredentials, writeCredentials } from "../credentials.js";
+import {
+  CredentialsLockError,
+  readCredentials,
+  writeCredentials,
+} from "../credentials.js";
 import { performBrowserAuth } from "../auth.js";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -123,6 +129,30 @@ describe("sapiom_authenticate tool", () => {
     const result = await getHandler()({});
     expect(result.content[0].text).toContain("Authentication failed");
     expect(result.content[0].text).toContain("Timed out");
+    expect(result.isError).toBe(true);
+  });
+
+  it("says the key was saved when only locking down the file failed", async () => {
+    const { server, getHandler } = createMockServer();
+    register(server, env);
+
+    vi.mocked(readCredentials).mockResolvedValue(null);
+    vi.mocked(performBrowserAuth).mockResolvedValue({
+      apiKey: "sk-new",
+      tenantId: "t-new",
+      organizationName: "New Org",
+      apiKeyId: "k-new",
+    });
+    vi.mocked(writeCredentials).mockRejectedValue(
+      new CredentialsLockError("/home/u/.sapiom/credentials.json", new Error("EPERM")),
+    );
+
+    const result = await getHandler()({});
+    expect(result.content[0].text).not.toContain("Authentication failed");
+    expect(result.content[0].text).toContain("Signed in");
+    expect(result.content[0].text).toContain("credentials.json");
+    expect(result.content[0].text).toContain("chmod 600");
+    expect(result.content[0].text).toContain("sapiom_logout");
     expect(result.isError).toBe(true);
   });
 

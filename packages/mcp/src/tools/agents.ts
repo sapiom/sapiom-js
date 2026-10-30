@@ -49,7 +49,7 @@ import {
 } from "@sapiom/agent-core";
 import { authoringRulesDriftWarnings } from "../authoring-rules-drift.js";
 import { type ResolvedEnvironment } from "../credentials.js";
-import { registerTool } from "../register-tool.js";
+import { registerTool, type RegisterToolOptions } from "../register-tool.js";
 import {
   INCLUDABLE_FIELDS,
   projectExecutionForTool,
@@ -176,8 +176,12 @@ function scheduleCreateResult(
   };
 }
 
+const LOCAL_ONLY_TELEMETRY: RegisterToolOptions = { telemetryArgs: "shape" };
+
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   // ── Local authoring tools (no account or capability spend) ───────────────────
+  // Their inputs (test inputs, stubs) can hold real secrets and never need to
+  // reach Sapiom, so telemetry records only argument names and sizes.
 
   registerTool(
     server,
@@ -217,6 +221,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         return fail(err);
       }
     },
+    LOCAL_ONLY_TELEMETRY,
   );
 
   registerTool(
@@ -244,6 +249,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         return fail(err);
       }
     },
+    LOCAL_ONLY_TELEMETRY,
   );
 
   registerTool(
@@ -295,6 +301,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         return fail(err);
       }
     },
+    LOCAL_ONLY_TELEMETRY,
   );
 
   // ── Networked tools (require authentication) ───────────────────────────────

@@ -1,7 +1,6 @@
 /**
- * Minimal git helpers for `deploy`. The push targets the minted credential URL
- * directly (passed as the remote argument) rather than persisting it via
- * `remote set-url`, so the short-lived token never lands in `.git/config`.
+ * Minimal git helpers for `deploy`. Minted credentials reach git only through the
+ * child's environment, never argv (readable by every local user) or `.git/config`.
  */
 import { execFileSync } from "node:child_process";
 
@@ -23,7 +22,7 @@ function gitMissingError(err: unknown): AgentOperationError | null {
   });
 }
 
-function git(args: string[], cwd: string): string {
+function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv): string {
   try {
     // windowsHide: this runs inside console-less GUI processes (the desktop
     // app and the sapiom-dev MCP server) — a console child would otherwise
@@ -33,6 +32,7 @@ function git(args: string[], cwd: string): string {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      env,
     }).trim();
   } catch (err) {
     const missing = gitMissingError(err);
@@ -89,6 +89,84 @@ export function redactCredentials(text: string): string {
   return text.replace(/(https?:\/\/)[^@\s/]+@/gi, "$1***@");
 }
 
+/**
+ * argv is readable by every local user, so the password moves to an env header.
+ * The non-secret username stays: a bare URL could match the user's `insteadOf` rewrites.
+ */
+function gitAuth(url: string): { url: string; env?: NodeJS.ProcessEnv } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { url };
+  }
+  if (!/^https?:$/.test(parsed.protocol) || !parsed.username || !parsed.password) return { url };
+  assertGitReadsEnvConfig();
+  const basic = Buffer.concat([
+    decodeUserinfo(parsed.username),
+    Buffer.from(":"),
+    decodeUserinfo(parsed.password),
+  ]).toString("base64");
+  parsed.password = "";
+  return { url: parsed.toString(), env: gitHeaderEnv(`Authorization: Basic ${basic}`) };
+}
+
+/** Like git, decode each valid escape to its byte and keep a malformed one as typed. */
+function decodeUserinfo(part: string): Buffer {
+  return Buffer.concat(
+    part
+      .split(/(%[0-9A-Fa-f]{2})/)
+      .map((piece, i) => (i % 2 ? Buffer.from([parseInt(piece.slice(1), 16)]) : Buffer.from(piece))),
+  );
+}
+
+/**
+ * git before 2.31 ignores `GIT_CONFIG_*` env, so the header would be dropped and
+ * fail like a rejected token: name the real cause instead.
+ */
+function assertGitReadsEnvConfig(): void {
+  let out: string;
+  try {
+    out = execFileSync("git", ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } catch (err) {
+    const missing = gitMissingError(err);
+    if (missing) throw missing;
+    return;
+  }
+  const match = /(\d+)\.(\d+)/.exec(out ?? "");
+  if (!match) return;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major > 2 || (major === 2 && minor >= 31)) return;
+  throw new AgentOperationError({
+    code: "GIT_TOO_OLD",
+    message: `git ${match[0]} is too old: Sapiom needs git 2.31 or newer.`,
+    hint: "Upgrade Git (https://git-scm.com/downloads), then retry.",
+  });
+}
+
+/**
+ * A rejected header must fail fast instead of falling back to a credential helper
+ * or a prompt, which could hang or send a different credential.
+ */
+function gitHeaderEnv(header: string): NodeJS.ProcessEnv {
+  const existing = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "", 10);
+  const base = Number.isInteger(existing) && existing > 0 ? existing : 0;
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    [`GIT_CONFIG_KEY_${base}`]: "credential.helper",
+    [`GIT_CONFIG_VALUE_${base}`]: "",
+    [`GIT_CONFIG_KEY_${base + 1}`]: "http.extraHeader",
+    [`GIT_CONFIG_VALUE_${base + 1}`]: header,
+    GIT_CONFIG_COUNT: String(base + 2),
+  };
+}
+
 export interface CloneRepoOptions {
   /**
    * Token-bearing HTTPS clone URL. SECRET: it embeds a live, read-only,
@@ -110,18 +188,12 @@ export interface CloneRepoOptions {
 }
 
 /**
- * Clone a per-fork repo from a token-bearing URL into `targetDir` and check out
- * `branch`. Used during the template-clone handoff to materialize a fork locally.
- *
- * Security: the credential is redacted from any error output, and after a
- * successful clone the origin remote is rewritten to the tokenless HTTPS URL so
- * the short-lived token never lands on disk.
- *
- * Throws `AgentOperationError` (code `GIT_CLONE`) on failure — with the credential
- * scrubbed from the hint.
+ * Clone a per-fork repo for the template-clone handoff. Throws `GIT_CLONE` (hint
+ * redacted), `GIT_TOO_OLD` or `GIT_NOT_INSTALLED`.
  */
 export function cloneRepo(opts: CloneRepoOptions): void {
   const { cloneUrl, targetDir, branch, repoFullName, cwd } = opts;
+  const auth = gitAuth(cloneUrl);
   try {
     execFileSync(
       "git",
@@ -136,10 +208,10 @@ export function cloneRepo(opts: CloneRepoOptions): void {
         "--branch",
         branch,
         "--",
-        cloneUrl,
+        auth.url,
         targetDir,
       ],
-      { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", windowsHide: true },
+      { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", windowsHide: true, env: auth.env },
     );
   } catch (err) {
     const missing = gitMissingError(err);
@@ -154,11 +226,8 @@ export function cloneRepo(opts: CloneRepoOptions): void {
     });
   }
 
-  // Scrub the token from the checkout: reset origin to the tokenless URL. This is
-  // hygiene, not correctness — the clone already succeeded — so a failure here
-  // must not fail the whole operation. We can't log (core is console-free), so a
-  // best-effort attempt is the right trade-off: worst case the ~1h token lingers
-  // in .git/config, which the caller was told to treat as ephemeral anyway.
+  // Canonicalize origin to the public repository URL. The clone already
+  // succeeded, so a failure here must not fail the operation.
   try {
     git(
       ["remote", "set-url", "origin", `https://github.com/${repoFullName}.git`],
@@ -174,7 +243,8 @@ export function pushHead(dir: string, pushUrl: string, branch: string): void {
   // used only when retrying a credential-rejected push; the freshly
   // provisioned repo may already contain a starting commit, so a plain push is
   // non-fast-forward. The remote is only a build source.
-  git(["push", "--force", pushUrl, `HEAD:${branch}`], dir);
+  const auth = gitAuth(pushUrl);
+  git(["push", "--force", auth.url, `HEAD:${branch}`], dir, auth.env);
 }
 
 /**
@@ -189,6 +259,8 @@ export function pushSynthesizedTree(
   pushUrl: string,
   branch: string,
 ): void {
+  // Before `init -b` (git 2.28+), so an old git reports GIT_TOO_OLD, not a failed init.
+  const auth = gitAuth(pushUrl);
   git(["init", "-q", "-b", branch], treeDir);
   git(["add", "-A"], treeDir);
   git(
@@ -204,5 +276,5 @@ export function pushSynthesizedTree(
     ],
     treeDir,
   );
-  git(["push", "--force", pushUrl, `HEAD:${branch}`], treeDir);
+  git(["push", "--force", auth.url, `HEAD:${branch}`], treeDir, auth.env);
 }

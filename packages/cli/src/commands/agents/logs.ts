@@ -1,7 +1,7 @@
 import { inspect, inspectBuild, listExecutions, AgentOperationError } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
-import { readConfig, requireConfig } from '../../lib/config.js';
+import { requireConfig } from '../../lib/config.js';
 import { CliError, isJsonMode, ok } from '../../lib/output.js';
 
 /**
@@ -17,15 +17,14 @@ export async function runLogs(
 
     if (opts.build) {
       const cfg = requireConfig(dir);
-      const client = makeClient({ projectHost: cfg.host, flagHost: opts.host, flagTarget: opts.target });
+      const client = makeClient({ flagHost: opts.host, flagTarget: opts.target });
       const { build } = await inspectBuild({ definitionId: cfg.definitionId, buildRunId: opts.build }, client);
       if (isJsonMode()) ok({ build });
       else ok({}, [`build ${opts.build}: ${build.status ?? 'unknown'}`]);
       return;
     }
 
-    const cfg = readConfig(dir);
-    const client = makeClient({ projectHost: cfg?.host, flagHost: opts.host, flagTarget: opts.target });
+    const client = makeClient({ flagHost: opts.host, flagTarget: opts.target });
 
     if (!executionId) {
       const executions = await listExecutions(client);
