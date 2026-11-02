@@ -11,7 +11,7 @@
     "@langchain/anthropic": "^0.3.0",
     "@langchain/core": "^0.3.0",
     "@langchain/langgraph": "^0.2.0",
-    "@langchain/openai": "^1.2.2",
+    "@langchain/openai": "^0.6.17",
     "@sapiom/langchain-classic": "latest",
     "dotenv": "^16.4.5",
     "zod": "^3.22.4"
@@ -20,5 +20,10 @@
     "@types/node": "^20.11.30",
     "tsx": "^4.7.0",
     "typescript": "^5.4.2"
+  },
+  "overrides": {
+    "fast-xml-parser": "^5.11.2",
+    "langsmith": "^0.11.7",
+    "uuid": "^14.0.3"
   }
 }
