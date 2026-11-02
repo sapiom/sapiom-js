@@ -8,7 +8,8 @@
  * dependency — `harness/web/src/lib/desktop.ts` feature-detects them.
  */
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute } from "node:path";
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import { CHOOSE_DIRECTORY, REVEAL_PATH } from "./ipc.js";
 import { isTrustedSender } from "./trusted-sender.js";
@@ -55,7 +56,18 @@ export function revealPath(event: IpcMainInvokeEvent, target: unknown, now = Dat
   return true;
 }
 
-async function chooseDirectory(event: IpcMainInvokeEvent, defaultPath: unknown): Promise<string | null> {
+/**
+ * Parent of the last folder the picker returned. Electron 43+ opens a dialog
+ * with no `defaultPath` in Downloads and stops the OS remembering the last
+ * folder, so the app remembers it instead.
+ */
+let lastChosenParent: string | null = null;
+
+/** Exported for the unit test; reached only through the CHOOSE_DIRECTORY handler. */
+export async function chooseDirectory(
+  event: IpcMainInvokeEvent,
+  defaultPath: unknown,
+): Promise<string | null> {
   // Same gate as the update check: a folder chooser opened by same-origin
   // agent-authored content (served at `/canvas/:sessionId/*`) would be an
   // escalation, so only the SPA at the top frame `/` may open it.
@@ -69,7 +81,10 @@ async function chooseDirectory(event: IpcMainInvokeEvent, defaultPath: unknown):
     // picker where the user already is — the OS dialog remains the trust boundary,
     // so a bad hint is simply ignored.
     properties: ["openDirectory", "createDirectory"],
-    defaultPath: typeof defaultPath === "string" && defaultPath ? defaultPath : undefined,
+    defaultPath:
+      typeof defaultPath === "string" && defaultPath ? defaultPath : (lastChosenParent ?? homedir()),
   });
-  return result.canceled ? null : (result.filePaths[0] ?? null);
+  const chosen = result.canceled ? null : (result.filePaths[0] ?? null);
+  if (chosen) lastChosenParent = dirname(chosen);
+  return chosen;
 }
