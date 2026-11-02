@@ -65,7 +65,7 @@
     "prettier": "^3.2.5",
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2",
-    "zod": "^3.25.76"
+    "zod": "catalog:"
   },
   "engines": {
     "node": ">=18.0.0"
