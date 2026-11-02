@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertNoPublish,
+  assertMacPassthrough,
   DARWIN_MINIMUM_RELEASE,
   stampMacManifests,
   stampMinimumSystemVersion,
@@ -84,23 +84,25 @@ describe("stampMacManifests", () => {
   });
 });
 
-describe("assertNoPublish", () => {
-  it("accepts no publish flag, or an explicit never", () => {
-    expect(() => assertNoPublish([])).not.toThrow();
-    expect(() => assertNoPublish(["-c.mac.notarize=true"])).not.toThrow();
-    expect(() => assertNoPublish(["--publish", "never"])).not.toThrow();
-    expect(() => assertNoPublish(["-p=never"])).not.toThrow();
+describe("assertMacPassthrough", () => {
+  it("accepts config overrides, which is what the release run passes", () => {
+    expect(() => assertMacPassthrough([])).not.toThrow();
+    expect(() => assertMacPassthrough(["-c.mac.notarize=true"])).not.toThrow();
+    expect(() => assertMacPassthrough(["--config.publish.channel=beta"])).not.toThrow();
   });
 
-  it("refuses any other publish policy, in every flag form", () => {
+  it("refuses every other arg, including each spelling of the publish flag", () => {
     for (const args of [
       ["--publish", "always"],
+      ["--publish", "never"],
       ["--publish=onTag"],
       ["-p", "onTagOrDraft"],
+      ["--p=always"],
+      ["-mp=always"],
+      ["-c", "other-config.yml"],
       ["-c.mac.notarize=true", "--publish"],
-      ["--publish", "never", "--publish", "always"],
     ]) {
-      expect(() => assertNoPublish(args), args.join(" ")).toThrow(/must not publish/);
+      expect(() => assertMacPassthrough(args), args.join(" ")).toThrow(/accepts only -c\.<key>/);
     }
   });
 });

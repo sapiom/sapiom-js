@@ -9,7 +9,7 @@
 //
 // Usage: node scripts/pack.mjs [--linux|--mac|--win] [...electron-builder args]
 //   (defaults to the HOST platform; any further args pass through, e.g.
-//   -c.mac.notarize=true)
+//   -c.mac.notarize=true; a mac build accepts only such -c.<key> overrides)
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -71,7 +71,7 @@ const macMinimum =
   platform === "--mac"
     ? await import(pathToFileURL(join(pkgDir, "dist", "main", "mac-minimum.js")).href)
     : null;
-macMinimum?.assertNoPublish(passthrough);
+macMinimum?.assertMacPassthrough(passthrough);
 // An explicit caller flag still wins — the passthrough args land after ours.
 const channelFlag = passthrough.some((arg) => arg.startsWith("-c.publish.channel"))
   ? []

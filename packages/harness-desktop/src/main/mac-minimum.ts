@@ -45,22 +45,19 @@ export function stampMacManifests(releaseDir: string): string[] {
   return manifests;
 }
 
-const PUBLISH_FLAG = /^(?:--publish|-p)(?:=(.*))?$/;
+const CONFIG_OVERRIDE = /^(?:-c|--config)\.[A-Za-z]/;
 
 /**
- * Throws when electron-builder args ask to publish. electron-builder uploads the
- * update manifest before it returns, so a mac build that publishes itself ships
- * it unstamped; the release job uploads the stamped files instead.
+ * Throws unless every extra electron-builder arg is a `-c.<key>` config override.
+ * electron-builder uploads the update manifest before it returns, so a mac build
+ * that publishes itself ships it unstamped. An allowlist, because yargs accepts
+ * too many spellings of the publish flag (aliases, groups, repeats) to deny them.
  */
-export function assertNoPublish(args: readonly string[]): void {
-  args.forEach((arg, index) => {
-    const match = PUBLISH_FLAG.exec(arg);
-    if (!match) return;
-    const policy = match[1] ?? args[index + 1];
-    if (policy !== "never") {
-      throw new Error(
-        `a mac build must not publish before its update manifest is stamped (got ${arg} ${policy ?? ""})`,
-      );
-    }
-  });
+export function assertMacPassthrough(args: readonly string[]): void {
+  const rejected = args.filter((arg) => !CONFIG_OVERRIDE.test(arg));
+  if (rejected.length > 0) {
+    throw new Error(
+      `a mac build accepts only -c.<key> overrides, so it cannot publish before its update manifest is stamped (got ${rejected.join(" ")})`,
+    );
+  }
 }

@@ -269,8 +269,9 @@ Things that will bite you:
   `latest-mac.yml` is only written when a zip target exists. It also refuses to apply an unsigned
   update — so auto-update on macOS depends on the Developer ID cert, not just on this code.
 - **The `publish:` block in `electron-builder.yml` is load-bearing even though we never publish from
-  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job, and
-  refuses any other `--publish` on a mac build, which would upload `latest-mac.yml` unstamped). Without a
+  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job, and a mac
+  build accepts only `-c.<key>` passthrough args, since a self-publish would upload `latest-mac.yml`
+  unstamped). Without a
   publish provider, no `latest*.yml` is generated and no `resources/app-update.yml` is baked in — the
   app then runs perfectly and never updates. The `update-config` smoke check exists for that, and it
   also cross-checks the *baked* channel against the one the app resolves at runtime.
