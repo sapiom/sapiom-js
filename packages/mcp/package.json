@@ -59,7 +59,7 @@
     "test:package": "pnpm --filter \"@sapiom/mcp...\" build && node scripts/check-package.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/sandbox-preview": "workspace:^",
@@ -73,7 +73,7 @@
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.12"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -75,7 +75,8 @@ jobs:
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile --filter "@sapiom/mcp..."
       - run: pnpm --filter "@sapiom/mcp..." build
-      - run: pnpm --filter @sapiom/agent-map test
+      # Vitest needs Node 20+, so agent-map's unit suite runs in the matrix
+      # above; this job proves the packed packages still work on Node 18.
       - run: pnpm --filter @sapiom/agent-map test:package
       - run: pnpm --filter @sapiom/mcp test:capabilities
       - run: pnpm --filter @sapiom/mcp test:package
