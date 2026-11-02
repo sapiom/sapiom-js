@@ -242,19 +242,19 @@ jobs:
           cache: "pnpm"
 
       - name: Use Python 3.11 (node-gyp needs distutils)
-        # electron-builder rebuilds node-pty from source where no matching
-        # prebuilt exists (macOS/arm64, Windows). Its bundled node-gyp@9 imports
-        # `distutils`, which Python 3.12+ removed (PEP 632) — and the macOS/
-        # Windows runners default to 3.12+. Pinning 3.11 (which still ships
-        # distutils) fixes the rebuild without upgrading node-gyp. No-op on
-        # Linux, which uses node-pty's prebuilt binary and never compiles.
+        # electron-builder compiles node-pty wherever no matching prebuild is
+        # used (Linux always: node-pty ships none). The pin dates from node-gyp@9,
+        # which imported `distutils` (removed in Python 3.12, PEP 632). The
+        # rebuild now runs node-gyp 12 through @electron/rebuild 4; the pin stays
+        # until a release run proves the runners' default Python works.
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        # onlyBuiltDependencies (pnpm-workspace.yaml) lets electron/node-pty/
-        # esbuild run their postinstall — electron downloads its binary here.
+        # onlyBuiltDependencies (pnpm-workspace.yaml) lets esbuild and node-pty
+        # run their install scripts. electron has none: it fetches its binary on
+        # first launch, and packaging downloads its own copy.
         run: pnpm install --frozen-lockfile
 
       - name: Build harness + desktop (topological)

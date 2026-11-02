@@ -12,13 +12,14 @@ touching this package, and how to tell whether a change actually works on the OS
 
 | OS | Role | Artifacts | node-pty |
 | --- | --- | --- | --- |
-| Linux | dev/proof platform | `AppImage`, `deb` | **prebuilt binary — never compiles** |
-| **macOS** | **required deliverable** (signed + notarized) | `dmg`, `zip` (arm64 today) | compiled from source |
+| Linux | dev/proof platform | `AppImage`, `deb` | compiled from source (node-pty ships no Linux prebuild) |
+| **macOS** | **required deliverable** (signed + notarized), macOS 13+ | `dmg`, `zip` (arm64 today) | compiled from source |
 | Windows | in scope, lower priority | `nsis` `.exe` | compiled from source |
 
-> **A green Linux build proves almost nothing about the other two.** Linux uses node-pty's prebuilt
-> binary, so node-gyp never runs — which is exactly why Linux passed through every CI failure that
-> macOS and Windows hit. Don't infer cross-platform health from it.
+> **A green Linux build proves almost nothing about the other two.** Linux compiles node-pty with
+> the system gcc and none of the macOS/Windows toolchain quirks below (Python, Visual Studio), which
+> is why Linux passed through every CI failure that macOS and Windows hit. Don't infer
+> cross-platform health from it.
 
 ## Main-process code that survives all three OSes
 
@@ -101,6 +102,12 @@ plain Node with no asar support, so their whole import tree must exist on disk. 
 recompiles node-pty against the Electron ABI **on the packaging OS** — there is no cross-compiling
 here, each OS builds on its own runner.
 
+**`pack.mjs` writes the root `packageManager` into the deploy dir's `package.json`.** electron-builder
+26 picks its node_modules collector from that field, then the lockfile, then the environment, and
+the deploy dir has no lockfile. Built the CI way, that resolved to npm, whose collection left esbuild's platform
+binary out of the package, and the `deploy-bundle` smoke check failed. A local run started through
+another tool (bun, for one) can be detected as that tool instead; the field makes every run agree.
+
 **A dependency that execs a sidecar binary needs more than `asarUnpack`.** Unpacking puts the file on
 disk but leaves every path `require.resolve` reports pointing at `app.asar`, and `spawn` — unlike
 `fs` — is not patched, so it fails with `ENOTDIR`. This shipped in 0.1.0: deploying a workflow died
@@ -126,8 +133,15 @@ smoke check starts two real runtimes, creates independent sessions, and requires
 - Canonicalize the tmpdir or electron-builder fails with `ENOENT .pnpm/node_modules/@sapiom/…`: it
   realpaths the dir, and a non-canonical base leaves the relative symlinks' `../` chains one level
   short.
-- **Python 3.12+ removed `distutils`** (PEP 632) and node-gyp@9 imports it → the rebuild dies. CI
-  pins Python 3.11.
+- **Python 3.12+ removed `distutils`** (PEP 632) and node-gyp@9 imported it, so the rebuild died. CI
+  pins Python 3.11. The rebuild now runs node-gyp 12 (via app-builder-lib's `@electron/rebuild` 4);
+  keep the pin until a release run proves the default Python works.
+- **The build runs on macOS 13 or later only** (Electron 44+). `mac.minimumSystemVersion` sets the
+  bundle's `LSMinimumSystemVersion`, and `pack.mjs --mac` stamps the matching Darwin floor
+  (`minimumSystemVersion: 22.0.0`) into `latest-mac.yml`/`beta-mac.yml`. That stamp is what stops an
+  installed app on macOS 11/12 from auto-updating into a build it cannot launch: electron-updater
+  reads the manifest, never the plist (`src/main/mac-minimum.ts`). Raise both together with the next
+  Electron floor; `electron-version.test.ts` pins them.
 - **Only arm64 is built today.** `macos-14` is Apple Silicon and electron-builder defaults to the
   host arch, so **Intel Macs get no artifact**. Add an `x64`/universal target before GA if Intel users
   are in scope.
@@ -163,9 +177,9 @@ smoke check starts two real runtimes, creates independent sessions, and requires
   `D:\…\harness-desktop\C:\Users\…` (`scripts/pack.mjs:35`).
 - **Pinned to `windows-2022`.** `windows-latest` rolled to a Visual Studio 18 image that node-gyp's
   VS detection reports as "unknown version undefined" → no usable compiler.
-- The `@electron/rebuild: ^3.7.0` override in `pnpm-workspace.yaml` is what gets a VS2022-aware
-  node-gyp. **Do not instead override `node-gyp` itself** — that hung the rebuild on *every*
-  platform.
+- There is no `@electron/rebuild` override any more: app-builder-lib 26 depends on
+  `@electron/rebuild` 4, whose node-gyp 12 detects VS2022. **Do not override `node-gyp` itself**:
+  that hung the rebuild on *every* platform.
 - **`cmd.exe` does not strip single quotes.** A script doing `echo '{"type":"module"}' > pkg.json`
   writes literal quotes → invalid JSON → the packaged app dies at launch with
   `ERR_INVALID_PACKAGE_CONFIG`. Use `node -e "require('fs').writeFileSync(…)"`. This applies to
@@ -179,6 +193,8 @@ smoke check starts two real runtimes, creates independent sessions, and requires
   `./sapiom-*.AppImage --appimage-extract 'resources/app.asar'` then `grep -a` it. The packaged
   bundle is the source of truth — not your `dist/`.
 - Node 26 on a dev box breaks Electron's binary extraction and `electron-rebuild`; CI uses Node 22.
+  Electron 45 itself needs Node >= 22.12 to install (`engines.node`).
+- Packaging locally needs `make` and a C++ compiler, since node-pty compiles here.
 
 ## CI
 
