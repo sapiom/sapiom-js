@@ -80,9 +80,11 @@ describe('zodToJsonSchema', () => {
       z.object({ id: z.string() }).and(z.object({ retries: z.number().default(0) })),
     );
 
-    const branches = schema.allOf as Record<string, unknown>[];
-    expect(requiredOf(branches[0])).toEqual(['id']);
-    expect(requiredOf(branches[1])).toEqual([]);
+    // Older zod emits one `allOf` branch per object, newer zod merges them into
+    // one object; the peer range accepts both.
+    const nodes = (schema.allOf as Record<string, unknown>[] | undefined) ?? [schema];
+    expect(nodes.flatMap(requiredOf)).toEqual(['id']);
+    expect(nodes.some((node) => propAt(node, 'retries')?.default === 0)).toBe(true);
   });
 
   it('treats .prefault() like .default(): the field is optional and carries the value', () => {

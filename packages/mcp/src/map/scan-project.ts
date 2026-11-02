@@ -89,7 +89,7 @@ const sapiomJsonSchema = z
     name: z.string().optional(),
     definitionId: z.union([z.string(), z.number()]).optional(),
     resources: z
-      .record(z.object({ env: z.record(z.string()).optional() }).passthrough())
+      .record(z.string(), z.object({ env: z.record(z.string(), z.string()).optional() }).passthrough())
       .optional(),
   })
   .passthrough();
@@ -238,6 +238,7 @@ function manifestToSteps(
     .object({
       entry: z.string(),
       steps: z.record(
+        z.string(),
         z
           .object({
             transitions: z

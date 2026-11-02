@@ -63,7 +63,7 @@
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/sandbox-preview": "workspace:^",
-    "zod": "^3.25.0",
+    "zod": "catalog:",
     "@sapiom/agent-map": "workspace:^",
     "typescript": "^5.4.2"
   },
