@@ -7,14 +7,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import type { ResolvedEnvironment } from "../credentials.js";
+import { register as registerAgents } from "./agents.js";
 import { register as registerFeedback } from "./feedback.js";
 import { register as registerSandbox } from "./sandbox.js";
+
+// Signed out: a tool that passes argument validation answers NOT_AUTHENTICATED.
+vi.mock("../credentials.js", () => ({
+  readCredentials: vi.fn(async () => null),
+}));
 
 const env: ResolvedEnvironment = {
   name: "production",
@@ -34,6 +40,7 @@ async function connect(): Promise<Client> {
   const server = new McpServer({ name: "sapiom-dev", version: "0.0.0" });
   registerSandbox(server, env);
   registerFeedback(server, env);
+  registerAgents(server, env);
   const client = new Client({ name: "test-client", version: "0.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -104,5 +111,21 @@ describe("tool input schemas over tools/list", () => {
     });
 
     expect(result.isError).toBe(true);
+  });
+
+  it("sapiom_dev_agents_emit_event accepts an omitted payload", async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const emit = tools.find(
+      (tool) => tool.name === "sapiom_dev_agents_emit_event",
+    )!;
+    expect(emit.inputSchema.required).toEqual(["type"]);
+
+    const result = await client.callTool({
+      name: "sapiom_dev_agents_emit_event",
+      arguments: { type: "heartbeat.tick" },
+    });
+    const text = (result.content as Array<{ text: string }>)[0]!.text;
+    expect(JSON.parse(text).error.code).toBe("NOT_AUTHENTICATED");
   });
 });

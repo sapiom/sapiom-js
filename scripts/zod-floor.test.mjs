@@ -1,16 +1,27 @@
 // =============================================================================
 // scripts/zod-floor.test.mjs
 //
-// Keeps every zod this repository declares or resolves on the version set once in
-// the pnpm catalog (pnpm-workspace.yaml), and that version at or above the floor.
-// Workspace packages reference the catalog; examples install with npm outside the
-// workspace and the scaffold fallback is generated, so both are compared to it here.
+// The pnpm catalog (pnpm-workspace.yaml) is the one place the zod version is set.
+// Workspace dependencies must reference it (peer ranges are excluded). Examples
+// install with npm outside the workspace and the scaffold pin is generated, so both
+// must match the catalog minimum. The catalog and every lockfile resolution must
+// meet FLOOR.
 //
 // Run:  pnpm examples:check:test   (node --test)
 // =============================================================================
 
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -19,7 +30,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FLOOR = "4.6.6";
 const DEP_FIELDS = ["dependencies", "devDependencies"];
 
-const read = (file) => readFileSync(path.join(ROOT, file), "utf8");
+// A Windows checkout can turn LF into CRLF, which the line patterns below would
+// not match.
+const read = (file) =>
+  readFileSync(path.join(ROOT, file), "utf8").replace(/\r\n/g, "\n");
 const readJson = (file) => JSON.parse(read(file));
 
 const compare = (left, right) => {
@@ -30,10 +44,9 @@ const compare = (left, right) => {
 };
 const minimumOf = (range) => /^[\^~]?(\d+\.\d+\.\d+)$/.exec(range)?.[1] ?? null;
 
-function catalogRange() {
-  const block =
-    /^catalog:\n((?:[ \t]+.*\n?)*)/m.exec(read("pnpm-workspace.yaml"))?.[1] ??
-    "";
+function catalogRange(yaml = read("pnpm-workspace.yaml")) {
+  const lf = yaml.replace(/\r\n/g, "\n");
+  const block = /^catalog:\n((?:[ \t]+.*\n?)*)/m.exec(lf)?.[1] ?? "";
   return /^[ \t]+["']?zod["']?:[ \t]*["']?([^"'\s#]+)/m.exec(block)?.[1];
 }
 
@@ -72,6 +85,39 @@ test("the pnpm catalog sets one zod at or above the floor, enforced by an overri
     /^overrides:\n(?:[ \t]+.*\n|[ \t]*#.*\n)*?[ \t]+["']?zod["']?:[ \t]*["']catalog:["']/m,
     "pnpm-workspace.yaml overrides must force zod to catalog:",
   );
+});
+
+test("a CRLF checkout yields the same catalog zod, here and in the scaffold generator", () => {
+  const crlf = read("pnpm-workspace.yaml").replace(/\n/g, "\r\n");
+  assert.equal(catalogRange(crlf), catalog);
+
+  const tree = mkdtempSync(path.join(tmpdir(), "zod-floor-crlf-"));
+  try {
+    writeFileSync(path.join(tree, "pnpm-workspace.yaml"), crlf);
+    for (const pkg of ["agent", "tools"]) {
+      mkdirSync(path.join(tree, "packages", pkg), { recursive: true });
+      copyFileSync(
+        path.join(ROOT, "packages", pkg, "package.json"),
+        path.join(tree, "packages", pkg, "package.json"),
+      );
+    }
+    mkdirSync(path.join(tree, "packages/agent-core/scripts"), {
+      recursive: true,
+    });
+    mkdirSync(path.join(tree, "packages/agent-core/src"));
+    const script = "packages/agent-core/scripts/gen-version-fallback.mjs";
+    copyFileSync(path.join(ROOT, script), path.join(tree, script));
+    execFileSync(process.execPath, [path.join(tree, script)], {
+      stdio: "ignore",
+    });
+    const generated = readFileSync(
+      path.join(tree, "packages/agent-core/src/version-fallback.generated.ts"),
+      "utf8",
+    );
+    assert.equal(/\bzod:\s*"([^"]+)"/.exec(generated)?.[1], catalogMinimum);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
 });
 
 test("workspace packages take zod from the catalog", () => {

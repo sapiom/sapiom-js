@@ -87,10 +87,9 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
 // `VERSION_FALLBACK` (the offline fallback stamped into a scaffolded project when
 // the live npm lookup below fails) is imported from `version-fallback.generated.ts`,
-// which is generated from the workspace's own @sapiom/agent + @sapiom/tools
-// package.json and the pnpm catalog's zod on every build and in the release
-// `version-packages` step. It used to be hand-maintained constants here that
-// drifted on every bump; deriving them means they can never go stale again.
+// which agent-core prebuild and the release `version-packages` step derive from the
+// @sapiom/agent and @sapiom/tools package.json files and the pnpm catalog's zod, so
+// offline scaffolds track the workspace.
 
 export interface ResolvedVersions {
   agent: string;
