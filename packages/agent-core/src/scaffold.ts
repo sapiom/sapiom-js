@@ -88,12 +88,9 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 // `VERSION_FALLBACK` (the offline fallback stamped into a scaffolded project when
 // the live npm lookup below fails) is imported from `version-fallback.generated.ts`,
 // which is generated from the workspace's own @sapiom/agent + @sapiom/tools
-// package.json on every build and in the release `version-packages` step. It used
-// to be a hand-maintained constant here and drifted on every SDK bump; deriving it
-// from the published packages means it can never go stale again.
-
-/** The zod major the authoring SDK is built against. */
-const ZOD_VERSION = "4.1.12";
+// package.json and the pnpm catalog's zod on every build and in the release
+// `version-packages` step. It used to be hand-maintained constants here that
+// drifted on every bump; deriving them means they can never go stale again.
 
 export interface ResolvedVersions {
   agent: string;
@@ -148,7 +145,7 @@ export async function resolveVersions(): Promise<ResolvedVersions> {
   return {
     agent: agent ?? VERSION_FALLBACK.agent,
     tools: tools ?? VERSION_FALLBACK.tools,
-    zod: ZOD_VERSION,
+    zod: VERSION_FALLBACK.zod,
   };
 }
 
