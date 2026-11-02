@@ -242,11 +242,10 @@ jobs:
           cache: "pnpm"
 
       - name: Use Python 3.11 (node-gyp needs distutils)
-        # electron-builder compiles node-pty wherever no matching prebuild is
-        # used (Linux always: node-pty ships none). The pin dates from node-gyp@9,
-        # which imported `distutils` (removed in Python 3.12, PEP 632). The
-        # rebuild now runs node-gyp 12 through @electron/rebuild 4; the pin stays
-        # until a release run proves the runners' default Python works.
+        # Keep Python 3.11 until a release run validates the runners' default Python
+        # with @electron/rebuild 4 and node-gyp 12. node-gyp 9 requires distutils,
+        # which Python 3.12+ omits (PEP 632). node-pty needs a source rebuild wherever
+        # no matching prebuild is used; it ships no Linux prebuilds.
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"

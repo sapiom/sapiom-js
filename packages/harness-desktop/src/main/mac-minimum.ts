@@ -44,3 +44,23 @@ export function stampMacManifests(releaseDir: string): string[] {
   }
   return manifests;
 }
+
+const PUBLISH_FLAG = /^(?:--publish|-p)(?:=(.*))?$/;
+
+/**
+ * Throws when electron-builder args ask to publish. electron-builder uploads the
+ * update manifest before it returns, so a mac build that publishes itself ships
+ * it unstamped; the release job uploads the stamped files instead.
+ */
+export function assertNoPublish(args: readonly string[]): void {
+  args.forEach((arg, index) => {
+    const match = PUBLISH_FLAG.exec(arg);
+    if (!match) return;
+    const policy = match[1] ?? args[index + 1];
+    if (policy !== "never") {
+      throw new Error(
+        `a mac build must not publish before its update manifest is stamped (got ${arg} ${policy ?? ""})`,
+      );
+    }
+  });
+}

@@ -1,8 +1,8 @@
 packages:
   - "packages/*"
 
-# node-pty needs its postinstall (chmods spawn-helper +x); pnpm skips build
-# scripts by default, which leaves it silently non-functional on fresh installs.
+# Allow node-pty's install scripts so native binaries can be built when no
+# matching prebuild exists; pnpm otherwise skips dependency build scripts.
 # esbuild needs its postinstall too. electron has no install script since v42 (it
 # downloads its binary on the first run of its bin); listing it is harmless.
 # @electron/rebuild recompiles node-pty against Electron's ABI during packaging.
@@ -13,9 +13,9 @@ onlyBuiltDependencies:
   - "@electron/rebuild"
   - opencode-ai
 
-# plist 3.1.1 (via @electron/osx-sign, @electron/universal, dmg-license) accepts
-# an advised @xmldom/xmldom 0.9.x, and pnpm keeps a locked version that still
-# satisfies the range. Raise only that line; plist 3.1.0's 0.8.x line is current.
+# Exclude affected @xmldom/xmldom 0.9.x versions accepted by plist 3.1.1
+# (via @electron/osx-sign and @electron/universal); pnpm can retain a locked
+# version that satisfies the range. Leave plist 3.1.0's 0.8.x line unchanged.
 overrides:
   "@xmldom/xmldom@>=0.9.0 <0.9.12": ^0.9.12
 patchedDependencies:

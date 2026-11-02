@@ -1,9 +1,8 @@
 /**
- * The mac update-manifest floor. A wrong stamp does not fail loudly: a Mac below
- * the floor would auto-update into a build that cannot launch, or one above it
- * would stop receiving updates. The second suite runs the installed
- * electron-updater's own check against a stamped manifest, because that check
- * (not ours) is what an installed app applies.
+ * A wrong macOS manifest floor can update an unsupported Mac into an unusable
+ * build or stop a supported Mac receiving updates. The installed-app suite runs
+ * electron-updater's own check against a stamped manifest because installed apps
+ * apply that check.
  */
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
@@ -11,12 +10,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertNoPublish,
   DARWIN_MINIMUM_RELEASE,
   stampMacManifests,
   stampMinimumSystemVersion,
 } from "./mac-minimum.js";
 
-// Shape of an electron-builder latest-mac.yml.
 const MANIFEST = [
   "version: 0.5.0",
   "files:",
@@ -82,6 +81,27 @@ describe("stampMacManifests", () => {
   it("throws when there is no mac manifest, so pack.mjs fails the build", () => {
     const dir = releaseDir({ "latest-linux.yml": MANIFEST });
     expect(() => stampMacManifests(dir)).toThrow(/no \*-mac\.yml/);
+  });
+});
+
+describe("assertNoPublish", () => {
+  it("accepts no publish flag, or an explicit never", () => {
+    expect(() => assertNoPublish([])).not.toThrow();
+    expect(() => assertNoPublish(["-c.mac.notarize=true"])).not.toThrow();
+    expect(() => assertNoPublish(["--publish", "never"])).not.toThrow();
+    expect(() => assertNoPublish(["-p=never"])).not.toThrow();
+  });
+
+  it("refuses any other publish policy, in every flag form", () => {
+    for (const args of [
+      ["--publish", "always"],
+      ["--publish=onTag"],
+      ["-p", "onTagOrDraft"],
+      ["-c.mac.notarize=true", "--publish"],
+      ["--publish", "never", "--publish", "always"],
+    ]) {
+      expect(() => assertNoPublish(args), args.join(" ")).toThrow(/must not publish/);
+    }
   });
 });
 

@@ -64,6 +64,14 @@ const { resolveUpdateChannel } = await import(
   pathToFileURL(join(pkgDir, "dist", "main", "update-policy.js")).href
 );
 const { channel } = resolveUpdateChannel(version, {});
+
+// electron-builder uploads update manifests before it returns, so a mac publish from
+// here would ship latest-mac.yml before the minimumSystemVersion stamp below.
+const macMinimum =
+  platform === "--mac"
+    ? await import(pathToFileURL(join(pkgDir, "dist", "main", "mac-minimum.js")).href)
+    : null;
+macMinimum?.assertNoPublish(passthrough);
 // An explicit caller flag still wins — the passthrough args land after ours.
 const channelFlag = passthrough.some((arg) => arg.startsWith("-c.publish.channel"))
   ? []
@@ -110,10 +118,10 @@ assertHarnessVersion(
   "deployed desktop bundle",
 );
 
-// electron-builder 26 collects the packed node_modules with the package manager it
-// detects, and the deploy dir has no lockfile, so without this field it falls back
-// to npm, whose walk of pnpm's layout leaves out esbuild's platform binary: the
-// packaged app then cannot bundle a deploy (the `deploy-bundle` smoke check).
+// Pin electron-builder 26's collector to pnpm: without lockfile metadata,
+// detection depends on the invoking environment and defaults to npm.
+// npm's walk of this pnpm layout can omit esbuild's platform binary,
+// breaking deploy bundling (the `deploy-bundle` smoke check).
 const deployPkgPath = join(deployDir, "package.json");
 const deployPkg = JSON.parse(readFileSync(deployPkgPath, "utf8"));
 deployPkg.packageManager = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).packageManager;
@@ -166,11 +174,10 @@ run(
 // it from the update manifest, so stamp it there or Macs below the floor
 // auto-update into a build they cannot launch (src/main/mac-minimum.ts). Throws
 // when no mac manifest exists, failing the build instead of shipping one unstamped.
-if (platform === "--mac") {
-  const { stampMacManifests } = await import(
-    pathToFileURL(join(pkgDir, "dist", "main", "mac-minimum.js")).href
+if (macMinimum) {
+  console.log(
+    `[pack] stamped minimumSystemVersion into ${macMinimum.stampMacManifests(outputDir).join(", ")}`,
   );
-  console.log(`[pack] stamped minimumSystemVersion into ${stampMacManifests(outputDir).join(", ")}`);
 }
 
 console.log(`[pack] done → ${outputDir}`);

@@ -103,10 +103,10 @@ recompiles node-pty against the Electron ABI **on the packaging OS** — there i
 here, each OS builds on its own runner.
 
 **`pack.mjs` writes the root `packageManager` into the deploy dir's `package.json`.** electron-builder
-26 picks its node_modules collector from that field, then the lockfile, then the environment, and
-the deploy dir has no lockfile. Built the CI way, that resolved to npm, whose collection left esbuild's platform
-binary out of the package, and the `deploy-bundle` smoke check failed. A local run started through
-another tool (bun, for one) can be detected as that tool instead; the field makes every run agree.
+26 picks its node_modules collector from that field, then the lockfile, then the environment
+(`npm_config_user_agent`, `npm_execpath`), else npm, and the deploy dir has no lockfile. Built the CI
+way, that resolved to npm, whose collection left esbuild's platform binary out of the package, and
+the `deploy-bundle` smoke check failed. The field makes every run collect with pnpm.
 
 **A dependency that execs a sidecar binary needs more than `asarUnpack`.** Unpacking puts the file on
 disk but leaves every path `require.resolve` reports pointing at `app.asar`, and `spawn` — unlike
@@ -269,7 +269,8 @@ Things that will bite you:
   `latest-mac.yml` is only written when a zip target exists. It also refuses to apply an unsigned
   update — so auto-update on macOS depends on the Developer ID cert, not just on this code.
 - **The `publish:` block in `electron-builder.yml` is load-bearing even though we never publish from
-  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job). Without a
+  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job, and
+  refuses any other `--publish` on a mac build, which would upload `latest-mac.yml` unstamped). Without a
   publish provider, no `latest*.yml` is generated and no `resources/app-update.yml` is baked in — the
   app then runs perfectly and never updates. The `update-config` smoke check exists for that, and it
   also cross-checks the *baked* channel against the one the app resolves at runtime.
