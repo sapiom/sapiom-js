@@ -24,9 +24,10 @@ overrides:
   # Lift transitive dependencies to the latest release of the major line their
   # parents declare. Keys are scoped to that line so a parent never gets a
   # major it did not ask for, and newer majors stay free for regular upgrades.
-  # Exceptions: fast-xml-parser@4, langsmith@0.3, toml@4 and uuid@9/10 sit in
-  # dev-only graphs whose tests cover the jump; @hono/node-server@1 moves to 2.x,
-  # which @modelcontextprotocol/sdk's own range allows.
+  # Exceptions: fast-xml-parser@4, langsmith@0.3 and uuid@9/10 sit in dev-only
+  # graphs whose tests cover the jump. toml@4 moves to 5 under effect, which the
+  # desktop app ships; its parse API is unchanged. @hono/node-server@1 moves to
+  # 2.x, which @modelcontextprotocol/sdk's own range allows.
   "baseline-browser-mapping@2": ^2.11.34
   "body-parser@1": ^1.20.9
   "body-parser@2": ^2.4.0

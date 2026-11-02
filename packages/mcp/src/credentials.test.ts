@@ -58,8 +58,8 @@ it("exposes the shared credential-store path", () => {
 });
 
 afterEach(() => {
-  // Since Vitest 4, restoreAllMocks only undoes vi.spyOn; resetting also
-  // clears the module mocks' call history between tests.
+  // Vitest 4's restoreAllMocks only restores vi.spyOn spies; reset module
+  // mocks too to prevent call history from leaking between tests.
   vi.resetAllMocks();
   vi.restoreAllMocks();
 });
