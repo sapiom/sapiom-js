@@ -685,10 +685,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       // other object arg in this module gets. `asEventPayload` re-imposes the
       // object rule after decoding, so nothing is loosened.
       //
-      // `.optional()` keeps it out of `required` in `tools/list`, which is why
-      // an omitted payload defaults to `{}` below rather than failing: the
-      // schema an agent reads has to be the schema the handler honors, and an
-      // event carrying no data is legitimate. Same `?? {}` as the run tool.
+      // `.optional()` keeps payload out of `required` in `tools/list`: the advertised
+      // schema must match the handler's `{}` default for an omitted payload, since an
+      // event may carry no data. Explicit `null` still fails the object rule.
       payload: z
         .unknown()
         .optional()
