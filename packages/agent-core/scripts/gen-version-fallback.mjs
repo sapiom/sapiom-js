@@ -33,10 +33,12 @@ const tools = versionOf("tools");
 // pins its floor so new projects install the version the SDK is built against.
 // Line-based read: the root has no YAML parser, and the block is flat `name: range`.
 const catalogZod = () => {
+  // A Windows checkout can turn LF into CRLF, which the line patterns below
+  // would not match.
   const yaml = readFileSync(
     resolve(here, "..", "..", "..", "pnpm-workspace.yaml"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   const block = /^catalog:\n((?:[ \t]+.*\n?)*)/m.exec(yaml)?.[1] ?? "";
   const range = /^[ \t]+["']?zod["']?:[ \t]*["']?([^"'\s#]+)/m.exec(block)?.[1];
   const version = range?.replace(/^[\^~]/, "");
