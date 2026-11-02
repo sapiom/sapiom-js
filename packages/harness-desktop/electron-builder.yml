@@ -4,7 +4,7 @@ copyright: Copyright © Sapiom
 # Pinned because packaging runs against a `pnpm deploy --prod` dir that has no
 # `electron` devDep for electron-builder to infer the version from. Keep in sync
 # with the `electron` devDependency.
-electronVersion: 33.4.11
+electronVersion: 45.2.1
 
 # Custom URL scheme for web→desktop deep links (the dashboard's "Open in Studio").
 # Populates macOS CFBundleURLTypes (Info.plist) and the Linux .desktop MimeType.
@@ -100,6 +100,9 @@ mac:
   # size as its neighbours in the Dock. A full-bleed tile (correct on Linux and
   # Windows) reads as conspicuously oversized next to system apps.
   icon: assets/icon-mac.png
+  # Electron 44+ does not run on macOS 12 or older. This sets LSMinimumSystemVersion;
+  # pack.mjs stamps the matching floor into the update manifest (src/main/mac-minimum.ts).
+  minimumSystemVersion: "13.0"
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: assets/entitlements.mac.plist

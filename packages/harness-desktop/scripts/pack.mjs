@@ -11,7 +11,7 @@
 //   (defaults to the HOST platform; any further args pass through, e.g.
 //   -c.mac.notarize=true)
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as os from "node:os";
@@ -110,6 +110,15 @@ assertHarnessVersion(
   "deployed desktop bundle",
 );
 
+// electron-builder 26 collects the packed node_modules with the package manager it
+// detects, and the deploy dir has no lockfile, so without this field it falls back
+// to npm, whose walk of pnpm's layout leaves out esbuild's platform binary: the
+// packaged app then cannot bundle a deploy (the `deploy-bundle` smoke check).
+const deployPkgPath = join(deployDir, "package.json");
+const deployPkg = JSON.parse(readFileSync(deployPkgPath, "utf8"));
+deployPkg.packageManager = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).packageManager;
+writeFileSync(deployPkgPath, `${JSON.stringify(deployPkg, null, 2)}\n`);
+
 // `pnpm deploy` honors .gitignore, which excludes dist/ + release/. Copy the
 // built app output, the builder config, and assets into the deploy dir.
 cpSync(join(pkgDir, "dist"), join(deployDir, "dist"), { recursive: true });
@@ -152,5 +161,16 @@ run(
   ],
   deployDir,
 );
+
+// electron-builder writes the macOS floor only into Info.plist. Installed apps read
+// it from the update manifest, so stamp it there or Macs below the floor
+// auto-update into a build they cannot launch (src/main/mac-minimum.ts). Throws
+// when no mac manifest exists, failing the build instead of shipping one unstamped.
+if (platform === "--mac") {
+  const { stampMacManifests } = await import(
+    pathToFileURL(join(pkgDir, "dist", "main", "mac-minimum.js")).href
+  );
+  console.log(`[pack] stamped minimumSystemVersion into ${stampMacManifests(outputDir).join(", ")}`);
+}
 
 console.log(`[pack] done → ${outputDir}`);
