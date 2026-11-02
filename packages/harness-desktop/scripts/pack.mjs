@@ -8,8 +8,8 @@
 // electron-builder there, writing artifacts back to <pkg>/release.
 //
 // Usage: node scripts/pack.mjs [--linux|--mac|--win] [...electron-builder args]
-//   (defaults to the HOST platform; any further args pass through, e.g.
-//   -c.mac.notarize=true; a mac build accepts only such -c.<key> overrides)
+//   (defaults to the HOST platform; further args must be -c.<key> overrides,
+//   e.g. -c.mac.notarize=true, and pass through; see pack-args.mjs)
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as os from "node:os";
 
 import { assertHarnessVersion } from "./harness-version.mjs";
+import { parsePackArgs } from "./pack-args.mjs";
 
 const pkgDir = dirname(dirname(fileURLToPath(import.meta.url))); // packages/harness-desktop
 const repoRoot = dirname(dirname(pkgDir)); // sapiom-js
@@ -31,14 +32,11 @@ const outputDir = join(pkgDir, "release");
  * then looked for a `release/mac-arm64/Sapiom.app` nothing had built.
  */
 const HOST_PLATFORM_FLAG = { darwin: "--mac", win32: "--win" }[process.platform] ?? "--linux";
-const platform = process.argv[2] ?? HOST_PLATFORM_FLAG;
-// Anything after the platform flag goes straight to electron-builder. Signing
+// Config overrides after the platform flag go straight to electron-builder. Signing
 // and notarization are switched on this way (`-c.mac.notarize=true`) rather than
 // hardcoded in electron-builder.yml, so a build without credentials still
 // succeeds unsigned instead of failing.
-// Empty strings filtered out: a shell passing an unset flag as "" would
-// otherwise reach electron-builder as a bogus empty argument.
-const passthrough = process.argv.slice(3).filter((arg) => arg.length > 0);
+const { platform, passthrough } = parsePackArgs(process.argv.slice(2), HOST_PLATFORM_FLAG);
 const isWindows = process.platform === "win32";
 
 // The update channel this artifact publishes to, derived HERE rather than by each
@@ -65,13 +63,10 @@ const { resolveUpdateChannel } = await import(
 );
 const { channel } = resolveUpdateChannel(version, {});
 
-// electron-builder uploads update manifests before it returns, so a mac publish from
-// here would ship latest-mac.yml before the minimumSystemVersion stamp below.
 const macMinimum =
   platform === "--mac"
     ? await import(pathToFileURL(join(pkgDir, "dist", "main", "mac-minimum.js")).href)
     : null;
-macMinimum?.assertMacPassthrough(passthrough);
 // An explicit caller flag still wins — the passthrough args land after ours.
 const channelFlag = passthrough.some((arg) => arg.startsWith("-c.publish.channel"))
   ? []

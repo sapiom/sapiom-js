@@ -10,7 +10,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertMacPassthrough,
   DARWIN_MINIMUM_RELEASE,
   stampMacManifests,
   stampMinimumSystemVersion,
@@ -81,29 +80,6 @@ describe("stampMacManifests", () => {
   it("throws when there is no mac manifest, so pack.mjs fails the build", () => {
     const dir = releaseDir({ "latest-linux.yml": MANIFEST });
     expect(() => stampMacManifests(dir)).toThrow(/no \*-mac\.yml/);
-  });
-});
-
-describe("assertMacPassthrough", () => {
-  it("accepts config overrides, which is what the release run passes", () => {
-    expect(() => assertMacPassthrough([])).not.toThrow();
-    expect(() => assertMacPassthrough(["-c.mac.notarize=true"])).not.toThrow();
-    expect(() => assertMacPassthrough(["--config.publish.channel=beta"])).not.toThrow();
-  });
-
-  it("refuses every other arg, including each spelling of the publish flag", () => {
-    for (const args of [
-      ["--publish", "always"],
-      ["--publish", "never"],
-      ["--publish=onTag"],
-      ["-p", "onTagOrDraft"],
-      ["--p=always"],
-      ["-mp=always"],
-      ["-c", "other-config.yml"],
-      ["-c.mac.notarize=true", "--publish"],
-    ]) {
-      expect(() => assertMacPassthrough(args), args.join(" ")).toThrow(/accepts only -c\.<key>/);
-    }
   });
 });
 

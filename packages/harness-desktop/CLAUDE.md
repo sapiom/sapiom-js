@@ -269,11 +269,11 @@ Things that will bite you:
   `latest-mac.yml` is only written when a zip target exists. It also refuses to apply an unsigned
   update — so auto-update on macOS depends on the Developer ID cert, not just on this code.
 - **The `publish:` block in `electron-builder.yml` is load-bearing even though we never publish from
-  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job, and a mac
-  build accepts only `-c.<key>` passthrough args, since a self-publish would upload `latest-mac.yml`
-  unstamped). Without a
-  publish provider, no `latest*.yml` is generated and no `resources/app-update.yml` is baked in — the
-  app then runs perfectly and never updates. The `update-config` smoke check exists for that, and it
+  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job, and
+  accepts only `--linux`/`--mac`/`--win` plus `-c.<key>` passthrough args, since a mac build that
+  publishes itself or picks its platform another way would upload or keep `latest-mac.yml`
+  unstamped). Without a publish provider, no `latest*.yml` is generated and no
+  `resources/app-update.yml` is baked in — the app then runs perfectly and never updates. The `update-config` smoke check exists for that, and it
   also cross-checks the *baked* channel against the one the app resolves at runtime.
 - **Don't derive the channel in a workflow.** `pack.mjs` imports `resolveUpdateChannel` from the built
   `dist/` and passes the flag itself, so the release workflow, the PR smoke job and a local

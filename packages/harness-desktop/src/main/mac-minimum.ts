@@ -44,20 +44,3 @@ export function stampMacManifests(releaseDir: string): string[] {
   }
   return manifests;
 }
-
-const CONFIG_OVERRIDE = /^(?:-c|--config)\.[A-Za-z]/;
-
-/**
- * Throws unless every extra electron-builder arg is a `-c.<key>` config override.
- * electron-builder uploads the update manifest before it returns, so a mac build
- * that publishes itself ships it unstamped. An allowlist, because yargs accepts
- * too many spellings of the publish flag (aliases, groups, repeats) to deny them.
- */
-export function assertMacPassthrough(args: readonly string[]): void {
-  const rejected = args.filter((arg) => !CONFIG_OVERRIDE.test(arg));
-  if (rejected.length > 0) {
-    throw new Error(
-      `a mac build accepts only -c.<key> overrides, so it cannot publish before its update manifest is stamped (got ${rejected.join(" ")})`,
-    );
-  }
-}
