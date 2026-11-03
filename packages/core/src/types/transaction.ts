@@ -91,6 +91,8 @@ export interface TransactionResponse {
   };
   verification?: {
     id: string;
+    version?: number;
+    expiresAt?: string;
     status: string;
     authentication:
       | "unknown"

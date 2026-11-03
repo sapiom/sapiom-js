@@ -399,6 +399,9 @@ class PaymentInterceptor {
         this.options.placeholder.injectionRef,
       );
     }
+    this.connection.onClose(() => {
+      void this.verification?.close();
+    });
     this.connection.onEvent((event) => this.dispatch(event));
     await this.connection.send("Target.setAutoAttach", {
       autoAttach: true,
