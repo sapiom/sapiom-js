@@ -369,6 +369,15 @@ class PaymentInterceptor {
   }
 
   async start(): Promise<InterceptorHandle> {
+    try {
+      return await this.startAttached();
+    } catch (error) {
+      await this.detach();
+      throw error;
+    }
+  }
+
+  private async startAttached(): Promise<InterceptorHandle> {
     if (this.options.verificationAdapter && this.options.relay.verification) {
       const adapter = this.options.verificationAdapter(this.connection, () =>
         this.verification?.current(),
@@ -688,15 +697,21 @@ class PaymentInterceptor {
   ): Promise<Decision> {
     if (this.verification) {
       const body = await readBody(this.connection, entry.sessionId, request);
-      const action = await this.verification.inspect({
-        url: request.url,
-        method: request.method,
-        body: body ?? "",
-        sessionId: entry.sessionId,
-        frameId: request.frameId,
-      });
-      if (action === "block") return { action: "fail", reason: "unknown" };
-      if (action === "capture") return { action: "challenge" };
+      // Card-bearing requests belong only to the existing credential relay.
+      if (
+        !textHoldsPlaceholderNumber(request.url, this.number) &&
+        !textHoldsPlaceholderNumber(body ?? "", this.number)
+      ) {
+        const action = await this.verification.inspect({
+          url: request.url,
+          method: request.method,
+          body: body ?? "",
+          sessionId: entry.sessionId,
+          frameId: request.frameId,
+        });
+        if (action === "block") return { action: "fail", reason: "unknown" };
+        if (action === "capture") return { action: "challenge" };
+      }
     }
     const read = await this.readHeld(entry.sessionId, request);
     if (read.kind === "unreadable") {
@@ -1022,7 +1037,7 @@ class PaymentInterceptor {
 
   private async detach(): Promise<void> {
     if (this.closed) return;
-    await this.verification?.close();
+    const verificationClosed = this.verification?.close();
     this.closed = true;
     this.buffering = false;
     this.backlog = null;
@@ -1044,6 +1059,7 @@ class PaymentInterceptor {
       })
       .catch(() => {});
     this.connection.close();
+    await verificationClosed;
   }
 
   private subscribe(listener: Listener): () => void {

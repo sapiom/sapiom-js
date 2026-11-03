@@ -17,6 +17,8 @@ export interface HttpRequestConfig {
   params?: Record<string, any>;
   body?: any;
   headers?: Record<string, string>;
+  /** Optional budget for this request only, including bounded server waits. */
+  timeoutMs?: number;
 }
 
 /**
@@ -208,7 +210,8 @@ export class HttpClient {
     };
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeout = config.timeoutMs ?? this.timeout;
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
       const response = await credentialFetch(
@@ -239,7 +242,7 @@ export class HttpClient {
     } catch (error: any) {
       clearTimeout(timeoutId);
       if (error.name === "AbortError") {
-        throw new Error(`Request timeout after ${this.timeout}ms`);
+        throw new Error(`Request timeout after ${timeout}ms`);
       }
       throw error;
     }
