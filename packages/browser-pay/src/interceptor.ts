@@ -16,6 +16,7 @@ import {
   type VerificationAdapterFactory,
   type VerificationHandle,
 } from "./verification.js";
+import { ShopifyVerification } from "./shopify-verification.js";
 import {
   isRelayTimeout,
   isRetryableRelayError,
@@ -369,8 +370,18 @@ class PaymentInterceptor {
   }
 
   async start(): Promise<InterceptorHandle> {
-    if (this.options.verificationAdapter && this.options.relay.verification) {
-      const adapter = this.options.verificationAdapter(this.connection, () =>
+    const factory =
+      this.options.verificationAdapter ??
+      (this.options.profileId === "shopify-card-vault"
+        ? (
+            connection: CdpConnection,
+            state: () =>
+              | import("./verification.js").VerificationState
+              | undefined,
+          ) => new ShopifyVerification(connection, state)
+        : undefined);
+    if (factory && this.options.relay.verification) {
+      const adapter = factory(this.connection, () =>
         this.verification?.current(),
       );
       this.verification = await VerificationSession.attach(

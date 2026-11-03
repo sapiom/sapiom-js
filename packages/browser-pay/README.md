@@ -165,3 +165,16 @@ Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` ru
 `detach()` fails in-flight paused requests before it disables Fetch. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames, client-side-encrypted card payloads, and worklet targets are not visible to this check.
 
 `examples/attach.ts` is the agent-side script. It is not published.
+
+The standard `shopify-card-vault` profile selects its merchant verification adapter
+when the backend enables this capability. It observes the original card session,
+permits one matching checkout submission, and captures supported CReq forms only
+inside that checkout's authentication frame tree. Check polls the existing native
+callback; a pending bank step never triggers another payment or a blind navigation.
+The original merchant frame receives its completion message only after a durable
+one-use claim. Receipt reads use the pinned Shopify `PollForReceipt` query on the
+same browser, cookies and proxy and must match the receipt, card session and terms.
+These remain runner observations; `order` and issuer authentication require
+independent backend evidence. Unknown query versions, callback formats and receipt
+shapes remain pending until the bound deadline. Merchant-created sessions rendered
+through the BT web SDK are experimental and must be validated before live enablement.
