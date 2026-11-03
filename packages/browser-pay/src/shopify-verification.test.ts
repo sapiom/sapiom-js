@@ -54,7 +54,7 @@ function fixture() {
     if (method === "Page.getFrameTree")
       return {
         frameTree: {
-          frame: { id: "top" },
+          frame: { id: "top", url: merchantOrigin + "/checkout" },
           childFrames: [
             { frame: { id: "auth" }, childFrames: [{ frame: { id: "acs" } }] },
           ],
@@ -101,6 +101,7 @@ function fixture() {
 describe("Shopify continuation on the original browser", () => {
   it("forwards one original card-session mutation and blocks a repeated payment", async () => {
     const f = fixture();
+    f.adapter.relayed({ body: '{"id":"unrelated-later-response"}' });
     const wrong = JSON.stringify(submit).replace("same-card", "other-card");
     expect(
       await f.inspect("/checkouts/internal/graphql/persisted", wrong),

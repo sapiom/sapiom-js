@@ -28,6 +28,7 @@ const money = (value: unknown) => {
 export class ShopifyVerification implements VerificationAdapter {
   private cardSession?: string;
   private submitted = false;
+  private checkout?: Frame;
   private callback?: Frame;
   private query?: Query;
 
@@ -37,6 +38,7 @@ export class ShopifyVerification implements VerificationAdapter {
   ) {}
 
   relayed(response: { body: string }) {
+    if (this.cardSession) return;
     const id = json(response.body)?.id;
     if (typeof id === "string" && id.length > 0 && id.length <= 256)
       this.cardSession = id;
@@ -70,9 +72,13 @@ export class ShopifyVerification implements VerificationAdapter {
           return "block" as const;
         // Claim before continuing the original mutation, including ambiguous network outcomes.
         this.submitted = true;
+        this.checkout = await this.checkoutFrame(request, state.merchantOrigin);
+        if (!this.checkout) return "block" as const;
       }
       if (
         this.submitted &&
+        this.checkout?.sessionId === request.sessionId &&
+        this.checkout.frameId === request.frameId &&
         request.frameId &&
         request.method === "POST" &&
         url.search === "?operationName=PollForReceipt" &&
@@ -143,7 +149,8 @@ export class ShopifyVerification implements VerificationAdapter {
         signal: AbortSignal.timeout(10000)
       });
       if (response.status !== 200) return null;
-      return (await response.text()).slice(0, 1024);
+      const text = await response.text();
+      return text.length <= 1024 ? text : null;
     }`,
     );
     // An early Check sees a redirect or challenge HTML. Never execute returned merchant HTML.
@@ -233,6 +240,29 @@ export class ShopifyVerification implements VerificationAdapter {
         ? tree
         : tree?.childFrames?.map(find).find(Boolean);
     return contains(find(result?.frameTree));
+  }
+
+  private async checkoutFrame(
+    request: VerificationRequest,
+    origin: string,
+  ): Promise<Frame | undefined> {
+    if (!request.frameId) return;
+    const result = (await this.cdp.send(
+      "Page.getFrameTree",
+      {},
+      request.sessionId,
+    )) as any;
+    const find = (tree: any): any =>
+      tree?.frame?.id === request.frameId
+        ? tree.frame
+        : tree?.childFrames?.map(find).find(Boolean);
+    const frame = find(result?.frameTree);
+    if (!frame?.url || new URL(frame.url).origin !== origin) return;
+    return {
+      frameId: request.frameId,
+      sessionId: request.sessionId,
+      url: frame.url,
+    };
   }
 
   private async evaluate(frame: Frame, fn: string): Promise<unknown> {
