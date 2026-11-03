@@ -1,5 +1,9 @@
 # @sapiom/browser-pay
 
+## Unreleased
+
+- Add transaction-bound verification observation over the existing browser CDP and relay credential channel. Preserve card-send retry fences and separate interaction from authentication and payment evidence.
+
 ## 0.3.0
 
 ### Minor Changes

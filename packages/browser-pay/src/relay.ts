@@ -10,12 +10,18 @@ import {
   type RelayRequest,
   type RelayResponse,
 } from "./contract.js";
+import {
+  verificationTransport,
+  type VerificationTransport,
+} from "./verification.js";
 
 export interface RelayCallOptions {
   signal?: AbortSignal;
 }
 
 export interface PaymentRelay {
+  /** Present on the standard HTTP relay; custom relays may keep their existing implementation. */
+  verification?: VerificationTransport;
   relay(
     request: RelayRequest,
     options?: RelayCallOptions,
@@ -139,6 +145,24 @@ async function discardBody(response: Response): Promise<void> {
 export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
   const config = requireHttpOptions(options);
   return {
+    verification: verificationTransport((suffix, body) =>
+      credentialFetch(
+        config.fetchImpl,
+        `${config.baseUrl}/v1/transactions/${encodeURIComponent(config.transactionId)}/payment/verification${suffix}`,
+        {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10_000),
+        },
+        { header: "x-api-key", value: config.apiKey },
+        config.policy,
+      ),
+    ),
     async relay(request, call) {
       const url = `${config.baseUrl}/v1/transactions/${encodeURIComponent(config.transactionId)}/payment/relay`;
       let response: Response;

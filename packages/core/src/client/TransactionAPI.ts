@@ -31,10 +31,14 @@ export class TransactionAPI {
    * @param transactionId The transaction ID
    * @returns The transaction details
    */
-  async get(transactionId: string): Promise<TransactionResponse> {
+  async get(
+    transactionId: string,
+    options?: { since?: string; maxWaitSeconds?: number },
+  ): Promise<TransactionResponse> {
     return await this.httpClient.request<TransactionResponse>({
       method: "GET",
       url: `/transactions/${transactionId}`,
+      ...(options && { params: options }),
     });
   }
 

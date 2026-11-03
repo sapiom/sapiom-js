@@ -15,6 +15,21 @@ An agent that gives up before paying cancels the purchase, which revokes the pla
 
 ## Relay contract
 
+The existing browser/relay integration also carries managed bank verification for supported
+profiles when the backend enables it. Browser creation, ownership, cookies and proxy stay with
+the current checkout. The SDK captures a supported merchant challenge on that same CDP
+connection and exposes `handle.verification` while the buyer acts on Sapiom's private hosted page.
+The checkout runner keeps its existing wait open until that activity ends or its session deadline
+expires. A buyer action URL is a credential: deliver it privately and do not log it.
+
+`handle.verification.current()` supplies sourced status, and `.wait()` resolves on an ended,
+canceled, expired or lost observation. A challenge/SDK completion is not a payment result.
+No verification operation creates another purchase or sends another card. Unsupported/custom
+relay integrations retain their existing behavior; the standard HTTP relay reuses its existing
+transaction and credential configuration. Do not detach the current interceptor while an active
+customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
+same purchase using the returned version.
+
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 
 ```json
