@@ -188,6 +188,7 @@ describe("Existing-browser verification observation", () => {
     const connection = {
       close: jest.fn(),
       onEvent: jest.fn(),
+      onClose: jest.fn(),
       send: jest.fn(async (_method, params) => {
         if (params?.autoAttach === true) throw new Error("setup failed");
         return {};
