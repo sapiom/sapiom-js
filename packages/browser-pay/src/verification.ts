@@ -71,6 +71,7 @@ export class VerificationSession implements VerificationHandle {
   private timer?: ReturnType<typeof setInterval>;
   private ticking = false;
   private closed = false;
+  private captureClaimed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly waiters = new Set<(state: VerificationState) => void>();
   private constructor(
@@ -102,10 +103,21 @@ export class VerificationSession implements VerificationHandle {
   async inspect(request: VerificationRequest) {
     const action = await this.adapter.inspect(request);
     if (typeof action !== "object") return action;
-    if (!verificationIsActive(this.state) || this.state.challengeCaptured)
+    if (
+      this.closed ||
+      this.captureClaimed ||
+      !verificationIsActive(this.state) ||
+      this.state.challengeCaptured ||
+      action.capture.url !== request.url ||
+      action.capture.body !== request.body
+    )
       return "block" as const;
+    // Reserve synchronously: an ambiguous capture report must never admit another ACS request.
+    this.captureClaimed = true;
     await this.report({ kind: "challenge_observed", capture: action.capture });
-    return "capture" as const;
+    return verificationIsActive(this.state) && this.state.challengeCaptured
+      ? ("capture" as const)
+      : ("block" as const);
   }
   relayed(response: { body: string }, sessionId: string) {
     this.adapter.relayed(response, sessionId);
@@ -114,12 +126,22 @@ export class VerificationSession implements VerificationHandle {
     if (this.closed) return;
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
-    if (verificationIsActive(this.state))
-      await this.report({ kind: "browser_lost" }).catch(() => {});
+    const reported = verificationIsActive(this.state)
+      ? this.report({ kind: "browser_lost" }).catch(() => {})
+      : Promise.resolve();
     this.finish({
       ...this.state,
       status: verificationIsActive(this.state) ? "error" : this.state.status,
     });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      reported,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 1000);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
   }
   private async report(input: Record<string, unknown>) {
     const operation = async () => {
@@ -168,7 +190,11 @@ export class VerificationSession implements VerificationHandle {
           const resume = await this.adapter.continuation?.();
           if (resume) {
             await this.report({ kind: "continuation_started" });
-            await resume();
+            if (
+              verificationIsActive(this.state) &&
+              this.state.continuationClaimed
+            )
+              await resume();
           }
         }
       }
@@ -188,7 +214,10 @@ export class VerificationSession implements VerificationHandle {
       state.version <= this.state.version
     )
       return;
-    this.state = state;
+    this.state =
+      this.closed && verificationIsActive(state)
+        ? { ...state, status: "error" }
+        : state;
     if (!verificationIsActive(state)) {
       if (this.timer) clearInterval(this.timer);
       for (const resolve of this.waiters) resolve(this.current());
@@ -228,7 +257,8 @@ export function verificationTransport(
     }
     if (
       registering &&
-      (response.status === 404 || data?.code === "verification_unavailable")
+      response.status === 503 &&
+      data?.code === "verification_unavailable"
     )
       return null;
     if (!response.ok)
@@ -252,7 +282,13 @@ export function verificationTransport(
       !Number.isFinite(Date.parse(data.expiresAt)) ||
       typeof data.merchantOrigin !== "string" ||
       typeof data.total?.amount !== "string" ||
-      typeof data.total?.currency !== "string"
+      typeof data.total?.currency !== "string" ||
+      ![
+        data.challengeCaptured,
+        data.launchClaimed,
+        data.checkRequested,
+        data.continuationClaimed,
+      ].every((v) => typeof v === "boolean")
     ) {
       throw new Error("Unreadable purchase verification response");
     }

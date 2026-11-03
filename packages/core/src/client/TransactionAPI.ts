@@ -35,10 +35,23 @@ export class TransactionAPI {
     transactionId: string,
     options?: { since?: string; maxWaitSeconds?: number },
   ): Promise<TransactionResponse> {
+    if (
+      options?.maxWaitSeconds !== undefined &&
+      (!Number.isFinite(options.maxWaitSeconds) ||
+        options.maxWaitSeconds < 0 ||
+        options.maxWaitSeconds > 60)
+    )
+      throw new Error("maxWaitSeconds must be between 0 and 60");
     return await this.httpClient.request<TransactionResponse>({
       method: "GET",
       url: `/transactions/${transactionId}`,
       ...(options && { params: options }),
+      ...(options?.maxWaitSeconds && {
+        timeoutMs: Math.max(
+          this.httpClient.getDefaults().timeout,
+          (options.maxWaitSeconds + 5) * 1000,
+        ),
+      }),
     });
   }
 
