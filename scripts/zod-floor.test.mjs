@@ -44,11 +44,22 @@ const compare = (left, right) => {
 };
 const minimumOf = (range) => /^[\^~]?(\d+\.\d+\.\d+)$/.exec(range)?.[1] ?? null;
 
-function catalogRange(yaml = read("pnpm-workspace.yaml")) {
-  const lf = yaml.replace(/\r\n/g, "\n");
-  const block = /^catalog:\n((?:[ \t]+.*\n?)*)/m.exec(lf)?.[1] ?? "";
-  return /^[ \t]+["']?zod["']?:[ \t]*["']?([^"'\s#]+)/m.exec(block)?.[1];
+// The zod value under a top-level YAML key, read line by line: the root has no
+// YAML parser, and the blocks are flat `name: value`.
+function zodUnder(key, yaml) {
+  const lines = yaml.split(/\r?\n/);
+  const start = lines.indexOf(`${key}:`);
+  if (start === -1) return undefined;
+  for (const line of lines.slice(start + 1)) {
+    if (!/^[ \t]/.test(line)) break;
+    const value = /^[ \t]+["']?zod["']?:[ \t]*["']?([^"'\s#]+)/.exec(line)?.[1];
+    if (value) return value;
+  }
+  return undefined;
 }
+
+const catalogRange = (yaml = read("pnpm-workspace.yaml")) =>
+  zodUnder("catalog", yaml);
 
 function packageJsons(dir) {
   const found = [];
@@ -80,9 +91,9 @@ test("the pnpm catalog sets one zod at or above the floor, enforced by an overri
     compare(catalogMinimum, FLOOR) >= 0,
     `pnpm-workspace.yaml catalog zod ${catalog} is below ${FLOOR}`,
   );
-  assert.match(
-    read("pnpm-workspace.yaml"),
-    /^overrides:\n(?:[ \t]+.*\n|[ \t]*#.*\n)*?[ \t]+["']?zod["']?:[ \t]*["']catalog:["']/m,
+  assert.equal(
+    zodUnder("overrides", read("pnpm-workspace.yaml")),
+    "catalog:",
     "pnpm-workspace.yaml overrides must force zod to catalog:",
   );
 });
