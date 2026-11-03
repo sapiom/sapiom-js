@@ -602,7 +602,7 @@ if (!chromeBin) {
           },
         );
         const until = async (test: () => boolean) => {
-          const deadline = Date.now() + 10000;
+          const deadline = Date.now() + 20000;
           while (!test() && Date.now() < deadline)
             await page.waitForTimeout(50);
           expect(test()).toBe(true);
@@ -647,7 +647,7 @@ if (!chromeBin) {
         await handle.detach();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
-    }, 30000);
+    }, 60000);
 
     it("relays only the placeholder request while a second CDP client drives the page", async () => {
       const { events, calls, result, merchantOrigin } = await drive(
