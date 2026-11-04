@@ -150,6 +150,52 @@ describe("Existing-browser verification observation", () => {
         body: "creq=original",
       }),
     ).toBe("block");
+    expect(
+      await observer!.inspect({
+        ...request,
+        method: "POST",
+        body: '{"creq":"original"}',
+      }),
+    ).toBe("block");
+    expect(
+      await observer!.inspect({
+        ...request,
+        method: "POST",
+        body: '{"messageType":"CReq"}',
+      }),
+    ).toBe("block");
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+  it("blocks unhandled bank challenge formats without treating ordinary JSON text as a challenge", async () => {
+    const state = initial();
+    const report = jest.fn(async () => state);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => "continue",
+        relayed: () => {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = {
+      url: "https://bank.example/challenge",
+      method: "POST",
+      sessionId: "original",
+    };
+    for (const body of [
+      "creq=original",
+      '{"creq":"original"}',
+      '{"messageType":"CReq"}',
+    ])
+      expect(await observer!.inspect({ ...request, body })).toBe("block");
+    expect(
+      await observer!.inspect({
+        ...request,
+        body: '{"note":"link?other=1&creq=reference-only","query":"receipt"}',
+      }),
+    ).toBe("continue");
     expect(report).not.toHaveBeenCalled();
     await observer!.close();
   });
