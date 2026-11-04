@@ -1840,14 +1840,16 @@ describe("interceptor CDP decisions", () => {
           ),
         "unknown session",
       );
-      expect(
-        stub.commands.some(
-          (command) =>
-            command.method === "Fetch.failRequest" &&
-            command.sessionId === "missing-session" &&
-            command.params.requestId === "req-unknown",
-        ),
-      ).toBe(true);
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Fetch.failRequest" &&
+              command.sessionId === "missing-session" &&
+              command.params.requestId === "req-unknown",
+          ),
+        "unknown-session failure command",
+      );
       await handle.detach();
     } finally {
       await stub.close();

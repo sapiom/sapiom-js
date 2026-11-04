@@ -346,6 +346,7 @@ describe("Shopify continuation on the original browser", () => {
   });
   it.each([
     merchantOrigin + "/checkout/processing",
+    "https://shop.example.other.example/checkout",
     "https://other.example/checkout",
   ])(
     "checks the current checkout origin after navigation to %s",
@@ -370,7 +371,7 @@ describe("Shopify continuation on the original browser", () => {
         frameId: "acs",
       };
       expect(await f.adapter.inspect(request)).toEqual(
-        url.startsWith(merchantOrigin)
+        new URL(url).origin === merchantOrigin
           ? { capture: { url: request.url, body: request.body } }
           : "fallback",
       );
@@ -570,10 +571,16 @@ describe("Shopify continuation on the original browser", () => {
       string,
       Record<string, unknown>,
     ][];
-    const script = calls
-      .filter(([method]) => method === "Runtime.evaluate")
-      .at(-1)![1].expression;
-    expect(script).toContain('"https://shop.example"');
+    const invocation = calls
+      .filter(([method]) => method === "Runtime.callFunctionOn")
+      .at(-1)![1];
+    const script = invocation.functionDeclaration;
+    expect(invocation.arguments).toEqual([
+      { value: merchantOrigin + "/payments_api/redirect/show?existing=opaque" },
+      { value: merchantOrigin },
+    ]);
+    expect(invocation.executionContextId).toBe(12);
+    expect(script).not.toContain(merchantOrigin);
     expect(script).toContain("location.href !==");
     expect(script).not.toContain("eval(");
   });

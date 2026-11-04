@@ -228,8 +228,8 @@ export class ShopifyVerification implements VerificationAdapter {
     if (!frame || !state || !state.launchClaimed) return null;
     const result = await this.evaluate(
       frame,
-      `async () => {
-      if (location.href !== ${JSON.stringify(frame.url)}) return null;
+      `async (callbackUrl) => {
+      if (location.href !== callbackUrl) return null;
       let target = location.href;
       const hint = document.getElementById('iframe-3ds')?.getAttribute('data-authentication-poll-url');
       if (hint != null) {
@@ -250,6 +250,7 @@ export class ShopifyVerification implements VerificationAdapter {
       if (response.status !== 200) return null;
       return readText(response, 1024);
     }`,
+      [frame.url],
     );
     // An early Check sees a redirect or challenge HTML. Never execute returned merchant HTML.
     if (
@@ -262,11 +263,12 @@ export class ShopifyVerification implements VerificationAdapter {
       // VerificationSession commits the one-use continuation claim before this fixed message.
       await this.evaluate(
         frame,
-        `() => {
-        if (location.href !== ${JSON.stringify(frame.url)}) return false;
-        window.top.postMessage({type: '3ds_completed'}, ${JSON.stringify(state.merchantOrigin)});
+        `(callbackUrl, merchantOrigin) => {
+        if (location.href !== callbackUrl) return false;
+        window.top.postMessage({type: '3ds_completed'}, merchantOrigin);
         return true;
       }`,
+        [frame.url, state.merchantOrigin],
       );
     };
   }
@@ -278,17 +280,18 @@ export class ShopifyVerification implements VerificationAdapter {
     if (!query || !this.cardSession) return null;
     const payload = await this.evaluate(
       query,
-      `async () => {
-      if (location.origin !== ${JSON.stringify(state.merchantOrigin)}) return null;
-      const response = await fetch(${JSON.stringify(query.url)}, {
+      `async (merchantOrigin, url, body) => {
+      if (location.origin !== merchantOrigin) return null;
+      const response = await fetch(url, {
         method: 'POST', credentials: 'include', redirect: 'error',
         headers: {'content-type': 'application/json', accept: 'application/json'},
-        body: ${JSON.stringify(query.body)}, signal: AbortSignal.timeout(10000)
+        body, signal: AbortSignal.timeout(10000)
       });
       if (response.status !== 200 || !response.headers.get('content-type')?.includes('json')) return null;
       const text = await readText(response, 262144);
       return text === null ? null : JSON.parse(text);
     }`,
+      [state.merchantOrigin, query.url, query.body],
     );
     const receipt = (payload as any)?.data?.receipt;
     const lines = receipt?.purchaseOrder?.payment?.paymentLines;
@@ -411,7 +414,11 @@ export class ShopifyVerification implements VerificationAdapter {
     };
   }
 
-  private async evaluate(frame: Frame, fn: string): Promise<unknown> {
+  private async evaluate(
+    frame: Frame,
+    fn: string,
+    args: unknown[],
+  ): Promise<unknown> {
     const world = (await this.cdp.send(
       "Page.createIsolatedWorld",
       {
@@ -421,10 +428,11 @@ export class ShopifyVerification implements VerificationAdapter {
       frame.sessionId,
     )) as any;
     const evaluated = (await this.cdp.send(
-      "Runtime.evaluate",
+      "Runtime.callFunctionOn",
       {
-        expression: `(() => { const readText = ${READ_VERIFICATION_TEXT}; return (${fn})(); })()`,
-        contextId: world.executionContextId,
+        functionDeclaration: `function(...args) { const readText = ${READ_VERIFICATION_TEXT}; return (${fn})(...args); }`,
+        executionContextId: world.executionContextId,
+        arguments: args.map((value) => ({ value })),
         awaitPromise: true,
         returnByValue: true,
       },
