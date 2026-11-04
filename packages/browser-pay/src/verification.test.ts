@@ -141,6 +141,33 @@ describe("Existing-browser verification observation", () => {
     expect(observer!.current().challengeCaptured).toBe(false);
     await observer!.close();
   });
+  it("retains native checkout when the backend ends observation before capturing", async () => {
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const report = jest.fn(async () => ({
+      ...state,
+      version: 2,
+      status: "error" as const,
+    }));
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => ({ capture }),
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(observer!.current().challengeCaptured).toBe(false);
+    expect(report).toHaveBeenCalledTimes(1);
+    await observer!.close();
+  });
   it("refuses native fallback after capture was reserved or recorded", async () => {
     const state = initial();
     const capture = {

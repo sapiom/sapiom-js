@@ -174,7 +174,7 @@ export class ShopifyVerification implements VerificationAdapter {
       url.pathname === "/payments_api/redirect/show" &&
       !this.callback &&
       this.checkout &&
-      (await this.descendant(this.checkout, request).catch(() => false))
+      (await this.descendant(this.checkout, request, false).catch(() => false))
     ) {
       this.callback = {
         sessionId: request.sessionId,
@@ -325,7 +325,11 @@ export class ShopifyVerification implements VerificationAdapter {
     };
   }
 
-  private async descendant(frame: Frame, request: VerificationRequest) {
+  private async descendant(
+    frame: Frame,
+    request: VerificationRequest,
+    exactUrl = true,
+  ) {
     const result = (await this.cdp.send(
       "Page.getFrameTree",
       {},
@@ -336,7 +340,13 @@ export class ShopifyVerification implements VerificationAdapter {
         ? tree
         : tree?.childFrames?.map(find).find(Boolean);
     const callback = find(result?.frameTree);
-    if (!callback || callback.frame.url !== frame.url) return false;
+    if (!callback || typeof callback.frame.url !== "string") return false;
+    if (
+      exactUrl
+        ? callback.frame.url !== frame.url
+        : new URL(callback.frame.url).origin !== new URL(frame.url).origin
+    )
+      return false;
     const parents = new Map<string, string>();
     const collect = (tree: any, parent?: string) => {
       if (typeof tree?.frame?.id !== "string") return;

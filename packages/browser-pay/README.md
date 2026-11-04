@@ -183,6 +183,8 @@ when the backend enables this capability. It observes the original card session
 and captures supported CReq forms only inside that checkout's authentication frame tree,
 including nested frames in separate browser processes. Check polls the existing native
 callback; a pending bank step never triggers another payment or a blind navigation.
+The tracked checkout may navigate within its merchant origin before opening the
+callback; the callback itself remains bound to its exact URL.
 When the merchant iframe supplies an authentication polling URL, it must use the
 merchant's fixed polling path and the original callback's exact payment arguments.
 The original merchant frame receives its completion message only after a durable

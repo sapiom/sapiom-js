@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve managed callback binding across checkout navigation within its merchant origin, and preserve native checkout when the backend ends observation without capturing a challenge.
+
 - Bind the merchant callback to its original checkout frame tree, bound streamed callback/receipt responses, and clean up browser regression fixtures when setup fails.
 
 - Follow merchant authentication frame ancestry across browser sessions, support the verified current Shopify receipt query, and retain native checkout on definite non-captures. Ambiguous captures and durable bank handoffs remain fenced.

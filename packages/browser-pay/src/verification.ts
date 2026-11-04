@@ -217,7 +217,20 @@ export class VerificationSession implements VerificationHandle {
       let ambiguous = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          this.finish(await this.transport.report(this.state.id, body));
+          const result = await this.transport.report(this.state.id, body);
+          this.finish(result);
+          if (
+            capture &&
+            !ambiguous &&
+            result.id === this.state.id &&
+            result.version >= this.state.version &&
+            !verificationIsActive(result) &&
+            !result.challengeCaptured &&
+            !result.launchClaimed &&
+            !this.state.challengeCaptured &&
+            !this.state.launchClaimed
+          )
+            return false;
           return true;
         } catch (error) {
           if (

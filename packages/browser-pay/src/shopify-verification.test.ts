@@ -63,13 +63,14 @@ const receipt = () => ({
 function fixture(cardSession = "same-card") {
   const state = initial();
   let value: unknown = null;
+  let checkoutUrl = merchantOrigin + "/checkout";
   const send = jest.fn(async (method: string) => {
     if (method === "Page.createIsolatedWorld")
       return { executionContextId: 12 };
     if (method === "Page.getFrameTree")
       return {
         frameTree: {
-          frame: { id: "top", url: merchantOrigin + "/checkout" },
+          frame: { id: "top", url: checkoutUrl },
           childFrames: [
             {
               frame: {
@@ -115,6 +116,9 @@ function fixture(cardSession = "same-card") {
     send,
     inspect,
     start,
+    navigate: (url: string) => {
+      checkoutUrl = url;
+    },
     value: (next: unknown) => {
       value = next;
     },
@@ -340,6 +344,38 @@ describe("Shopify continuation on the original browser", () => {
       capture: { url: request.url, body: request.body },
     });
   });
+  it.each([
+    merchantOrigin + "/checkout/processing",
+    "https://other.example/checkout",
+  ])(
+    "checks the current checkout origin after navigation to %s",
+    async (url) => {
+      const f = fixture();
+      await f.inspect(
+        "/checkouts/internal/graphql/persisted",
+        JSON.stringify(submit),
+      );
+      f.navigate(url);
+      await f.inspect(
+        "/payments_api/redirect/show?existing=opaque",
+        "",
+        "GET",
+        "auth",
+      );
+      const request = {
+        url: "https://bank.example/challenge",
+        method: "POST",
+        body: "creq=" + creq(),
+        sessionId: "acs-session",
+        frameId: "acs",
+      };
+      expect(await f.adapter.inspect(request)).toEqual(
+        url.startsWith(merchantOrigin)
+          ? { capture: { url: request.url, body: request.body } }
+          : "fallback",
+      );
+    },
+  );
   it("keeps submission and challenge fences after durable takeover", async () => {
     const f = fixture();
     await f.start();

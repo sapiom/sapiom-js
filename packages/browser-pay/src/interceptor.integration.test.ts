@@ -776,6 +776,11 @@ if (!chromeBin) {
                 method: "POST",
                 body: JSON.stringify(submitBody),
               });
+              (globalThis as any).history.replaceState(
+                {},
+                "",
+                "/checkout/processing",
+              );
               const iframe = (globalThis as any).document.createElement(
                 "iframe",
               );
