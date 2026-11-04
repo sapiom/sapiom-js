@@ -202,6 +202,8 @@ import * as github from "./connectors/github/index.js";
 import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
 import * as slack from "./connectors/slack/index.js";
 import type {
+  SlackDownloadFileArgs,
+  SlackDownloadFileResult,
   SlackHistoryArgs,
   SlackHistoryResult,
   SlackPostEphemeralArgs,
@@ -214,6 +216,8 @@ import type {
   SlackRepliesResult,
   SlackUpdateArgs,
   SlackUpdateResult,
+  SlackUploadFileArgs,
+  SlackUploadFileResult,
   SlackUserInfoArgs,
   SlackUserInfoResult,
   SlackWhoAmIResult,
@@ -641,6 +645,12 @@ export interface Sapiom {
       whoAmI(): Promise<SlackWhoAmIResult>;
       /** `users.info`: look up a user by id. */
       userInfo(args: SlackUserInfoArgs): Promise<SlackUserInfoResult>;
+      /** Copy a file posted in Slack (`files[].id`) into the tenant's file storage; returns its `fileId`. */
+      downloadFile(
+        args: SlackDownloadFileArgs,
+      ): Promise<SlackDownloadFileResult>;
+      /** Share a file storage file into a channel or thread. */
+      uploadFile(args: SlackUploadFileArgs): Promise<SlackUploadFileResult>;
     };
     /**
      * The tenant's Linear connector over the MCP relay (slug `linear`). Its tools come
@@ -931,6 +941,8 @@ function bind(transport: Transport): Sapiom {
         history: (args) => slack.history(args, transport),
         whoAmI: () => slack.whoAmI(transport),
         userInfo: (args) => slack.userInfo(args, transport),
+        downloadFile: (args) => slack.downloadFile(args, transport),
+        uploadFile: (args) => slack.uploadFile(args, transport),
       },
       linear: mcp("linear", transport),
       notion: mcp("notion", transport),
