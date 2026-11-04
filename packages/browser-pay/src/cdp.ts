@@ -82,6 +82,109 @@ function parseCdpMessage(value: unknown):
 
 /** One CDP payload, including a large getRequestPostData body, stays under this. */
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+const MAX_DISCOVERY_BYTES = 64 * 1024;
+
+/**
+ * Treats an http: or https: URL as a DevTools discovery endpoint, the way
+ * Playwright's `connectOverCDP` does. One addition keeps URLs that worked
+ * before discovery: an http(s) URL whose path ends in a DevTools websocket
+ * path, `/devtools/browser/<id>` or `/devtools/page/<id>` (also behind a
+ * reverse-proxy prefix), is connected directly. A discovery URL whose path
+ * merely contains `devtools`, such as `/proxy/devtools/`, still uses
+ * discovery. Other URLs pass through unchanged; `WebSocketClient.connect`
+ * refuses any scheme but ws: and wss:.
+ */
+async function resolveWebSocketUrl(
+  url: string,
+  timeoutMs: number,
+): Promise<URL> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    throw new Error("CDP websocket URL is invalid");
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    return target;
+  }
+  const secure = target.protocol === "https:";
+  if (/\/devtools\/(?:browser|page)\/[^/]+$/.test(target.pathname)) {
+    target.protocol = secure ? "wss:" : "ws:";
+    return target;
+  }
+  if (!target.pathname.endsWith("/")) target.pathname += "/";
+  target.pathname += "json/version/";
+  return discoveredWebSocketUrl(
+    await fetchDiscovery(target, timeoutMs),
+    secure,
+  );
+}
+
+/** Reads `webSocketDebuggerUrl` from a DevTools `json/version/` answer. */
+export function discoveredWebSocketUrl(body: string, secure: boolean): URL {
+  let target: URL | undefined;
+  try {
+    const value: unknown = JSON.parse(body);
+    const raw = isRecord(value) ? value.webSocketDebuggerUrl : undefined;
+    if (typeof raw === "string") target = new URL(raw);
+  } catch {
+    // An unparseable body or URL is refused below.
+  }
+  if (!target || (target.protocol !== "ws:" && target.protocol !== "wss:")) {
+    throw new Error("CDP discovery response is invalid");
+  }
+  if (secure && target.protocol !== "wss:") {
+    throw new Error("CDP discovery over https named a websocket without TLS");
+  }
+  return target;
+}
+
+/**
+ * GETs a discovery URL. Redirects and upgrades are refused, the body is
+ * capped, and `timeoutMs` bounds the whole answer: a socket idle timeout alone
+ * would let a server that sends a byte now and then hold attach open forever.
+ */
+function fetchDiscovery(url: URL, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === "https:" ? https : http;
+    const request = transport.get(url);
+    const fail = (error: Error) => {
+      clearTimeout(deadline);
+      request.destroy();
+      reject(error);
+    };
+    const deadline = setTimeout(
+      () => fail(new Error("CDP discovery timeout")),
+      timeoutMs,
+    );
+    request.on("upgrade", (response, socket) => {
+      socket.destroy();
+      fail(new Error(`CDP discovery refused: HTTP ${response.statusCode}`));
+    });
+    request.on("response", (response) => {
+      if (response.statusCode !== 200) {
+        fail(new Error(`CDP discovery refused: HTTP ${response.statusCode}`));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > MAX_DISCOVERY_BYTES) {
+          fail(new Error("CDP discovery response is invalid"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        clearTimeout(deadline);
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      });
+      response.on("error", () => fail(new Error("CDP discovery failed")));
+    });
+    request.on("error", () => fail(new Error("CDP discovery failed")));
+  });
+}
 
 class WebSocketClient {
   private chunks: Buffer[] = [];
@@ -107,13 +210,16 @@ class WebSocketClient {
     });
   }
 
-  static connect(url: string, timeoutMs: number): Promise<WebSocketClient> {
+  static connect(target: URL, timeoutMs: number): Promise<WebSocketClient> {
     return new Promise((resolve, reject) => {
-      let target: URL;
-      try {
-        target = new URL(url);
-      } catch {
-        reject(new Error("CDP websocket URL is invalid"));
+      // Only wss: gets TLS below, so any other scheme would go out as plain
+      // HTTP: an https:// URL, query token included, would reach port 80.
+      if (target.protocol !== "ws:" && target.protocol !== "wss:") {
+        reject(
+          new Error(
+            "CDP URL must start with ws://, wss://, http:// or https://",
+          ),
+        );
         return;
       }
       const key = crypto.randomBytes(16).toString("base64");
@@ -404,7 +510,8 @@ export class CdpConnection {
     url: string,
     timeoutMs = 15_000,
   ): Promise<CdpConnection> {
-    return new CdpConnection(await WebSocketClient.connect(url, timeoutMs));
+    const target = await resolveWebSocketUrl(url, timeoutMs);
+    return new CdpConnection(await WebSocketClient.connect(target, timeoutMs));
   }
 
   send(

@@ -120,6 +120,8 @@ const handle = await attachInterceptor(cdpUrl, {
 });
 ```
 
+`cdpUrl` is the browser's CDP WebSocket URL (`ws://` or `wss://`) or its DevTools discovery URL (`http://` or `https://`, such as `http://localhost:9222`). For a discovery URL, the SDK reads the WebSocket URL from `json/version/` under the URL's path, with the query kept. An `https://` discovery URL must name a `wss://` WebSocket URL. The SDK connects to the WebSocket URL that the discovery endpoint names, so trust the discovery endpoint as much as the browser. An `http://` or `https://` URL whose path ends in `/devtools/browser/<id>` or `/devtools/page/<id>`, also behind a proxy path prefix, is connected directly. Any other scheme is refused before a connection opens. A Puppeteer `Browser` or `Page` also works when its `wsEndpoint()` gives that URL; a browser launched with `pipe: true` has none and is refused. A Playwright `Browser` or `Page` has no `wsEndpoint()` and is refused with an error that says so. A Playwright `BrowserServer` does have a `wsEndpoint()`, but that URL speaks Playwright's own protocol, not CDP, so attach fails with a CDP error (`CDP command failed: Target.setAutoAttach`), not with that message. With Playwright, attach to the CDP URL, then connect Playwright to the same URL with `chromium.connectOverCDP(cdpUrl)`. For an `http(s)://…/devtools/…` URL, give Playwright its `ws://` or `wss://` form, because `connectOverCDP` reads every `http(s)` URL as a discovery URL.
+
 For a Shopify checkout, `profileId: "shopify-card-vault"` keeps the recorded profile's stricter checks. For any other checkout, leave `profileId` out:
 
 ```typescript
