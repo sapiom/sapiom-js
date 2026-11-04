@@ -219,6 +219,11 @@ function startRelay(script: RelayResponse[] = [IN_PROGRESS, RELAYED]): Promise<{
 }> {
   const posts: SeenPost[] = [];
   const server = http.createServer((req, res) => {
+    if (req.url?.includes("/payment/verification")) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
