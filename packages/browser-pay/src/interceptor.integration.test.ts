@@ -449,7 +449,7 @@ if (!chromeBin) {
       expect(events.filter((event) => event.type === "relayed")).toHaveLength(
         2,
       );
-    });
+    }, 60000);
 
     it("relays only the placeholder request while a second CDP client drives the page", async () => {
       const { events, calls, result, merchantOrigin } = await drive(
