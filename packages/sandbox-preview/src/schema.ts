@@ -37,7 +37,7 @@ export const sandboxConfigBodySchema = z.object({
   port: z.number().int().min(1).max(65535),
   tier: z.enum(['xs', 's', 'm', 'l', 'xl']).optional(),
   ttl: z.string().optional(),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
 });
 
 export type SandboxConfigBody = z.infer<typeof sandboxConfigBodySchema>;

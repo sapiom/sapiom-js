@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@sapiom/tools": "workspace:^",
-    "zod": "^3.25.76"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

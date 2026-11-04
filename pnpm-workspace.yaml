@@ -21,5 +21,14 @@ onlyBuiltDependencies:
 # cross-platform rebuild HANG that the bare node-gyp override caused.
 overrides:
   "@electron/rebuild": ^3.7.0
+  # Transitive deps pin or range below the catalog (exact pins, zod 3 ranges);
+  # forcing the catalog keeps every resolved zod at or above it.
+  zod: "catalog:"
+
+# Single source of the zod version for every workspace package (`"zod": "catalog:"`);
+# pnpm publish writes the range into each published package.json. examples/ install
+# with npm outside the workspace, so scripts/zod-floor.test.mjs checks them against it.
+catalog:
+  zod: ^4.6.7
 patchedDependencies:
   "@assistant-ui/react-opencode@0.2.22": patches/@assistant-ui__react-opencode@0.2.22.patch
