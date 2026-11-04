@@ -32,6 +32,11 @@ transaction and credential configuration. Do not detach the current interceptor 
 customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
 same purchase using the returned version.
 
+Verification registration happens before the interceptor relays the card. If registration
+fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
+the existing checkout relay path and leaves `handle.verification` unavailable. Registration
+failure does not cancel or retry a payment and does not resume a previous verification.
+
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 
 ```json

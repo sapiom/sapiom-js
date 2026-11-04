@@ -9,9 +9,10 @@ import { attachInterceptor, type InterceptorEvent } from "./interceptor";
 import type { PaymentRelay, RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
-import type {
-  VerificationAdapterFactory,
-  VerificationState,
+import {
+  VerificationHttpError,
+  type VerificationAdapterFactory,
+  type VerificationState,
 } from "./verification";
 
 const nodeRequire = createRequire(__filename);
@@ -381,7 +382,13 @@ if (!chromeBin) {
             card: bodies.card,
           },
         );
-        return { events, calls, result, merchantOrigin };
+        return {
+          events,
+          calls,
+          result,
+          merchantOrigin,
+          verification: handle.verification,
+        };
       } finally {
         // Closing a connectOverCDP browser can terminate Chrome. Close the page
         // only; the interceptor's own connection is detached below.
@@ -390,6 +397,50 @@ if (!chromeBin) {
         void browser;
       }
     }
+
+    it.each([
+      {
+        reason: "timeout",
+        error: () => new DOMException("registration timed out", "TimeoutError"),
+      },
+      {
+        reason: "HTTP 409 observer mismatch",
+        error: () =>
+          new VerificationHttpError(409, "verification_observer_mismatch"),
+      },
+    ])(
+      "keeps checkout working when registration fails: $reason",
+      async ({ error }) => {
+        const register = jest.fn(async () => {
+          throw error();
+        });
+        const sync = jest.fn();
+        const report = jest.fn();
+        const { result, verification } = await drive(
+          {
+            ...stubPaymentRelay(async () => ({
+              outcome: "relayed",
+              response: {
+                status: 201,
+                headers: { "content-type": "application/json" },
+                body: '{"id":"same-card"}',
+              },
+            })),
+            verification: { register, sync, report },
+          },
+          { ping: PING, card: CARD },
+        );
+        expect(result).toMatchObject({
+          ping: { status: 200 },
+          card: { status: 201 },
+        });
+        expect(verification).toBeUndefined();
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(sync).not.toHaveBeenCalled();
+        expect(report).not.toHaveBeenCalled();
+      },
+      60000,
+    );
 
     it("captures a challenge on the same connection without emitting another card relay", async () => {
       let state: VerificationState = {

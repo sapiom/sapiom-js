@@ -397,7 +397,7 @@ class PaymentInterceptor {
         this.options.relay.verification,
         adapter,
         this.options.placeholder.injectionRef,
-      );
+      ).catch(() => null);
     }
     this.connection.onClose(() => {
       void this.verification?.close();

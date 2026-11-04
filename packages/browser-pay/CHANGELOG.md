@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve the existing checkout relay path when optional verification registration fails, including a timeout or an observer mismatch.
+
 - Validate CReq base64url encoding, padding and the supported message schema before capturing a bank challenge.
 
 - Block repeat Shopify submissions using the backend's durable challenge flags, including after an adapter instance is replaced.

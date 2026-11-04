@@ -8,4 +8,4 @@ Refuse another checkout submission when durable verification state already recor
 
 Validate and bound the captured URL and single-field CReq form before reporting, preserve accepted protocol data exactly, and match the backend's 255-character card-session limit.
 
-Validate the CReq encoding, padding and supported message schema before capture.
+Validate the CReq encoding, padding and supported message schema before capture. If optional verification registration fails, keep the existing checkout relay path available without a verification observer.
