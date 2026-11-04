@@ -96,6 +96,26 @@ describe("CdpConnection", () => {
     }
   });
 
+  it("notifies every close listener even when an earlier listener throws", async () => {
+    const stub = await listen();
+    try {
+      const connection = await CdpConnection.connect(stub.url);
+      const socket = await stub.onceSocket;
+      const broken = jest.fn(() => {
+        throw new Error("observer failed");
+      });
+      const notified = jest.fn();
+      connection.onClose(broken);
+      connection.onClose(notified);
+      const pending = connection.send("Fetch.enable", {}, undefined, 30_000);
+      socket.write(Buffer.from([0x88, 0x00]));
+      await expect(pending).rejects.toThrow(/closed/);
+      expect(broken).toHaveBeenCalledTimes(1);
+      expect(notified).toHaveBeenCalledTimes(1);
+    } finally {
+      await stub.close();
+    }
+  });
   it("rejects a pending call when the socket errors without a close frame", async () => {
     const stub = await listen();
     try {

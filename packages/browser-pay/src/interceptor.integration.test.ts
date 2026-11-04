@@ -451,6 +451,57 @@ if (!chromeBin) {
       );
     }, 60000);
 
+    it("preserves ordinary traffic and fulfilled card responses when observer callbacks throw", async () => {
+      const state: VerificationState = {
+        id: "verification",
+        version: 1,
+        status: "preparing",
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        merchantOrigin: "http://localhost",
+        total: { amount: "11.00", currency: "USD" },
+        challengeCaptured: false,
+        launchClaimed: false,
+        checkRequested: false,
+        continuationClaimed: false,
+      };
+      const { events, result } = await drive(
+        {
+          ...stubPaymentRelay(async () => ({
+            outcome: "relayed",
+            response: {
+              status: 201,
+              headers: { "content-type": "application/json" },
+              body: '{"id":"same-card"}',
+            },
+          })),
+          verification: {
+            register: async () => state,
+            sync: async () => state,
+            report: async () => state,
+          },
+        },
+        { ping: PING, card: CARD },
+        5000,
+        () => ({
+          inspect: async () => {
+            throw new Error("inspection failed");
+          },
+          relayed: () => {
+            throw new Error("observation failed");
+          },
+          reconcile: async () => null,
+        }),
+      );
+      expect(result).toMatchObject({
+        ping: { status: 200 },
+        unrelated: { status: 200 },
+        card: { status: 201, text: '{"id":"same-card"}' },
+      });
+      expect(events.some((event) => event.type === "failed")).toBe(false);
+      expect(events.filter((event) => event.type === "relayed")).toHaveLength(
+        2,
+      );
+    }, 60000);
     it("relays only the placeholder request while a second CDP client drives the page", async () => {
       const { events, calls, result, merchantOrigin } = await drive(
         stubPaymentRelay(async () => ({

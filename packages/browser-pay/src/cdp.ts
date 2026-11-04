@@ -398,7 +398,13 @@ export class CdpConnection {
     socket.onclose = () => {
       this.closed = true;
       rejectAll(new Error("CDP connection closed"));
-      for (const listener of this.closeListeners) listener();
+      for (const listener of this.closeListeners) {
+        try {
+          listener();
+        } catch {
+          // A failing listener must not interrupt the remaining close notifications.
+        }
+      }
       this.closeListeners.clear();
     };
   }
