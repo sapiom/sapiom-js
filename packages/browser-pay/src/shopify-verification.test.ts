@@ -1,5 +1,6 @@
 import {
   isShopifySubmission,
+  READ_VERIFICATION_TEXT,
   ShopifyVerification,
 } from "./shopify-verification";
 import type { VerificationState } from "./verification";
@@ -121,6 +122,32 @@ function fixture(cardSession = "same-card") {
 }
 
 describe("Shopify continuation on the original browser", () => {
+  it("cancels oversized reads before consuming the full response", async () => {
+    const read = new Function(`return (${READ_VERIFICATION_TEXT})`)() as (
+      response: Response,
+      limit: number,
+    ) => Promise<string | null>;
+    let chunks = 0;
+    const cancel = jest.fn();
+    const body = new ReadableStream({
+      pull(controller) {
+        chunks++;
+        controller.enqueue(new Uint8Array(16));
+      },
+      cancel,
+    });
+    expect(await read(new Response(body), 32)).toBeNull();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(chunks).toBeLessThanOrEqual(4);
+    const tooLarge = new Response("not read", {
+      headers: { "content-length": "100" },
+    });
+    const earlyCancel = jest.spyOn(tooLarge.body!, "cancel");
+    expect(await read(tooLarge, 32)).toBeNull();
+    expect(earlyCancel).toHaveBeenCalledTimes(1);
+    expect(await read(new Response("é"), 2)).toBe("é");
+    expect(await read(new Response("é"), 1)).toBeNull();
+  });
   it("recognizes body and query submissions without treating receipt reads as Pay", () => {
     const url = merchantOrigin + "/checkouts/internal/graphql/persisted";
     expect(isShopifySubmission({ url, body: JSON.stringify(submit) })).toBe(
@@ -283,6 +310,36 @@ describe("Shopify continuation on the original browser", () => {
       expect(parent).toHaveBeenCalledWith("acs-session", "processor");
     },
   );
+  it("ignores another same-merchant tab's callback before binding the tracked checkout", async () => {
+    const f = fixture();
+    await f.inspect(
+      "/checkouts/internal/graphql/persisted",
+      JSON.stringify(submit),
+    );
+    await f.adapter.inspect({
+      url: merchantOrigin + "/payments_api/redirect/show?other=tab",
+      method: "GET",
+      body: "",
+      frameId: "other-frame",
+      sessionId: "other-tab",
+    });
+    await f.inspect(
+      "/payments_api/redirect/show?existing=opaque",
+      "",
+      "GET",
+      "auth",
+    );
+    const request = {
+      url: "https://bank.example/challenge",
+      method: "POST",
+      body: "creq=" + creq(),
+      sessionId: "acs-session",
+      frameId: "acs",
+    };
+    expect(await f.adapter.inspect(request)).toEqual({
+      capture: { url: request.url, body: request.body },
+    });
+  });
   it("keeps submission and challenge fences after durable takeover", async () => {
     const f = fixture();
     await f.start();

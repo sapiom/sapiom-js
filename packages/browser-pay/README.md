@@ -39,6 +39,8 @@ failure does not cancel or retry a payment and does not resume a previous verifi
 An observer mismatch retains a separate submission fence: ordinary traffic and the card
 relay stay attached, but this conflicted attachment cannot send Shopify's
 `SubmitForCompletion`. Reconcile the existing purchase before attempting another Pay.
+The conflict response contains no trusted merchant binding, so this conservative
+fence covers Shopify submissions across the attached browser until the conflict is resolved.
 
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 
@@ -186,6 +188,8 @@ merchant's fixed polling path and the original callback's exact payment argument
 The original merchant frame receives its completion message only after a durable
 one-use claim. Receipt reads use the pinned Shopify `PollForReceipt` query on the
 same browser, cookies and proxy and must match the receipt, card session and terms.
+Callback and receipt responses are read incrementally with byte limits; oversized
+responses are canceled before the complete body is buffered.
 These remain runner observations; `order` and issuer authentication require
 independent backend evidence. Unknown query versions, callback formats and receipt
 shapes remain pending until the bound deadline. Merchant-created sessions rendered

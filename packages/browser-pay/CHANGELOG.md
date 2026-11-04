@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bind the merchant callback to its original checkout frame tree, bound streamed callback/receipt responses, and clean up browser regression fixtures when setup fails.
+
 - Follow merchant authentication frame ancestry across browser sessions, support the verified current Shopify receipt query, and retain native checkout on definite non-captures. Ambiguous captures and durable bank handoffs remain fenced.
 
 - Keep Shopify payment submissions fenced after an observer-mismatch registration, while leaving the interceptor attached for ordinary traffic and the existing card relay.

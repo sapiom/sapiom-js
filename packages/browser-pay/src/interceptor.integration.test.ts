@@ -656,6 +656,19 @@ if (!chromeBin) {
           } else {
             const operation = JSON.parse(body || "{}").operationName;
             if (operation === "SubmitForCompletion") submissions++;
+            if (
+              operation === "PollForReceipt" &&
+              body !==
+                JSON.stringify({
+                  id: "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
+                  operationName: "PollForReceipt",
+                  variables: { receiptId: "receipt", sessionToken: "private" },
+                })
+            ) {
+              res.statusCode = 400;
+              res.end("unsupported receipt query");
+              return;
+            }
             res.setHeader("content-type", "application/json");
             res.end(
               JSON.stringify({
@@ -685,73 +698,76 @@ if (!chromeBin) {
             );
           }
         });
-        await new Promise<void>((resolve) =>
-          server.listen(0, "127.0.0.1", resolve),
-        );
-        const origin = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
-        middleOrigin = origin.replace("127.0.0.1", "localhost");
-        state = {
-          id: "verification",
-          version: 1,
-          status: "preparing",
-          expiresAt: new Date(Date.now() + 120000).toISOString(),
-          merchantOrigin: origin,
-          total: { amount: "11.00", currency: "USD" },
-          challengeCaptured: false,
-          launchClaimed: false,
-          checkRequested: false,
-          continuationClaimed: false,
-        };
-        const handle = await attachInterceptor(cdpUrl, {
-          profileId: "shopify-card-vault",
-          placeholder: PLACEHOLDER,
-          relay: {
-            ...stubPaymentRelay(async () => {
-              cardRelays++;
-              return {
-                outcome: "relayed",
-                response: {
-                  status: 200,
-                  headers: { "content-type": "application/json" },
-                  body: '{"id":"same-card"}',
+        let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+        let page!: import("playwright").Page;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", resolve);
+          });
+          const origin = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+          middleOrigin = origin.replace("127.0.0.1", "localhost");
+          state = {
+            id: "verification",
+            version: 1,
+            status: "preparing",
+            expiresAt: new Date(Date.now() + 120000).toISOString(),
+            merchantOrigin: origin,
+            total: { amount: "11.00", currency: "USD" },
+            challengeCaptured: false,
+            launchClaimed: false,
+            checkRequested: false,
+            continuationClaimed: false,
+          };
+          handle = await attachInterceptor(cdpUrl, {
+            profileId: "shopify-card-vault",
+            placeholder: PLACEHOLDER,
+            relay: {
+              ...stubPaymentRelay(async () => {
+                cardRelays++;
+                return {
+                  outcome: "relayed",
+                  response: {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                    body: '{"id":"same-card"}',
+                  },
+                };
+              }),
+              verification: {
+                register: async () => state,
+                sync: async () => state,
+                report: async (_id, report) => {
+                  state = { ...state, version: state.version + 1 };
+                  if (report.kind === "challenge_observed") {
+                    expect(report.capture).toEqual({
+                      url: "https://bank.example/challenge",
+                      body: "creq=" + creq,
+                    });
+                    state = {
+                      ...state,
+                      status: "requires_action",
+                      challengeCaptured: true,
+                    };
+                  }
+                  if (report.kind === "continuation_started") {
+                    continuations++;
+                    state.continuationClaimed = true;
+                  }
+                  if (report.kind === "checkout_observed")
+                    state = {
+                      ...state,
+                      status: "ended",
+                      observation: { outcome: "confirmed", source: "runner" },
+                    };
+                  return state;
                 },
-              };
-            }),
-            verification: {
-              register: async () => state,
-              sync: async () => state,
-              report: async (_id, report) => {
-                state = { ...state, version: state.version + 1 };
-                if (report.kind === "challenge_observed") {
-                  expect(report.capture).toEqual({
-                    url: "https://bank.example/challenge",
-                    body: "creq=" + creq,
-                  });
-                  state = {
-                    ...state,
-                    status: "requires_action",
-                    challengeCaptured: true,
-                  };
-                }
-                if (report.kind === "continuation_started") {
-                  continuations++;
-                  state.continuationClaimed = true;
-                }
-                if (report.kind === "checkout_observed")
-                  state = {
-                    ...state,
-                    status: "ended",
-                    observation: { outcome: "confirmed", source: "runner" },
-                  };
-                return state;
               },
             },
-          },
-        });
-        const { chromium } = await import("playwright");
-        const browser = await chromium.connectOverCDP(cdpUrl);
-        const page = await browser.contexts()[0].newPage();
-        try {
+          });
+          const { chromium } = await import("playwright");
+          const browser = await chromium.connectOverCDP(cdpUrl);
+          page = await browser.contexts()[0].newPage();
           await page.goto(origin);
           await page.evaluate(
             async ({ cardBody, submitBody }) => {
@@ -838,8 +854,8 @@ if (!chromeBin) {
           );
           expect([submissions, cardRelays, continuations]).toEqual([1, 1, 1]);
         } finally {
-          await page.close();
-          await handle.detach();
+          await page?.close().catch(() => {});
+          await handle?.detach();
           server.closeAllConnections();
           await new Promise<void>((resolve) => server.close(() => resolve()));
         }

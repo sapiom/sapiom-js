@@ -10,6 +10,25 @@ const RECEIPT_QUERIES = new Set([
   "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
   "3ddb1d363e4e875c5659f2aaba308447980240ffc14b31ef90cb8ab7843bc1e5",
 ]);
+export const READ_VERIFICATION_TEXT = `async (response, limit) => {
+  if (Number(response.headers.get('content-length')) > limit) {
+    await response.body?.cancel();
+    return null;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder();
+  let size = 0, text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      size += value.byteLength;
+      if (size > limit) { await reader.cancel(); return null; }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally { reader.releaseLock(); }
+}`;
 type Frame = { sessionId: string; frameId: string; url: string };
 type Query = Frame & { body: string; receiptId: string };
 const json = (body: string) => {
@@ -100,6 +119,7 @@ export class ShopifyVerification implements VerificationAdapter {
         const lines = body?.variables?.input?.payment?.paymentLines;
         if (state.challengeCaptured || state.launchClaimed)
           return "block" as const;
+        // Shopify retains its native retry behavior until Sapiom captures the bank step.
         if (
           this.submitted ||
           !this.cardSession ||
@@ -152,7 +172,9 @@ export class ShopifyVerification implements VerificationAdapter {
       request.frameId &&
       request.method === "GET" &&
       url.pathname === "/payments_api/redirect/show" &&
-      !this.callback
+      !this.callback &&
+      this.checkout &&
+      (await this.descendant(this.checkout, request).catch(() => false))
     ) {
       this.callback = {
         sessionId: request.sessionId,
@@ -226,8 +248,7 @@ export class ShopifyVerification implements VerificationAdapter {
         signal: AbortSignal.timeout(10000)
       });
       if (response.status !== 200) return null;
-      const text = await response.text();
-      return text.length <= 1024 ? text : null;
+      return readText(response, 1024);
     }`,
     );
     // An early Check sees a redirect or challenge HTML. Never execute returned merchant HTML.
@@ -265,8 +286,8 @@ export class ShopifyVerification implements VerificationAdapter {
         body: ${JSON.stringify(query.body)}, signal: AbortSignal.timeout(10000)
       });
       if (response.status !== 200 || !response.headers.get('content-type')?.includes('json')) return null;
-      const text = await response.text();
-      return text.length <= 262144 ? JSON.parse(text) : null;
+      const text = await readText(response, 262144);
+      return text === null ? null : JSON.parse(text);
     }`,
     );
     const receipt = (payload as any)?.data?.receipt;
@@ -392,7 +413,7 @@ export class ShopifyVerification implements VerificationAdapter {
     const evaluated = (await this.cdp.send(
       "Runtime.evaluate",
       {
-        expression: `(${fn})()`,
+        expression: `(() => { const readText = ${READ_VERIFICATION_TEXT}; return (${fn})(); })()`,
         contextId: world.executionContextId,
         awaitPromise: true,
         returnByValue: true,

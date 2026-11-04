@@ -13,3 +13,5 @@ Validate the CReq encoding, padding and supported message schema before capture.
 Retain a separate Shopify submission fence when registration reports an observer mismatch. The interceptor stays attached for ordinary traffic and card relay, but cannot repeat Pay for the conflicted verification.
 
 Resolve challenge ancestry across browser sessions and support the verified current Shopify receipt query alongside the prior version. Before managed capture, unsupported checkout shapes and definite capture refusals preserve the native browser flow. Ambiguous reports retain the capture fence even when a later retry is refused.
+
+Bind the native callback to the tracked checkout and cancel oversized callback/receipt response streams before buffering their complete bodies.
