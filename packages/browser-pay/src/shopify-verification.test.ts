@@ -131,6 +131,31 @@ describe("Shopify continuation on the original browser", () => {
       capture: { url: request.url, body: request.body },
     });
   });
+  it("blocks the payment mutation if its original checkout frame cannot be verified", async () => {
+    const f = fixture();
+    f.send.mockRejectedValue(new Error("CDP unavailable"));
+    const request = () =>
+      f.inspect(
+        "/checkouts/internal/graphql/persisted",
+        JSON.stringify(submit),
+      );
+    expect(await request()).toBe("block");
+    expect(await request()).toBe("block");
+  });
+  it("blocks the bank POST if its frame ancestry cannot be verified", async () => {
+    const f = fixture();
+    await f.start();
+    f.send.mockRejectedValue(new Error("CDP unavailable"));
+    expect(
+      await f.adapter.inspect({
+        url: "https://bank.example/challenge",
+        method: "POST",
+        body: "creq=exact",
+        sessionId: "acs-session",
+        frameId: "acs",
+      }),
+    ).toBe("block");
+  });
   it("keeps early checks pending and never executes returned HTML", async () => {
     const f = fixture();
     await f.start();

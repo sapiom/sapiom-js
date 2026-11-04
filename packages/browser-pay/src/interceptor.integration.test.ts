@@ -567,7 +567,7 @@ if (!chromeBin) {
         id: "verification",
         version: 1,
         status: "preparing",
-        expiresAt: new Date(Date.now() + 30000).toISOString(),
+        expiresAt: new Date(Date.now() + 120000).toISOString(),
         merchantOrigin: origin,
         total: { amount: "11.00", currency: "USD" },
         challengeCaptured: false,

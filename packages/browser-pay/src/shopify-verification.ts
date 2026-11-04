@@ -72,7 +72,10 @@ export class ShopifyVerification implements VerificationAdapter {
           return "block" as const;
         // Claim before continuing the original mutation, including ambiguous network outcomes.
         this.submitted = true;
-        this.checkout = await this.checkoutFrame(request, state.merchantOrigin);
+        this.checkout = await this.checkoutFrame(
+          request,
+          state.merchantOrigin,
+        ).catch(() => undefined);
         if (!this.checkout) return "block" as const;
       }
       if (
@@ -130,7 +133,9 @@ export class ShopifyVerification implements VerificationAdapter {
       url.username ||
       url.password ||
       url.hash ||
-      !(await this.descendant(this.callback, request.frameId))
+      !(await this.descendant(this.callback, request.frameId).catch(
+        () => false,
+      ))
     )
       return "block" as const;
     return { capture: { url: request.url, body: request.body } };

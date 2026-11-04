@@ -19,8 +19,8 @@ The existing browser/relay integration also carries managed bank verification fo
 profiles when the backend enables it. Browser creation, ownership, cookies and proxy stay with
 the current checkout. The SDK captures a supported merchant challenge on that same CDP
 connection and exposes `handle.verification` while the buyer acts on Sapiom's private hosted page.
-This observer increment requires an explicit `verificationAdapter`; a profile alone does not
-create the observer. The companion Shopify adapter increment supplies its profile's default.
+The `shopify-card-vault` profile supplies a default verification adapter when the backend enables
+it. Other profiles require an explicit `verificationAdapter` for challenge capture.
 The checkout runner keeps its existing wait open until that activity ends or its session deadline
 expires. A buyer action URL is a credential: deliver it privately and do not log it.
 
