@@ -63,6 +63,20 @@ export interface VerificationHandle {
   current(): VerificationState;
   wait(): Promise<VerificationState>;
 }
+function isChallengeRequest(request: VerificationRequest): boolean {
+  if (request.method.toUpperCase() !== "POST") return false;
+  try {
+    const body: unknown = JSON.parse(request.body);
+    return (
+      body !== null &&
+      typeof body === "object" &&
+      (Object.prototype.hasOwnProperty.call(body, "creq") ||
+        ("messageType" in body && body.messageType === "CReq"))
+    );
+  } catch {
+    return new URLSearchParams(request.body).has("creq");
+  }
+}
 export const verificationIsActive = (state: VerificationState) =>
   ["preparing", "requires_action", "checking"].includes(state.status);
 
@@ -106,11 +120,12 @@ export class VerificationSession implements VerificationHandle {
       action = await this.adapter.inspect(request);
     } catch {
       // Observation errors leave ordinary traffic alone; an unobserved bank POST stays blocked.
-      return request.method.toUpperCase() === "POST" &&
-        new URLSearchParams(request.body).has("creq")
+      return isChallengeRequest(request)
         ? ("block" as const)
         : ("continue" as const);
     }
+    if (action === "continue" && isChallengeRequest(request))
+      return "block" as const;
     if (typeof action !== "object") return action;
     if (
       this.closed ||
