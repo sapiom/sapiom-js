@@ -621,6 +621,7 @@ if (!chromeBin) {
         );
         ready = true;
         await until(() => continuations === 1);
+        await page.waitForFunction(() => (globalThis as any).callbacks === 1);
         expect(await page.evaluate(() => (globalThis as any).callbacks)).toBe(
           1,
         );
@@ -645,6 +646,7 @@ if (!chromeBin) {
       } finally {
         await page.close();
         await handle.detach();
+        server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     }, 60000);

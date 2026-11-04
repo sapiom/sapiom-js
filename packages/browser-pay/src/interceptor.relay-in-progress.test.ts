@@ -961,6 +961,12 @@ function listenRelay(
 }> {
   const posts: SeenPost[] = [];
   const server = http.createServer((req, res) => {
+    if (req.url?.includes("/payment/verification")) {
+      req.resume();
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
