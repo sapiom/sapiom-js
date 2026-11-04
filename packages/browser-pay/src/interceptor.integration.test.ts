@@ -74,7 +74,12 @@ window.run = async (bodies) => {
   let card;
   try { card = await post("/sessions", bodies.card); }
   catch (error) { card = { error: error.name }; }
-  return { ping, unrelated, mismatch, card };
+  let checkout;
+  if (bodies.checkout) {
+    try { checkout = await post("/checkouts/internal/graphql/persisted", bodies.checkout); }
+    catch (error) { checkout = { error: error.name }; }
+  }
+  return { ping, unrelated, mismatch, card, ...(bodies.checkout ? { checkout } : {}) };
 };
 </script>`;
 
@@ -307,7 +312,13 @@ if (!chromeBin) {
 
     async function drive(
       relay: PaymentRelay,
-      bodies: { ping: string; other?: string; mismatch?: string; card: string },
+      bodies: {
+        ping: string;
+        other?: string;
+        mismatch?: string;
+        card: string;
+        checkout?: string;
+      },
       timeoutMs = 5_000,
       verificationAdapter?: VerificationAdapterFactory,
     ) {
@@ -380,6 +391,7 @@ if (!chromeBin) {
             other: bodies.other ?? PING,
             mismatch: bodies.mismatch ?? bodies.card,
             card: bodies.card,
+            checkout: bodies.checkout,
           },
         );
         return {
@@ -401,16 +413,18 @@ if (!chromeBin) {
     it.each([
       {
         reason: "timeout",
+        submissionAllowed: true,
         error: () => new DOMException("registration timed out", "TimeoutError"),
       },
       {
         reason: "HTTP 409 observer mismatch",
+        submissionAllowed: false,
         error: () =>
           new VerificationHttpError(409, "verification_observer_mismatch"),
       },
     ])(
-      "keeps checkout working when registration fails: $reason",
-      async ({ error }) => {
+      "keeps the relay attached and guards payment after registration fails: $reason",
+      async ({ error, submissionAllowed }) => {
         const register = jest.fn(async () => {
           throw error();
         });
@@ -428,12 +442,39 @@ if (!chromeBin) {
             })),
             verification: { register, sync, report },
           },
-          { ping: PING, card: CARD },
+          {
+            ping: PING,
+            card: CARD,
+            checkout: JSON.stringify({
+              operationName: "SubmitForCompletion",
+              variables: {
+                input: {
+                  payment: {
+                    paymentLines: [
+                      {
+                        paymentMethod: {
+                          directPaymentMethod: { sessionId: "same-card" },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            }),
+          },
         );
         expect(result).toMatchObject({
           ping: { status: 200 },
           card: { status: 201 },
+          checkout: submissionAllowed
+            ? { status: 200 }
+            : { error: "TypeError" },
         });
+        expect(
+          hits.filter(
+            (hit) => hit.path === "/checkouts/internal/graphql/persisted",
+          ),
+        ).toHaveLength(submissionAllowed ? 1 : 0);
         expect(verification).toBeUndefined();
         expect(register).toHaveBeenCalledTimes(1);
         expect(sync).not.toHaveBeenCalled();

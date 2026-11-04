@@ -1,4 +1,7 @@
-import { ShopifyVerification } from "./shopify-verification";
+import {
+  isShopifySubmission,
+  ShopifyVerification,
+} from "./shopify-verification";
 import type { VerificationState } from "./verification";
 
 const merchantOrigin = "https://shop.example";
@@ -110,6 +113,24 @@ function fixture(cardSession = "same-card") {
 }
 
 describe("Shopify continuation on the original browser", () => {
+  it("recognizes body and query submissions without treating receipt reads as Pay", () => {
+    const url = merchantOrigin + "/checkouts/internal/graphql/persisted";
+    expect(isShopifySubmission({ url, body: JSON.stringify(submit) })).toBe(
+      true,
+    );
+    expect(
+      isShopifySubmission({
+        url: url + "?operationName=SubmitForCompletion",
+        body: JSON.stringify({ variables: submit.variables }),
+      }),
+    ).toBe(true);
+    expect(
+      isShopifySubmission({
+        url: url + "?operationName=PollForReceipt",
+        body: '{"operationName":"PollForReceipt"}',
+      }),
+    ).toBe(false);
+  });
   it("forwards one original card-session mutation and blocks a repeated payment", async () => {
     const f = fixture();
     f.adapter.relayed({ body: '{"id":"unrelated-later-response"}' });

@@ -17,6 +17,16 @@ const json = (body: string) => {
     return null;
   }
 };
+export const isShopifySubmission = (
+  request: Pick<VerificationRequest, "url" | "body">,
+) => {
+  const url = new URL(request.url);
+  return (
+    url.pathname === "/checkouts/internal/graphql/persisted" &&
+    (json(request.body)?.operationName === "SubmitForCompletion" ||
+      url.searchParams.get("operationName") === "SubmitForCompletion")
+  );
+};
 const supportedCReq = (encoded: string) => {
   if (!/^[A-Za-z0-9_-]+={0,2}$/.test(encoded)) return false;
   const unpadded = encoded.replace(/=+$/, "");
@@ -80,10 +90,7 @@ export class ShopifyVerification implements VerificationAdapter {
       sameMerchant &&
       url.pathname === "/checkouts/internal/graphql/persisted"
     ) {
-      if (
-        body?.operationName === "SubmitForCompletion" ||
-        url.searchParams.get("operationName") === "SubmitForCompletion"
-      ) {
+      if (isShopifySubmission(request)) {
         const lines = body?.variables?.input?.payment?.paymentLines;
         if (
           this.submitted ||

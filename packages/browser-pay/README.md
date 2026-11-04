@@ -36,6 +36,9 @@ Verification registration happens before the interceptor relays the card. If reg
 fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
 the existing checkout relay path and leaves `handle.verification` unavailable. Registration
 failure does not cancel or retry a payment and does not resume a previous verification.
+An observer mismatch retains a separate submission fence: ordinary traffic and the card
+relay stay attached, but this conflicted attachment cannot send Shopify's
+`SubmitForCompletion`. Reconcile the existing purchase before attempting another Pay.
 
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 

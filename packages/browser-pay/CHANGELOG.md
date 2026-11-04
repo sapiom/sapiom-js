@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep Shopify payment submissions fenced after an observer-mismatch registration, while leaving the interceptor attached for ordinary traffic and the existing card relay.
+
 - Preserve the existing checkout relay path when optional verification registration fails, including a timeout or an observer mismatch.
 
 - Validate CReq base64url encoding, padding and the supported message schema before capturing a bank challenge.
