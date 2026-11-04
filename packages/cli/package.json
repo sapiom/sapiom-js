@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/cli",
-  "version": "21.0.1",
+  "version": "21.0.2",
   "description": "The Sapiom command-line interface — scaffold, validate, and ship Sapiom agents.",
   "license": "MIT",
   "author": "Sapiom",
