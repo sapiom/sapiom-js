@@ -1,5 +1,19 @@
 # @sapiom/mcp
 
+## 0.20.4
+
+### Patch Changes
+
+- bc010c4: `~/.sapiom/credentials.json` is now set to `0600` and its directory to `0700`
+  on every write, including when they already existed with wider permissions.
+  Usage analytics for the local-only tools (`sapiom_dev_agents_scaffold`,
+  `sapiom_dev_agents_check`, `sapiom_dev_agents_run_local`) record each
+  argument's name and size instead of its value.
+- Updated dependencies [bc010c4]
+- Updated dependencies [bc010c4]
+  - @sapiom/agent-core@0.16.1
+  - @sapiom/sandbox-preview@0.1.35
+
 ## 0.20.3
 
 ### Patch Changes
