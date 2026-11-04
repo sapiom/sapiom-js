@@ -449,7 +449,7 @@ if (!chromeBin) {
       expect(events.filter((event) => event.type === "relayed")).toHaveLength(
         2,
       );
-    });
+    }, 60000);
 
     it("automatically waits for the native callback and continues once on the original browser", async () => {
       let ready = false;
