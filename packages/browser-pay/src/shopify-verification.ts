@@ -119,11 +119,20 @@ export class ShopifyVerification implements VerificationAdapter {
         url: url.href,
       };
     }
+    const formChallenge =
+      body === null && new URLSearchParams(request.body).has("creq");
+    const jsonChallenge =
+      body !== null &&
+      typeof body === "object" &&
+      (Object.prototype.hasOwnProperty.call(body, "creq") ||
+        body.messageType === "CReq");
     if (
+      sameMerchant ||
       request.method !== "POST" ||
-      !new URLSearchParams(request.body).has("creq")
+      (!formChallenge && !jsonChallenge)
     )
       return "continue" as const;
+    if (jsonChallenge) return "block" as const;
     if (
       !this.submitted ||
       !this.cardSession ||

@@ -142,6 +142,35 @@ describe("Shopify continuation on the original browser", () => {
     expect(await request()).toBe("block");
     expect(await request()).toBe("block");
   });
+  it("blocks unsupported JSON bank challenges while preserving merchant metadata requests", async () => {
+    const f = fixture();
+    await f.start();
+    const request = {
+      url: "https://bank.example/challenge",
+      method: "POST",
+      sessionId: "acs-session",
+      frameId: "acs",
+    };
+    for (const body of [
+      '{"creq":"challenge-reference","event":"started"}',
+      '{"messageType":"CReq"}',
+    ]) {
+      expect(await f.adapter.inspect({ ...request, body })).toBe("block");
+      expect(await f.inspect("/checkout/events", body)).toBe("continue");
+    }
+    expect(
+      await f.inspect(
+        "/checkout/events",
+        "creq=challenge-reference&event=started",
+      ),
+    ).toBe("continue");
+    expect(
+      await f.adapter.inspect({
+        ...request,
+        body: '{"note":"link?other=1&creq=reference-only"}',
+      }),
+    ).toBe("continue");
+  });
   it("blocks the bank POST if its frame ancestry cannot be verified", async () => {
     const f = fixture();
     await f.start();
