@@ -115,6 +115,148 @@ describe("Existing-browser verification observation", () => {
     });
     await observer!.close();
   });
+  it("continues ordinary traffic but blocks a bank POST when inspection fails", async () => {
+    const state = initial();
+    const report = jest.fn(async () => state);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => {
+          throw new Error("observation failed");
+        },
+        relayed: () => {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = {
+      url: "https://shop.example/read",
+      method: "GET",
+      body: "",
+      sessionId: "original",
+    };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(
+      await observer!.inspect({
+        ...request,
+        method: "POST",
+        body: '{"query":"receipt"}',
+      }),
+    ).toBe("continue");
+    expect(
+      await observer!.inspect({
+        ...request,
+        method: "POST",
+        body: "creq=original",
+      }),
+    ).toBe("block");
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+  it.each(["sync", "reconcile", "continuation"])(
+    "expires while %s is stuck and ignores its late result",
+    async (stuck) => {
+      jest.useFakeTimers();
+      const state: VerificationState = {
+        ...initial(),
+        expiresAt: new Date(Date.now() + 4000).toISOString(),
+        status: "requires_action",
+        challengeCaptured: true,
+        launchClaimed: true,
+      };
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const resume = jest.fn(async () => {});
+      const report = jest.fn(async () => ({
+        ...state,
+        version: 2,
+        continuationClaimed: true,
+      }));
+      const observer = await VerificationSession.attach(
+        {
+          register: async () => state,
+          sync: async () => {
+            if (stuck === "sync") await gate;
+            return { ...state, version: 2 };
+          },
+          report,
+        },
+        {
+          inspect: async () => "continue",
+          relayed: () => {},
+          reconcile: async () => {
+            if (stuck !== "reconcile") return null;
+            await gate;
+            return {
+              outcome: "confirmed",
+              cardSession: "same",
+              amount: "11.00",
+              currency: "USD",
+            };
+          },
+          continuation: async () => {
+            await gate;
+            return resume;
+          },
+        },
+        "injection",
+      );
+      const waiting = observer!.wait();
+      await jest.advanceTimersByTimeAsync(4000);
+      expect((await waiting).status).toBe("expired");
+      release();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(observer!.current().status).toBe("expired");
+      expect(report).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+      await observer!.close();
+    },
+  );
+  it("does not revive an expired wait when an in-flight capture report returns active state", async () => {
+    jest.useFakeTimers();
+    const state = {
+      ...initial(),
+      expiresAt: new Date(Date.now() + 4000).toISOString(),
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => {
+          await gate;
+          return { ...state, version: 2, challengeCaptured: true };
+        },
+      },
+      {
+        inspect: async () => ({ capture }),
+        relayed: () => {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const capturing = observer!.inspect({
+      ...capture,
+      method: "POST",
+      sessionId: "original",
+    });
+    const waiting = observer!.wait();
+    await jest.advanceTimersByTimeAsync(4000);
+    expect((await waiting).status).toBe("expired");
+    release();
+    expect(await capturing).toBe("block");
+    expect(observer!.current().status).toBe("expired");
+    await observer!.close();
+  });
   it("rejects malformed state instead of allowing unbounded waiting", async () => {
     const client = verificationTransport(
       async () =>

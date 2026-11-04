@@ -101,7 +101,16 @@ export class VerificationSession implements VerificationHandle {
       : Promise.resolve(this.current());
   }
   async inspect(request: VerificationRequest) {
-    const action = await this.adapter.inspect(request);
+    let action: Awaited<ReturnType<VerificationAdapter["inspect"]>>;
+    try {
+      action = await this.adapter.inspect(request);
+    } catch {
+      // Observation errors leave ordinary traffic alone; an unobserved bank POST stays blocked.
+      return request.method.toUpperCase() === "POST" &&
+        new URLSearchParams(request.body).has("creq")
+        ? ("block" as const)
+        : ("continue" as const);
+    }
     if (typeof action !== "object") return action;
     if (
       this.closed ||
@@ -120,7 +129,11 @@ export class VerificationSession implements VerificationHandle {
       : ("block" as const);
   }
   relayed(response: { body: string }, sessionId: string) {
-    this.adapter.relayed(response, sessionId);
+    try {
+      this.adapter.relayed(response, sessionId);
+    } catch {
+      // Observation cannot change the response of a card relay that already happened.
+    }
   }
   async close() {
     if (this.closed) return;
@@ -176,43 +189,49 @@ export class VerificationSession implements VerificationHandle {
     return pending;
   }
   private async tick() {
-    if (this.ticking || this.closed || !verificationIsActive(this.state))
-      return;
+    // Check expiry before the in-flight guard, including when an adapter never settles.
+    if (!this.canObserve() || this.ticking) return;
     this.ticking = true;
     try {
       await this.queue;
-      this.finish(await this.transport.sync(this.state.id));
-      if (verificationIsActive(this.state)) {
+      if (!this.canObserve()) return;
+      const synced = await this.transport.sync(this.state.id);
+      if (!this.canObserve()) return;
+      this.finish(synced);
+      if (this.canObserve()) {
         const observation = await this.adapter.reconcile(this.state);
+        if (!this.canObserve()) return;
         if (observation && observation.outcome !== "unknown")
           await this.report({ kind: "checkout_observed", observation });
         else if (this.state.launchClaimed && !this.state.continuationClaimed) {
           const resume = await this.adapter.continuation?.();
+          if (!this.canObserve()) return;
           if (resume) {
             await this.report({ kind: "continuation_started" });
-            if (
-              verificationIsActive(this.state) &&
-              this.state.continuationClaimed
-            )
+            if (this.canObserve() && this.state.continuationClaimed)
               await resume();
           }
         }
       }
     } catch {
-      if (Date.now() >= Date.parse(this.state.expiresAt))
-        this.finish({ ...this.state, status: "expired" });
+      this.canObserve();
     } finally {
       this.ticking = false;
     }
   }
+  private canObserve() {
+    if (
+      !this.closed &&
+      verificationIsActive(this.state) &&
+      Date.now() >= Date.parse(this.state.expiresAt)
+    )
+      this.finish({ ...this.state, status: "expired" });
+    return !this.closed && verificationIsActive(this.state);
+  }
   private finish(state: VerificationState) {
     if (state.id !== this.state.id || state.version < this.state.version)
       return;
-    if (
-      !verificationIsActive(this.state) &&
-      verificationIsActive(state) &&
-      state.version <= this.state.version
-    )
+    if (!verificationIsActive(this.state) && verificationIsActive(state))
       return;
     this.state =
       this.closed && verificationIsActive(state)
