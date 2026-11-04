@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate CReq base64url encoding, padding and the supported message schema before capturing a bank challenge.
+
 - Block repeat Shopify submissions using the backend's durable challenge flags, including after an adapter instance is replaced.
 
 - Bound and validate captured bank forms before reporting, preserve accepted payloads unchanged, and align card-session identifiers with the backend's 255-character limit.

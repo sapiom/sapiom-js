@@ -7,3 +7,5 @@ Automatically observe supported Shopify merchant challenges on the existing brow
 Refuse another checkout submission when durable verification state already records a captured or launched challenge.
 
 Validate and bound the captured URL and single-field CReq form before reporting, preserve accepted protocol data exactly, and match the backend's 255-character card-session limit.
+
+Validate the CReq encoding, padding and supported message schema before capture.

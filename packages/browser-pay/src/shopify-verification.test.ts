@@ -2,6 +2,17 @@ import { ShopifyVerification } from "./shopify-verification";
 import type { VerificationState } from "./verification";
 
 const merchantOrigin = "https://shop.example";
+const creq = (change = {}) =>
+  Buffer.from(
+    JSON.stringify({
+      acsTransID: "11111111-1111-4111-8111-111111111111",
+      threeDSServerTransID: "22222222-2222-4222-8222-222222222222",
+      messageType: "CReq",
+      messageVersion: "2.2.0",
+      challengeWindowSize: "05",
+      ...change,
+    }),
+  ).toString("base64url");
 const initial = (): VerificationState => ({
   id: "verification",
   version: 1,
@@ -158,7 +169,7 @@ describe("Shopify continuation on the original browser", () => {
     const request = {
       url: "https://bank.example/challenge",
       method: "POST",
-      body: "creq=exact",
+      body: "creq=" + creq(),
       sessionId: "acs-session",
       frameId: "acs",
     };
@@ -187,7 +198,14 @@ describe("Shopify continuation on the original browser", () => {
             : "https://bank.example/challenge",
         method: "POST",
         body:
-          field === "body" ? "creq=" + "x".repeat(length - 5) : "creq=exact",
+          "creq=" +
+          (field === "body"
+            ? Buffer.from(
+                Buffer.from(creq(), "base64url")
+                  .toString("utf8")
+                  .padEnd(Math.floor(((length - 5) * 3) / 4), " "),
+              ).toString("base64url")
+            : creq()),
         sessionId: "acs-session",
         frameId: "acs",
       };
@@ -201,31 +219,57 @@ describe("Shopify continuation on the original browser", () => {
     },
   );
   it.each([
-    "creq=",
-    "creq=exact&creq=other",
-    "creq=exact&threeDSSessionData=private",
-    "creq=%3Cscript%3Euntrusted%3C%2Fscript%3E",
-    "creq=exact%0A",
-  ])("blocks unsupported form data without forwarding it: %s", async (body) => {
-    const f = fixture();
-    await f.start();
-    expect(
-      await f.adapter.inspect({
-        url: "https://bank.example/challenge",
-        method: "POST",
-        body,
-        sessionId: "acs-session",
-        frameId: "acs",
-      }),
-    ).toBe("block");
-  });
+    ["empty", "creq="],
+    ["duplicate fields", `creq=${creq()}&creq=${creq()}`],
+    ["extra form fields", `creq=${creq()}&threeDSSessionData=private`],
+    ["merchant HTML", "creq=%3Cscript%3Euntrusted%3C%2Fscript%3E"],
+    ["control characters", `creq=${creq()}%0A`],
+    ["impossible base64url length", "creq=x"],
+    ["noncanonical pad bits", "creq=Zh"],
+    ["extra padding", `creq=${creq()}===`],
+    [
+      "incorrect padding",
+      "creq=" +
+        creq() +
+        "=".repeat((4 - (creq().length % 4)) % 4 === 1 ? 2 : 1),
+    ],
+    ["non-JSON data", "creq=ZXhhY3Q"],
+    ["unsupported version", "creq=" + creq({ messageVersion: "1.0" })],
+    ["unknown CReq fields", "creq=" + creq({ messageExtensions: [] })],
+    ["invalid transaction ID", "creq=" + creq({ acsTransID: "guessed" })],
+    [
+      "non-string transaction ID",
+      "creq=" + creq({ acsTransID: ["11111111-1111-4111-8111-111111111111"] }),
+    ],
+    ["unsupported window", "creq=" + creq({ challengeWindowSize: "06" })],
+  ])(
+    "blocks unsupported form data without forwarding it: %s",
+    async (_reason, body) => {
+      const f = fixture();
+      await f.start();
+      expect(
+        await f.adapter.inspect({
+          url: "https://bank.example/challenge",
+          method: "POST",
+          body,
+          sessionId: "acs-session",
+          frameId: "acs",
+        }),
+      ).toBe("block");
+    },
+  );
   it("blocks control characters in challenge URLs and preserves encoded CReq padding", async () => {
     const f = fixture();
     await f.start();
+    let raw = Buffer.from(creq(), "base64url").toString("utf8");
+    if (Buffer.byteLength(raw) % 3 === 0) raw += " ";
+    const encoded = Buffer.from(raw).toString("base64url");
+    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    expect(padded).toContain("=");
     const request = {
       url: "https://bank.example/challenge?reference=exact",
       method: "POST",
-      body: "creq=ZXhhY3Q%3D",
+      body: new URLSearchParams({ creq: padded }).toString(),
       sessionId: "acs-session",
       frameId: "acs",
     };
@@ -284,7 +328,7 @@ describe("Shopify continuation on the original browser", () => {
       await f.adapter.inspect({
         url: "https://bank.example/challenge",
         method: "POST",
-        body: "creq=exact",
+        body: "creq=" + creq(),
         sessionId: "acs-session",
         frameId: "acs",
       }),
