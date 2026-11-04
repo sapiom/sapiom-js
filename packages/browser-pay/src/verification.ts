@@ -63,8 +63,16 @@ export interface VerificationHandle {
   current(): VerificationState;
   wait(): Promise<VerificationState>;
 }
-function isChallengeRequest(request: VerificationRequest): boolean {
+function isChallengeRequest(
+  request: VerificationRequest,
+  merchantOrigin: string,
+): boolean {
   if (request.method.toUpperCase() !== "POST") return false;
+  try {
+    if (new URL(request.url).origin === merchantOrigin) return false;
+  } catch {
+    return false;
+  }
   try {
     const body: unknown = JSON.parse(request.body);
     return (
@@ -120,12 +128,10 @@ export class VerificationSession implements VerificationHandle {
       action = await this.adapter.inspect(request);
     } catch {
       // Observation errors leave ordinary traffic alone; an unobserved bank POST stays blocked.
-      return isChallengeRequest(request)
+      return isChallengeRequest(request, this.state.merchantOrigin)
         ? ("block" as const)
         : ("continue" as const);
     }
-    if (action === "continue" && isChallengeRequest(request))
-      return "block" as const;
     if (typeof action !== "object") return action;
     if (
       this.closed ||
