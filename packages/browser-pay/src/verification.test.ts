@@ -146,6 +146,7 @@ describe("Existing-browser verification observation", () => {
     expect(
       await observer!.inspect({
         ...request,
+        url: "https://bank.example/challenge",
         method: "POST",
         body: "creq=original",
       }),
@@ -153,6 +154,7 @@ describe("Existing-browser verification observation", () => {
     expect(
       await observer!.inspect({
         ...request,
+        url: "https://bank.example/challenge",
         method: "POST",
         body: '{"creq":"original"}',
       }),
@@ -160,14 +162,23 @@ describe("Existing-browser verification observation", () => {
     expect(
       await observer!.inspect({
         ...request,
+        url: "https://bank.example/challenge",
         method: "POST",
         body: '{"messageType":"CReq"}',
       }),
     ).toBe("block");
+    for (const body of [
+      "creq=challenge-reference&event=started",
+      '{"creq":"challenge-reference","event":"started"}',
+      '{"messageType":"CReq","event":"started"}',
+    ])
+      expect(
+        await observer!.inspect({ ...request, method: "POST", body }),
+      ).toBe("continue");
     expect(report).not.toHaveBeenCalled();
     await observer!.close();
   });
-  it("blocks unhandled bank challenge formats without treating ordinary JSON text as a challenge", async () => {
+  it("preserves the adapter's destination decision for challenge-shaped traffic", async () => {
     const state = initial();
     const report = jest.fn(async () => state);
     const observer = await VerificationSession.attach(
@@ -189,7 +200,7 @@ describe("Existing-browser verification observation", () => {
       '{"creq":"original"}',
       '{"messageType":"CReq"}',
     ])
-      expect(await observer!.inspect({ ...request, body })).toBe("block");
+      expect(await observer!.inspect({ ...request, body })).toBe("continue");
     expect(
       await observer!.inspect({
         ...request,
