@@ -164,6 +164,68 @@ describe("slack methods", () => {
     expect(bodyOf(calls[0]!)).toEqual({});
   });
 
+  it("downloadFile POSTs files.download with the Slack file id and returns the stored file", async () => {
+    const stored = {
+      fileId: "f-123",
+      contentType: "image/jpeg",
+      fileName: "board.jpg",
+      size: 4_200_000,
+    };
+    const { transport, calls } = makeTransport([() => jsonResponse(stored)]);
+
+    await expect(
+      slack.downloadFile({ file: "F1" }, transport),
+    ).resolves.toEqual(stored);
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/slack/methods/files.download`,
+    );
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("sat_run-token");
+    expect(bodyOf(calls[0]!)).toEqual({ file: "F1" });
+  });
+
+  it("uploadFile POSTs files.upload with the gateway's arg names, threadTs as given", async () => {
+    const result = {
+      ok: true,
+      file: "F9",
+      permalink: "https://t.slack.com/files/F9",
+    };
+    const { transport, calls } = makeTransport([() => jsonResponse(result)]);
+
+    const args = {
+      fileId: "f-123",
+      channel: "C1",
+      threadTs: "1.1",
+      title: "Board",
+      initialComment: "Black wins by 3.5.",
+      fileName: "board.png",
+    };
+    await expect(slack.uploadFile(args, transport)).resolves.toEqual(result);
+
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/slack/methods/files.upload`,
+    );
+    expect(bodyOf(calls[0]!)).toEqual(args);
+  });
+
+  it("surfaces the 403 for a Slack connection made before the files scopes", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(
+          JSON.stringify({
+            error: "oauth_scope_not_granted",
+            message:
+              "This connector is not authorized for the scope(s) this method needs (files:read). Reconnect the connector to grant them.",
+          }),
+          { status: 403, headers: { "Content-Type": "application/json" } },
+        ),
+    ]);
+    await expect(slack.downloadFile({ file: "F1" }, transport)).rejects.toThrow(
+      /403.*files:read/,
+    );
+  });
+
   it("surfaces a 404 (no Slack connector for this tenant) with the connector_not_found body", async () => {
     const { transport } = makeTransport([
       () =>
