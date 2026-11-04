@@ -180,3 +180,6 @@ These remain runner observations; `order` and issuer authentication require
 independent backend evidence. Unknown query versions, callback formats and receipt
 shapes remain pending until the bound deadline. Merchant-created sessions rendered
 through the BT web SDK are experimental and must be validated before live enablement.
+
+The adapter also refuses another checkout submission when the backend reports a
+captured or launched challenge, including when the adapter instance is new.

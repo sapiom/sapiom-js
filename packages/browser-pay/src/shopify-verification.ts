@@ -61,6 +61,8 @@ export class ShopifyVerification implements VerificationAdapter {
         const lines = body?.variables?.input?.payment?.paymentLines;
         if (
           this.submitted ||
+          state.challengeCaptured ||
+          state.launchClaimed ||
           !this.cardSession ||
           request.method !== "POST" ||
           body?.operationName !== "SubmitForCompletion" ||

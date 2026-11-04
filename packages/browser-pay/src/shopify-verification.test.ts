@@ -5,12 +5,12 @@ const merchantOrigin = "https://shop.example";
 const initial = (): VerificationState => ({
   id: "verification",
   version: 1,
-  status: "requires_action",
+  status: "preparing",
   expiresAt: new Date(Date.now() + 60000).toISOString(),
   merchantOrigin,
   total: { amount: "11.00", currency: "USD" },
-  challengeCaptured: true,
-  launchClaimed: true,
+  challengeCaptured: false,
+  launchClaimed: false,
   checkRequested: false,
   continuationClaimed: false,
 });
@@ -114,6 +114,28 @@ describe("Shopify continuation on the original browser", () => {
       ),
     ).toBe("block");
   });
+  it.each(["challengeCaptured", "launchClaimed"] as const)(
+    "blocks a second payment from a fresh adapter when the backend has %s",
+    async (flag) => {
+      const f = fixture();
+      await f.start();
+      f.state.status = "requires_action";
+      f.state[flag] = true;
+      const fresh = new ShopifyVerification({ send: f.send }, () => f.state);
+      fresh.relayed({ body: '{"id":"same-card"}' });
+      f.send.mockClear();
+      expect(
+        await fresh.inspect({
+          url: merchantOrigin + "/checkouts/internal/graphql/persisted",
+          method: "POST",
+          body: JSON.stringify(submit),
+          sessionId: "original-browser",
+          frameId: "top",
+        }),
+      ).toBe("block");
+      expect(f.send).not.toHaveBeenCalled();
+    },
+  );
   it("captures only a challenge in the recorded merchant authentication frame tree", async () => {
     const f = fixture();
     await f.start();
@@ -188,6 +210,9 @@ describe("Shopify continuation on the original browser", () => {
   it("keeps early checks pending and never executes returned HTML", async () => {
     const f = fixture();
     await f.start();
+    f.state.status = "requires_action";
+    f.state.challengeCaptured = true;
+    f.state.launchClaimed = true;
     f.value('<form action="https://bank.example">pending</form>');
     expect(await f.adapter.continuation()).toBeNull();
     f.value(

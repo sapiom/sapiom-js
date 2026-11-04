@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Block repeat Shopify submissions using the backend's durable challenge flags, including after an adapter instance is replaced.
+
 - Continue supported Shopify bank verification on the original browser with a one-use native callback and correlated receipt observation.
 
 - Add transaction-bound verification observation over the existing browser CDP and relay credential channel. Preserve card-send retry fences and separate interaction from authentication and payment evidence.
