@@ -55,7 +55,12 @@ export interface VerificationAdapter {
   continuation?(): Promise<(() => Promise<void>) | null>;
   inspect(
     request: VerificationRequest,
-  ): Promise<"continue" | "block" | { capture: { url: string; body: string } }>;
+  ): Promise<
+    | "continue"
+    | "block"
+    | "fallback"
+    | { capture: { url: string; body: string } }
+  >;
   relayed(response: { body: string }, sessionId: string): void;
   reconcile(state: VerificationState): Promise<CheckoutObservation | null>;
 }
@@ -94,6 +99,7 @@ export class VerificationSession implements VerificationHandle {
   private ticking = false;
   private closed = false;
   private captureClaimed = false;
+  private native = false;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly waiters = new Set<(state: VerificationState) => void>();
   private constructor(
@@ -123,6 +129,11 @@ export class VerificationSession implements VerificationHandle {
       : Promise.resolve(this.current());
   }
   async inspect(request: VerificationRequest) {
+    if (this.native) {
+      if (this.state.challengeCaptured || this.state.launchClaimed)
+        this.native = false;
+      else return "continue" as const;
+    }
     let action: Awaited<ReturnType<VerificationAdapter["inspect"]>>;
     try {
       action = await this.adapter.inspect(request);
@@ -132,6 +143,17 @@ export class VerificationSession implements VerificationHandle {
         ? ("block" as const)
         : ("continue" as const);
     }
+    if (action === "fallback") {
+      if (
+        this.captureClaimed ||
+        this.state.challengeCaptured ||
+        this.state.launchClaimed
+      )
+        return "block" as const;
+      this.native = true;
+      return "continue" as const;
+    }
+    if (this.native) return "continue" as const;
     if (typeof action !== "object") return action;
     if (
       this.closed ||
@@ -144,7 +166,15 @@ export class VerificationSession implements VerificationHandle {
       return "block" as const;
     // Reserve synchronously: an ambiguous capture report must never admit another ACS request.
     this.captureClaimed = true;
-    await this.report({ kind: "challenge_observed", capture: action.capture });
+    const reported = await this.report(
+      { kind: "challenge_observed", capture: action.capture },
+      true,
+    );
+    if (!reported) {
+      this.captureClaimed = false;
+      this.native = true;
+      return "continue" as const;
+    }
     return verificationIsActive(this.state) && this.state.challengeCaptured
       ? ("capture" as const)
       : ("block" as const);
@@ -177,17 +207,18 @@ export class VerificationSession implements VerificationHandle {
     ]);
     if (timer) clearTimeout(timer);
   }
-  private async report(input: Record<string, unknown>) {
+  private async report(input: Record<string, unknown>, capture = false) {
     const operation = async () => {
       const body = {
         ...input,
         idempotencyKey: randomUUID(),
         expectedVersion: this.state.version,
       };
+      let ambiguous = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           this.finish(await this.transport.report(this.state.id, body));
-          return;
+          return true;
         } catch (error) {
           if (
             error instanceof VerificationHttpError &&
@@ -195,11 +226,30 @@ export class VerificationSession implements VerificationHandle {
           ) {
             this.finish(await this.transport.sync(this.state.id));
             body.expectedVersion = this.state.version;
+            if (
+              attempt === 2 &&
+              capture &&
+              !ambiguous &&
+              error.status >= 400 &&
+              error.status < 500 &&
+              !this.state.challengeCaptured &&
+              !this.state.launchClaimed
+            )
+              return false;
           } else if (
             error instanceof VerificationHttpError &&
             error.status < 500
-          )
+          ) {
+            if (
+              capture &&
+              !ambiguous &&
+              error.status >= 400 &&
+              !this.state.challengeCaptured &&
+              !this.state.launchClaimed
+            )
+              return false;
             throw error;
+          } else ambiguous = true;
           if (attempt === 2)
             throw new Error("Purchase verification report failed");
         }
@@ -219,7 +269,7 @@ export class VerificationSession implements VerificationHandle {
       const synced = await this.transport.sync(this.state.id);
       if (!this.canObserve()) return;
       this.finish(synced);
-      if (this.canObserve()) {
+      if (this.canObserve() && !this.native) {
         const observation = await this.adapter.reconcile(this.state);
         if (!this.canObserve()) return;
         if (observation && observation.outcome !== "unknown")

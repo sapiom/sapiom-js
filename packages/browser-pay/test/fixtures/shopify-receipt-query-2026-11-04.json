@@ -1,0 +1,20 @@
+{
+  "inspectedAt": "2026-11-04",
+  "merchant": "https://sapiom-test-store.myshopify.com",
+  "sourceAsset": "https://sapiom-test-store.myshopify.com/cdn/shopifycloud/checkout-web/assets/c1/6ec9a0fa.Cw43zij1.js",
+  "sourceSha256": "8243c3b24301c2b54d0d766411536d87cd01dbbbe8ddccb7e226762b19c83976",
+  "operation": {
+    "id": "3ddb1d363e4e875c5659f2aaba308447980240ffc14b31ef90cb8ab7843bc1e5",
+    "type": "query",
+    "name": "PollForReceipt"
+  },
+  "variables": ["receiptId", "sessionToken"],
+  "clientReadOperations": ["staticQuery", "query/refetch"],
+  "readback": {
+    "httpStatus": 200,
+    "receiptType": "ActionRequiredReceipt",
+    "receiptMatches": true,
+    "topLevelKeys": ["id", "action", "timeout", "__typename"],
+    "newPaymentSubmissions": 0
+  }
+}

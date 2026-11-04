@@ -392,7 +392,14 @@ class PaymentInterceptor {
             state: () =>
               | import("./verification.js").VerificationState
               | undefined,
-          ) => new ShopifyVerification(connection, state)
+          ) =>
+            new ShopifyVerification(
+              connection,
+              state,
+              (sessionId, parentFrameId) =>
+                this.byTarget.get(parentFrameId ?? "")?.sessionId ??
+                this.sessions.get(sessionId)?.parentSessionId,
+            )
         : undefined);
     if (factory && this.options.relay.verification) {
       const adapter = factory(this.connection, () =>

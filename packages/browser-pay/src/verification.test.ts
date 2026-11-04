@@ -1,5 +1,6 @@
 import {
   VerificationSession,
+  VerificationHttpError,
   verificationTransport,
   type VerificationState,
   type VerificationAdapter,
@@ -21,6 +22,159 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it.each([400, 401, 403, 404, 409, 422, 429])(
+    "leaves a definite HTTP %i capture refusal to the native checkout",
+    async (status) => {
+      const state = initial();
+      const capture = {
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+      };
+      const inspect = jest.fn(async () => ({ capture }));
+      const report = jest.fn(async () => {
+        throw new VerificationHttpError(
+          status,
+          "verification_challenge_unsupported",
+        );
+      });
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync: async () => state, report },
+        { inspect, relayed() {}, reconcile: async () => null },
+        "injection",
+      );
+      const request = { ...capture, method: "POST", sessionId: "original" };
+      expect(await observer!.inspect(request)).toBe("continue");
+      expect(await observer!.inspect(request)).toBe("continue");
+      expect(observer!.current().challengeCaptured).toBe(false);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(report).toHaveBeenCalledTimes(1);
+      await observer!.close();
+    },
+  );
+  it.each([
+    new Error("response lost"),
+    new VerificationHttpError(503, "unavailable"),
+  ])(
+    "keeps capture fenced after an ambiguous response followed by a definite refusal: %s",
+    async (unknown) => {
+      const state = initial();
+      const capture = {
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+      };
+      const report = jest
+        .fn()
+        .mockRejectedValueOnce(unknown)
+        .mockRejectedValue(
+          new VerificationHttpError(409, "verification_challenge_unsupported"),
+        );
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync: async () => state, report },
+        {
+          inspect: async () => ({ capture }),
+          relayed() {},
+          reconcile: async () => null,
+        },
+        "injection",
+      );
+      const request = { ...capture, method: "POST", sessionId: "original" };
+      await expect(observer!.inspect(request)).rejects.toThrow();
+      expect(await observer!.inspect(request)).toBe("block");
+      expect(report).toHaveBeenCalledTimes(2);
+      expect(report.mock.calls[0][1].idempotencyKey).toEqual(
+        report.mock.calls[1][1].idempotencyKey,
+      );
+      await observer!.close();
+    },
+  );
+  it("withdraws inspection and reconciliation when the adapter selects native checkout", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    const inspect = jest.fn(async () => "fallback" as const);
+    const reconcile = jest.fn(async () => null);
+    const report = jest.fn(async () => state);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      { inspect, relayed() {}, reconcile },
+      "injection",
+    );
+    const request = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+      method: "POST",
+      sessionId: "original",
+    };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    await jest.advanceTimersByTimeAsync(2001);
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+  it("leaves repeated definite version conflicts native when sync confirms no capture", async () => {
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const report = jest.fn(async () => {
+      throw new VerificationHttpError(409, "verification_version_conflict");
+    });
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => ({ ...state, version: ++state.version }),
+        report,
+      },
+      {
+        inspect: async () => ({ capture }),
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(report).toHaveBeenCalledTimes(3);
+    expect(observer!.current().challengeCaptured).toBe(false);
+    await observer!.close();
+  });
+  it("refuses native fallback after capture was reserved or recorded", async () => {
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspect = jest
+      .fn<ReturnType<VerificationAdapter["inspect"]>, []>()
+      .mockResolvedValueOnce({ capture })
+      .mockResolvedValue("fallback");
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => {
+          await gate;
+          return { ...state, version: 2, challengeCaptured: true };
+        },
+      },
+      { inspect, relayed() {}, reconcile: async () => null },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    const first = observer!.inspect(request);
+    expect(await observer!.inspect(request)).toBe("block");
+    release();
+    expect(await first).toBe("capture");
+    expect(await observer!.inspect(request)).toBe("block");
+    await observer!.close();
+  });
   it("treats a disabled or older backend as unavailable without following redirects", async () => {
     const disabled = verificationTransport(
       async () =>

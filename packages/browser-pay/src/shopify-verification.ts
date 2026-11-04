@@ -6,8 +6,10 @@ import type {
   VerificationState,
 } from "./verification.js";
 
-const RECEIPT_QUERY =
-  "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567";
+const RECEIPT_QUERIES = new Set([
+  "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
+  "3ddb1d363e4e875c5659f2aaba308447980240ffc14b31ef90cb8ab7843bc1e5",
+]);
 type Frame = { sessionId: string; frameId: string; url: string };
 type Query = Frame & { body: string; receiptId: string };
 const json = (body: string) => {
@@ -71,6 +73,10 @@ export class ShopifyVerification implements VerificationAdapter {
   constructor(
     private readonly cdp: Pick<CdpConnection, "send">,
     private readonly state: () => VerificationState | undefined,
+    private readonly parentSession: (
+      sessionId: string,
+      parentFrameId?: string,
+    ) => string | undefined = () => undefined,
   ) {}
 
   relayed(response: { body: string }) {
@@ -92,10 +98,10 @@ export class ShopifyVerification implements VerificationAdapter {
     ) {
       if (isShopifySubmission(request)) {
         const lines = body?.variables?.input?.payment?.paymentLines;
+        if (state.challengeCaptured || state.launchClaimed)
+          return "block" as const;
         if (
           this.submitted ||
-          state.challengeCaptured ||
-          state.launchClaimed ||
           !this.cardSession ||
           request.method !== "POST" ||
           body?.operationName !== "SubmitForCompletion" ||
@@ -104,14 +110,14 @@ export class ShopifyVerification implements VerificationAdapter {
           lines[0]?.paymentMethod?.directPaymentMethod?.sessionId !==
             this.cardSession
         )
-          return "block" as const;
+          return "fallback" as const;
         // Claim before continuing the original mutation, including ambiguous network outcomes.
         this.submitted = true;
         this.checkout = await this.checkoutFrame(
           request,
           state.merchantOrigin,
         ).catch(() => undefined);
-        if (!this.checkout) return "block" as const;
+        if (!this.checkout) return "fallback" as const;
       }
       if (
         this.submitted &&
@@ -121,7 +127,7 @@ export class ShopifyVerification implements VerificationAdapter {
         request.method === "POST" &&
         url.search === "?operationName=PollForReceipt" &&
         body?.operationName === "PollForReceipt" &&
-        body.id === RECEIPT_QUERY &&
+        RECEIPT_QUERIES.has(body.id) &&
         Object.keys(body).sort().join() === "id,operationName,variables" &&
         body.variables &&
         Object.keys(body.variables).sort().join() ===
@@ -167,7 +173,8 @@ export class ShopifyVerification implements VerificationAdapter {
       (!formChallenge && !jsonChallenge)
     )
       return "continue" as const;
-    if (jsonChallenge) return "block" as const;
+    if (state.challengeCaptured || state.launchClaimed) return "block" as const;
+    if (jsonChallenge) return "fallback" as const;
     // Reject unsupported material and preserve accepted bank protocol data exactly.
     if (
       request.url.length > 2048 ||
@@ -187,11 +194,9 @@ export class ShopifyVerification implements VerificationAdapter {
       url.username ||
       url.password ||
       url.hash ||
-      !(await this.descendant(this.callback, request.frameId).catch(
-        () => false,
-      ))
+      !(await this.descendant(this.callback, request).catch(() => false))
     )
-      return "block" as const;
+      return "fallback" as const;
     return { capture: { url: request.url, body: request.body } };
   }
 
@@ -203,7 +208,20 @@ export class ShopifyVerification implements VerificationAdapter {
       frame,
       `async () => {
       if (location.href !== ${JSON.stringify(frame.url)}) return null;
-      const response = await fetch(location.href, {
+      let target = location.href;
+      const hint = document.getElementById('iframe-3ds')?.getAttribute('data-authentication-poll-url');
+      if (hint != null) {
+        const original = new URL(location.href);
+        const poll = new URL(hint, original);
+        if (poll.origin !== original.origin || poll.pathname !== '/payments_api/redirect/poll' ||
+            poll.username || poll.password || poll.hash || poll.href.length > 2048 ||
+            [...poll.searchParams.keys()].sort().join(',') !== 'origin,payment_id' ||
+            [...original.searchParams.keys()].sort().join(',') !== 'origin,payment_id' ||
+            !poll.searchParams.get('payment_id') || !poll.searchParams.get('origin') ||
+            ['origin', 'payment_id'].some(key => poll.searchParams.get(key) !== original.searchParams.get(key))) return null;
+        target = poll.href;
+      }
+      const response = await fetch(target, {
         credentials: 'include', redirect: 'error', cache: 'no-store',
         signal: AbortSignal.timeout(10000)
       });
@@ -286,19 +304,57 @@ export class ShopifyVerification implements VerificationAdapter {
     };
   }
 
-  private async descendant(frame: Frame, frameId: string) {
+  private async descendant(frame: Frame, request: VerificationRequest) {
     const result = (await this.cdp.send(
       "Page.getFrameTree",
       {},
       frame.sessionId,
     )) as any;
-    const contains = (tree: any): boolean =>
-      tree?.frame?.id === frameId || Boolean(tree?.childFrames?.some(contains));
     const find = (tree: any): any =>
       tree?.frame?.id === frame.frameId
         ? tree
         : tree?.childFrames?.map(find).find(Boolean);
-    return contains(find(result?.frameTree));
+    const callback = find(result?.frameTree);
+    if (!callback || callback.frame.url !== frame.url) return false;
+    const parents = new Map<string, string>();
+    const collect = (tree: any, parent?: string) => {
+      if (typeof tree?.frame?.id !== "string") return;
+      const id = tree.frame.id;
+      const parentId = parent ?? tree.frame.parentId;
+      if (typeof parentId === "string") parents.set(id, parentId);
+      for (const child of tree.childFrames ?? []) collect(child, id);
+    };
+    collect(result.frameTree);
+    const contains = () => {
+      const seen = new Set<string>();
+      let id = request.frameId;
+      while (id && !seen.has(id)) {
+        if (id === frame.frameId) return true;
+        seen.add(id);
+        id = parents.get(id);
+      }
+      return false;
+    };
+    if (contains()) return true;
+    // OOP iframe roots retain their browser-owned parent frame ID in their own session.
+    const seen = new Set<string>();
+    let sessionId: string | undefined = request.sessionId;
+    while (sessionId && sessionId !== frame.sessionId && seen.size < 32) {
+      if (seen.has(sessionId)) return false;
+      seen.add(sessionId);
+      const tree = (await this.cdp.send(
+        "Page.getFrameTree",
+        {},
+        sessionId,
+      )) as any;
+      collect(tree?.frameTree);
+      if (contains()) return true;
+      sessionId = this.parentSession(
+        sessionId,
+        tree?.frameTree?.frame?.parentId,
+      );
+    }
+    return false;
   }
 
   private async checkoutFrame(

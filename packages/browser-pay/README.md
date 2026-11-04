@@ -177,10 +177,12 @@ Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` ru
 `examples/attach.ts` is the agent-side script. It is not published.
 
 The standard `shopify-card-vault` profile selects its merchant verification adapter
-when the backend enables this capability. It observes the original card session,
-permits one matching checkout submission, and captures supported CReq forms only
-inside that checkout's authentication frame tree. Check polls the existing native
+when the backend enables this capability. It observes the original card session
+and captures supported CReq forms only inside that checkout's authentication frame tree,
+including nested frames in separate browser processes. Check polls the existing native
 callback; a pending bank step never triggers another payment or a blind navigation.
+When the merchant iframe supplies an authentication polling URL, it must use the
+merchant's fixed polling path and the original callback's exact payment arguments.
 The original merchant frame receives its completion message only after a durable
 one-use claim. Receipt reads use the pinned Shopify `PollForReceipt` query on the
 same browser, cookies and proxy and must match the receipt, card session and terms.
@@ -189,13 +191,31 @@ independent backend evidence. Unknown query versions, callback formats and recei
 shapes remain pending until the bound deadline. Merchant-created sessions rendered
 through the BT web SDK are experimental and must be validated before live enablement.
 
-The adapter also refuses another checkout submission when the backend reports a
+The adapter refuses another checkout submission when the backend reports a
 captured or launched challenge, including when the adapter instance is new.
+Before capture, an unsupported checkout shape, a retry or an unresolved frame withdraws
+managed observation and preserves the native checkout. An unsupported challenge or a
+definite backend capture refusal likewise leaves the original bank request intact.
+An ambiguous capture timeout or server error retains the capture fence, including if
+a later retry is refused. Native fallback never resubmits the card or Pay.
+Custom adapters can return `fallback` to withdraw inspection and reconciliation before
+capture; the observer still synchronizes durable state until it ends or expires.
 
 Card-session identifiers are limited to 255 characters. Captured URLs are limited to 2,048 characters,
 and form bodies to 8,192 characters, matching the backend contract. Only a single
 base64url `creq` field containing the supported five-field 3DS 2.1.0 or 2.2.0 message
 is accepted; duplicate or extra fields, control characters in the URL, invalid encoding
-or padding, and unsupported challenge messages are blocked before reporting. Accepted URLs
+or padding, and unsupported challenge messages are excluded from managed capture. Accepted URLs
 and form bodies are forwarded unchanged through the private verification transport.
 Never include raw challenge material in logs or agent messages.
+
+The current and previous supported Shopify receipt-query IDs remain explicitly pinned.
+The [4 November 2026 source inspection](test/fixtures/shopify-receipt-query-2026-11-04.json)
+records the current query descriptor, client read operations and matching pending receipt.
+Unknown query IDs remain unsupported.
+
+Live activation remains blocked for the current test-store composition: a real replay
+captures the challenge and renders its exact fields through BT, but the merchant's
+authentication poll remains pending after the simulator step. Merchant continuation
+and a correlated completed receipt still require end-to-end validation. A pending
+poll never authorizes a completion message or consumes the continuation claim.

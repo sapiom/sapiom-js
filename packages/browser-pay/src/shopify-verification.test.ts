@@ -70,7 +70,15 @@ function fixture(cardSession = "same-card") {
         frameTree: {
           frame: { id: "top", url: merchantOrigin + "/checkout" },
           childFrames: [
-            { frame: { id: "auth" }, childFrames: [{ frame: { id: "acs" } }] },
+            {
+              frame: {
+                id: "auth",
+                url:
+                  merchantOrigin +
+                  "/payments_api/redirect/show?existing=opaque",
+              },
+              childFrames: [{ frame: { id: "acs" } }],
+            },
           ],
         },
       };
@@ -131,20 +139,20 @@ describe("Shopify continuation on the original browser", () => {
       }),
     ).toBe(false);
   });
-  it("forwards one original card-session mutation and blocks a repeated payment", async () => {
+  it("withdraws observation for unsupported or repeated submissions before capture", async () => {
     const f = fixture();
     f.adapter.relayed({ body: '{"id":"unrelated-later-response"}' });
     const wrong = JSON.stringify(submit).replace("same-card", "other-card");
     expect(
       await f.inspect("/checkouts/internal/graphql/persisted", wrong),
-    ).toBe("block");
+    ).toBe("fallback");
     await f.start();
     expect(
       await f.inspect(
         "/checkouts/internal/graphql/persisted",
         JSON.stringify(submit),
       ),
-    ).toBe("block");
+    ).toBe("fallback");
   });
   it.each(["challengeCaptured", "launchClaimed"] as const)(
     "blocks a second payment from a fresh adapter when the backend has %s",
@@ -170,7 +178,7 @@ describe("Shopify continuation on the original browser", () => {
   );
   it.each([
     [255, "continue"],
-    [256, "block"],
+    [256, "fallback"],
   ] as const)(
     "checks a %i-character card session against the backend limit",
     async (length, decision) => {
@@ -184,7 +192,7 @@ describe("Shopify continuation on the original browser", () => {
       ).toBe(decision);
     },
   );
-  it("captures only a challenge in the recorded merchant authentication frame tree", async () => {
+  it("captures supported challenges and withdraws observation outside the callback frame tree", async () => {
     const f = fixture();
     await f.start();
     const request = {
@@ -195,11 +203,107 @@ describe("Shopify continuation on the original browser", () => {
       frameId: "acs",
     };
     expect(await f.adapter.inspect({ ...request, frameId: "unrelated" })).toBe(
-      "block",
+      "fallback",
     );
     expect(await f.adapter.inspect(request)).toEqual({
       capture: { url: request.url, body: request.body },
     });
+  });
+  it.each(["auth", "unrelated"])(
+    "checks browser-owned ancestry across OOP sessions whose root parent is %s",
+    async (parentId) => {
+      const f = fixture();
+      const send = jest.fn(
+        async (method: string, _params?: unknown, sessionId?: string) => {
+          if (method !== "Page.getFrameTree") return {};
+          if (sessionId === "acs-session")
+            return {
+              frameTree: {
+                frame: { id: "acs", parentId: "processor", url: "about:blank" },
+              },
+            };
+          if (sessionId === "processor-session")
+            return {
+              frameTree: {
+                frame: {
+                  id: "processor",
+                  parentId,
+                  url: "https://processor.example",
+                },
+              },
+            };
+          return {
+            frameTree: {
+              frame: { id: "top", url: merchantOrigin + "/checkout" },
+              childFrames: [
+                {
+                  frame: {
+                    id: "auth",
+                    url:
+                      merchantOrigin +
+                      "/payments_api/redirect/show?existing=opaque",
+                  },
+                },
+              ],
+            },
+          };
+        },
+      );
+      const parent = jest.fn((sessionId: string) =>
+        sessionId === "acs-session" ? "processor-session" : "original-browser",
+      );
+      const adapter = new ShopifyVerification({ send }, () => f.state, parent);
+      adapter.relayed({ body: '{"id":"same-card"}' });
+      await adapter.inspect({
+        url: merchantOrigin + "/checkouts/internal/graphql/persisted",
+        body: JSON.stringify(submit),
+        method: "POST",
+        frameId: "top",
+        sessionId: "original-browser",
+      });
+      await adapter.inspect({
+        url: merchantOrigin + "/payments_api/redirect/show?existing=opaque",
+        body: "",
+        method: "GET",
+        frameId: "auth",
+        sessionId: "original-browser",
+      });
+      const request = {
+        url: "https://bank.example/challenge",
+        body: "creq=" + creq(),
+        method: "POST",
+        frameId: "acs",
+        sessionId: "acs-session",
+      };
+      expect(await adapter.inspect(request)).toEqual(
+        parentId === "auth"
+          ? { capture: { url: request.url, body: request.body } }
+          : "fallback",
+      );
+      expect(parent).toHaveBeenCalledWith("acs-session", "processor");
+    },
+  );
+  it("keeps submission and challenge fences after durable takeover", async () => {
+    const f = fixture();
+    await f.start();
+    f.state.challengeCaptured = true;
+    for (const body of ["creq=unsupported", '{"messageType":"CReq"}']) {
+      expect(
+        await f.adapter.inspect({
+          url: "https://bank.example/challenge",
+          method: "POST",
+          body,
+          sessionId: "acs-session",
+          frameId: "acs",
+        }),
+      ).toBe("block");
+    }
+    expect(
+      await f.inspect(
+        "/checkouts/internal/graphql/persisted",
+        JSON.stringify(submit),
+      ),
+    ).toBe("block");
   });
   it.each([
     ["url", 2048, true],
@@ -235,7 +339,7 @@ describe("Shopify continuation on the original browser", () => {
       expect(action).toEqual(
         accepted
           ? { capture: { url: request.url, body: request.body } }
-          : "block",
+          : "fallback",
       );
     },
   );
@@ -264,7 +368,7 @@ describe("Shopify continuation on the original browser", () => {
     ],
     ["unsupported window", "creq=" + creq({ challengeWindowSize: "06" })],
   ])(
-    "blocks unsupported form data without forwarding it: %s",
+    "leaves unsupported form data to the native checkout without capturing it: %s",
     async (_reason, body) => {
       const f = fixture();
       await f.start();
@@ -276,10 +380,10 @@ describe("Shopify continuation on the original browser", () => {
           sessionId: "acs-session",
           frameId: "acs",
         }),
-      ).toBe("block");
+      ).toBe("fallback");
     },
   );
-  it("blocks control characters in challenge URLs and preserves encoded CReq padding", async () => {
+  it("leaves unsupported URLs native and preserves encoded CReq padding", async () => {
     const f = fixture();
     await f.start();
     let raw = Buffer.from(creq(), "base64url").toString("utf8");
@@ -296,12 +400,12 @@ describe("Shopify continuation on the original browser", () => {
     };
     expect(
       await f.adapter.inspect({ ...request, url: request.url + "\n" }),
-    ).toBe("block");
+    ).toBe("fallback");
     expect(await f.adapter.inspect(request)).toEqual({
       capture: { url: request.url, body: request.body },
     });
   });
-  it("blocks the payment mutation if its original checkout frame cannot be verified", async () => {
+  it("withdraws observation if the original checkout frame cannot be verified", async () => {
     const f = fixture();
     f.send.mockRejectedValue(new Error("CDP unavailable"));
     const request = () =>
@@ -309,10 +413,10 @@ describe("Shopify continuation on the original browser", () => {
         "/checkouts/internal/graphql/persisted",
         JSON.stringify(submit),
       );
-    expect(await request()).toBe("block");
-    expect(await request()).toBe("block");
+    expect(await request()).toBe("fallback");
+    expect(await request()).toBe("fallback");
   });
-  it("blocks unsupported JSON bank challenges while preserving merchant metadata requests", async () => {
+  it("leaves unsupported JSON bank challenges native and preserves merchant metadata", async () => {
     const f = fixture();
     await f.start();
     const request = {
@@ -325,7 +429,7 @@ describe("Shopify continuation on the original browser", () => {
       '{"creq":"challenge-reference","event":"started"}',
       '{"messageType":"CReq"}',
     ]) {
-      expect(await f.adapter.inspect({ ...request, body })).toBe("block");
+      expect(await f.adapter.inspect({ ...request, body })).toBe("fallback");
       expect(await f.inspect("/checkout/events", body)).toBe("continue");
     }
     expect(
@@ -341,7 +445,7 @@ describe("Shopify continuation on the original browser", () => {
       }),
     ).toBe("continue");
   });
-  it("blocks the bank POST if its frame ancestry cannot be verified", async () => {
+  it("leaves the bank POST native if its frame ancestry cannot be verified", async () => {
     const f = fixture();
     await f.start();
     f.send.mockRejectedValue(new Error("CDP unavailable"));
@@ -353,7 +457,7 @@ describe("Shopify continuation on the original browser", () => {
         sessionId: "acs-session",
         frameId: "acs",
       }),
-    ).toBe("block");
+    ).toBe("fallback");
   });
   it("keeps early checks pending and never executes returned HTML", async () => {
     const f = fixture();
@@ -380,45 +484,51 @@ describe("Shopify continuation on the original browser", () => {
     expect(script).toContain("location.href !==");
     expect(script).not.toContain("eval(");
   });
-  it("pins the read-only receipt query and correlates card session, receipt and terms", async () => {
-    const f = fixture();
-    await f.start();
-    const query = {
-      id: "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
-      operationName: "PollForReceipt",
-      variables: { receiptId: "same-receipt", sessionToken: "private" },
-    };
-    await f.inspect(
-      "/checkouts/internal/graphql/persisted?operationName=PollForReceipt",
-      JSON.stringify({ ...query, id: "mutation" }),
-    );
-    f.value(receipt());
-    expect(await f.adapter.reconcile(f.state)).toBeNull();
-    await f.inspect(
-      "/checkouts/internal/graphql/persisted?operationName=PollForReceipt",
-      JSON.stringify(query),
-    );
-    expect(await f.adapter.reconcile(f.state)).toMatchObject({
-      outcome: "confirmed",
-      cardSession: "same-card",
-      amount: "11.00",
-    });
-    for (const alter of [
-      (r: ReturnType<typeof receipt>) => {
-        r.data.receipt.id = "other-receipt";
-      },
-      (r: ReturnType<typeof receipt>) => {
-        r.data.receipt.purchaseOrder.payment.paymentLines[0].paymentMethod.sessionId =
-          "other-card";
-      },
-      (r: ReturnType<typeof receipt>) => {
-        r.data.receipt.paymentDetails.paymentAmount.amount = "12";
-      },
-    ]) {
-      const next = receipt();
-      alter(next);
-      f.value(next);
+  it.each([
+    "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
+    "3ddb1d363e4e875c5659f2aaba308447980240ffc14b31ef90cb8ab7843bc1e5",
+  ])(
+    "pins read-only receipt query %s and correlates card session, receipt and terms",
+    async (id) => {
+      const f = fixture();
+      await f.start();
+      const query = {
+        id,
+        operationName: "PollForReceipt",
+        variables: { receiptId: "same-receipt", sessionToken: "private" },
+      };
+      await f.inspect(
+        "/checkouts/internal/graphql/persisted?operationName=PollForReceipt",
+        JSON.stringify({ ...query, id: "mutation" }),
+      );
+      f.value(receipt());
       expect(await f.adapter.reconcile(f.state)).toBeNull();
-    }
-  });
+      await f.inspect(
+        "/checkouts/internal/graphql/persisted?operationName=PollForReceipt",
+        JSON.stringify(query),
+      );
+      expect(await f.adapter.reconcile(f.state)).toMatchObject({
+        outcome: "confirmed",
+        cardSession: "same-card",
+        amount: "11.00",
+      });
+      for (const alter of [
+        (r: ReturnType<typeof receipt>) => {
+          r.data.receipt.id = "other-receipt";
+        },
+        (r: ReturnType<typeof receipt>) => {
+          r.data.receipt.purchaseOrder.payment.paymentLines[0].paymentMethod.sessionId =
+            "other-card";
+        },
+        (r: ReturnType<typeof receipt>) => {
+          r.data.receipt.paymentDetails.paymentAmount.amount = "12";
+        },
+      ]) {
+        const next = receipt();
+        alter(next);
+        f.value(next);
+        expect(await f.adapter.reconcile(f.state)).toBeNull();
+      }
+    },
+  );
 });
