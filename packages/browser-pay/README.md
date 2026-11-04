@@ -183,3 +183,10 @@ through the BT web SDK are experimental and must be validated before live enable
 
 The adapter also refuses another checkout submission when the backend reports a
 captured or launched challenge, including when the adapter instance is new.
+
+Card-session identifiers are limited to 255 characters. Captured URLs are limited to 2,048 characters,
+and form bodies to 8,192 characters, matching the backend contract. Only a single
+base64url `creq` field is supported; duplicate or extra fields, control characters in
+the URL, and malformed challenge values are blocked before reporting. Accepted URLs
+and form bodies are forwarded unchanged through the private verification transport.
+Never include raw challenge material in logs or agent messages.

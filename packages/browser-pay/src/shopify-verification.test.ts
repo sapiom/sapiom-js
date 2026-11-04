@@ -45,7 +45,7 @@ const receipt = () => ({
   },
 });
 
-function fixture() {
+function fixture(cardSession = "same-card") {
   const state = initial();
   let value: unknown = null;
   const send = jest.fn(async (method: string) => {
@@ -71,12 +71,12 @@ function fixture() {
       sessionId: "original-browser",
       frameId,
     });
-  adapter.relayed({ body: '{"id":"same-card"}' });
+  adapter.relayed({ body: JSON.stringify({ id: cardSession }) });
   const start = async () => {
     expect(
       await inspect(
         "/checkouts/internal/graphql/persisted",
-        JSON.stringify(submit),
+        JSON.stringify(submit).replace("same-card", cardSession),
       ),
     ).toBe("continue");
     await inspect(
@@ -136,6 +136,22 @@ describe("Shopify continuation on the original browser", () => {
       expect(f.send).not.toHaveBeenCalled();
     },
   );
+  it.each([
+    [255, "continue"],
+    [256, "block"],
+  ] as const)(
+    "checks a %i-character card session against the backend limit",
+    async (length, decision) => {
+      const cardSession = "x".repeat(length);
+      const f = fixture(cardSession);
+      expect(
+        await f.inspect(
+          "/checkouts/internal/graphql/persisted",
+          JSON.stringify(submit).replace("same-card", cardSession),
+        ),
+      ).toBe(decision);
+    },
+  );
   it("captures only a challenge in the recorded merchant authentication frame tree", async () => {
     const f = fixture();
     await f.start();
@@ -149,6 +165,73 @@ describe("Shopify continuation on the original browser", () => {
     expect(await f.adapter.inspect({ ...request, frameId: "unrelated" })).toBe(
       "block",
     );
+    expect(await f.adapter.inspect(request)).toEqual({
+      capture: { url: request.url, body: request.body },
+    });
+  });
+  it.each([
+    ["url", 2048, true],
+    ["url", 2049, false],
+    ["body", 8192, true],
+    ["body", 8193, false],
+  ] as const)(
+    "bounds the captured %s at %i characters without changing valid payloads",
+    async (field, length, accepted) => {
+      const f = fixture();
+      await f.start();
+      const prefix = "https://bank.example/challenge?reference=";
+      const request = {
+        url:
+          field === "url"
+            ? prefix + "x".repeat(length - prefix.length)
+            : "https://bank.example/challenge",
+        method: "POST",
+        body:
+          field === "body" ? "creq=" + "x".repeat(length - 5) : "creq=exact",
+        sessionId: "acs-session",
+        frameId: "acs",
+      };
+      expect(request[field]).toHaveLength(length);
+      const action = await f.adapter.inspect(request);
+      expect(action).toEqual(
+        accepted
+          ? { capture: { url: request.url, body: request.body } }
+          : "block",
+      );
+    },
+  );
+  it.each([
+    "creq=",
+    "creq=exact&creq=other",
+    "creq=exact&threeDSSessionData=private",
+    "creq=%3Cscript%3Euntrusted%3C%2Fscript%3E",
+    "creq=exact%0A",
+  ])("blocks unsupported form data without forwarding it: %s", async (body) => {
+    const f = fixture();
+    await f.start();
+    expect(
+      await f.adapter.inspect({
+        url: "https://bank.example/challenge",
+        method: "POST",
+        body,
+        sessionId: "acs-session",
+        frameId: "acs",
+      }),
+    ).toBe("block");
+  });
+  it("blocks control characters in challenge URLs and preserves encoded CReq padding", async () => {
+    const f = fixture();
+    await f.start();
+    const request = {
+      url: "https://bank.example/challenge?reference=exact",
+      method: "POST",
+      body: "creq=ZXhhY3Q%3D",
+      sessionId: "acs-session",
+      frameId: "acs",
+    };
+    expect(
+      await f.adapter.inspect({ ...request, url: request.url + "\n" }),
+    ).toBe("block");
     expect(await f.adapter.inspect(request)).toEqual({
       capture: { url: request.url, body: request.body },
     });

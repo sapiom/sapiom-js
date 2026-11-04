@@ -508,6 +508,15 @@ if (!chromeBin) {
       let cardRelays = 0;
       let continuations = 0;
       let state: VerificationState;
+      const creq = Buffer.from(
+        JSON.stringify({
+          acsTransID: "11111111-1111-4111-8111-111111111111",
+          threeDSServerTransID: "22222222-2222-4222-8222-222222222222",
+          messageType: "CReq",
+          messageVersion: "2.2.0",
+          challengeWindowSize: "05",
+        }),
+      ).toString("base64url");
       const server = http.createServer(async (req, res) => {
         const chunks: Buffer[] = [];
         for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -525,7 +534,7 @@ if (!chromeBin) {
           res.end(
             ready
               ? '<script>window.top.postMessage({type:"3ds_completed"}, "*");</script>'
-              : `<!doctype html><iframe name="acs"></iframe><form target="acs" method="POST" action="https://bank.example/challenge"><input name="creq" value="original-merchant-request"></form><script>document.forms[0].submit()</script>`,
+              : `<!doctype html><iframe name="acs"></iframe><form target="acs" method="POST" action="https://bank.example/challenge"><input name="creq" value="${creq}"></form><script>document.forms[0].submit()</script>`,
           );
         } else {
           const operation = JSON.parse(body || "{}").operationName;
@@ -595,12 +604,17 @@ if (!chromeBin) {
             sync: async () => state,
             report: async (_id, report) => {
               state = { ...state, version: state.version + 1 };
-              if (report.kind === "challenge_observed")
+              if (report.kind === "challenge_observed") {
+                expect(report.capture).toEqual({
+                  url: "https://bank.example/challenge",
+                  body: "creq=" + creq,
+                });
                 state = {
                   ...state,
                   status: "requires_action",
                   challengeCaptured: true,
                 };
+              }
               if (report.kind === "continuation_started") {
                 continuations++;
                 state.continuationClaimed = true;

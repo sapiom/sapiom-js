@@ -40,7 +40,7 @@ export class ShopifyVerification implements VerificationAdapter {
   relayed(response: { body: string }) {
     if (this.cardSession) return;
     const id = json(response.body)?.id;
-    if (typeof id === "string" && id.length > 0 && id.length <= 256)
+    if (typeof id === "string" && id.length > 0 && id.length <= 255)
       this.cardSession = id;
   }
 
@@ -121,8 +121,8 @@ export class ShopifyVerification implements VerificationAdapter {
         url: url.href,
       };
     }
-    const formChallenge =
-      body === null && new URLSearchParams(request.body).has("creq");
+    const form = body === null ? new URLSearchParams(request.body) : null;
+    const formChallenge = form?.has("creq") ?? false;
     const jsonChallenge =
       body !== null &&
       typeof body === "object" &&
@@ -135,7 +135,17 @@ export class ShopifyVerification implements VerificationAdapter {
     )
       return "continue" as const;
     if (jsonChallenge) return "block" as const;
+    // Reject unsupported material and preserve accepted bank protocol data exactly.
     if (
+      request.url.length > 2048 ||
+      request.body.length > 8192 ||
+      [...request.url].some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 32 || code === 127;
+      }) ||
+      !form ||
+      [...form.keys()].join(",") !== "creq" ||
+      !/^[A-Za-z0-9_-]+={0,2}$/.test(form.get("creq") ?? "") ||
       !this.submitted ||
       !this.cardSession ||
       !this.callback ||
