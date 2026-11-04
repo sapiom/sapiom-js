@@ -221,7 +221,8 @@ records the current query descriptor, client read operations and matching pendin
 Unknown query IDs remain unsupported.
 
 Live activation remains blocked for the current test-store composition: a real replay
-captures the challenge and renders its exact fields through BT, but the merchant's
-authentication poll remains pending after the simulator step. Merchant continuation
-and a correlated completed receipt still require end-to-end validation. A pending
-poll never authorizes a completion message or consumes the continuation claim.
+captures the challenge and BT emits matching CReq fields, but the merchant's
+authentication poll remains pending after the simulator step. Buyer-visible bank
+rendering, merchant continuation and a correlated completed receipt still require
+end-to-end validation. A pending poll never authorizes a completion message or
+consumes the continuation claim.
