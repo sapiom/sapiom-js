@@ -17,6 +17,8 @@ export interface HttpRequestConfig {
   params?: Record<string, any>;
   body?: any;
   headers?: Record<string, string>;
+  /** Optional budget for this request only, including bounded server waits. */
+  timeoutMs?: number;
 }
 
 /**
@@ -199,6 +201,9 @@ export class HttpClient {
 
   /**
    * Execute a single request using native fetch (no retry)
+   * @param config Request options, including an optional deadline that covers headers and body consumption.
+   * @returns The fully read response body, with the deadline cleared on either success or failure.
+   * @throws A timeout error on abort; the outer retry policy must not retry an uncertain timed-out request.
    */
   private async executeRequest<T = any>(config: HttpRequestConfig): Promise<T> {
     const url = this.buildUrl(config.url, config.params);
@@ -208,7 +213,8 @@ export class HttpClient {
     };
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeout = config.timeoutMs ?? this.timeout;
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
       const response = await credentialFetch(
@@ -224,8 +230,6 @@ export class HttpClient {
         this.policy,
       );
 
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorData = await this.parseResponse(response);
         throw new Error(
@@ -237,11 +241,12 @@ export class HttpClient {
 
       return responseData as T;
     } catch (error: any) {
-      clearTimeout(timeoutId);
       if (error.name === "AbortError") {
-        throw new Error(`Request timeout after ${this.timeout}ms`);
+        throw new Error(`Request timeout after ${timeout}ms`);
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -276,6 +281,9 @@ export class HttpClient {
 
   /**
    * Parse response based on content type
+   * @param response The response whose body is still covered by the request deadline.
+   * @returns JSON, text, or null for an empty body; malformed JSON retains the existing empty-object fallback.
+   * @throws AbortError when a JSON body read is aborted, so a timeout cannot become an empty successful response.
    */
   private async parseResponse(response: Response): Promise<any> {
     const contentType = response.headers.get("content-type");
@@ -284,7 +292,8 @@ export class HttpClient {
     if (contentType?.includes("application/json")) {
       try {
         return await response.json();
-      } catch {
+      } catch (error: any) {
+        if (error?.name === "AbortError") throw error;
         // Invalid JSON, return empty object
         return {};
       }

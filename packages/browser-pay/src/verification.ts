@@ -1,0 +1,358 @@
+import { randomUUID } from "node:crypto";
+import type { CdpConnection } from "./cdp.js";
+
+export interface VerificationState {
+  id: string;
+  version: number;
+  status:
+    | "preparing"
+    | "requires_action"
+    | "checking"
+    | "ended"
+    | "expired"
+    | "canceled"
+    | "error";
+  expiresAt: string;
+  challengeCaptured: boolean;
+  launchClaimed: boolean;
+  checkRequested: boolean;
+  continuationClaimed: boolean;
+  merchantOrigin: string;
+  total: { amount: string; currency: string };
+  actionUrl?: string;
+  observation?: {
+    outcome: "confirmed" | "failed" | "unknown";
+    source: "runner";
+    confirmation?: string;
+  };
+}
+export interface VerificationTransport {
+  register(
+    injectionRef: string,
+    browserRef: string,
+  ): Promise<VerificationState | null>;
+  sync(id: string): Promise<VerificationState>;
+  report(
+    id: string,
+    input: Record<string, unknown>,
+  ): Promise<VerificationState>;
+}
+export interface VerificationRequest {
+  url: string;
+  method: string;
+  body: string;
+  sessionId: string;
+  frameId?: string;
+}
+export interface CheckoutObservation {
+  outcome: "confirmed" | "failed" | "unknown";
+  cardSession: string;
+  amount: string;
+  currency: string;
+  confirmation?: string;
+}
+export interface VerificationAdapter {
+  continuation?(): Promise<(() => Promise<void>) | null>;
+  inspect(
+    request: VerificationRequest,
+  ): Promise<"continue" | "block" | { capture: { url: string; body: string } }>;
+  relayed(response: { body: string }, sessionId: string): void;
+  reconcile(state: VerificationState): Promise<CheckoutObservation | null>;
+}
+export interface VerificationHandle {
+  current(): VerificationState;
+  wait(): Promise<VerificationState>;
+}
+function isChallengeRequest(
+  request: VerificationRequest,
+  merchantOrigin: string,
+): boolean {
+  if (request.method.toUpperCase() !== "POST") return false;
+  try {
+    if (new URL(request.url).origin === merchantOrigin) return false;
+  } catch {
+    return false;
+  }
+  try {
+    const body: unknown = JSON.parse(request.body);
+    return (
+      body !== null &&
+      typeof body === "object" &&
+      (Object.prototype.hasOwnProperty.call(body, "creq") ||
+        ("messageType" in body && body.messageType === "CReq"))
+    );
+  } catch {
+    return new URLSearchParams(request.body).has("creq");
+  }
+}
+export const verificationIsActive = (state: VerificationState) =>
+  ["preparing", "requires_action", "checking"].includes(state.status);
+
+/** Fixed-purpose observer on the existing browser; it never creates or closes a browser session. */
+export class VerificationSession implements VerificationHandle {
+  private timer?: ReturnType<typeof setInterval>;
+  private ticking = false;
+  private closed = false;
+  private captureClaimed = false;
+  private queue: Promise<unknown> = Promise.resolve();
+  private readonly waiters = new Set<(state: VerificationState) => void>();
+  private constructor(
+    private readonly transport: VerificationTransport,
+    private readonly adapter: VerificationAdapter,
+    private state: VerificationState,
+  ) {}
+
+  /**
+   * Register an observer for the existing checkout without creating another browser or credential channel.
+   * @param transport The purchase-bound verification transport carried by the existing relay.
+   * @param adapter The internal integration that inspects this checkout and reads back its result.
+   * @param injectionRef The existing card injection to bind to the observer.
+   * @returns Null when unavailable, otherwise a session; only active registrations start a polling timer.
+   */
+  static async attach(
+    transport: VerificationTransport,
+    adapter: VerificationAdapter,
+    injectionRef: string,
+  ) {
+    const state = await transport.register(injectionRef, randomUUID());
+    if (!state) return null;
+    const observer = new VerificationSession(transport, adapter, state);
+    if (verificationIsActive(state)) {
+      observer.timer = setInterval(() => void observer.tick(), 2000);
+      observer.timer.unref?.();
+    }
+    return observer;
+  }
+  current() {
+    return { ...this.state };
+  }
+  wait(): Promise<VerificationState> {
+    return verificationIsActive(this.state)
+      ? new Promise((resolve) => this.waiters.add(resolve))
+      : Promise.resolve(this.current());
+  }
+  async inspect(request: VerificationRequest) {
+    let action: Awaited<ReturnType<VerificationAdapter["inspect"]>>;
+    try {
+      action = await this.adapter.inspect(request);
+    } catch {
+      // Observation errors leave ordinary traffic alone; an unobserved bank POST stays blocked.
+      return isChallengeRequest(request, this.state.merchantOrigin)
+        ? ("block" as const)
+        : ("continue" as const);
+    }
+    if (typeof action !== "object") return action;
+    if (
+      this.closed ||
+      this.captureClaimed ||
+      !verificationIsActive(this.state) ||
+      this.state.challengeCaptured ||
+      action.capture.url !== request.url ||
+      action.capture.body !== request.body
+    )
+      return "block" as const;
+    // Reserve synchronously: an ambiguous capture report must never admit another ACS request.
+    this.captureClaimed = true;
+    await this.report({ kind: "challenge_observed", capture: action.capture });
+    return verificationIsActive(this.state) && this.state.challengeCaptured
+      ? ("capture" as const)
+      : ("block" as const);
+  }
+  relayed(response: { body: string }, sessionId: string) {
+    try {
+      this.adapter.relayed(response, sessionId);
+    } catch {
+      // Observation cannot change the response of a card relay that already happened.
+    }
+  }
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.timer) clearInterval(this.timer);
+    const reported = verificationIsActive(this.state)
+      ? this.report({ kind: "browser_lost" }).catch(() => {})
+      : Promise.resolve();
+    this.finish({
+      ...this.state,
+      status: verificationIsActive(this.state) ? "error" : this.state.status,
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      reported,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 1000);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+  }
+  private async report(input: Record<string, unknown>) {
+    const operation = async () => {
+      const body = {
+        ...input,
+        idempotencyKey: randomUUID(),
+        expectedVersion: this.state.version,
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          this.finish(await this.transport.report(this.state.id, body));
+          return;
+        } catch (error) {
+          if (
+            error instanceof VerificationHttpError &&
+            error.code === "verification_version_conflict"
+          ) {
+            this.finish(await this.transport.sync(this.state.id));
+            body.expectedVersion = this.state.version;
+          } else if (
+            error instanceof VerificationHttpError &&
+            error.status < 500
+          )
+            throw error;
+          if (attempt === 2)
+            throw new Error("Purchase verification report failed");
+        }
+      }
+    };
+    const pending = this.queue.then(operation);
+    this.queue = pending.catch(() => {});
+    return pending;
+  }
+  private async tick() {
+    // Check expiry before the in-flight guard, including when an adapter never settles.
+    if (!this.canObserve() || this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.queue;
+      if (!this.canObserve()) return;
+      const synced = await this.transport.sync(this.state.id);
+      if (!this.canObserve()) return;
+      this.finish(synced);
+      if (this.canObserve()) {
+        const observation = await this.adapter.reconcile(this.state);
+        if (!this.canObserve()) return;
+        if (observation && observation.outcome !== "unknown")
+          await this.report({ kind: "checkout_observed", observation });
+        else if (this.state.launchClaimed && !this.state.continuationClaimed) {
+          const resume = await this.adapter.continuation?.();
+          if (!this.canObserve()) return;
+          if (resume) {
+            await this.report({ kind: "continuation_started" });
+            if (this.canObserve() && this.state.continuationClaimed)
+              await resume();
+          }
+        }
+      }
+    } catch {
+      this.canObserve();
+    } finally {
+      this.ticking = false;
+    }
+  }
+  private canObserve() {
+    if (
+      !this.closed &&
+      verificationIsActive(this.state) &&
+      Date.now() >= Date.parse(this.state.expiresAt)
+    )
+      this.finish({ ...this.state, status: "expired" });
+    return !this.closed && verificationIsActive(this.state);
+  }
+  private finish(state: VerificationState) {
+    if (state.id !== this.state.id || state.version < this.state.version)
+      return;
+    if (!verificationIsActive(this.state) && verificationIsActive(state))
+      return;
+    this.state =
+      this.closed && verificationIsActive(state)
+        ? { ...state, status: "error" }
+        : state;
+    if (!verificationIsActive(state)) {
+      if (this.timer) clearInterval(this.timer);
+      for (const resolve of this.waiters) resolve(this.current());
+      this.waiters.clear();
+    }
+  }
+}
+
+export class VerificationHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+  ) {
+    super("Purchase verification request failed");
+  }
+}
+
+/** The caller supplies the existing relay's credential-safe POST, not another credential channel. */
+export function verificationTransport(
+  post: (suffix: string, body: unknown) => Promise<Response>,
+): VerificationTransport {
+  const read = async (
+    suffix: string,
+    body: unknown,
+    registering = false,
+  ): Promise<VerificationState | null> => {
+    const response = await post(suffix, body);
+    if (registering && response.status === 404) {
+      await response.arrayBuffer().catch(() => {});
+      return null;
+    }
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error("Unreadable purchase verification response");
+    }
+    if (
+      registering &&
+      response.status === 503 &&
+      data?.code === "verification_unavailable"
+    )
+      return null;
+    if (!response.ok)
+      throw new VerificationHttpError(
+        response.status,
+        typeof data?.code === "string" ? data.code : "verification_error",
+      );
+    if (
+      !data ||
+      typeof data.id !== "string" ||
+      !Number.isInteger(data.version) ||
+      ![
+        "preparing",
+        "requires_action",
+        "checking",
+        "ended",
+        "expired",
+        "canceled",
+        "error",
+      ].includes(data.status) ||
+      !Number.isFinite(Date.parse(data.expiresAt)) ||
+      typeof data.merchantOrigin !== "string" ||
+      typeof data.total?.amount !== "string" ||
+      typeof data.total?.currency !== "string" ||
+      ![
+        data.challengeCaptured,
+        data.launchClaimed,
+        data.checkRequested,
+        data.continuationClaimed,
+      ].every((v) => typeof v === "boolean")
+    ) {
+      throw new Error("Unreadable purchase verification response");
+    }
+    return data as VerificationState;
+  };
+  return {
+    register: (injectionRef, browserRef) =>
+      read("", { injectionRef, browserRef }, true),
+    sync: async (id) => (await read(`/${encodeURIComponent(id)}/sync`, {}))!,
+    report: async (id, input) =>
+      (await read(`/${encodeURIComponent(id)}/reports`, input))!,
+  };
+}
+
+export type VerificationAdapterFactory = (
+  connection: CdpConnection,
+  state: () => VerificationState | undefined,
+) => VerificationAdapter;

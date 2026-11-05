@@ -12,6 +12,11 @@ import {
 import { isRecord } from "./guards.js";
 import { silentLogger, type PayLogger } from "./logger.js";
 import {
+  VerificationSession,
+  type VerificationAdapterFactory,
+  type VerificationHandle,
+} from "./verification.js";
+import {
   isRelayTimeout,
   isRetryableRelayError,
   RelayTimeoutError,
@@ -19,6 +24,11 @@ import {
 } from "./relay.js";
 
 export interface AttachOptions {
+  /**
+   * Optional integration adapter; standard profiles supply their adapter without another browser setup.
+   * @internal Until U6 defines how other checkouts provide adapters.
+   */
+  verificationAdapter?: VerificationAdapterFactory;
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
   placeholder: HeldPlaceholder;
@@ -118,6 +128,7 @@ type PublicRefusal = Omit<
 >;
 
 export interface InterceptorHandle {
+  verification?: VerificationHandle;
   detach(): Promise<void>;
   /** Subscribe to outcomes. Returns an unsubscribe function. */
   on(listener: (event: InterceptorEvent) => void): () => void;
@@ -290,6 +301,7 @@ interface Inflight {
 }
 
 interface PausedRequest {
+  frameId?: string;
   url: string;
   method: string;
   headers?: unknown;
@@ -311,6 +323,7 @@ type HeldRead =
   | { kind: "held"; body: string };
 
 type Decision =
+  | { action: "challenge" }
   | { action: "continue" }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
@@ -335,6 +348,7 @@ export async function attachInterceptor(
 }
 
 class PaymentInterceptor {
+  private verification: VerificationSession | null = null;
   private readonly sessions = new Map<string, Session>();
   private readonly byTarget = new Map<string, Session>();
   private readonly enabledSessions = new Set<string>();
@@ -366,6 +380,28 @@ class PaymentInterceptor {
   }
 
   async start(): Promise<InterceptorHandle> {
+    try {
+      return await this.startAttached();
+    } catch (error) {
+      await this.detach();
+      throw error;
+    }
+  }
+
+  private async startAttached(): Promise<InterceptorHandle> {
+    if (this.options.verificationAdapter && this.options.relay.verification) {
+      const adapter = this.options.verificationAdapter(this.connection, () =>
+        this.verification?.current(),
+      );
+      this.verification = await VerificationSession.attach(
+        this.options.relay.verification,
+        adapter,
+        this.options.placeholder.injectionRef,
+      );
+    }
+    this.connection.onClose(() => {
+      void this.verification?.close();
+    });
     this.connection.onEvent((event) => this.dispatch(event));
     await this.connection.send("Target.setAutoAttach", {
       autoAttach: true,
@@ -380,6 +416,7 @@ class PaymentInterceptor {
     await Promise.all([...this.pendingArms]);
     this.buffering = false;
     return {
+      ...(this.verification && { verification: this.verification }),
       on: (listener) => this.subscribe(listener),
       detach: () => this.detach(),
     };
@@ -641,6 +678,7 @@ class PaymentInterceptor {
     };
     this.inflight.set(key, entry);
     if (
+      !this.verification &&
       canContinueWithoutReading(
         request.method,
         request.url,
@@ -671,6 +709,24 @@ class PaymentInterceptor {
     entry: Inflight,
     request: PausedRequest,
   ): Promise<Decision> {
+    if (this.verification) {
+      const body = await readBody(this.connection, entry.sessionId, request);
+      // Card-bearing requests belong only to the existing credential relay.
+      if (
+        !textHoldsPlaceholderNumber(request.url, this.number) &&
+        !textHoldsPlaceholderNumber(body ?? "", this.number)
+      ) {
+        const action = await this.verification.inspect({
+          url: request.url,
+          method: request.method,
+          body: body ?? "",
+          sessionId: entry.sessionId,
+          frameId: request.frameId,
+        });
+        if (action === "block") return { action: "fail", reason: "unknown" };
+        if (action === "capture") return { action: "challenge" };
+      }
+    }
     const read = await this.readHeld(entry.sessionId, request);
     if (read.kind === "unreadable") {
       return { action: "fail", reason: "unreadable_body" };
@@ -878,6 +934,16 @@ class PaymentInterceptor {
     url: string,
     decision: Decision,
   ): Promise<void> {
+    if (decision.action === "challenge") {
+      await this.settle(entry, {
+        fulfill: {
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: "<!doctype html><title>Bank verification</title><p>Continue verification on the purchase page.</p>",
+        },
+      });
+      return;
+    }
     if (decision.action === "continue") {
       await this.settle(entry, "continue");
       return;
@@ -892,6 +958,7 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
+    this.verification?.relayed(decision.response, entry.sessionId);
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
     this.emit(
       fulfilled
@@ -984,6 +1051,7 @@ class PaymentInterceptor {
 
   private async detach(): Promise<void> {
     if (this.closed) return;
+    const verificationClosed = this.verification?.close();
     this.closed = true;
     this.buffering = false;
     this.backlog = null;
@@ -1005,6 +1073,7 @@ class PaymentInterceptor {
       })
       .catch(() => {});
     this.connection.close();
+    await verificationClosed;
   }
 
   private subscribe(listener: Listener): () => void {
@@ -1350,6 +1419,7 @@ function parsePaused(
   return {
     requestId: value.requestId,
     request: {
+      ...(typeof value.frameId === "string" ? { frameId: value.frameId } : {}),
       url: typeof request.url === "string" ? request.url : "",
       method: typeof request.method === "string" ? request.method : "GET",
       headers: request.headers,

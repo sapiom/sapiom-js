@@ -13,6 +13,10 @@ import {
 import type { PaymentRelay, RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
+import type {
+  VerificationAdapterFactory,
+  VerificationState,
+} from "./verification";
 
 const nodeRequire = createRequire(__filename);
 
@@ -308,10 +312,12 @@ if (!chromeBin) {
       relay: PaymentRelay,
       bodies: { ping: string; other?: string; mismatch?: string; card: string },
       timeoutMs = 5_000,
+      verificationAdapter?: VerificationAdapterFactory,
     ) {
       const events: InterceptorEvent[] = [];
       const calls: RelayRequest[] = [];
       const wrapped: PaymentRelay = {
+        verification: relay.verification,
         relay: async (request, options) => {
           calls.push(request);
           return relay.relay(request, options);
@@ -322,6 +328,7 @@ if (!chromeBin) {
         placeholder: PLACEHOLDER,
         profileId: "shopify-card-vault",
         timeoutMs,
+        verificationAdapter,
       });
       handle.on((event) => events.push(event));
       const { chromium } = await import("playwright");
@@ -388,6 +395,117 @@ if (!chromeBin) {
       }
     }
 
+    it("captures a challenge on the same connection without emitting another card relay", async () => {
+      let state: VerificationState = {
+        id: "verification",
+        version: 1,
+        status: "preparing",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        merchantOrigin: "http://localhost",
+        total: { amount: "11.00", currency: "USD" },
+        challengeCaptured: false,
+        launchClaimed: false,
+        checkRequested: false,
+        continuationClaimed: false,
+      };
+      const reports: Record<string, unknown>[] = [];
+      const relay: PaymentRelay = {
+        ...stubPaymentRelay(async () => ({
+          outcome: "relayed",
+          response: {
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: '{"id":"same-session"}',
+          },
+        })),
+        verification: {
+          register: async () => state,
+          sync: async () => state,
+          report: async (_id, report) => {
+            reports.push(report);
+            state = {
+              ...state,
+              version: state.version + 1,
+              status: "requires_action",
+              challengeCaptured: true,
+            };
+            return state;
+          },
+        },
+      };
+      const { events } = await drive(
+        relay,
+        { ping: PING, card: CARD },
+        5000,
+        () => ({
+          inspect: async (request) =>
+            request.url.endsWith("/collect")
+              ? { capture: { url: request.url, body: request.body } }
+              : "continue",
+          relayed: () => {},
+          reconcile: async () => null,
+        }),
+      );
+      expect(hits.filter((hit) => hit.path === "/collect")).toHaveLength(0);
+      expect(
+        reports.find((report) => report.kind === "challenge_observed"),
+      ).toMatchObject({ capture: { body: PING } });
+      expect(events.filter((event) => event.type === "relayed")).toHaveLength(
+        2,
+      );
+    }, 60000);
+
+    it("preserves ordinary traffic and fulfilled card responses when observer callbacks throw", async () => {
+      const state: VerificationState = {
+        id: "verification",
+        version: 1,
+        status: "preparing",
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        merchantOrigin: "http://localhost",
+        total: { amount: "11.00", currency: "USD" },
+        challengeCaptured: false,
+        launchClaimed: false,
+        checkRequested: false,
+        continuationClaimed: false,
+      };
+      const { events, result } = await drive(
+        {
+          ...stubPaymentRelay(async () => ({
+            outcome: "relayed",
+            response: {
+              status: 201,
+              headers: { "content-type": "application/json" },
+              body: '{"id":"same-card"}',
+            },
+          })),
+          verification: {
+            register: async () => state,
+            sync: async () => state,
+            report: async () => state,
+          },
+        },
+        { ping: PING, card: CARD },
+        5000,
+        () => ({
+          inspect: async () => {
+            throw new Error("inspection failed");
+          },
+          relayed: () => {
+            throw new Error("observation failed");
+          },
+          reconcile: async () => null,
+        }),
+      );
+      expect(result).toMatchObject({
+        ping: { status: 200 },
+        unrelated: { status: 200 },
+        card: { status: 201, text: '{"id":"same-card"}' },
+      });
+      expect(events.some((event) => event.type === "failed")).toBe(false);
+      expect(events.filter((event) => event.type === "relayed")).toHaveLength(
+        2,
+      );
+    }, 60000);
     it("relays only the placeholder request while a second CDP client drives the page", async () => {
       const { events, calls, result, merchantOrigin } = await drive(
         stubPaymentRelay(async () => ({

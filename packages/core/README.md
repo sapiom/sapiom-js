@@ -160,8 +160,18 @@ await client.transactions.create({
 ##### transactions.get()
 
 ```typescript
-await client.transactions.get(transactionId: string)
+await client.transactions.get(transactionId);
+await client.transactions.get(transactionId, {
+  since: previous.version,
+  maxWaitSeconds: 25,
+});
 ```
+
+`maxWaitSeconds` accepts whole numbers from 0 to 25; invalid values are rejected
+before a request is sent. Omit it or pass 0 for an immediate read. For a bounded
+wait, pass the previous purchase `version` as `since` to wait for a change. The
+request timeout includes five seconds beyond the server wait and preserves a
+larger configured client timeout. The deadline covers reading the response body.
 
 ##### Helper Methods
 

@@ -29,12 +29,31 @@ export class TransactionAPI {
   /**
    * Get a specific transaction by ID
    * @param transactionId The transaction ID
+   * @param options A previous purchase version and a whole-number server wait from 0 to 25 seconds.
    * @returns The transaction details
+   * @throws If the wait is invalid, before sending a request. A bounded read preserves a larger client timeout.
    */
-  async get(transactionId: string): Promise<TransactionResponse> {
+  async get(
+    transactionId: string,
+    options?: { since?: string; maxWaitSeconds?: number },
+  ): Promise<TransactionResponse> {
+    if (
+      options?.maxWaitSeconds !== undefined &&
+      (!Number.isInteger(options.maxWaitSeconds) ||
+        options.maxWaitSeconds < 0 ||
+        options.maxWaitSeconds > 25)
+    )
+      throw new Error("maxWaitSeconds must be a whole number from 0 to 25");
     return await this.httpClient.request<TransactionResponse>({
       method: "GET",
       url: `/transactions/${transactionId}`,
+      ...(options && { params: options }),
+      ...(options?.maxWaitSeconds && {
+        timeoutMs: Math.max(
+          this.httpClient.getDefaults().timeout,
+          (options.maxWaitSeconds + 5) * 1000,
+        ),
+      }),
     });
   }
 
