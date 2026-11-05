@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { CdpCommandError } from "./cdp";
+import { MerchantVerification } from "./merchant-verification";
 import type { VerificationState } from "./verification";
 import {
   attachInterceptor,
@@ -454,6 +455,71 @@ it.each(["uncaptured", "captured", "launched", "uncertain"])(
     }
   },
 );
+it("keeps no-profile GET callbacks visible to the default observer without reading a body", async () => {
+  const stub = await startStub();
+  const inspect = jest
+    .spyOn(MerchantVerification.prototype, "inspect")
+    .mockResolvedValue("continue");
+  const state: VerificationState = {
+    id: "verification",
+    version: 1,
+    status: "preparing",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    merchantOrigin: "https://shop.example",
+    total: { amount: "11.00", currency: "USD" },
+    challengeCaptured: false,
+    launchClaimed: false,
+    checkRequested: false,
+    continuationClaimed: false,
+  };
+  const handle = await attachInterceptor(stub.url, {
+    placeholder: HELD,
+    relay: {
+      relay: async () => success(),
+      verification: {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => state,
+      },
+    },
+  });
+  try {
+    attachPage(stub.emit);
+    await waitFor(
+      () =>
+        stub.commands.some(
+          (c) => c.method === "Fetch.enable" && c.sessionId === "page-1",
+        ),
+      "page interception",
+    );
+    stub.emit({
+      method: "Fetch.requestPaused",
+      sessionId: "page-1",
+      params: {
+        requestId: "callback",
+        frameId: "auth",
+        request: {
+          method: "GET",
+          url: "https://shop.example/payments_api/redirect/show?original=1",
+        },
+      },
+    });
+    await waitFor(
+      () => inspect.mock.calls.length > 0,
+      "default GET observation",
+    );
+    expect(inspect).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "GET", frameId: "auth", body: "" }),
+    );
+    expect(
+      stub.commands.some((c) => c.method === "Network.getRequestPostData"),
+    ).toBe(false);
+  } finally {
+    await handle.detach();
+    await stub.close();
+    inspect.mockRestore();
+  }
+});
 
 it("fences the bound injection's placeholder across pages and leaves other card values alone", async () => {
   const stub = await startStub();

@@ -714,9 +714,7 @@ class PaymentInterceptor {
     };
     this.inflight.set(key, entry);
     if (
-      (!this.verification ||
-        (this.options.profileId === undefined &&
-          !this.options.verificationAdapter)) &&
+      !this.verification &&
       canContinueWithoutReading(
         request.method,
         request.url,
