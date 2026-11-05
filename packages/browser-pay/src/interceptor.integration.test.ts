@@ -5,7 +5,11 @@ import http from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { attachInterceptor, type InterceptorEvent } from "./interceptor";
+import {
+  attachInterceptor,
+  type InterceptorEvent,
+  type InterceptorTarget,
+} from "./interceptor";
 import type { PaymentRelay, RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
@@ -1095,5 +1099,38 @@ if (!chromeBin) {
         void browser;
       }
     }, 60_000);
+
+    it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const page = await browser.contexts()[0].newPage();
+      try {
+        for (const target of [browser, page]) {
+          await expect(
+            attachInterceptor(target as unknown as InterceptorTarget, {
+              relay: stubPaymentRelay(async () => {
+                throw new Error("relay must not be called");
+              }),
+              placeholder: PLACEHOLDER,
+            }),
+          ).rejects.toThrow(
+            "Playwright browsers and pages do not expose wsEndpoint()",
+          );
+        }
+      } finally {
+        await page.close().catch(() => {});
+      }
+    });
+
+    it("attaches through the browser's http:// discovery URL, as connectOverCDP does", async () => {
+      const discoveryUrl = `http://${new URL(cdpUrl).host}`;
+      const handle = await attachInterceptor(discoveryUrl, {
+        relay: stubPaymentRelay(async () => {
+          throw new Error("relay must not be called");
+        }),
+        placeholder: PLACEHOLDER,
+      });
+      await handle.detach();
+    });
   },
 );

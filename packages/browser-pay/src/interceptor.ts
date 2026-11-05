@@ -136,13 +136,21 @@ export interface InterceptorHandle {
 }
 
 /**
- * A browser CDP websocket URL, or a Playwright/Puppeteer browser or page that
- * can provide one. The interceptor always opens its own connection.
+ * A browser CDP WebSocket URL (`ws://` or `wss://`) or DevTools discovery URL
+ * (`http://` or `https://`), the same URLs Playwright's `connectOverCDP`
+ * takes, or a Puppeteer browser or page that can provide one through
+ * `wsEndpoint()`. Playwright's `Browser` and `Page` have no `wsEndpoint()`
+ * (only its `BrowserServer` does, and that URL speaks Playwright's own
+ * protocol, not CDP), so with Playwright pass the CDP URL instead. A URL with
+ * any other scheme is refused before a connection opens. The interceptor
+ * always opens its own connection.
  */
 export type InterceptorTarget =
   | string
   | { wsEndpoint(): string }
   | { browser(): { wsEndpoint(): string } | null }
+  // Neither Puppeteer nor Playwright fits this shape today; it stays so
+  // existing callers still compile.
   | { context(): { browser(): { wsEndpoint(): string } | null } | null };
 
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 25_000;
@@ -1665,7 +1673,7 @@ function resolveCdpUrl(target: InterceptorTarget): string {
   const fromContext = nested ? callString(nested, "wsEndpoint") : undefined;
   if (fromContext) return fromContext;
   throw new Error(
-    "Pass a CDP websocket URL, or a Playwright/Puppeteer browser or page whose browser exposes wsEndpoint()",
+    "Pass a CDP URL (ws://, wss://, http:// or https://), or a Puppeteer browser or page. Playwright browsers and pages do not expose wsEndpoint(); pass the URL instead.",
   );
 }
 

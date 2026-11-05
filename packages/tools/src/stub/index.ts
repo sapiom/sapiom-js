@@ -164,6 +164,8 @@ import type {
   SlackUpdateResult,
   SlackUserInfoResult,
   SlackWhoAmIResult,
+  SlackDownloadFileResult,
+  SlackUploadFileResult,
 } from "../connectors/slack/index.js";
 import type {
   McpCallToolResult,
@@ -2495,6 +2497,19 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               profile: { display_name: "stub-user", real_name: "Stub User" },
             },
           })) as SlackUserInfoResult,
+        downloadFile: async (args) =>
+          stubSlack("downloadFile", args, () => ({
+            fileId: "stub-slack-file-id",
+            contentType: "image/jpeg",
+            fileName: `${args.file}.jpg`,
+            size: 0,
+          })) as SlackDownloadFileResult,
+        uploadFile: async (args) =>
+          stubSlack("uploadFile", args, () => ({
+            ok: true,
+            file: "F0STUBFILE",
+            permalink: null,
+          })) as SlackUploadFileResult,
       },
       linear: stubMcp("linear"),
       notion: stubMcp("notion"),
