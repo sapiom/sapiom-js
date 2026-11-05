@@ -155,7 +155,7 @@ export class VerificationSession implements VerificationHandle {
       state = await transport.register(injectionRef, randomUUID());
     } catch (error) {
       try {
-        await adapter.dispose?.();
+        Promise.resolve(adapter.dispose?.()).catch(() => {});
       } catch {
         /* Registration failure keeps native checkout in charge. */
       }
@@ -163,7 +163,7 @@ export class VerificationSession implements VerificationHandle {
     }
     if (!state) {
       try {
-        await adapter.dispose?.();
+        Promise.resolve(adapter.dispose?.()).catch(() => {});
       } catch {
         /* Cleanup cannot disable the ordinary relay. */
       }
