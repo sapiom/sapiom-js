@@ -39,7 +39,14 @@ export const supportedCReq = (encoded: string) => {
     (encoded !== unpadded && encoded.length % 4 !== 0)
   )
     return false;
-  const message = json(decoded.toString("utf8"));
+  let message;
+  try {
+    message = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(decoded),
+    );
+  } catch {
+    return false;
+  }
   if (!message || typeof message !== "object" || Array.isArray(message))
     return false;
   const uuid =

@@ -453,6 +453,16 @@ describe("Shopify continuation on the original browser", () => {
         "=".repeat((4 - (creq().length % 4)) % 4 === 1 ? 2 : 1),
     ],
     ["non-JSON data", "creq=ZXhhY3Q"],
+    [
+      "invalid UTF-8 in an overwritten field",
+      "creq=" +
+        Buffer.concat([
+          Buffer.from('{"messageType":"'),
+          Buffer.from([0xff]),
+          Buffer.from('",'),
+          Buffer.from(creq(), "base64url").subarray(1),
+        ]).toString("base64url"),
+    ],
     ["unsupported version", "creq=" + creq({ messageVersion: "1.0" })],
     ["unknown CReq fields", "creq=" + creq({ messageExtensions: [] })],
     ["invalid transaction ID", "creq=" + creq({ acsTransID: "guessed" })],

@@ -84,6 +84,26 @@ beforeEach(() => {
   } as NativeCardinalTarget);
 });
 afterEach(() => jest.restoreAllMocks());
+it("leaves malformed UTF-8 hidden by a duplicate JSON field in native checkout", async () => {
+  const f = fixture();
+  await f.adapter.inspect(lookup);
+  const form = new URLSearchParams(challenge.body);
+  const original = Buffer.from(form.get("creq")!, "base64url");
+  form.set(
+    "creq",
+    Buffer.concat([
+      Buffer.from('{"messageType":"'),
+      Buffer.from([0xff]),
+      Buffer.from('",'),
+      original.subarray(1),
+    ]).toString("base64url"),
+  );
+  expect(await f.adapter.inspect({ ...challenge, body: form.toString() })).toBe(
+    "fallback",
+  );
+  expect(NativeCardinal.prototype.bind).not.toHaveBeenCalled();
+  await f.adapter.dispose();
+});
 it("captures the complete form only after the relayed token's exact amount-bound lookup and native binding", async () => {
   const f = fixture();
   await f.adapter.inspect(lookup);
