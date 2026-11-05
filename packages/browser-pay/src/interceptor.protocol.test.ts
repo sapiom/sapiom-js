@@ -3,7 +3,11 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { CdpCommandError } from "./cdp";
-import { attachInterceptor, type InterceptorEvent } from "./interceptor";
+import {
+  attachInterceptor,
+  type InterceptorEvent,
+  type InterceptorTarget,
+} from "./interceptor";
 import type { HeldPlaceholder, RelayRequest, RelayResponse } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
 import type { RelayCallOptions } from "./relay";
@@ -1149,6 +1153,24 @@ describe("interceptor CDP decisions", () => {
       }),
     ).rejects.toThrow("profileId must not be empty");
   });
+
+  const playwrightBrowser = { contexts: () => [], newPage: async () => ({}) };
+  it.each([
+    ["browser", playwrightBrowser],
+    ["page", { context: () => ({ browser: () => playwrightBrowser }) }],
+  ])(
+    "refuses a Playwright %s, which has no wsEndpoint()",
+    async (_kind, target) => {
+      await expect(
+        attachInterceptor(target as unknown as InterceptorTarget, {
+          relay: stubPaymentRelay(async () => success()),
+          placeholder: HELD,
+        }),
+      ).rejects.toThrow(
+        "Playwright browsers and pages do not expose wsEndpoint()",
+      );
+    },
+  );
 
   it("reads a body with missing entry bytes via getRequestPostData and relays it", async () => {
     const stub = await startStub({ postData: CARD });
