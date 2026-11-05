@@ -108,6 +108,13 @@ export class VerificationSession implements VerificationHandle {
     private state: VerificationState,
   ) {}
 
+  /**
+   * Register an observer for the existing checkout without creating another browser or credential channel.
+   * @param transport The purchase-bound verification transport carried by the existing relay.
+   * @param adapter The internal integration that inspects this checkout and reads back its result.
+   * @param injectionRef The existing card injection to bind to the observer.
+   * @returns Null when unavailable, otherwise a session; only active registrations start a polling timer.
+   */
   static async attach(
     transport: VerificationTransport,
     adapter: VerificationAdapter,

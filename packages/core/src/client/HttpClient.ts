@@ -201,6 +201,9 @@ export class HttpClient {
 
   /**
    * Execute a single request using native fetch (no retry)
+   * @param config Request options, including an optional deadline that covers headers and body consumption.
+   * @returns The fully read response body, with the deadline cleared on either success or failure.
+   * @throws A timeout error on abort; the outer retry policy must not retry an uncertain timed-out request.
    */
   private async executeRequest<T = any>(config: HttpRequestConfig): Promise<T> {
     const url = this.buildUrl(config.url, config.params);
@@ -278,6 +281,9 @@ export class HttpClient {
 
   /**
    * Parse response based on content type
+   * @param response The response whose body is still covered by the request deadline.
+   * @returns JSON, text, or null for an empty body; malformed JSON retains the existing empty-object fallback.
+   * @throws AbortError when a JSON body read is aborted, so a timeout cannot become an empty successful response.
    */
   private async parseResponse(response: Response): Promise<any> {
     const contentType = response.headers.get("content-type");
