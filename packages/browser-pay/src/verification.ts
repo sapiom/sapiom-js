@@ -129,6 +129,7 @@ export class VerificationSession implements VerificationHandle {
   private captureClaimed = false;
   private native = false;
   private nativeReturn?: NativeReturn;
+  private nativeAckKey?: string;
   private disposed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly waiters = new Set<(state: VerificationState) => void>();
@@ -277,7 +278,11 @@ export class VerificationSession implements VerificationHandle {
     if (timer) clearTimeout(timer);
   }
   /** Serialize reports with stable replay keys, dropping receipts when native checkout takes over. */
-  private async report(input: Record<string, unknown>, capture = false) {
+  private async report(
+    input: Record<string, unknown>,
+    capture = false,
+    idempotencyKey = randomUUID(),
+  ) {
     const operation = async () => {
       // A native fallback can win while this receipt waits for earlier reports to finish.
       if (
@@ -287,7 +292,7 @@ export class VerificationSession implements VerificationHandle {
         return false;
       const body = {
         ...input,
-        idempotencyKey: randomUUID(),
+        idempotencyKey,
         expectedVersion: this.state.version,
       };
       let ambiguous = false;
@@ -368,6 +373,15 @@ export class VerificationSession implements VerificationHandle {
       if (!this.canObserve()) return;
       this.finish(synced);
       if (this.canObserve() && !this.native) {
+        if (this.nativeAckKey) {
+          await this.report(
+            { kind: "interaction_resumed" },
+            false,
+            this.nativeAckKey,
+          );
+          this.nativeAckKey = undefined;
+          return;
+        }
         const observation = await this.adapter.reconcile(this.state);
         if (!this.canObserve() || this.native) return;
         if (observation && observation.outcome !== "unknown")
@@ -380,13 +394,22 @@ export class VerificationSession implements VerificationHandle {
             if (this.canObserve() && this.state.continuationClaimed) {
               const result = this.nativeReturn;
               this.nativeReturn = undefined;
+              let acknowledged;
               try {
-                const acknowledged = await resume(result);
-                if (this.canObserve() && acknowledged?.interactionReturned)
-                  await this.report({ kind: "interaction_resumed" });
+                acknowledged = await resume(result);
               } catch {
                 if (this.canObserve())
                   await this.report({ kind: "continuation_failed" });
+                return;
+              }
+              if (this.canObserve() && acknowledged?.interactionReturned) {
+                this.nativeAckKey = randomUUID();
+                await this.report(
+                  { kind: "interaction_resumed" },
+                  false,
+                  this.nativeAckKey,
+                );
+                this.nativeAckKey = undefined;
               }
             }
           }

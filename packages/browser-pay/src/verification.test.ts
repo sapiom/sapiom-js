@@ -22,6 +22,73 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it.each([false, true])(
+    "reconciles a lost native acknowledgment without redelivery or a contradictory failure (committed=%s)",
+    async (committed) => {
+      jest.useFakeTimers();
+      let state: VerificationState = {
+        ...initial(),
+        challengeCaptured: true,
+        launchClaimed: true,
+        status: "checking",
+        nativeReturnAvailable: true,
+      };
+      let acknowledgments = 0;
+      const resume = jest.fn(async () => ({
+        interactionReturned: true as const,
+      }));
+      const report = jest.fn(async (_id, body) => {
+        if (body.kind === "continuation_started") {
+          state = { ...state, version: 2, continuationClaimed: true };
+          return {
+            ...state,
+            nativeReturn: {
+              protocol: "braintree_cardinal" as const,
+              jwt: "header.payload.signature",
+            },
+          };
+        }
+        if (body.kind === "interaction_resumed") {
+          acknowledgments++;
+          if (committed || acknowledgments > 3)
+            state = {
+              ...state,
+              version: 3,
+              status: "ended",
+              interactionReturned: true,
+            };
+          if (acknowledgments <= 3)
+            throw new Error("lost acknowledgment reply");
+        }
+        return state;
+      });
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync: async () => state, report },
+        {
+          inspect: async () => "continue",
+          relayed() {},
+          reconcile: async () => null,
+          continuation: async () => resume,
+        },
+        "injection",
+      );
+      await jest.advanceTimersByTimeAsync(2001);
+      expect(
+        report.mock.calls.some(
+          ([, body]) => body.kind === "continuation_failed",
+        ),
+      ).toBe(false);
+      await jest.advanceTimersByTimeAsync(2001);
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(observer!.current().interactionReturned).toBe(true);
+      const keys = report.mock.calls
+        .filter(([, body]) => body.kind === "interaction_resumed")
+        .map(([, body]) => body.idempotencyKey);
+      expect(new Set(keys).size).toBe(1);
+      expect(acknowledgments).toBe(committed ? 3 : 4);
+      await observer!.close();
+    },
+  );
   it.each([true, false])(
     "keeps native return private and acknowledges only a completed native delivery (%s)",
     async (succeeds) => {
