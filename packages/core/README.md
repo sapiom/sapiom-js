@@ -339,3 +339,11 @@ for (const method of page.data) console.log(method.kind, method.label, method.re
 Limit management uses a separate credential with `org.payment_method_spending_limits.read` or an explicit `org.payment_method_spending_limits.write` grant. A platform credential acting for a buyer sets `headers: { "sapiom-tenant": buyerId }` in `SapiomClient`. Read `getSpendingLimits(id)` before `setSpendingLimits(id, settings)` and send the returned version with all three nullable slots. Changed cumulative slots start a fresh allowance; unchanged saves preserve usage. Unavailable usage is `null`, not zero.
 
 The `paymentCards` client retains `getSpendingLimits` and `setSpendingLimits` with `org.card_spending_limits.*` grants. It also provides `list`, `get`, `createSetupLink`, `getSetupLink`, `setDefault` and `remove`. A setup URL is returned once for the buyer; it must not be logged or created again automatically after a lost response.
+
+Purchases use `transactions.create({ purchase, funding }, { idempotencyKey })`.
+Retain the key and body to resume an uncertain create; purchase writes never retry automatically.
+Use `checkCompatibility(domain)`, `get(id, { since, maxWaitSeconds: 25 })`,
+`getCheckout`, `updateCheckout` (a full replacement), `refreshCheckout` (explicit
+reconciliation) and `cancel`. Follow `nextAction.actor`; buyer links are secrets.
+`payment_submitted` does not confirm an order, and `complete()` reports an ordinary
+operation outcome. See [the runnable purchase example](examples/saved-method-purchase.mjs).

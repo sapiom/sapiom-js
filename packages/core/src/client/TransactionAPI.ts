@@ -2,6 +2,7 @@ import {
   CompleteTransactionRequest,
   CompleteTransactionResult,
   CreateTransactionRequest,
+  CreatePurchaseRequest,
   PaymentProtocolData,
   TransactionResponse,
   TransactionStatus,
@@ -9,6 +10,13 @@ import {
   TransactionCostResponse,
 } from "../types/transaction.js";
 import type { HttpClient } from "./HttpClient.js";
+
+import type {
+  CheckoutEnvelope,
+  PurchaseWriteOptions,
+  PurchaseWaitOptions,
+  TransactionCompatibility,
+} from "../types/purchase.js";
 
 export class TransactionAPI {
   constructor(private readonly httpClient: HttpClient) {}
@@ -18,11 +26,27 @@ export class TransactionAPI {
    * @param data The transaction data
    * @returns The created transaction response
    */
-  async create(data: CreateTransactionRequest): Promise<TransactionResponse> {
+  async create(
+    data: CreatePurchaseRequest,
+    options: PurchaseWriteOptions,
+  ): Promise<TransactionResponse>;
+  async create(
+    data: CreateTransactionRequest,
+    options?: PurchaseWriteOptions,
+  ): Promise<TransactionResponse>;
+  async create(
+    data: CreateTransactionRequest | CreatePurchaseRequest,
+    options?: PurchaseWriteOptions,
+  ): Promise<TransactionResponse> {
+    const purchase = "purchase" in data;
+    const headers =
+      options || purchase ? this.purchaseHeaders(options) : undefined;
     return await this.httpClient.request<TransactionResponse>({
       method: "POST",
       url: "/transactions",
       body: data,
+      ...(headers && { headers }),
+      ...(purchase && { retry: false as const }),
     });
   }
 
@@ -35,15 +59,9 @@ export class TransactionAPI {
    */
   async get(
     transactionId: string,
-    options?: { since?: string; maxWaitSeconds?: number },
+    options?: PurchaseWaitOptions,
   ): Promise<TransactionResponse> {
-    if (
-      options?.maxWaitSeconds !== undefined &&
-      (!Number.isInteger(options.maxWaitSeconds) ||
-        options.maxWaitSeconds < 0 ||
-        options.maxWaitSeconds > 25)
-    )
-      throw new Error("maxWaitSeconds must be a whole number from 0 to 25");
+    this.validateWait(options);
     return await this.httpClient.request<TransactionResponse>({
       method: "GET",
       url: `/transactions/${transactionId}`,
@@ -55,6 +73,114 @@ export class TransactionAPI {
         ),
       }),
     });
+  }
+
+  /** Cancel only while the server still permits it; this never confirms a merchant order. */
+  async cancel(
+    transactionId: string,
+    options: PurchaseWriteOptions,
+  ): Promise<TransactionResponse> {
+    return this.httpClient.request({
+      method: "POST",
+      url: `/transactions/${transactionId}/cancel`,
+      headers: this.purchaseHeaders(options),
+      retry: false,
+    });
+  }
+
+  async checkCompatibility(domain: string): Promise<TransactionCompatibility> {
+    return this.httpClient.request({
+      url: "/transaction-compatibility",
+      params: { domain },
+    });
+  }
+
+  async openCheckout(
+    transactionId: string,
+    body: Record<string, unknown>,
+    options: PurchaseWriteOptions,
+  ): Promise<CheckoutEnvelope> {
+    return this.httpClient.request({
+      method: "POST",
+      url: this.checkoutUrl(transactionId),
+      body,
+      headers: this.purchaseHeaders(options),
+      retry: false,
+    });
+  }
+
+  async getCheckout(
+    transactionId: string,
+    options?: PurchaseWaitOptions,
+  ): Promise<CheckoutEnvelope> {
+    this.validateWait(options);
+    return this.httpClient.request({
+      url: this.checkoutUrl(transactionId),
+      ...(options && { params: options }),
+      ...(options?.maxWaitSeconds && {
+        timeoutMs: Math.max(
+          this.httpClient.getDefaults().timeout,
+          (options.maxWaitSeconds + 5) * 1000,
+        ),
+      }),
+    });
+  }
+
+  /** Full merchant checkout replacement, not a patch; a new revision must be governed again. */
+  async updateCheckout(
+    transactionId: string,
+    body: Record<string, unknown>,
+    options: PurchaseWriteOptions,
+  ): Promise<CheckoutEnvelope> {
+    return this.httpClient.request({
+      method: "PUT",
+      url: this.checkoutUrl(transactionId),
+      body,
+      headers: this.purchaseHeaders(options),
+      retry: false,
+    });
+  }
+
+  async cancelCheckout(
+    transactionId: string,
+    options: PurchaseWriteOptions,
+  ): Promise<CheckoutEnvelope> {
+    return this.httpClient.request({
+      method: "POST",
+      url: `${this.checkoutUrl(transactionId)}/cancel`,
+      headers: this.purchaseHeaders(options),
+      retry: false,
+    });
+  }
+
+  /** Explicitly reconcile with the merchant. An uncertain mutation never resubmits automatically. */
+  async refreshCheckout(transactionId: string): Promise<CheckoutEnvelope> {
+    return this.httpClient.request({
+      method: "POST",
+      url: `${this.checkoutUrl(transactionId)}/refresh`,
+      retry: false,
+    });
+  }
+
+  private checkoutUrl(id: string): string {
+    return `/transactions/${id}/ucp/checkout`;
+  }
+  private purchaseHeaders(
+    options?: PurchaseWriteOptions,
+  ): Record<string, string> {
+    const key = options?.idempotencyKey?.trim();
+    if (!key || key.length > 255)
+      throw new Error("idempotencyKey must contain 1 to 255 characters");
+    return { "Idempotency-Key": key };
+  }
+  private validateWait(options?: PurchaseWaitOptions): void {
+    if (
+      options?.maxWaitSeconds !== undefined &&
+      (!Number.isInteger(options.maxWaitSeconds) ||
+        options.maxWaitSeconds < 0 ||
+        options.maxWaitSeconds > 25)
+    )
+      throw new Error("maxWaitSeconds must be a whole number from 0 to 25");
   }
 
   /**
