@@ -281,7 +281,7 @@ export class VerificationSession implements VerificationHandle {
   private async report(
     input: Record<string, unknown>,
     capture = false,
-    idempotencyKey = randomUUID(),
+    idempotencyKey: string = randomUUID(),
   ) {
     const operation = async () => {
       // A native fallback can win while this receipt waits for earlier reports to finish.
@@ -362,6 +362,14 @@ export class VerificationSession implements VerificationHandle {
     return pending;
   }
   /** Synchronize durable state and discard reconciliation when the checkout returns to native handling. */
+  private async acknowledgeNativeReturn() {
+    await this.report(
+      { kind: "interaction_resumed" },
+      false,
+      this.nativeAckKey,
+    );
+    this.nativeAckKey = undefined;
+  }
   private async tick() {
     // Check expiry before the in-flight guard, including when an adapter never settles.
     if (!this.canObserve() || this.ticking) return;
@@ -374,12 +382,7 @@ export class VerificationSession implements VerificationHandle {
       this.finish(synced);
       if (this.canObserve() && !this.native) {
         if (this.nativeAckKey) {
-          await this.report(
-            { kind: "interaction_resumed" },
-            false,
-            this.nativeAckKey,
-          );
-          this.nativeAckKey = undefined;
+          await this.acknowledgeNativeReturn();
           return;
         }
         const observation = await this.adapter.reconcile(this.state);
@@ -404,12 +407,7 @@ export class VerificationSession implements VerificationHandle {
               }
               if (this.canObserve() && acknowledged?.interactionReturned) {
                 this.nativeAckKey = randomUUID();
-                await this.report(
-                  { kind: "interaction_resumed" },
-                  false,
-                  this.nativeAckKey,
-                );
-                this.nativeAckKey = undefined;
+                await this.acknowledgeNativeReturn();
               }
             }
           }
