@@ -224,8 +224,15 @@ export class VerificationSession implements VerificationHandle {
     ]);
     if (timer) clearTimeout(timer);
   }
+  /** Serialize reports with stable replay keys, dropping receipts when native checkout takes over. */
   private async report(input: Record<string, unknown>, capture = false) {
     const operation = async () => {
+      // A native fallback can win while this receipt waits for earlier reports to finish.
+      if (
+        input.kind === "checkout_observed" &&
+        (this.native || !this.canObserve())
+      )
+        return false;
       const body = {
         ...input,
         idempotencyKey: randomUUID(),

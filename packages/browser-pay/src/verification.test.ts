@@ -155,6 +155,40 @@ describe("Existing-browser verification observation", () => {
     await observer!.close();
   });
 
+  it("does not send a queued receipt when native fallback wins before the report starts", async () => {
+    jest.useFakeTimers({ doNotFake: ["queueMicrotask"] });
+    const state = initial();
+    const report = jest.fn(async () => state);
+    let observer: VerificationSession | null = null;
+    observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => "fallback",
+        relayed() {},
+        reconcile: async () => {
+          queueMicrotask(() => {
+            void observer!.inspect({
+              url: "https://shop.example/retry",
+              method: "POST",
+              body: "{}",
+              sessionId: "original",
+            });
+          });
+          return {
+            outcome: "confirmed",
+            cardSession: "original",
+            amount: "11.00",
+            currency: "USD",
+          };
+        },
+      },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+
   it("leaves repeated definite version conflicts native when sync confirms no capture", async () => {
     const state = initial();
     const capture = {
