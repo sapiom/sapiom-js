@@ -32,6 +32,11 @@ transaction and credential configuration. Do not detach the current interceptor 
 customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
 same purchase using the returned version.
 
+`maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
+internal integration hook until U6 defines how other checkouts provide adapters.
+Registration that already reports an ended, expired, canceled or error state
+returns the observation without starting a polling timer.
+
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 
 ```json

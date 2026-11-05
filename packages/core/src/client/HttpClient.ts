@@ -227,8 +227,6 @@ export class HttpClient {
         this.policy,
       );
 
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorData = await this.parseResponse(response);
         throw new Error(
@@ -240,11 +238,12 @@ export class HttpClient {
 
       return responseData as T;
     } catch (error: any) {
-      clearTimeout(timeoutId);
       if (error.name === "AbortError") {
         throw new Error(`Request timeout after ${timeout}ms`);
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -287,7 +286,8 @@ export class HttpClient {
     if (contentType?.includes("application/json")) {
       try {
         return await response.json();
-      } catch {
+      } catch (error: any) {
+        if (error?.name === "AbortError") throw error;
         // Invalid JSON, return empty object
         return {};
       }

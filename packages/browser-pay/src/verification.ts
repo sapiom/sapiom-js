@@ -110,8 +110,10 @@ export class VerificationSession implements VerificationHandle {
     const state = await transport.register(injectionRef, randomUUID());
     if (!state) return null;
     const observer = new VerificationSession(transport, adapter, state);
-    observer.timer = setInterval(() => void observer.tick(), 2000);
-    observer.timer.unref?.();
+    if (verificationIsActive(state)) {
+      observer.timer = setInterval(() => void observer.tick(), 2000);
+      observer.timer.unref?.();
+    }
     return observer;
   }
   current() {
