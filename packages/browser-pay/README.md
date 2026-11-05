@@ -19,8 +19,8 @@ The existing browser/relay integration also carries managed bank verification fo
 profiles when the backend enables it. Browser creation, ownership, cookies and proxy stay with
 the current checkout. The SDK captures a supported merchant challenge on that same CDP
 connection and exposes `handle.verification` while the buyer acts on Sapiom's private hosted page.
-This observer increment requires an explicit `verificationAdapter`; a profile alone does not
-create the observer. The companion Shopify adapter increment supplies its profile's default.
+The `shopify-card-vault` profile supplies a default verification adapter when the backend enables
+it. Other profiles require an explicit `verificationAdapter` for challenge capture.
 The checkout runner keeps its existing wait open until that activity ends or its session deadline
 expires. A buyer action URL is a credential: deliver it privately and do not log it.
 
@@ -31,6 +31,16 @@ relay integrations retain their existing behavior; the standard HTTP relay reuse
 transaction and credential configuration. Do not detach the current interceptor while an active
 customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
 same purchase using the returned version.
+
+Verification registration happens before the interceptor relays the card. If registration
+fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
+the existing checkout relay path and leaves `handle.verification` unavailable. Registration
+failure does not cancel or retry a payment and does not resume a previous verification.
+This includes an HTTP 409 observer mismatch: the unavailable optional observer does
+not impose a submission fence on this merchant or other tabs in the attached browser.
+The SDK never initiates another Pay to resolve uncertainty; reconcile the existing
+purchase before deciding whether to retry. A successfully registered observer still
+blocks another submission after challenge capture or while its capture report is uncertain.
 
 `maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
 internal integration hook until U6 defines how other checkouts provide adapters.
@@ -174,3 +184,54 @@ Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` ru
 `detach()` fails in-flight paused requests before it disables Fetch. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames, client-side-encrypted card payloads, and worklet targets are not visible to this check.
 
 `examples/attach.ts` is the agent-side script. It is not published.
+
+The standard `shopify-card-vault` profile selects its merchant verification adapter
+when the backend enables this capability. It observes the original card session
+and captures supported CReq forms only inside that checkout's authentication frame tree,
+including nested frames in separate browser processes. Check polls the existing native
+callback; a pending bank step never triggers another payment or a blind navigation.
+The tracked checkout may navigate within its merchant origin before opening the
+callback; the callback itself remains bound to its exact URL.
+When the merchant iframe supplies an authentication polling URL, it must use the
+merchant's fixed polling path and the original callback's exact payment arguments.
+The original merchant frame receives its completion message only after a durable
+one-use claim. Receipt reads use the pinned Shopify `PollForReceipt` query on the
+same browser, cookies and proxy and must match the receipt, card session and terms.
+Callback and receipt responses are read incrementally with byte limits; oversized
+responses are canceled before the complete body is buffered.
+These remain runner observations; `order` and issuer authentication require
+independent backend evidence. Unknown query versions, callback formats and receipt
+shapes remain pending until the bound deadline. Merchant-created sessions rendered
+through the BT web SDK are experimental and must be validated before live enablement.
+
+The adapter refuses another checkout submission when the backend reports a
+captured or launched challenge, including when the adapter instance is new.
+Before capture, an unsupported checkout shape, a retry or an unresolved frame withdraws
+managed observation and preserves the native checkout. An unsupported challenge or a
+definite backend capture refusal likewise leaves the original bank request intact.
+An observer that ends without a captured or launched challenge also leaves subsequent
+bank requests native, including when polling discovers the end before the request arrives.
+An ambiguous capture timeout or server error retains the capture fence, including if
+a later retry is refused. Native fallback never resubmits the card or Pay.
+Custom adapters can return `fallback` to withdraw inspection and reconciliation before
+capture; the observer still synchronizes durable state until it ends or expires.
+
+Card-session identifiers are limited to 255 characters. Captured URLs are limited to 2,048 characters,
+and form bodies to 8,192 characters, matching the backend contract. Only a single
+base64url `creq` field containing the supported five-field 3DS 2.1.0 or 2.2.0 message
+is accepted; duplicate or extra fields, control characters in the URL, invalid encoding
+or padding, and unsupported challenge messages are excluded from managed capture. Accepted URLs
+and form bodies are forwarded unchanged through the private verification transport.
+Never include raw challenge material in logs or agent messages.
+
+The current and previous supported Shopify receipt-query IDs remain explicitly pinned.
+The [4 November 2026 source inspection](test/fixtures/shopify-receipt-query-2026-11-04.json)
+records the current query descriptor, client read operations and matching pending receipt.
+Unknown query IDs remain unsupported.
+
+Live activation remains blocked for the current test-store composition: a real replay
+captures the challenge and BT emits matching CReq fields, but the merchant's
+authentication poll remains pending after the simulator step. Buyer-visible bank
+rendering, merchant continuation and a correlated completed receipt still require
+end-to-end validation. A pending poll never authorizes a completion message or
+consumes the continuation claim.

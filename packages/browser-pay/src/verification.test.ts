@@ -1,5 +1,6 @@
 import {
   VerificationSession,
+  VerificationHttpError,
   verificationTransport,
   type VerificationState,
   type VerificationAdapter,
@@ -21,6 +22,354 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it.each([400, 401, 403, 404, 409, 422, 429])(
+    "leaves a definite HTTP %i capture refusal to the native checkout",
+    async (status) => {
+      const state = initial();
+      const capture = {
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+      };
+      const inspect = jest.fn(async () => ({ capture }));
+      const report = jest.fn(async () => {
+        throw new VerificationHttpError(
+          status,
+          "verification_challenge_unsupported",
+        );
+      });
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync: async () => state, report },
+        { inspect, relayed() {}, reconcile: async () => null },
+        "injection",
+      );
+      const request = { ...capture, method: "POST", sessionId: "original" };
+      expect(await observer!.inspect(request)).toBe("continue");
+      expect(await observer!.inspect(request)).toBe("continue");
+      expect(observer!.current().challengeCaptured).toBe(false);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(report).toHaveBeenCalledTimes(1);
+      await observer!.close();
+    },
+  );
+  it.each([
+    new Error("response lost"),
+    new VerificationHttpError(503, "unavailable"),
+  ])(
+    "keeps capture fenced after an ambiguous response followed by a definite refusal: %s",
+    async (unknown) => {
+      const state = initial();
+      const capture = {
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+      };
+      const report = jest
+        .fn()
+        .mockRejectedValueOnce(unknown)
+        .mockRejectedValue(
+          new VerificationHttpError(409, "verification_challenge_unsupported"),
+        );
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync: async () => state, report },
+        {
+          inspect: async () => ({ capture }),
+          relayed() {},
+          reconcile: async () => null,
+        },
+        "injection",
+      );
+      const request = { ...capture, method: "POST", sessionId: "original" };
+      await expect(observer!.inspect(request)).rejects.toThrow();
+      expect(await observer!.inspect(request)).toBe("block");
+      expect(report).toHaveBeenCalledTimes(2);
+      expect(report.mock.calls[0][1].idempotencyKey).toEqual(
+        report.mock.calls[1][1].idempotencyKey,
+      );
+      await observer!.close();
+    },
+  );
+  it("withdraws inspection and reconciliation when the adapter selects native checkout", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    const inspect = jest.fn(async () => "fallback" as const);
+    const reconcile = jest.fn(async () => null);
+    const report = jest.fn(async () => state);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      { inspect, relayed() {}, reconcile },
+      "injection",
+    );
+    const request = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+      method: "POST",
+      sessionId: "original",
+    };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    await jest.advanceTimersByTimeAsync(2001);
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+  it("discards a pending receipt when inspection switches the checkout to native", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    let finishReceipt!: (value: {
+      outcome: "confirmed";
+      cardSession: string;
+      amount: string;
+      currency: string;
+    }) => void;
+    const pending = new Promise<Parameters<typeof finishReceipt>[0]>(
+      (resolve) => {
+        finishReceipt = resolve;
+      },
+    );
+    const report = jest.fn(async () => state);
+    const reconcile = jest.fn(() => pending);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      { inspect: async () => "fallback", relayed() {}, reconcile },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(
+      await observer!.inspect({
+        url: "https://shop.example/retry",
+        method: "POST",
+        body: "{}",
+        sessionId: "original",
+      }),
+    ).toBe("continue");
+    finishReceipt({
+      outcome: "confirmed",
+      cardSession: "original",
+      amount: "11.00",
+      currency: "USD",
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(report).not.toHaveBeenCalled();
+    expect(observer!.current()).not.toHaveProperty("observation");
+    await observer!.close();
+  });
+
+  it("does not send a queued receipt when native fallback wins before the report starts", async () => {
+    jest.useFakeTimers({ doNotFake: ["queueMicrotask"] });
+    const state = initial();
+    const report = jest.fn(async () => state);
+    let observer: VerificationSession | null = null;
+    observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => "fallback",
+        relayed() {},
+        reconcile: async () => {
+          queueMicrotask(() => {
+            void observer!.inspect({
+              url: "https://shop.example/retry",
+              method: "POST",
+              body: "{}",
+              sessionId: "original",
+            });
+          });
+          return {
+            outcome: "confirmed",
+            cardSession: "original",
+            amount: "11.00",
+            currency: "USD",
+          };
+        },
+      },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+
+  it("leaves repeated definite version conflicts native when sync confirms no capture", async () => {
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const report = jest.fn(async () => {
+      throw new VerificationHttpError(409, "verification_version_conflict");
+    });
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => ({ ...state, version: ++state.version }),
+        report,
+      },
+      {
+        inspect: async () => ({ capture }),
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(report).toHaveBeenCalledTimes(3);
+    expect(observer!.current().challengeCaptured).toBe(false);
+    await observer!.close();
+  });
+  it("retains native checkout when the backend ends observation before capturing", async () => {
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const report = jest.fn(async () => ({
+      ...state,
+      version: 2,
+      status: "error" as const,
+    }));
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => ({ capture }),
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(observer!.current().challengeCaptured).toBe(false);
+    expect(report).toHaveBeenCalledTimes(1);
+    await observer!.close();
+  });
+  it("refuses native fallback after capture was reserved or recorded", async () => {
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspect = jest
+      .fn<ReturnType<VerificationAdapter["inspect"]>, []>()
+      .mockResolvedValueOnce({ capture })
+      .mockResolvedValue("fallback");
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => {
+          await gate;
+          return { ...state, version: 2, challengeCaptured: true };
+        },
+      },
+      { inspect, relayed() {}, reconcile: async () => null },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    const first = observer!.inspect(request);
+    expect(await observer!.inspect(request)).toBe("block");
+    release();
+    expect(await first).toBe("capture");
+    expect(await observer!.inspect(request)).toBe("block");
+    await observer!.close();
+  });
+
+  it("leaves a delayed challenge native after polling ends uncaptured observation", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const sync = jest.fn(async () => ({
+      ...state,
+      version: 2,
+      status: "ended" as const,
+    }));
+    const inspect = jest.fn(async () => ({ capture }));
+    const report = jest.fn(async () => state);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync, report },
+      { inspect, relayed() {}, reconcile: async () => null },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(observer!.current().status).toBe("ended");
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(inspect).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+
+  it("keeps ambiguous capture fenced after polling returns uncaptured terminal state", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const report = jest.fn(async () => {
+      throw new Error("response lost");
+    });
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => ({ ...state, version: 2, status: "ended" as const }),
+        report,
+      },
+      {
+        inspect: async () => ({ capture }),
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    await expect(observer!.inspect(request)).rejects.toThrow();
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(observer!.current().status).toBe("ended");
+    expect(await observer!.inspect(request)).toBe("block");
+    expect(report).toHaveBeenCalledTimes(3);
+    await observer!.close();
+  });
+
+  it.each([
+    { challengeCaptured: true, launchClaimed: false },
+    { challengeCaptured: false, launchClaimed: true },
+  ])("keeps a terminal handoff fenced with %j", async (handoff) => {
+    const state = { ...initial(), status: "ended" as const, ...handoff };
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => state,
+      },
+      {
+        inspect: async () => "block",
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    expect(
+      await observer!.inspect({
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+        method: "POST",
+        sessionId: "original",
+      }),
+    ).toBe("block");
+    await observer!.close();
+  });
+
   it.each(["ended", "expired", "canceled", "error"] as const)(
     "returns a registered %s session without starting a polling timer",
     async (status) => {
@@ -28,9 +377,14 @@ describe("Existing-browser verification observation", () => {
       const state = { ...initial(), status };
       const sync = jest.fn(async () => state);
       const reconcile = jest.fn(async () => null);
+      const capture = {
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+      };
+      const inspect = jest.fn(async () => ({ capture }));
       const observer = await VerificationSession.attach(
         { register: async () => state, sync, report: async () => state },
-        { inspect: async () => "continue", relayed() {}, reconcile },
+        { inspect, relayed() {}, reconcile },
         "injection",
       );
       expect(jest.getTimerCount()).toBe(0);
@@ -38,6 +392,14 @@ describe("Existing-browser verification observation", () => {
       await jest.advanceTimersByTimeAsync(4001);
       expect(sync).not.toHaveBeenCalled();
       expect(reconcile).not.toHaveBeenCalled();
+      expect(
+        await observer!.inspect({
+          ...capture,
+          method: "POST",
+          sessionId: "original",
+        }),
+      ).toBe("continue");
+      expect(inspect).not.toHaveBeenCalled();
       await observer!.close();
       expect(jest.getTimerCount()).toBe(0);
     },

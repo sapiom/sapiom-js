@@ -16,6 +16,7 @@ import {
   type VerificationAdapterFactory,
   type VerificationHandle,
 } from "./verification.js";
+import { ShopifyVerification } from "./shopify-verification.js";
 import {
   isRelayTimeout,
   isRetryableRelayError,
@@ -389,15 +390,33 @@ class PaymentInterceptor {
   }
 
   private async startAttached(): Promise<InterceptorHandle> {
-    if (this.options.verificationAdapter && this.options.relay.verification) {
-      const adapter = this.options.verificationAdapter(this.connection, () =>
+    const factory =
+      this.options.verificationAdapter ??
+      (this.options.profileId === "shopify-card-vault"
+        ? (
+            connection: CdpConnection,
+            state: () =>
+              | import("./verification.js").VerificationState
+              | undefined,
+          ) =>
+            new ShopifyVerification(
+              connection,
+              state,
+              (sessionId, parentFrameId) =>
+                this.byTarget.get(parentFrameId ?? "")?.sessionId ??
+                this.sessions.get(sessionId)?.parentSessionId,
+            )
+        : undefined);
+    if (factory && this.options.relay.verification) {
+      const adapter = factory(this.connection, () =>
         this.verification?.current(),
       );
+      // Optional registration precedes this attachment's card relay; a failure leaves native checkout in charge.
       this.verification = await VerificationSession.attach(
         this.options.relay.verification,
         adapter,
         this.options.placeholder.injectionRef,
-      );
+      ).catch(() => null);
     }
     this.connection.onClose(() => {
       void this.verification?.close();
@@ -716,13 +735,14 @@ class PaymentInterceptor {
         !textHoldsPlaceholderNumber(request.url, this.number) &&
         !textHoldsPlaceholderNumber(body ?? "", this.number)
       ) {
-        const action = await this.verification.inspect({
+        const verificationRequest = {
           url: request.url,
           method: request.method,
           body: body ?? "",
           sessionId: entry.sessionId,
           frameId: request.frameId,
-        });
+        };
+        const action = await this.verification.inspect(verificationRequest);
         if (action === "block") return { action: "fail", reason: "unknown" };
         if (action === "capture") return { action: "challenge" };
       }

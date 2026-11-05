@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Discard receipt reconciliation that finishes after the checkout has returned to native handling.
+
+- Preserve native bank requests when polling has already ended an uncaptured checkout observation, while retaining captured and ambiguous-capture fences.
+
+- Preserve managed callback binding across checkout navigation within its merchant origin, and preserve native checkout when the backend ends observation without capturing a challenge.
+
+- Bind the merchant callback to its original checkout frame tree, bound streamed callback/receipt responses, and clean up browser regression fixtures when setup fails.
+
+- Follow merchant authentication frame ancestry across browser sessions, support the verified current Shopify receipt query, and retain native checkout on definite non-captures. Ambiguous captures and durable bank handoffs remain fenced.
+
+- Preserve native checkout on every optional registration failure, including HTTP 409 observer mismatches. An unavailable observer does not block this purchase or other merchant tabs; registered observers retain their capture and takeover fences.
+
+- Preserve the existing checkout relay path when optional verification registration fails, including a timeout or an observer mismatch.
+
+- Validate CReq base64url encoding, padding and the supported message schema before capturing a bank challenge.
+
+- Block repeat Shopify submissions using the backend's durable challenge flags, including after an adapter instance is replaced.
+
+- Bound and validate captured bank forms before reporting, preserve accepted payloads unchanged, and align card-session identifiers with the backend's 255-character limit.
+
+- Continue supported Shopify bank verification on the original browser with a one-use native callback and correlated receipt observation.
+
 - Add transaction-bound verification observation over the existing browser CDP and relay credential channel. Preserve card-send retry fences and separate interaction from authentication and payment evidence.
 - Keep the verification adapter hook internal until U6 defines general checkout integration, and avoid starting a polling timer when registration already returns a terminal session.
 
