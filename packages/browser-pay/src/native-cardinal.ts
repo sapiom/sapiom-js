@@ -37,7 +37,6 @@ type Context = { id: number; epoch: number };
 export class NativeCardinal {
   private readonly contexts = new Map<string, Context>();
   private readonly enabled = new Map<string, Promise<unknown>>();
-  private readonly sessions = new Set<string>();
   private readonly group = `sapiom-native-return-${randomUUID()}`;
   private epoch = 0;
   private readonly delivery: NativeCardinalDelivery;
@@ -155,7 +154,6 @@ export class NativeCardinal {
         frame.sessionId,
         this.cdp.send("Runtime.enable", {}, frame.sessionId, 5000),
       );
-      this.sessions.add(frame.sessionId);
     }
     await this.enabled.get(frame.sessionId);
     return this.contexts.get(`${frame.sessionId}:${frame.frameId}`);
@@ -326,7 +324,7 @@ export class NativeCardinal {
   async dispose() {
     this.unsubscribe();
     await Promise.allSettled(
-      [...this.sessions].map((session) =>
+      [...this.enabled.keys()].map((session) =>
         this.cdp.send(
           "Runtime.releaseObjectGroup",
           { objectGroup: this.group },
