@@ -1,5 +1,12 @@
 # @sapiom/langchain-classic
 
+## 0.5.4
+
+### Patch Changes
+
+- Updated dependencies [148d520]
+  - @sapiom/core@0.8.0
+
 ## 0.5.3
 
 ### Patch Changes
