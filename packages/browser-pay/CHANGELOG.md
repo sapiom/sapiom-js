@@ -8,7 +8,7 @@
 
 - Follow merchant authentication frame ancestry across browser sessions, support the verified current Shopify receipt query, and retain native checkout on definite non-captures. Ambiguous captures and durable bank handoffs remain fenced.
 
-- Keep Shopify payment submissions fenced after an observer-mismatch registration, while leaving the interceptor attached for ordinary traffic and the existing card relay.
+- Preserve native checkout on every optional registration failure, including HTTP 409 observer mismatches. An unavailable observer does not block this purchase or other merchant tabs; registered observers retain their capture and takeover fences.
 
 - Preserve the existing checkout relay path when optional verification registration fails, including a timeout or an observer mismatch.
 

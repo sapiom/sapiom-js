@@ -413,18 +413,24 @@ if (!chromeBin) {
     it.each([
       {
         reason: "timeout",
-        submissionAllowed: true,
         error: () => new DOMException("registration timed out", "TimeoutError"),
       },
       {
         reason: "HTTP 409 observer mismatch",
-        submissionAllowed: false,
         error: () =>
           new VerificationHttpError(409, "verification_observer_mismatch"),
       },
+      {
+        reason: "HTTP 429 rate limit",
+        error: () => new VerificationHttpError(429, "rate_limited"),
+      },
+      {
+        reason: "HTTP 502 backend failure",
+        error: () => new VerificationHttpError(502, "verification_error"),
+      },
     ])(
-      "keeps the relay attached and guards payment after registration fails: $reason",
-      async ({ error, submissionAllowed }) => {
+      "preserves the native checkout when optional registration fails: $reason",
+      async ({ error }) => {
         const register = jest.fn(async () => {
           throw error();
         });
@@ -466,15 +472,13 @@ if (!chromeBin) {
         expect(result).toMatchObject({
           ping: { status: 200 },
           card: { status: 201 },
-          checkout: submissionAllowed
-            ? { status: 200 }
-            : { error: "TypeError" },
+          checkout: { status: 200 },
         });
         expect(
           hits.filter(
             (hit) => hit.path === "/checkouts/internal/graphql/persisted",
           ),
-        ).toHaveLength(submissionAllowed ? 1 : 0);
+        ).toHaveLength(1);
         expect(verification).toBeUndefined();
         expect(register).toHaveBeenCalledTimes(1);
         expect(sync).not.toHaveBeenCalled();

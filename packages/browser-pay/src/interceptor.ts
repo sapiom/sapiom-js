@@ -12,15 +12,11 @@ import {
 import { isRecord } from "./guards.js";
 import { silentLogger, type PayLogger } from "./logger.js";
 import {
-  VerificationHttpError,
   VerificationSession,
   type VerificationAdapterFactory,
   type VerificationHandle,
 } from "./verification.js";
-import {
-  isShopifySubmission,
-  ShopifyVerification,
-} from "./shopify-verification.js";
+import { ShopifyVerification } from "./shopify-verification.js";
 import {
   isRelayTimeout,
   isRetryableRelayError,
@@ -346,7 +342,6 @@ export async function attachInterceptor(
 
 class PaymentInterceptor {
   private verification: VerificationSession | null = null;
-  private verificationConflict = false;
   private readonly sessions = new Map<string, Session>();
   private readonly byTarget = new Map<string, Session>();
   private readonly enabledSessions = new Set<string>();
@@ -408,17 +403,12 @@ class PaymentInterceptor {
       const adapter = factory(this.connection, () =>
         this.verification?.current(),
       );
+      // Optional registration precedes this attachment's card relay; a failure leaves native checkout in charge.
       this.verification = await VerificationSession.attach(
         this.options.relay.verification,
         adapter,
         this.options.placeholder.injectionRef,
-      ).catch((error: unknown) => {
-        this.verificationConflict =
-          error instanceof VerificationHttpError &&
-          error.status === 409 &&
-          error.code === "verification_observer_mismatch";
-        return null;
-      });
+      ).catch(() => null);
     }
     this.connection.onClose(() => {
       void this.verification?.close();
@@ -700,7 +690,6 @@ class PaymentInterceptor {
     this.inflight.set(key, entry);
     if (
       !this.verification &&
-      !this.verificationConflict &&
       canContinueWithoutReading(
         request.method,
         request.url,
@@ -731,7 +720,7 @@ class PaymentInterceptor {
     entry: Inflight,
     request: PausedRequest,
   ): Promise<Decision> {
-    if (this.verification || this.verificationConflict) {
+    if (this.verification) {
       const body = await readBody(this.connection, entry.sessionId, request);
       // Card-bearing requests belong only to the existing credential relay.
       if (
@@ -745,10 +734,7 @@ class PaymentInterceptor {
           sessionId: entry.sessionId,
           frameId: request.frameId,
         };
-        const action =
-          this.verificationConflict && isShopifySubmission(verificationRequest)
-            ? "block"
-            : await this.verification?.inspect(verificationRequest);
+        const action = await this.verification.inspect(verificationRequest);
         if (action === "block") return { action: "fail", reason: "unknown" };
         if (action === "capture") return { action: "challenge" };
       }
