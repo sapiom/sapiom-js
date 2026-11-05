@@ -19,8 +19,9 @@ The existing browser/relay integration also carries managed bank verification fo
 profiles when the backend enables it. Browser creation, ownership, cookies and proxy stay with
 the current checkout. The SDK captures a supported merchant challenge on that same CDP
 connection and exposes `handle.verification` while the buyer acts on Sapiom's private hosted page.
-The `shopify-card-vault` profile supplies a default verification adapter when the backend enables
-it. Other profiles require an explicit `verificationAdapter` for challenge capture.
+The `shopify-card-vault` profile supplies its existing verification adapter. Without a profile,
+the observer recognizes qualified Shopify relay responses and the Braintree/Cardinal composition
+below. Other named profiles require an explicit `verificationAdapter` for challenge capture.
 The checkout runner keeps its existing wait open until that activity ends or its session deadline
 expires. A buyer action URL is a credential: deliver it privately and do not log it.
 
@@ -58,8 +59,8 @@ placeholder stays fenced across pages after capture; a browser request does not 
 injection reference. An already-started relay keeps polling with its original idempotency key to
 read back the existing send. Capture fences new submissions and does not abandon that readback.
 
-`maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
-internal integration hook until U6 defines how other checkouts provide adapters.
+`maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` remains an
+internal integration hook; the no-profile default does not require one.
 Registration that already reports an ended, expired, canceled or error state
 returns the observation without starting a polling timer.
 
@@ -233,9 +234,9 @@ Custom adapters can return `fallback` to withdraw inspection and reconciliation 
 capture; the observer still synchronizes durable state until it ends or expires.
 
 Card-session identifiers are limited to 255 characters. Captured URLs are limited to 2,048 characters,
-and form bodies to 8,192 characters, matching the backend contract. Only a single
+and form bodies to 8,192 characters, matching the backend contract. A single
 base64url `creq` field containing the supported five-field 3DS 2.1.0 or 2.2.0 message
-is accepted; duplicate or extra fields, control characters in the URL, invalid encoding
+is accepted. The qualified Cardinal path also requires the original `threeDSSessionData` field; duplicate or extra fields, control characters in the URL, invalid encoding
 or padding, and unsupported challenge messages are excluded from managed capture. Accepted URLs
 and form bodies are forwarded unchanged through the private verification transport.
 Never include raw challenge material in logs or agent messages.
@@ -251,3 +252,29 @@ authentication poll remains pending after the simulator step. Buyer-visible bank
 rendering, merchant continuation and a correlated completed receipt still require
 end-to-end validation. A pending poll never authorizes a completion message or
 consumes the continuation claim.
+
+## Qualified no-profile bank handoff
+
+The initial additional composition is Braintree Web **3.139.0** with Cardinal **2.1.0**,
+qualified in Chromium against its USD sandbox. This is separate from generic card-relay support.
+The observer pins the relayed token's merchant frame tree and exact 3DS lookup, including the
+upgraded native nonce. It admits only known native callback implementations before capturing
+one complete `creq` + `threeDSSessionData` form. Other SDK versions, protocols, frame lineages
+or amounts retain native checkout before capture. No browser/session/proxy settings change.
+
+The private hosted page preserves those form values and transports the genuine opaque Cardinal
+result back through the existing purchase. Only a one-use runner claim receives that result.
+The original native Braintree integration validates it; an HTTP-200 response with errors or no
+authenticated payment method is rejected before its pending promise can resolve. No synthetic
+message, callback-origin rewriting, standalone authentication or new Pay is used.
+
+`interactionReturned` ends the ceremony separately from merchant confirmation. Resume only an
+automation task your bank handoff paused. If its earlier task already ended during verification,
+discard that answer and observe the original merchant page without card values or another Pay.
+[The integration example](examples/bank-verification.ts) takes host callbacks for an existing task
+and private buyer channel; the host still owns its browser and deadline.
+
+Live issuers, mobile/device-dependent approval and other native runtime versions need qualification
+before enablement. Unknown return, expiry or browser loss after capture preserves uncertainty and
+the submission fence. The sandbox example returns a payment-method nonce and creates no sale/order;
+it is component evidence, not a public purchase or production-availability claim.
