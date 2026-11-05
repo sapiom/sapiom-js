@@ -137,6 +137,7 @@ export class VerificationSession implements VerificationHandle {
       ? new Promise((resolve) => this.waiters.add(resolve))
       : Promise.resolve(this.current());
   }
+  /** Inspect checkout traffic while preserving captured and uncertain handoffs during native fallback. */
   async inspect(request: VerificationRequest) {
     if (
       !verificationIsActive(this.state) &&
@@ -288,6 +289,7 @@ export class VerificationSession implements VerificationHandle {
     this.queue = pending.catch(() => {});
     return pending;
   }
+  /** Synchronize durable state and discard reconciliation when the checkout returns to native handling. */
   private async tick() {
     // Check expiry before the in-flight guard, including when an adapter never settles.
     if (!this.canObserve() || this.ticking) return;
@@ -300,7 +302,7 @@ export class VerificationSession implements VerificationHandle {
       this.finish(synced);
       if (this.canObserve() && !this.native) {
         const observation = await this.adapter.reconcile(this.state);
-        if (!this.canObserve()) return;
+        if (!this.canObserve() || this.native) return;
         if (observation && observation.outcome !== "unknown")
           await this.report({ kind: "checkout_observed", observation });
         else if (this.state.launchClaimed && !this.state.continuationClaimed) {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Discard receipt reconciliation that finishes after the checkout has returned to native handling.
+
 - Preserve native bank requests when polling has already ended an uncaptured checkout observation, while retaining captured and ambiguous-capture fences.
 
 - Preserve managed callback binding across checkout navigation within its merchant origin, and preserve native checkout when the backend ends observation without capturing a challenge.

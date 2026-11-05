@@ -112,6 +112,49 @@ describe("Existing-browser verification observation", () => {
     expect(report).not.toHaveBeenCalled();
     await observer!.close();
   });
+  it("discards a pending receipt when inspection switches the checkout to native", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    let finishReceipt!: (value: {
+      outcome: "confirmed";
+      cardSession: string;
+      amount: string;
+      currency: string;
+    }) => void;
+    const pending = new Promise<Parameters<typeof finishReceipt>[0]>(
+      (resolve) => {
+        finishReceipt = resolve;
+      },
+    );
+    const report = jest.fn(async () => state);
+    const reconcile = jest.fn(() => pending);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      { inspect: async () => "fallback", relayed() {}, reconcile },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(
+      await observer!.inspect({
+        url: "https://shop.example/retry",
+        method: "POST",
+        body: "{}",
+        sessionId: "original",
+      }),
+    ).toBe("continue");
+    finishReceipt({
+      outcome: "confirmed",
+      cardSession: "original",
+      amount: "11.00",
+      currency: "USD",
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(report).not.toHaveBeenCalled();
+    expect(observer!.current()).not.toHaveProperty("observation");
+    await observer!.close();
+  });
+
   it("leaves repeated definite version conflicts native when sync confirms no capture", async () => {
     const state = initial();
     const capture = {

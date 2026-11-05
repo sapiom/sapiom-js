@@ -19,3 +19,5 @@ Bind the native callback to the tracked checkout and cancel oversized callback/r
 Allow the tracked checkout to navigate within its merchant origin before opening its callback, and leave definite backend termination before capture to the native checkout.
 
 Keep subsequent bank requests native when polling has already ended an uncaptured observation. Captured or launched challenges and ambiguous in-flight capture reports retain their submission fences.
+
+Discard a pending receipt read when inspection switches to native checkout before that read completes.
