@@ -10,26 +10,8 @@ const RECEIPT_QUERIES = new Set([
   "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
   "3ddb1d363e4e875c5659f2aaba308447980240ffc14b31ef90cb8ab7843bc1e5",
 ]);
-export const READ_VERIFICATION_TEXT = `async (response, limit) => {
-  if (Number(response.headers.get('content-length')) > limit) {
-    await response.body?.cancel();
-    return null;
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const decoder = new TextDecoder();
-  let size = 0, text = '';
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return text + decoder.decode();
-      size += value.byteLength;
-      if (size > limit) { await reader.cancel(); return null; }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally { reader.releaseLock(); }
-}`;
-type Frame = { sessionId: string; frameId: string; url: string };
+export { READ_VERIFICATION_TEXT } from "./merchant-frame.js";
+import { MerchantFrames, type Frame } from "./merchant-frame.js";
 type Query = Frame & { body: string; receiptId: string };
 const json = (body: string) => {
   try {
@@ -82,7 +64,10 @@ const money = (value: unknown) => {
 };
 
 /** Observes the supported Shopify protocol on the caller's existing CDP connection. */
-export class ShopifyVerification implements VerificationAdapter {
+export class ShopifyVerification
+  extends MerchantFrames
+  implements VerificationAdapter
+{
   private cardSession?: string;
   private submitted = false;
   private checkout?: Frame;
@@ -90,13 +75,15 @@ export class ShopifyVerification implements VerificationAdapter {
   private query?: Query;
 
   constructor(
-    private readonly cdp: Pick<CdpConnection, "send">,
+    cdp: Pick<CdpConnection, "send">,
     private readonly state: () => VerificationState | undefined,
-    private readonly parentSession: (
+    parentSession: (
       sessionId: string,
       parentFrameId?: string,
     ) => string | undefined = () => undefined,
-  ) {}
+  ) {
+    super(cdp, parentSession);
+  }
 
   relayed(response: { body: string }) {
     if (this.cardSession) return;
@@ -326,121 +313,5 @@ export class ShopifyVerification implements VerificationAdapter {
       ...(typeof confirmation === "string" &&
         /^[A-Z0-9]{6,14}$/.test(confirmation) && { confirmation }),
     };
-  }
-
-  private async descendant(
-    frame: Frame,
-    request: VerificationRequest,
-    exactUrl = true,
-  ) {
-    const result = (await this.cdp.send(
-      "Page.getFrameTree",
-      {},
-      frame.sessionId,
-    )) as any;
-    const find = (tree: any): any =>
-      tree?.frame?.id === frame.frameId
-        ? tree
-        : tree?.childFrames?.map(find).find(Boolean);
-    const callback = find(result?.frameTree);
-    if (!callback || typeof callback.frame.url !== "string") return false;
-    if (
-      exactUrl
-        ? callback.frame.url !== frame.url
-        : new URL(callback.frame.url).origin !== new URL(frame.url).origin
-    )
-      return false;
-    const parents = new Map<string, string>();
-    const collect = (tree: any, parent?: string) => {
-      if (typeof tree?.frame?.id !== "string") return;
-      const id = tree.frame.id;
-      const parentId = parent ?? tree.frame.parentId;
-      if (typeof parentId === "string") parents.set(id, parentId);
-      for (const child of tree.childFrames ?? []) collect(child, id);
-    };
-    collect(result.frameTree);
-    const contains = () => {
-      const seen = new Set<string>();
-      let id = request.frameId;
-      while (id && !seen.has(id)) {
-        if (id === frame.frameId) return true;
-        seen.add(id);
-        id = parents.get(id);
-      }
-      return false;
-    };
-    if (contains()) return true;
-    // OOP iframe roots retain their browser-owned parent frame ID in their own session.
-    const seen = new Set<string>();
-    let sessionId: string | undefined = request.sessionId;
-    while (sessionId && sessionId !== frame.sessionId && seen.size < 32) {
-      if (seen.has(sessionId)) return false;
-      seen.add(sessionId);
-      const tree = (await this.cdp.send(
-        "Page.getFrameTree",
-        {},
-        sessionId,
-      )) as any;
-      collect(tree?.frameTree);
-      if (contains()) return true;
-      sessionId = this.parentSession(
-        sessionId,
-        tree?.frameTree?.frame?.parentId,
-      );
-    }
-    return false;
-  }
-
-  private async checkoutFrame(
-    request: VerificationRequest,
-    origin: string,
-  ): Promise<Frame | undefined> {
-    if (!request.frameId) return;
-    const result = (await this.cdp.send(
-      "Page.getFrameTree",
-      {},
-      request.sessionId,
-    )) as any;
-    const find = (tree: any): any =>
-      tree?.frame?.id === request.frameId
-        ? tree.frame
-        : tree?.childFrames?.map(find).find(Boolean);
-    const frame = find(result?.frameTree);
-    if (!frame?.url || new URL(frame.url).origin !== origin) return;
-    return {
-      frameId: request.frameId,
-      sessionId: request.sessionId,
-      url: frame.url,
-    };
-  }
-
-  private async evaluate(
-    frame: Frame,
-    fn: string,
-    args: unknown[],
-  ): Promise<unknown> {
-    const world = (await this.cdp.send(
-      "Page.createIsolatedWorld",
-      {
-        frameId: frame.frameId,
-        worldName: "sapiom-checkout-verification",
-      },
-      frame.sessionId,
-    )) as any;
-    const evaluated = (await this.cdp.send(
-      "Runtime.callFunctionOn",
-      {
-        functionDeclaration: `function(...args) { const readText = ${READ_VERIFICATION_TEXT}; return (${fn})(...args); }`,
-        executionContextId: world.executionContextId,
-        arguments: args.map((value) => ({ value })),
-        awaitPromise: true,
-        returnByValue: true,
-      },
-      frame.sessionId,
-      15000,
-    )) as any;
-    if (evaluated.exceptionDetails)
-      throw new Error("Merchant observation unavailable");
-    return evaluated.result?.value;
   }
 }

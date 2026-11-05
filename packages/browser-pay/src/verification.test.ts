@@ -22,6 +22,62 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it.each([true, false])(
+    "keeps native return private and acknowledges only a completed native delivery (%s)",
+    async (succeeds) => {
+      jest.useFakeTimers();
+      let state: VerificationState = {
+        ...initial(),
+        challengeCaptured: true,
+        launchClaimed: true,
+        status: "checking",
+        nativeReturnAvailable: true,
+      };
+      const nativeReturn = {
+        protocol: "braintree_cardinal" as const,
+        jwt: "header.payload.signature",
+      };
+      const resume = jest.fn(async () => {
+        if (!succeeds) throw new Error("native rejected");
+        return { interactionReturned: true as const };
+      });
+      const dispose = jest.fn();
+      const report = jest.fn(async (_id, body) => {
+        state = { ...state, version: state.version + 1 };
+        if (body.kind === "continuation_started") {
+          state.continuationClaimed = true;
+          return { ...state, nativeReturn };
+        }
+        state.status = body.kind === "interaction_resumed" ? "ended" : "error";
+        state.interactionReturned = body.kind === "interaction_resumed";
+        return state;
+      });
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync: async () => state, report },
+        {
+          inspect: async () => "continue",
+          relayed() {},
+          reconcile: async () => null,
+          continuation: async () => resume,
+          dispose,
+        },
+        "injection",
+      );
+      await jest.advanceTimersByTimeAsync(2001);
+      expect(resume).toHaveBeenCalledWith(nativeReturn);
+      expect(report.mock.calls.map(([, body]) => body.kind)).toEqual([
+        "continuation_started",
+        succeeds ? "interaction_resumed" : "continuation_failed",
+      ]);
+      expect(observer!.current()).not.toHaveProperty("nativeReturn");
+      expect(await observer!.wait()).not.toHaveProperty("nativeReturn");
+      expect(observer!.current().interactionReturned).toBe(succeeds);
+      await jest.advanceTimersByTimeAsync(4000);
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(dispose).toHaveBeenCalledTimes(1);
+      await observer!.close();
+    },
+  );
   it.each([400, 401, 403, 404, 409, 422, 429])(
     "leaves a definite HTTP %i capture refusal to the native checkout",
     async (status) => {
