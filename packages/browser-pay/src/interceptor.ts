@@ -1000,7 +1000,6 @@ class PaymentInterceptor {
     }
     this.verification?.relayed(decision.response, entry.sessionId, {
       frameId: entry.frameId,
-      requestId: entry.requestId,
       url,
     });
     const fulfilled = await this.settle(entry, { fulfill: decision.response });

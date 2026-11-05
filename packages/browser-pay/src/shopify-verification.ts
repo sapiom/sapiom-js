@@ -30,7 +30,7 @@ export const isShopifySubmission = (
       url.searchParams.get("operationName") === "SubmitForCompletion")
   );
 };
-const supportedCReq = (encoded: string) => {
+export const supportedCReq = (encoded: string) => {
   if (!/^[A-Za-z0-9_-]+={0,2}$/.test(encoded)) return false;
   const unpadded = encoded.replace(/=+$/, "");
   const decoded = Buffer.from(encoded, "base64url");

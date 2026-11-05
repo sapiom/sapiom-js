@@ -4,7 +4,7 @@ import {
   NativeCardinal,
   type NativeCardinalTarget,
 } from "./native-cardinal.js";
-import { ShopifyVerification } from "./shopify-verification.js";
+import { ShopifyVerification, supportedCReq } from "./shopify-verification.js";
 import type {
   NativeReturn,
   VerificationAdapter,
@@ -174,37 +174,7 @@ export class MerchantVerification
       !form.get("threeDSSessionData")
     )
       return "fallback" as const;
-    const encoded = form.get("creq")!;
-    const unpadded = encoded.replace(/=+$/, "");
-    if (
-      !/^[A-Za-z0-9_-]+={0,2}$/.test(encoded) ||
-      (encoded !== unpadded && encoded.length % 4 !== 0) ||
-      Buffer.from(encoded, "base64url").toString("base64url") !== unpadded
-    )
-      return "fallback" as const;
-    let creq;
-    try {
-      creq = JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(
-          Buffer.from(encoded, "base64url"),
-        ),
-      );
-    } catch {
-      return "fallback" as const;
-    }
-    const uuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (
-      !creq ||
-      Object.keys(creq).sort().join(",") !==
-        "acsTransID,challengeWindowSize,messageType,messageVersion,threeDSServerTransID" ||
-      creq.messageType !== "CReq" ||
-      !["2.1.0", "2.2.0"].includes(creq.messageVersion) ||
-      !["01", "02", "03", "04", "05"].includes(creq.challengeWindowSize) ||
-      !uuid.test(creq.acsTransID) ||
-      !uuid.test(creq.threeDSServerTransID)
-    )
-      return "fallback" as const;
+    if (!supportedCReq(form.get("creq")!)) return "fallback" as const;
     try {
       const nonce = await this.native.lookupNonce();
       if (!nonce) return "fallback" as const;
