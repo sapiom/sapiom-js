@@ -1007,6 +1007,79 @@ describe("interceptor event redaction", () => {
     assertSafeError(invalidUrlError);
   });
 
+  it("refuses a CDP URL with another scheme before it connects", async () => {
+    let connections = 0;
+    const server = http.createServer();
+    server.on("connection", (socket) => {
+      connections += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+    try {
+      for (const url of [
+        `ftp://synthuser:synthpass@127.0.0.1:${port}/s/synthopaquesession?token=synthtoken`,
+        "file:///synthopaquesession",
+      ]) {
+        const error = await captureError(
+          attachInterceptor(
+            url,
+            attachOptions(stubPaymentRelay(async () => success())),
+          ),
+        );
+        expect(error.message).toBe(
+          "CDP URL must start with ws://, wss://, http:// or https://",
+        );
+        assertSafeError(error);
+      }
+      expect(connections).toBe(0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not expose a discovery URL when discovery fails", async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(404);
+      response.end("synthtoken synthopaquesession");
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const error = await captureError(
+        attachInterceptor(
+          `http://synthuser:synthpass@127.0.0.1:${port}/s/synthopaquesession?token=synthtoken`,
+          attachOptions(stubPaymentRelay(async () => success())),
+        ),
+      );
+      expect(error.message).toBe("CDP discovery refused: HTTP 404");
+      assertSafeError(error);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("lets a wss:// CDP URL through to the connect step", async () => {
+    const closed = http.createServer();
+    await new Promise<void>((resolve) => {
+      closed.listen(0, "127.0.0.1", resolve);
+    });
+    const closedPort = (closed.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const connectError = await captureError(
+      attachInterceptor(
+        `wss://127.0.0.1:${closedPort}/devtools/browser/synthopaquesession`,
+        attachOptions(stubPaymentRelay(async () => success())),
+      ),
+    );
+    expect(connectError.message).toBe("CDP websocket connect failed");
+    assertSafeError(connectError);
+  });
+
   it("does not expose transport details when the connect fails", async () => {
     const closed = http.createServer();
     await new Promise<void>((resolve) => {

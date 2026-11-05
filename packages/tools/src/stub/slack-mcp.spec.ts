@@ -30,6 +30,15 @@ describe("stub slack + mcp connectors", () => {
       user_id: "U0STUBBOT",
       bot_id: "B0STUBBOT",
     });
+    await expect(slack.downloadFile({ file: "F1" })).resolves.toEqual({
+      fileId: "stub-slack-file-id",
+      contentType: "image/jpeg",
+      fileName: "F1.jpg",
+      size: 0,
+    });
+    await expect(
+      slack.uploadFile({ fileId: "f1", channel: "C1", threadTs: "1.1" }),
+    ).resolves.toEqual({ ok: true, file: "F0STUBFILE", permalink: null });
   });
 
   it("returns and records a Slack override", async () => {

@@ -186,6 +186,43 @@ export interface SlackUserInfoResult {
   [key: string]: unknown;
 }
 
+export interface SlackDownloadFileArgs {
+  /** The Slack file id (`F…`): a `file_share` message's `files[].id`. */
+  file: string;
+}
+
+/** The file now in the tenant's Sapiom file storage. */
+export interface SlackDownloadFileResult {
+  /** File storage id: read it with `fileStorage.getDownloadUrl(fileId)` or post it back with `uploadFile`. */
+  fileId: string;
+  contentType: string;
+  fileName: string | null;
+  /** Bytes. */
+  size: number;
+}
+
+export interface SlackUploadFileArgs {
+  /** A file storage id the tenant owns (from `fileStorage.upload` or `downloadFile`). */
+  fileId: string;
+  /** Channel id to share the file in. */
+  channel: string;
+  /** Parent message `ts` to share it in that thread. */
+  threadTs?: string;
+  /** File title in Slack; defaults to the file name. */
+  title?: string;
+  /** Message text posted with the file. */
+  initialComment?: string;
+  /** File name in Slack; defaults to the stored file's name. */
+  fileName?: string;
+}
+
+export interface SlackUploadFileResult {
+  ok: true;
+  /** The new Slack file's id (`F…`). */
+  file: string;
+  permalink: string | null;
+}
+
 function callMethod<T>(
   method: string,
   body: Record<string, unknown>,
@@ -269,4 +306,29 @@ export async function userInfo(
   transport: Transport = defaultTransport(),
 ): Promise<SlackUserInfoResult> {
   return callMethod("users.info", { ...args }, transport);
+}
+
+/**
+ * Copy a file posted in Slack into the tenant's file storage and return its `fileId`. The gateway
+ * fetches the bytes with the bot token; the token and Slack's private URL never reach the run.
+ * Up to 25 MiB. Needs the `files:read` scope: a Slack connection made before it answers 403
+ * `oauth_scope_not_granted` until Slack is reconnected.
+ */
+export async function downloadFile(
+  args: SlackDownloadFileArgs,
+  transport: Transport = defaultTransport(),
+): Promise<SlackDownloadFileResult> {
+  return callMethod("files.download", { ...args }, transport);
+}
+
+/**
+ * Share a file from the tenant's file storage into a channel, in a thread when `threadTs` is set.
+ * Up to 25 MiB. Needs the `files:write` scope (reconnect Slack if the connection predates it) and
+ * the bot in the channel (`not_in_channel` otherwise).
+ */
+export async function uploadFile(
+  args: SlackUploadFileArgs,
+  transport: Transport = defaultTransport(),
+): Promise<SlackUploadFileResult> {
+  return callMethod("files.upload", { ...args }, transport);
 }
