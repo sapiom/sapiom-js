@@ -1,4 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  readNativeLookup,
+  waitNativeLookup,
+  type NativeLookup,
+} from "./native-lookup.js";
 import type { CdpConnection } from "./cdp.js";
 import type { Frame } from "./merchant-frame.js";
 import {
@@ -38,14 +43,7 @@ export class NativeCardinal {
   private readonly delivery: NativeCardinalDelivery;
   private readonly unsubscribe: () => void;
   private readonly network = new Map<string, Promise<unknown>>();
-  private lookup?: {
-    sessionId: string;
-    requestId: string;
-    url: string;
-    received: boolean;
-    result: Promise<string | undefined>;
-    resolve: (nonce?: string) => void;
-  };
+  private lookup?: NativeLookup;
 
   constructor(private readonly cdp: Pick<CdpConnection, "send" | "onEvent">) {
     this.delivery = new NativeCardinalDelivery(cdp);
@@ -73,7 +71,7 @@ export class NativeCardinal {
             Number(event.params.encodedDataLength) > 65536
           )
             lookup.resolve();
-          else void this.readLookup(lookup);
+          else void readNativeLookup(this.cdp, lookup);
         }
       }
       const params = event.params as {
@@ -147,49 +145,8 @@ export class NativeCardinal {
     }
   }
 
-  private async readLookup(lookup: NonNullable<NativeCardinal["lookup"]>) {
-    try {
-      const response = (await this.cdp.send(
-        "Network.getResponseBody",
-        { requestId: lookup.requestId },
-        lookup.sessionId,
-        5000,
-      )) as { body: string; base64Encoded?: boolean };
-      if (typeof response.body !== "string" || response.body.length > 65536)
-        return;
-      const text = response.base64Encoded
-        ? Buffer.from(response.body, "base64").toString("utf8")
-        : response.body;
-      if (Buffer.byteLength(text) > 32768) return;
-      const body = JSON.parse(text);
-      const nonce = body.paymentMethod?.nonce;
-      if (
-        !body.errors?.length &&
-        typeof nonce === "string" &&
-        nonce.length > 0 &&
-        nonce.length <= 255
-      )
-        lookup.resolve(nonce);
-    } catch {
-      /* An unavailable lookup leaves the existing challenge native. */
-    } finally {
-      lookup.resolve();
-    }
-  }
-
-  async lookupNonce() {
-    if (!this.lookup) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        this.lookup.result,
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => resolve(undefined), 5000);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+  lookupNonce() {
+    return waitNativeLookup(this.lookup);
   }
 
   private async context(frame: Frame) {
