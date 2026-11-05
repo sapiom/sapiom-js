@@ -24,7 +24,10 @@ import {
 } from "./relay.js";
 
 export interface AttachOptions {
-  /** Optional integration adapter; standard profiles supply their adapter without another browser setup. */
+  /**
+   * Optional integration adapter; standard profiles supply their adapter without another browser setup.
+   * @internal Until U6 defines how other checkouts provide adapters.
+   */
   verificationAdapter?: VerificationAdapterFactory;
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
