@@ -171,7 +171,7 @@ export class MerchantVerification
       [...form.keys()].sort().join(",") !== "creq,threeDSSessionData" ||
       form.getAll("creq").length !== 1 ||
       form.getAll("threeDSSessionData").length !== 1 ||
-      !form.get("threeDSSessionData")
+      !/^[\x20-\x7e]+$/.test(form.get("threeDSSessionData") ?? "")
     )
       return "fallback" as const;
     if (!supportedCReq(form.get("creq")!)) return "fallback" as const;

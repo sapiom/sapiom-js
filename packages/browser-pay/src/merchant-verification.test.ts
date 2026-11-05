@@ -75,15 +75,13 @@ beforeEach(() => {
   jest
     .spyOn(NativeCardinal.prototype, "lookupNonce")
     .mockResolvedValue("upgraded");
-  jest
-    .spyOn(NativeCardinal.prototype, "bind")
-    .mockResolvedValue({
-      frame: {
-        frameId: "checkout",
-        sessionId: "session",
-        url: origin + "/checkout",
-      },
-    } as NativeCardinalTarget);
+  jest.spyOn(NativeCardinal.prototype, "bind").mockResolvedValue({
+    frame: {
+      frameId: "checkout",
+      sessionId: "session",
+      url: origin + "/checkout",
+    },
+  } as NativeCardinalTarget);
 });
 afterEach(() => jest.restoreAllMocks());
 it("captures the complete form only after the relayed token's exact amount-bound lookup and native binding", async () => {
@@ -152,3 +150,20 @@ it("requires a protected result and returns only the genuine native acknowledgme
   );
   await f.adapter.dispose();
 });
+it.each(["%0A", "%00", "%FF", "%E2%82%AC"])(
+  "keeps non-reproducible session data %s native before capture",
+  async (value) => {
+    const f = fixture();
+    await f.adapter.inspect(lookup);
+    const body = new URLSearchParams(challenge.body);
+    body.delete("threeDSSessionData");
+    expect(
+      await f.adapter.inspect({
+        ...challenge,
+        body: body.toString() + "&threeDSSessionData=" + value,
+      }),
+    ).toBe("fallback");
+    expect(NativeCardinal.prototype.bind).not.toHaveBeenCalled();
+    await f.adapter.dispose();
+  },
+);
