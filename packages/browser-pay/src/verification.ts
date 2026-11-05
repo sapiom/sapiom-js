@@ -362,7 +362,6 @@ export class VerificationSession implements VerificationHandle {
     this.queue = pending.catch(() => {});
     return pending;
   }
-  /** Synchronize durable state and discard reconciliation when the checkout returns to native handling. */
   private async acknowledgeNativeReturn() {
     await this.report(
       { kind: "interaction_resumed" },
@@ -371,6 +370,7 @@ export class VerificationSession implements VerificationHandle {
     );
     this.nativeAckKey = undefined;
   }
+  /** Synchronize durable state and discard reconciliation when the checkout returns to native handling. */
   private async tick() {
     // Check expiry before the in-flight guard, including when an adapter never settles.
     if (!this.canObserve() || this.ticking) return;
