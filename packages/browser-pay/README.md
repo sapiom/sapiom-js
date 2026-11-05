@@ -207,6 +207,8 @@ captured or launched challenge, including when the adapter instance is new.
 Before capture, an unsupported checkout shape, a retry or an unresolved frame withdraws
 managed observation and preserves the native checkout. An unsupported challenge or a
 definite backend capture refusal likewise leaves the original bank request intact.
+An observer that ends without a captured or launched challenge also leaves subsequent
+bank requests native, including when polling discovers the end before the request arrives.
 An ambiguous capture timeout or server error retains the capture fence, including if
 a later retry is refused. Native fallback never resubmits the card or Pay.
 Custom adapters can return `fallback` to withdraw inspection and reconciliation before

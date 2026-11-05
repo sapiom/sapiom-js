@@ -138,6 +138,13 @@ export class VerificationSession implements VerificationHandle {
       : Promise.resolve(this.current());
   }
   async inspect(request: VerificationRequest) {
+    if (
+      !verificationIsActive(this.state) &&
+      !this.captureClaimed &&
+      !this.state.challengeCaptured &&
+      !this.state.launchClaimed
+    )
+      this.native = true;
     if (this.native) {
       if (this.state.challengeCaptured || this.state.launchClaimed)
         this.native = false;

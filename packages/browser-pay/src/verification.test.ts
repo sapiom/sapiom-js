@@ -203,6 +203,96 @@ describe("Existing-browser verification observation", () => {
     await observer!.close();
   });
 
+  it("leaves a delayed challenge native after polling ends uncaptured observation", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const sync = jest.fn(async () => ({
+      ...state,
+      version: 2,
+      status: "ended" as const,
+    }));
+    const inspect = jest.fn(async () => ({ capture }));
+    const report = jest.fn(async () => state);
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync, report },
+      { inspect, relayed() {}, reconcile: async () => null },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(observer!.current().status).toBe("ended");
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(await observer!.inspect(request)).toBe("continue");
+    expect(inspect).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+    await observer!.close();
+  });
+
+  it("keeps ambiguous capture fenced after polling returns uncaptured terminal state", async () => {
+    jest.useFakeTimers();
+    const state = initial();
+    const capture = {
+      url: "https://bank.example/challenge",
+      body: "creq=original",
+    };
+    const report = jest.fn(async () => {
+      throw new Error("response lost");
+    });
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => ({ ...state, version: 2, status: "ended" as const }),
+        report,
+      },
+      {
+        inspect: async () => ({ capture }),
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const request = { ...capture, method: "POST", sessionId: "original" };
+    await expect(observer!.inspect(request)).rejects.toThrow();
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(observer!.current().status).toBe("ended");
+    expect(await observer!.inspect(request)).toBe("block");
+    expect(report).toHaveBeenCalledTimes(3);
+    await observer!.close();
+  });
+
+  it.each([
+    { challengeCaptured: true, launchClaimed: false },
+    { challengeCaptured: false, launchClaimed: true },
+  ])("keeps a terminal handoff fenced with %j", async (handoff) => {
+    const state = { ...initial(), status: "ended" as const, ...handoff };
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => state,
+      },
+      {
+        inspect: async () => "block",
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    expect(
+      await observer!.inspect({
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+        method: "POST",
+        sessionId: "original",
+      }),
+    ).toBe("block");
+    await observer!.close();
+  });
+
   it.each(["ended", "expired", "canceled", "error"] as const)(
     "returns a registered %s session without starting a polling timer",
     async (status) => {
@@ -210,9 +300,14 @@ describe("Existing-browser verification observation", () => {
       const state = { ...initial(), status };
       const sync = jest.fn(async () => state);
       const reconcile = jest.fn(async () => null);
+      const capture = {
+        url: "https://bank.example/challenge",
+        body: "creq=original",
+      };
+      const inspect = jest.fn(async () => ({ capture }));
       const observer = await VerificationSession.attach(
         { register: async () => state, sync, report: async () => state },
-        { inspect: async () => "continue", relayed() {}, reconcile },
+        { inspect, relayed() {}, reconcile },
         "injection",
       );
       expect(jest.getTimerCount()).toBe(0);
@@ -220,6 +315,14 @@ describe("Existing-browser verification observation", () => {
       await jest.advanceTimersByTimeAsync(4001);
       expect(sync).not.toHaveBeenCalled();
       expect(reconcile).not.toHaveBeenCalled();
+      expect(
+        await observer!.inspect({
+          ...capture,
+          method: "POST",
+          sessionId: "original",
+        }),
+      ).toBe("continue");
+      expect(inspect).not.toHaveBeenCalled();
       await observer!.close();
       expect(jest.getTimerCount()).toBe(0);
     },

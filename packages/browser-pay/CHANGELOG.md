@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve native bank requests when polling has already ended an uncaptured checkout observation, while retaining captured and ambiguous-capture fences.
+
 - Preserve managed callback binding across checkout navigation within its merchant origin, and preserve native checkout when the backend ends observation without capturing a challenge.
 
 - Bind the merchant callback to its original checkout frame tree, bound streamed callback/receipt responses, and clean up browser regression fixtures when setup fails.
