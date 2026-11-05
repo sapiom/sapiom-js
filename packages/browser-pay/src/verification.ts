@@ -38,7 +38,6 @@ export interface VerificationRunnerReply extends VerificationState {
 }
 export interface VerificationRelayContext {
   frameId?: string;
-  requestId?: string;
   url?: string;
 }
 export interface VerificationTransport {
