@@ -37,11 +37,11 @@ export class TransactionAPI {
   ): Promise<TransactionResponse> {
     if (
       options?.maxWaitSeconds !== undefined &&
-      (!Number.isFinite(options.maxWaitSeconds) ||
+      (!Number.isInteger(options.maxWaitSeconds) ||
         options.maxWaitSeconds < 0 ||
-        options.maxWaitSeconds > 60)
+        options.maxWaitSeconds > 25)
     )
-      throw new Error("maxWaitSeconds must be between 0 and 60");
+      throw new Error("maxWaitSeconds must be a whole number from 0 to 25");
     return await this.httpClient.request<TransactionResponse>({
       method: "GET",
       url: `/transactions/${transactionId}`,

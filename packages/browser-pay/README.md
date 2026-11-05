@@ -42,6 +42,11 @@ relay stay attached, but this conflicted attachment cannot send Shopify's
 The conflict response contains no trusted merchant binding, so this conservative
 fence covers Shopify submissions across the attached browser until the conflict is resolved.
 
+`maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
+internal integration hook until U6 defines how other checkouts provide adapters.
+Registration that already reports an ended, expired, canceled or error state
+returns the observation without starting a polling timer.
+
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 
 ```json

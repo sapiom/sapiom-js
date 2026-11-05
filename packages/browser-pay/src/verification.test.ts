@@ -202,6 +202,28 @@ describe("Existing-browser verification observation", () => {
     expect(await observer!.inspect(request)).toBe("block");
     await observer!.close();
   });
+
+  it.each(["ended", "expired", "canceled", "error"] as const)(
+    "returns a registered %s session without starting a polling timer",
+    async (status) => {
+      jest.useFakeTimers();
+      const state = { ...initial(), status };
+      const sync = jest.fn(async () => state);
+      const reconcile = jest.fn(async () => null);
+      const observer = await VerificationSession.attach(
+        { register: async () => state, sync, report: async () => state },
+        { inspect: async () => "continue", relayed() {}, reconcile },
+        "injection",
+      );
+      expect(jest.getTimerCount()).toBe(0);
+      await expect(observer!.wait()).resolves.toEqual(state);
+      await jest.advanceTimersByTimeAsync(4001);
+      expect(sync).not.toHaveBeenCalled();
+      expect(reconcile).not.toHaveBeenCalled();
+      await observer!.close();
+      expect(jest.getTimerCount()).toBe(0);
+    },
+  );
   it("treats a disabled or older backend as unavailable without following redirects", async () => {
     const disabled = verificationTransport(
       async () =>
@@ -262,6 +284,16 @@ describe("Existing-browser verification observation", () => {
   it("waits on source-labelled merchant readback and does not create or close a browser", async () => {
     jest.useFakeTimers();
     let state = initial();
+    const report = jest.fn(
+      async (_id: string, _body: Record<string, unknown>) => {
+        state = {
+          ...state,
+          status: "ended",
+          observation: { outcome: "confirmed", source: "runner" },
+        };
+        return state;
+      },
+    );
     const adapter: VerificationAdapter = {
       inspect: async () => "continue",
       relayed: () => {},
@@ -276,14 +308,7 @@ describe("Existing-browser verification observation", () => {
       {
         register: async () => state,
         sync: async () => state,
-        report: async () => {
-          state = {
-            ...state,
-            status: "ended",
-            observation: { outcome: "confirmed", source: "runner" },
-          };
-          return state;
-        },
+        report,
       },
       adapter,
       "injection",
@@ -294,6 +319,20 @@ describe("Existing-browser verification observation", () => {
       outcome: "confirmed",
       source: "runner",
     });
+    expect(report).toHaveBeenCalledWith(
+      "verification",
+      expect.objectContaining({
+        kind: "checkout_observed",
+        observation: {
+          outcome: "confirmed",
+          cardSession: "same",
+          amount: "11.00",
+          currency: "USD",
+        },
+        expectedVersion: 1,
+      }),
+    );
+    expect(jest.getTimerCount()).toBe(0);
     await observer!.close();
   });
   it("continues ordinary traffic but blocks a bank POST when inspection fails", async () => {

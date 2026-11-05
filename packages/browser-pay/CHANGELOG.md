@@ -21,6 +21,7 @@
 - Continue supported Shopify bank verification on the original browser with a one-use native callback and correlated receipt observation.
 
 - Add transaction-bound verification observation over the existing browser CDP and relay credential channel. Preserve card-send retry fences and separate interaction from authentication and payment evidence.
+- Keep the verification adapter hook internal until U6 defines general checkout integration, and avoid starting a polling timer when registration already returns a terminal session.
 
 ## 0.3.0
 

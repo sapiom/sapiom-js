@@ -1,5 +1,9 @@
 # @sapiom/core
 
+## Unreleased
+
+- Add purchase verification status and bounded transaction reads. Accept only whole-number `maxWaitSeconds` values from 0 to 25, matching the backend, and keep the HTTP request deadline active until the response body is read. A body-read timeout is reported as a timeout and is not retried.
+
 ## 0.7.0
 
 ### Minor Changes
