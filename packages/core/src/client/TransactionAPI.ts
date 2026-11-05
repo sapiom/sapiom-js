@@ -29,7 +29,9 @@ export class TransactionAPI {
   /**
    * Get a specific transaction by ID
    * @param transactionId The transaction ID
+   * @param options A previous purchase version and a whole-number server wait from 0 to 25 seconds.
    * @returns The transaction details
+   * @throws If the wait is invalid, before sending a request. A bounded read preserves a larger client timeout.
    */
   async get(
     transactionId: string,
