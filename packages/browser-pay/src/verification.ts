@@ -341,6 +341,8 @@ export class VerificationSession implements VerificationHandle {
             error instanceof VerificationHttpError &&
             error.status < 500
           ) {
+            if (input.kind === "interaction_resumed" && error.status !== 429)
+              return false;
             if (
               capture &&
               !ambiguous &&
@@ -380,10 +382,8 @@ export class VerificationSession implements VerificationHandle {
       if (!this.canObserve()) return;
       this.finish(synced);
       if (this.canObserve() && !this.native) {
-        if (this.nativeAckKey) {
-          await this.acknowledgeNativeReturn();
-          return;
-        }
+        if (this.nativeAckKey) await this.acknowledgeNativeReturn();
+        if (!this.canObserve()) return;
         const observation = await this.adapter.reconcile(this.state);
         if (!this.canObserve() || this.native) return;
         if (observation && observation.outcome !== "unknown")

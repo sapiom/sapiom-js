@@ -22,6 +22,60 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it("reads the merchant receipt after a definite native acknowledgment rejection", async () => {
+    jest.useFakeTimers();
+    let state: VerificationState = {
+      ...initial(),
+      status: "checking",
+      challengeCaptured: true,
+      launchClaimed: true,
+      nativeReturnAvailable: true,
+    };
+    const resume = jest.fn(async () => ({
+      interactionReturned: true as const,
+    }));
+    const observation = {
+      outcome: "confirmed" as const,
+      source: "runner" as const,
+    };
+    const reconcile = jest
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(observation);
+    const report = jest.fn(async (_id, body) => {
+      if (body.kind === "interaction_resumed")
+        throw new VerificationHttpError(422, "verification_report_invalid");
+      state = {
+        ...state,
+        version: state.version + 1,
+        continuationClaimed: true,
+      };
+      if (body.kind === "checkout_observed")
+        state = { ...state, status: "ended", observation };
+      return state;
+    });
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => "continue",
+        relayed() {},
+        reconcile,
+        continuation: async () => resume,
+      },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(4001);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls.map(([, body]) => body.kind)).toEqual([
+      "continuation_started",
+      "interaction_resumed",
+      "checkout_observed",
+    ]);
+    expect(observer!.current().observation).toEqual(observation);
+    expect(observer!.current().interactionReturned).not.toBe(true);
+    await observer!.close();
+  });
   it.each([false, true])(
     "reconciles a lost native acknowledgment without redelivery or a contradictory failure (committed=%s)",
     async (committed) => {
