@@ -67,6 +67,12 @@ export class MerchantVerification
       url.origin === "https://checkout.pci.shopifyinc.com" &&
       url.pathname === "/sessions"
     ) {
+      if (
+        typeof body?.id !== "string" ||
+        body.id.length === 0 ||
+        body.id.length > 255
+      )
+        return;
       this.mode = "shopify";
       this.shopify.relayed(response);
       return;
@@ -101,6 +107,8 @@ export class MerchantVerification
     const url = new URL(request.url);
     if (this.pin) this.checkout = await this.pin;
     const checkout = this.checkout;
+    const captured =
+      this.target || state.challengeCaptured || state.launchClaimed;
     if (
       checkout &&
       this.nonce &&
@@ -109,6 +117,12 @@ export class MerchantVerification
         `/payment_methods/${encodeURIComponent(this.nonce)}/three_d_secure/lookup`,
       )
     ) {
+      if (
+        captured &&
+        (await this.samePage(checkout, request).catch(() => undefined)) !==
+          false
+      )
+        return "block" as const;
       if (
         !state.challengeCaptured &&
         (await this.descendant(checkout, request, false))
@@ -144,8 +158,12 @@ export class MerchantVerification
     }
     if (!jsonChallenge && !new URLSearchParams(request.body).has("creq"))
       return "continue" as const;
-    if (this.target || state.challengeCaptured || state.launchClaimed)
-      return "block" as const;
+    if (captured)
+      return checkout &&
+        (await this.samePage(checkout, request).catch(() => undefined)) ===
+          false
+        ? ("continue" as const)
+        : ("block" as const);
     if (
       !checkout ||
       !(await this.descendant(checkout, request, false).catch(() => false))

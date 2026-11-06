@@ -28,7 +28,10 @@ const lookup = {
   body: '{"amount":"11.00"}',
   url: "https://api.sandbox.braintreegateway.com/merchants/test/client_api/v1/payment_methods/tokenized/three_d_secure/lookup",
 };
-function fixture() {
+function fixture(
+  shopifyResponse?: string,
+  parentSession: (sessionId: string) => string | undefined = () => undefined,
+) {
   const state: VerificationState = {
     id: "verification",
     version: 1,
@@ -41,24 +44,36 @@ function fixture() {
     checkRequested: false,
     continuationClaimed: false,
   };
-  const send = jest.fn(async () => ({
-    frameTree: {
-      frame: { id: "checkout", url: origin + "/checkout" },
-      childFrames: [
-        {
-          frame: {
-            id: "card",
-            url: "https://assets.braintreegateway.com/fields",
+  const send = jest.fn(
+    async (
+      _method?: string,
+      _params?: Record<string, unknown>,
+      _sessionId?: string,
+    ) => ({
+      frameTree: {
+        frame: { id: "checkout", url: origin + "/checkout" },
+        childFrames: [
+          {
+            frame: {
+              id: "card",
+              url: "https://assets.braintreegateway.com/fields",
+            },
           },
-        },
-        { frame: { id: "bank", url: "about:blank" } },
-      ],
-    },
-  }));
+          { frame: { id: "bank", url: "about:blank" } },
+        ],
+      },
+    }),
+  );
   const adapter = new MerchantVerification(
     { send, onEvent: () => () => {} } as never,
     () => state,
+    parentSession,
   );
+  if (shopifyResponse)
+    adapter.relayed({ body: shopifyResponse }, "session", {
+      frameId: "card",
+      url: "https://checkout.pci.shopifyinc.com/sessions",
+    });
   adapter.relayed(
     { body: '{"data":{"tokenizeCreditCard":{"token":"tokenized"}}}' },
     "session",
@@ -188,6 +203,110 @@ it("blocks the captured bank request when reading its frame tree fails", async (
   expect(await f.adapter.inspect(challenge)).toBe("block");
   await f.adapter.dispose();
 });
+it("continues a bank challenge proven to belong to another page after capture", async () => {
+  const f = fixture();
+  await f.adapter.inspect(lookup);
+  await f.adapter.inspect(challenge);
+  f.state.challengeCaptured = true;
+  f.send.mockResolvedValue({
+    frameTree: {
+      frame: { id: "other-page", url: "https://other.example/checkout" },
+      childFrames: [],
+    },
+  });
+  expect(
+    await f.adapter.inspect({
+      ...challenge,
+      sessionId: "other-page-session",
+      frameId: "other-bank",
+    }),
+  ).toBe("continue");
+  await f.adapter.dispose();
+});
+it.each([true, false])(
+  "keeps an owned or uncertain out-of-process frame blocked (parent known=%s)",
+  async (known) => {
+    const f = fixture(undefined, (session) =>
+      known && session === "bank-oop" ? "session" : undefined,
+    );
+    await f.adapter.inspect(lookup);
+    await f.adapter.inspect(challenge);
+    const tree = {
+      frameTree: {
+        frame: {
+          id: "bank",
+          parentId: "checkout",
+          url: "https://bank.example",
+        },
+        childFrames: [],
+      },
+    };
+    f.send.mockResolvedValue(tree);
+    expect(
+      await f.adapter.inspect({ ...challenge, sessionId: "bank-oop" }),
+    ).toBe("block");
+    await f.adapter.dispose();
+  },
+);
+it("continues a bank challenge in an out-of-process frame proven to belong to another page", async () => {
+  const f = fixture(undefined, (session) =>
+    session === "other-bank-oop" ? "other-page-session" : undefined,
+  );
+  await f.adapter.inspect(lookup);
+  await f.adapter.inspect(challenge);
+  f.send.mockImplementation(async (_method, _params, session) =>
+    session === "other-bank-oop"
+      ? {
+          frameTree: {
+            frame: {
+              id: "other-bank",
+              parentId: "other-page",
+              url: "https://bank.example",
+            },
+            childFrames: [],
+          },
+        }
+      : {
+          frameTree: {
+            frame: { id: "other-page", url: "https://other.example" },
+            childFrames: [],
+          },
+        },
+  );
+  expect(
+    await f.adapter.inspect({
+      ...challenge,
+      sessionId: "other-bank-oop",
+      frameId: "other-bank",
+    }),
+  ).toBe("continue");
+  await f.adapter.dispose();
+});
+it.each(["proposed", "captured", "launched"])(
+  "blocks another bound lookup after capture is %s",
+  async (stage) => {
+    const f = fixture();
+    await f.adapter.inspect(lookup);
+    if (stage === "proposed") await f.adapter.inspect(challenge);
+    else if (stage === "captured") f.state.challengeCaptured = true;
+    else f.state.launchClaimed = true;
+    expect(
+      await f.adapter.inspect({ ...lookup, networkId: "another-lookup" }),
+    ).toBe("block");
+    await f.adapter.dispose();
+  },
+);
+it.each(["{}", '{"id":""}', '{"id":123}'])(
+  "does not select Shopify from an unusable session response %s",
+  async (body) => {
+    const f = fixture(body);
+    await f.adapter.inspect(lookup);
+    expect(await f.adapter.inspect(challenge)).toEqual({
+      capture: expect.anything(),
+    });
+    await f.adapter.dispose();
+  },
+);
 it.each([
   { ...lookup, body: '{"amount":"12.00"}' },
   { ...lookup, url: lookup.url.replace("tokenized/", "another/") },
