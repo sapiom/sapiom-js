@@ -65,7 +65,7 @@ injection reference. An already-started relay keeps polling with its original id
 read back the existing send. Capture fences new submissions and does not abandon that readback.
 
 `maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
-internal integration hook until U6 defines how other checkouts provide adapters.
+internal integration hook, not yet a supported option.
 Registration that already reports an ended, expired, canceled or error state
 returns the observation without starting a polling timer.
 
