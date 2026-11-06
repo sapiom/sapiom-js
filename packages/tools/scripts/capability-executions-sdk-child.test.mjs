@@ -143,3 +143,71 @@ test("IPC process failure rejects a pending waiter instead of hanging", async ()
   await failure;
   await process.stop();
 });
+
+test("built memory helpers keep their namespace prefix on saved caller errors", async () => {
+  let saved;
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {
+      /* drain request */
+    }
+    res.setHeader("content-type", "application/json");
+    if (req.method === "POST") {
+      saved = { ...receipt, capabilityId: req.url.split("/")[3] };
+      res.statusCode = 202;
+      res.end(JSON.stringify(saved));
+    } else {
+      const append = saved.capabilityId === "memory.append";
+      res.end(
+        JSON.stringify({
+          ...saved,
+          status: "failed",
+          error: {
+            code: append ? "secret_detected" : "invalid_filter",
+            message: append
+              ? "Memory content must not contain secrets."
+              : "Memory filter is invalid.",
+          },
+        }),
+      );
+    }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    for (const [capabilityKey, request, message] of [
+      [
+        "memory.append",
+        { content: "fixture" },
+        "Failed to append memory: Memory content must not contain secrets.",
+      ],
+      [
+        "memory.recall",
+        { query: "fixture" },
+        "Failed to recall memories: Memory filter is invalid.",
+      ],
+    ]) {
+      const process = await child();
+      try {
+        process.send({
+          operation: "capability",
+          capabilityKey,
+          request,
+          capabilityDelivery: "executions",
+          baseUrl: `http://127.0.0.1:${server.address().port}`,
+          apiKey: "fixture-only",
+        });
+        const response = await process.wait((value) => value.type === "error");
+        assert.equal(response.error.name, "MemoryHttpError");
+        assert.equal(response.error.status, 400);
+        assert.equal(response.error.message, message);
+        assert.equal(response.error.executionId, receipt.id);
+        assert.ok(response.error.submissionKey);
+      } finally {
+        await process.stop();
+      }
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
