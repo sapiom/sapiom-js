@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { CdpCommandError } from "./cdp";
+import type { VerificationState } from "./verification";
 import {
   attachInterceptor,
   type InterceptorEvent,
@@ -314,6 +315,7 @@ function multipartPause(
 function attachPage(
   emit: (event: Record<string, unknown>) => void,
   sessionId = "page-1",
+  targetId = "target-page",
 ) {
   emit({
     method: "Target.attachedToTarget",
@@ -321,7 +323,7 @@ function attachPage(
       sessionId,
       waitingForDebugger: true,
       targetInfo: {
-        targetId: "target-page",
+        targetId,
         type: "page",
         url: "https://shop.example/checkout",
       },
@@ -336,6 +338,317 @@ const success = (): RelayResponse => ({
     headers: { "content-type": "application/json" },
     body: '{"id":"sess"}',
   },
+});
+
+it.each(["uncaptured", "captured", "launched", "uncertain"])(
+  "fences the credential relay only after registered capture (%s)",
+  async (stage) => {
+    const stub = await startStub();
+    const state: VerificationState = {
+      id: "verification",
+      version: 1,
+      status: "preparing",
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+      merchantOrigin: "https://shop.example",
+      total: { amount: "11.00", currency: "USD" },
+      challengeCaptured: stage === "captured",
+      launchClaimed: stage === "launched",
+      checkRequested: false,
+      continuationClaimed: false,
+    };
+    const relay = jest.fn(async () => success());
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reporting = false;
+    const handle = await attachInterceptor(stub.url, {
+      placeholder: HELD,
+      verificationAdapter: () => ({
+        inspect: async (request) =>
+          request.body === "creq=held"
+            ? { capture: { url: request.url, body: request.body } }
+            : "continue",
+        relayed() {},
+        reconcile: async () => null,
+      }),
+      relay: {
+        relay,
+        verification: {
+          register: async () => state,
+          sync: async () => state,
+          report: async (_id, input) => {
+            if (input.kind === "challenge_observed") {
+              reporting = true;
+              await gate;
+            }
+            return {
+              ...state,
+              version: 2,
+              status: "ended",
+              challengeCaptured: true,
+            };
+          },
+        },
+      },
+    });
+    try {
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "page interception",
+      );
+      if (stage === "uncertain") {
+        stub.emit({
+          method: "Fetch.requestPaused",
+          sessionId: "page-1",
+          params: {
+            requestId: "bank-capture",
+            frameId: "bank",
+            request: {
+              method: "POST",
+              url: "https://bank.example/challenge",
+              postData: "creq=held",
+            },
+          },
+        });
+        await waitFor(() => reporting, "reserved capture report");
+      }
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "another-card",
+          frameId: "checkout",
+          request: {
+            method: "POST",
+            url: "https://payments.sandbox.braintree-api.com/graphql",
+            postData: CARD,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (c) =>
+              ["Fetch.fulfillRequest", "Fetch.failRequest"].includes(
+                c.method,
+              ) && c.params.requestId === "another-card",
+          ),
+        "card settlement",
+      );
+      expect(relay).toHaveBeenCalledTimes(stage === "uncaptured" ? 1 : 0);
+      expect(
+        stub.commands.find(
+          (c) =>
+            ["Fetch.fulfillRequest", "Fetch.failRequest"].includes(c.method) &&
+            c.params.requestId === "another-card",
+        )?.method,
+      ).toBe(
+        stage === "uncaptured" ? "Fetch.fulfillRequest" : "Fetch.failRequest",
+      );
+    } finally {
+      release();
+      await handle.detach();
+      await stub.close();
+    }
+  },
+);
+
+it("fences the bound injection's placeholder across pages and leaves other card values alone", async () => {
+  const stub = await startStub();
+  const state: VerificationState = {
+    id: "verification",
+    version: 1,
+    status: "requires_action",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    merchantOrigin: "https://shop.example",
+    total: { amount: "11.00", currency: "USD" },
+    challengeCaptured: true,
+    launchClaimed: false,
+    checkRequested: false,
+    continuationClaimed: false,
+  };
+  const relay = jest.fn(async () => success());
+  const handle = await attachInterceptor(stub.url, {
+    placeholder: HELD,
+    verificationAdapter: () => ({
+      inspect: async () => "continue",
+      relayed() {},
+      reconcile: async () => null,
+    }),
+    relay: {
+      relay,
+      verification: {
+        register: async () => state,
+        sync: async () => state,
+        report: async () => ({ ...state, version: 2, status: "ended" }),
+      },
+    },
+  });
+  try {
+    attachPage(stub.emit);
+    attachPage(stub.emit, "page-2", "other-page");
+    await waitFor(
+      () =>
+        stub.commands.filter((c) => c.method === "Fetch.enable").length === 2,
+      "both attached pages",
+    );
+    for (const [id, sessionId, body] of [
+      ["own", "page-1", CARD],
+      ["same-placeholder", "page-2", CARD],
+      ["other-card", "page-2", CARD.replace(HELD.number, "4111111111111111")],
+    ]) {
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId,
+        params: {
+          requestId: id,
+          frameId: id,
+          request: {
+            method: "POST",
+            url: "https://payments.sandbox.braintree-api.com/graphql",
+            postData: body,
+          },
+        },
+      });
+    }
+    const decision = (id: string) =>
+      stub.commands.find(
+        (c) =>
+          ["Fetch.failRequest", "Fetch.continueRequest"].includes(c.method) &&
+          c.params.requestId === id,
+      )?.method;
+    await waitFor(
+      () =>
+        Boolean(
+          decision("own") &&
+          decision("same-placeholder") &&
+          decision("other-card"),
+        ),
+      "all card decisions",
+    );
+    expect(decision("own")).toBe("Fetch.failRequest");
+    expect(decision("same-placeholder")).toBe("Fetch.failRequest");
+    expect(decision("other-card")).toBe("Fetch.continueRequest");
+    expect(relay).not.toHaveBeenCalled();
+  } finally {
+    await handle.detach();
+    await stub.close();
+  }
+});
+
+it("reconciles an already-started relay after capture using its original idempotency key", async () => {
+  const stub = await startStub();
+  let state: VerificationState = {
+    id: "verification",
+    version: 1,
+    status: "preparing",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    merchantOrigin: "https://shop.example",
+    total: { amount: "11.00", currency: "USD" },
+    challengeCaptured: false,
+    launchClaimed: false,
+    checkRequested: false,
+    continuationClaimed: false,
+  };
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls: RelayRequest[] = [];
+  const relay = jest.fn(
+    async (request: RelayRequest): Promise<RelayResponse> => {
+      calls.push(request);
+      if (calls.length === 1) {
+        await gate;
+        return { outcome: "refused", reason: "relay_in_progress" };
+      }
+      return success();
+    },
+  );
+  const handle = await attachInterceptor(stub.url, {
+    placeholder: HELD,
+    verificationAdapter: () => ({
+      inspect: async (request) =>
+        request.body === "creq=held"
+          ? { capture: { url: request.url, body: request.body } }
+          : "continue",
+      relayed() {},
+      reconcile: async () => null,
+    }),
+    relay: {
+      relay,
+      verification: {
+        register: async () => state,
+        sync: async () => state,
+        report: async (_id, input) => {
+          if (input.kind === "challenge_observed")
+            state = {
+              ...state,
+              version: 2,
+              status: "requires_action",
+              challengeCaptured: true,
+            };
+          return state;
+        },
+      },
+    },
+  });
+  try {
+    attachPage(stub.emit);
+    await waitFor(
+      () => stub.commands.some((c) => c.method === "Fetch.enable"),
+      "page interception",
+    );
+    stub.emit({
+      method: "Fetch.requestPaused",
+      sessionId: "page-1",
+      params: {
+        requestId: "started-card",
+        frameId: "checkout",
+        request: {
+          method: "POST",
+          url: "https://payments.sandbox.braintree-api.com/graphql",
+          postData: CARD,
+        },
+      },
+    });
+    await waitFor(() => calls.length === 1, "initial relay attempt");
+    stub.emit({
+      method: "Fetch.requestPaused",
+      sessionId: "page-1",
+      params: {
+        requestId: "bank-capture",
+        frameId: "bank",
+        request: {
+          method: "POST",
+          url: "https://bank.example/challenge",
+          postData: "creq=held",
+        },
+      },
+    });
+    await waitFor(() => state.challengeCaptured, "captured challenge");
+    release();
+    await waitFor(
+      () =>
+        stub.commands.some(
+          (c) =>
+            c.method === "Fetch.fulfillRequest" &&
+            c.params.requestId === "started-card",
+        ),
+      "original relay readback",
+    );
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls.map((call) => call.idempotencyKey)).size).toBe(1);
+    expect(calls.every((call) => call.injectionRef === HELD.injectionRef)).toBe(
+      true,
+    );
+  } finally {
+    release();
+    await handle.detach();
+    await stub.close();
+  }
 });
 
 function header(

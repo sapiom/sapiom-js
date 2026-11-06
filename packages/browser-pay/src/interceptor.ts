@@ -784,6 +784,8 @@ class PaymentInterceptor {
       this.options.profileId ? profileHeader : genericHeader,
     );
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
+    if (this.verification?.submissionBlocked())
+      return { action: "fail", reason: "unknown" };
     return this.awaitRelay(
       request,
       headers,

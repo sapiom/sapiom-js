@@ -37,6 +37,12 @@ transaction and credential configuration. Do not detach the current interceptor 
 customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
 same purchase using the returned version.
 
+For a qualified native return, the private delivery receipt is emitted before the merchant's
+original verification promise can continue checkout. A native validation timeout rejects that
+pending promise; a late response cannot subsequently fulfill it. Reconcile the existing purchase
+with the merchant before deciding what to do next, since verification failure is not proof of a
+declined payment.
+
 Verification registration happens before the interceptor relays the card. If registration
 fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
 the existing checkout relay path and leaves `handle.verification` unavailable. Registration
@@ -46,6 +52,11 @@ not impose a submission fence on this merchant or other tabs in the attached bro
 The SDK never initiates another Pay to resolve uncertainty; reconcile the existing
 purchase before deciding whether to retry. A successfully registered observer still
 blocks another submission after challenge capture or while its capture report is uncertain.
+
+An interceptor's credential relay is bound to its configured `injectionRef`. A matching
+placeholder stays fenced across pages after capture; a browser request does not select another
+injection reference. An already-started relay keeps polling with its original idempotency key to
+read back the existing send. Capture fences new submissions and does not abandon that readback.
 
 `maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
 internal integration hook until U6 defines how other checkouts provide adapters.

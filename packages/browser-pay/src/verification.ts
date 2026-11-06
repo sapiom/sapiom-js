@@ -180,6 +180,13 @@ export class VerificationSession implements VerificationHandle {
   current() {
     return { ...this.state };
   }
+  submissionBlocked() {
+    return (
+      this.captureClaimed ||
+      this.state.challengeCaptured ||
+      this.state.launchClaimed
+    );
+  }
   wait(): Promise<VerificationState> {
     return verificationIsActive(this.state)
       ? new Promise((resolve) => this.waiters.add(resolve))
