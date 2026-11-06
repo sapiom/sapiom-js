@@ -37,6 +37,19 @@ export type ToolResult = {
  * fits. This is the primitive the execution projection uses to guarantee a tool
  * result can never exceed its char budget regardless of how large the underlying
  * step input/output/logs were (a single step output can be multiple MB).
+ *
+ * The marker itself is *appended after* slicing to `budget`, so naively
+ * returning `slice(0, budget) + marker` would make the result longer than
+ * `budget` by the marker's own length (worse with a `webappUrl`, whose
+ * length isn't known in advance) — silently breaking the "can never exceed
+ * its char budget" guarantee this function exists to provide. Reserve room
+ * for the marker inside `budget` instead. The marker's length depends on how
+ * many characters were dropped, which depends on how much of `text` is kept —
+ * two passes converges: size the marker for keeping up to `budget`, shrink the
+ * kept slice to leave room for it, then re-measure once more in case shrinking
+ * changed `dropped`'s digit count enough to grow the marker itself (e.g. 999 ->
+ * 1000 dropped chars). Only pathological budgets smaller than the marker's own
+ * length can still overshoot — the marker has to say something.
  */
 export function capText(
   text: string,
@@ -44,9 +57,14 @@ export function capText(
   webappUrl?: string,
 ): string {
   if (text.length <= budget) return text;
-  const dropped = text.length - budget;
   const where = webappUrl ? ` — open ${webappUrl} for the full value` : "";
-  return `${text.slice(0, budget)}…[truncated ${dropped} chars${where}]`;
+  const markerFor = (sliceLen: number): string =>
+    `…[truncated ${text.length - sliceLen} chars${where}]`;
+  let sliceLen = budget;
+  for (let i = 0; i < 2; i++) {
+    sliceLen = Math.max(0, budget - markerFor(sliceLen).length);
+  }
+  return `${text.slice(0, sliceLen)}${markerFor(sliceLen)}`;
 }
 
 export function ok(data: unknown): ToolResult {
