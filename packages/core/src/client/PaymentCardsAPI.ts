@@ -6,7 +6,7 @@ import type {
 } from "../types/payment-card.js";
 import type { HttpClient } from "./HttpClient.js";
 
-/** Management methods for a trusted platform backend; purchasing keys cannot change limits. */
+/** Buyer card setup and discovery; limit writes require a separate explicit management grant. */
 export class PaymentCardsAPI {
   constructor(private readonly httpClient: HttpClient) {}
 
@@ -30,9 +30,11 @@ export class PaymentCardsAPI {
       retry: false,
     });
   }
+  /** List this buyer's current cards and readiness using a buyer key. */
   list(): Promise<{ data: PaymentCardView[] }> {
     return this.httpClient.request({ url: "/payment-cards" });
   }
+  /** Read a tenant-owned card by ID, including its current readiness. */
   get(cardId: string): Promise<PaymentCardView> {
     return this.httpClient.request({
       url: `/payment-cards/${encodeURIComponent(cardId)}`,
@@ -49,11 +51,13 @@ export class PaymentCardsAPI {
       retry: false,
     });
   }
+  /** Read setup status and the completed card ID; the one-time setup URL is not reissued. */
   getSetupLink(linkId: string): Promise<CardSetupLinkView> {
     return this.httpClient.request({
       url: `/payment-cards/setup-links/${encodeURIComponent(linkId)}`,
     });
   }
+  /** Set this buyer's default card; this never changes another payment kind's default. */
   setDefault(cardId: string): Promise<PaymentCardView> {
     return this.httpClient.request({
       method: "PUT",
@@ -61,8 +65,9 @@ export class PaymentCardsAPI {
       retry: false,
     });
   }
-  remove(cardId: string): Promise<void> {
-    return this.httpClient.request({
+  /** Remove a card from future purchases; successful removal returns no value and refunds no order. */
+  async remove(cardId: string): Promise<void> {
+    await this.httpClient.request({
       method: "DELETE",
       url: `/payment-cards/${encodeURIComponent(cardId)}`,
       retry: false,

@@ -11,6 +11,7 @@ import type {
 export class PaymentMethodsAPI {
   constructor(private readonly httpClient: HttpClient) {}
 
+  /** Page through this buyer's current saved methods. Preserve cursors and inspect readiness before selection. */
   list(options: PaymentMethodListOptions = {}): Promise<PaymentMethodPage> {
     return this.httpClient.request({
       url: "/payment-methods",
@@ -23,6 +24,7 @@ export class PaymentMethodsAPI {
     });
   }
 
+  /** Read one tenant-owned saved method, including inactive methods; requires org.transactions.read. */
   get(methodId: string): Promise<PaymentMethodView> {
     return this.httpClient.request({
       url: `/payment-methods/${encodeURIComponent(methodId)}`,
