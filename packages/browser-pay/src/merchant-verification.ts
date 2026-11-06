@@ -114,10 +114,12 @@ export class MerchantVerification
         (await this.descendant(checkout, request, false))
       ) {
         const body = JSON.parse(request.body);
-        this.lookup =
+        if (
+          !this.lookup &&
           money(body.amount) === state.total.amount &&
-          state.total.currency === "USD";
-        if (this.lookup) {
+          state.total.currency === "USD"
+        ) {
+          this.lookup = true;
           try {
             await this.native.watchLookup(request);
           } catch {
@@ -142,12 +144,13 @@ export class MerchantVerification
     }
     if (!jsonChallenge && !new URLSearchParams(request.body).has("creq"))
       return "continue" as const;
+    if (this.target || state.challengeCaptured || state.launchClaimed)
+      return "block" as const;
     if (
       !checkout ||
       !(await this.descendant(checkout, request, false).catch(() => false))
     )
       return "continue" as const;
-    if (state.challengeCaptured || state.launchClaimed) return "block" as const;
     if (
       jsonChallenge ||
       this.mode !== "braintree" ||

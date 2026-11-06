@@ -123,6 +123,72 @@ it("captures the complete form only after the relayed token's exact amount-bound
   await f.adapter.dispose();
 });
 it.each([
+  ["the same request", lookup],
+  ["a second request", { ...lookup, networkId: "second-lookup" }],
+  ["another amount", { ...lookup, body: '{"amount":"12.00"}' }],
+])(
+  "retains the original amount-bound lookup after %s",
+  async (_label, later) => {
+    const f = fixture();
+    jest
+      .mocked(NativeCardinal.prototype.watchLookup)
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error("Native lookup unavailable"));
+    await f.adapter.inspect(lookup);
+    await f.adapter.inspect(later as VerificationRequest);
+    expect(await f.adapter.inspect(challenge)).toEqual({
+      capture: expect.anything(),
+    });
+    expect(NativeCardinal.prototype.watchLookup).toHaveBeenCalledTimes(1);
+    expect(NativeCardinal.prototype.bind).toHaveBeenCalledWith(
+      expect.anything(),
+      "upgraded",
+    );
+    await f.adapter.dispose();
+  },
+);
+it.each(["proposed", "captured", "launched"])(
+  "blocks an uncertain bank frame once the challenge is %s",
+  async (stage) => {
+    const f = fixture();
+    await f.adapter.inspect(lookup);
+    if (stage === "proposed") {
+      expect(await f.adapter.inspect(challenge)).toEqual({
+        capture: expect.anything(),
+      });
+    } else {
+      f.state.challengeCaptured = stage === "captured";
+      f.state.launchClaimed = stage === "launched";
+    }
+    f.send.mockResolvedValue({
+      frameTree: {
+        frame: { id: "other", url: origin + "/checkout" },
+        childFrames: [],
+      },
+    });
+    expect(await f.adapter.inspect(challenge)).toBe("block");
+    expect(
+      await f.adapter.inspect({
+        ...challenge,
+        url: origin + "/status",
+        body: "{}",
+      }),
+    ).toBe("continue");
+    await f.adapter.dispose();
+  },
+);
+it("blocks the captured bank request when reading its frame tree fails", async () => {
+  const f = fixture();
+  await f.adapter.inspect(lookup);
+  expect(await f.adapter.inspect(challenge)).toEqual({
+    capture: expect.anything(),
+  });
+  f.state.challengeCaptured = true;
+  f.send.mockRejectedValue(new Error("frame tree unavailable"));
+  expect(await f.adapter.inspect(challenge)).toBe("block");
+  await f.adapter.dispose();
+});
+it.each([
   { ...lookup, body: '{"amount":"12.00"}' },
   { ...lookup, url: lookup.url.replace("tokenized/", "another/") },
   { ...lookup, frameId: "another-tab" },

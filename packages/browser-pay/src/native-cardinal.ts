@@ -260,7 +260,7 @@ export class NativeCardinal {
             const bound = (await send("Runtime.callFunctionOn", {
               objectId: candidate,
               functionDeclaration:
-                "function(nonce) { return typeof this._performJWTValidation === 'function' && typeof this._client?.request === 'function' && this._lookupPaymentMethod?.nonce === nonce && typeof this._verifyCardPromisePlus?.then === 'function'; }",
+                "function(nonce) { return typeof this._performJWTValidation === 'function' && typeof this._client?.request === 'function' && this._lookupPaymentMethod?.nonce === nonce && typeof this._verifyCardPromisePlus?.then === 'function' && typeof this._verifyCardPromisePlus.resolve === 'function' && typeof this._verifyCardPromisePlus.reject === 'function' && !this._verifyCardPromisePlus.isFulfilled; }",
               arguments: [{ value: nonce }],
               returnByValue: true,
             })) as Evaluation;
