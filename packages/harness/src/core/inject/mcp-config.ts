@@ -1,9 +1,11 @@
 import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { credentialHeaders } from "@sapiom/analytics-core/credential";
 import { resolveEnvironment } from "@sapiom/mcp/auth";
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../../cli/paths.js";
+import { harnessCredentialPolicy } from "../credential-policy.js";
 
 /**
  * A host-supplied way to launch the local `sapiom-dev` stdio server instead of
@@ -93,7 +95,16 @@ export async function generateMcpConfig(
       sapiom: {
         type: "http",
         url: remoteMcpUrl,
-        ...(options.apiKey ? { headers: { "x-api-key": options.apiKey } } : {}),
+        ...(options.apiKey
+          ? {
+              // Refuse to hand the key to Claude Code / Codex for a channel we would refuse ourselves.
+              headers: credentialHeaders(
+                remoteMcpUrl,
+                { header: "x-api-key", value: options.apiKey },
+                harnessCredentialPolicy(),
+              ),
+            }
+          : {}),
       },
       "sapiom-dev": options.devServer
         ? {

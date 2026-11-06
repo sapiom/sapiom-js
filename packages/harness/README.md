@@ -397,6 +397,20 @@ from what its other components do on their own (the app's product analytics, and
   (`source: served` or `source: bundled`). `SAPIOM_AUTHORING_RULES_FETCH_DISABLED=1`
   (or `true`) skips the request.
 
+Requests that carry your Sapiom API key (the Agents and account panels, the
+Assistant, and the MCP config written for Claude Code and Codex) only travel over
+`https://` or to a loopback host (`localhost`, `127.0.0.1`), and the key is
+dropped on a redirect to another origin. A custom environment on plain `http://`
+to any other host (for example `http://10.0.0.5:3000`) is refused, and starting a
+signed-in session against it fails (a session without an API key has no key to
+protect and starts as before). On a trusted private network, opt in with
+`SAPIOM_ALLOW_INSECURE_HTTP=1`:
+
+- **CLI**: set it in the shell that runs `npx @sapiom/harness`.
+- **Desktop app**: a launched app does not read your shell profile, so set it in
+  the session environment and reopen the app (on macOS,
+  `launchctl setenv SAPIOM_ALLOW_INSECURE_HTTP 1`).
+
 ## Development
 
 ```bash
