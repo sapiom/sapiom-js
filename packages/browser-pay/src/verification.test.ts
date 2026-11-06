@@ -45,8 +45,8 @@ describe("Existing-browser verification observation", () => {
         },
         "injection",
       ).then(
-        (value) => value,
-        (error) => error,
+        (value) => (mode === "failed" ? "unexpected fulfillment" : value),
+        (error) => (mode === "failed" ? error : "unexpected rejection"),
       );
       try {
         const settled = await Promise.race([
