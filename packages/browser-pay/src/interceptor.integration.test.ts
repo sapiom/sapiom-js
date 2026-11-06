@@ -491,7 +491,7 @@ if (!chromeBin) {
       60000,
     );
 
-    it("captures a challenge on the same connection without emitting another card relay", async () => {
+    it("captures a challenge on the same connection and fences subsequent card relays", async () => {
       let state: VerificationState = {
         id: "verification",
         version: 1,
@@ -529,7 +529,7 @@ if (!chromeBin) {
           },
         },
       };
-      const { events } = await drive(
+      const { events, calls, result } = await drive(
         relay,
         { ping: PING, card: CARD },
         5000,
@@ -547,8 +547,13 @@ if (!chromeBin) {
         reports.find((report) => report.kind === "challenge_observed"),
       ).toMatchObject({ capture: { body: PING } });
       expect(events.filter((event) => event.type === "relayed")).toHaveLength(
-        2,
+        0,
       );
+      expect(calls).toHaveLength(0);
+      expect(result).toMatchObject({
+        card: { error: "TypeError" },
+        mismatch: { error: "TypeError" },
+      });
     }, 60000);
 
     it("preserves ordinary traffic and fulfilled card responses when observer callbacks throw", async () => {

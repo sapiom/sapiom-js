@@ -587,6 +587,7 @@ describe("Shopify continuation on the original browser", () => {
   it.each([
     "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
     "3ddb1d363e4e875c5659f2aaba308447980240ffc14b31ef90cb8ab7843bc1e5",
+    "f69ad20671a08576d910b92925cad6a634b0839d7e657d426c9b26db1da47df8",
   ])(
     "pins read-only receipt query %s and correlates card session, receipt and terms",
     async (id) => {
