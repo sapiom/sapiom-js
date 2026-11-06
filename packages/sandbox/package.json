@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/sandbox",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "description": "Sandbox environment management for Sapiom SDK",
   "repository": {
     "type": "git",

@@ -1,5 +1,20 @@
 # @sapiom/browser-pay
 
+## 0.6.0
+
+### Minor Changes
+
+- 93862d3: Carry a purchase-bound native verification result privately through its one-use continuation claim. Expose `interactionReturned` after the original native verifier acknowledges delivery, separately from merchant order confirmation. Preserve existing browser ownership and Shopify observation.
+
+### Patch Changes
+
+- 98c83e4: Reject the original native verification promise at its validation deadline so late responses cannot fulfill it. Emit the private delivery receipt before the merchant's promise continuation can navigate, preserving one-use native return acknowledgment.
+
+  Fence another credential relay while bank challenge capture is reserved, recorded or launched. Expose bounded browser-owned page ancestry to the internal observer so it can keep separate checkouts independent after capture.
+
+- 108b5f4: Reject malformed native validation error responses before acknowledging a bank return.
+- cdd8deb: Keep unavailable or failed observer registration from waiting on stalled adapter cleanup.
+
 ## 0.5.0
 
 ### Minor Changes
