@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.8.1
+
+### Patch Changes
+
+- 93862d3: Carry a purchase-bound native verification result privately through its one-use continuation claim. Expose `interactionReturned` after the original native verifier acknowledges delivery, separately from merchant order confirmation. Preserve existing browser ownership and Shopify observation.
+
 ## 0.8.0
 
 ### Minor Changes
