@@ -1,11 +1,17 @@
 import type { CdpConnection } from "./cdp.js";
+export type NativeLookupChallenge = {
+  nonce: string;
+  acsUrl: string;
+  acsTransactionId: string;
+  threeDSecureServerTransactionId: string;
+};
 export type NativeLookup = {
   sessionId: string;
   requestId: string;
   url: string;
   received: boolean;
-  result: Promise<string | undefined>;
-  resolve: (nonce?: string) => void;
+  result: Promise<NativeLookupChallenge | undefined>;
+  resolve: (challenge?: NativeLookupChallenge) => void;
 };
 
 export async function readNativeLookup(
@@ -27,13 +33,31 @@ export async function readNativeLookup(
     if (Buffer.byteLength(text) > 32768) return;
     const body = JSON.parse(text);
     const nonce = body.paymentMethod?.nonce;
+    const acsUrl = body.lookup?.acsUrl;
+    const { acsTransactionId, threeDSecureServerTransactionId } =
+      body.threeDSecureInfo ?? {};
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (
-      !body.errors?.length &&
+      (!body.errors ||
+        (Array.isArray(body.errors) && body.errors.length === 0)) &&
       typeof nonce === "string" &&
       nonce.length > 0 &&
-      nonce.length <= 255
+      nonce.length <= 255 &&
+      typeof acsUrl === "string" &&
+      acsUrl.length > 0 &&
+      acsUrl.length <= 2048 &&
+      typeof acsTransactionId === "string" &&
+      uuid.test(acsTransactionId) &&
+      typeof threeDSecureServerTransactionId === "string" &&
+      uuid.test(threeDSecureServerTransactionId)
     )
-      lookup.resolve(nonce);
+      lookup.resolve({
+        nonce,
+        acsUrl,
+        acsTransactionId,
+        threeDSecureServerTransactionId,
+      });
   } catch {
     /* An unavailable lookup leaves the existing challenge native. */
   } finally {

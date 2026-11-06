@@ -17,6 +17,7 @@ import {
   type VerificationHandle,
 } from "./verification.js";
 import { ShopifyVerification } from "./shopify-verification.js";
+import { MerchantVerification } from "./merchant-verification.js";
 import {
   isRelayTimeout,
   isRetryableRelayError,
@@ -298,6 +299,7 @@ interface Inflight {
   key: string;
   sessionId: string;
   requestId: string;
+  frameId?: string;
   phase: InflightPhase;
 }
 
@@ -406,7 +408,21 @@ class PaymentInterceptor {
                 this.byTarget.get(parentFrameId ?? "")?.sessionId ??
                 this.sessions.get(sessionId)?.parentSessionId,
             )
-        : undefined);
+        : this.options.profileId === undefined
+          ? (
+              connection: CdpConnection,
+              state: () =>
+                | import("./verification.js").VerificationState
+                | undefined,
+            ) =>
+              new MerchantVerification(
+                connection,
+                state,
+                (sessionId, parentFrameId) =>
+                  this.byTarget.get(parentFrameId ?? "")?.sessionId ??
+                  this.sessions.get(sessionId)?.parentSessionId,
+              )
+          : undefined);
     if (factory && this.options.relay.verification) {
       const adapter = factory(this.connection, () =>
         this.verification?.current(),
@@ -693,6 +709,7 @@ class PaymentInterceptor {
       key,
       sessionId,
       requestId,
+      frameId: request.frameId,
       phase: { status: "open" },
     };
     this.inflight.set(key, entry);
@@ -741,6 +758,7 @@ class PaymentInterceptor {
           body: body ?? "",
           sessionId: entry.sessionId,
           frameId: request.frameId,
+          networkId: request.networkId,
         };
         const action = await this.verification.inspect(verificationRequest);
         if (action === "block") return { action: "fail", reason: "unknown" };
@@ -980,7 +998,10 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
-    this.verification?.relayed(decision.response, entry.sessionId);
+    this.verification?.relayed(decision.response, entry.sessionId, {
+      frameId: entry.frameId,
+      url,
+    });
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
     this.emit(
       fulfilled
