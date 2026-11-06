@@ -717,7 +717,7 @@ class PaymentInterceptor {
   ): Promise<void> {
     try {
       const decision = await this.decide(entry, request);
-      await this.apply(entry, request.url, decision);
+      await this.apply(entry, request, decision);
     } catch {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url: request.url, reason: "network" });
@@ -741,6 +741,7 @@ class PaymentInterceptor {
           body: body ?? "",
           sessionId: entry.sessionId,
           frameId: request.frameId,
+          networkId: request.networkId,
         };
         const action = await this.verification.inspect(verificationRequest);
         if (action === "block") return { action: "fail", reason: "unknown" };
@@ -951,9 +952,10 @@ class PaymentInterceptor {
 
   private async apply(
     entry: Inflight,
-    url: string,
+    request: PausedRequest,
     decision: Decision,
   ): Promise<void> {
+    const url = request.url;
     if (decision.action === "challenge") {
       await this.settle(entry, {
         fulfill: {
@@ -978,7 +980,10 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
-    this.verification?.relayed(decision.response, entry.sessionId);
+    this.verification?.relayed(decision.response, entry.sessionId, {
+      frameId: request.frameId,
+      url,
+    });
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
     this.emit(
       fulfilled
