@@ -94,9 +94,28 @@ describe("guarded delivery to the existing native verifier", () => {
     expect(native.receipt).toHaveBeenCalledWith("private-receipt");
     expect(native.framework._client.request).toBe(native.request);
   });
+  it("accepts an empty native errors array after validating the original exchange", async () => {
+    const native = verifier({
+      errors: [],
+      paymentMethod: { nonce: "authenticated" },
+      threeDSecureInfo: {},
+    });
+    await expect(native.call()).resolves.toBe(true);
+    expect(native.receipt).toHaveBeenCalledTimes(1);
+  });
   it.each([
     {
       errors: [{ code: "94533" }],
+      paymentMethod: { nonce: "fallback" },
+      threeDSecureInfo: {},
+    },
+    {
+      errors: { code: "94533" },
+      paymentMethod: { nonce: "fallback" },
+      threeDSecureInfo: {},
+    },
+    {
+      errors: { code: "94533", length: 0 },
       paymentMethod: { nonce: "fallback" },
       threeDSecureInfo: {},
     },

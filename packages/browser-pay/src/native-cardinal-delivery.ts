@@ -52,7 +52,7 @@ export const DELIVER_NATIVE_CARDINAL = `async function(handler, cleanup, pending
       return Promise.reject(new Error('native_validation_binding_mismatch'));
     return Promise.resolve(original.call(this, options, ...rest)).then(response => {
       if (expired || Date.now() >= deadline) throw timeoutError;
-      if ((response.errors && response.errors.length) || !response.paymentMethod ||
+      if ((response.errors && (!Array.isArray(response.errors) || response.errors.length)) || !response.paymentMethod ||
           typeof response.paymentMethod.nonce !== 'string' || !response.threeDSecureInfo)
         throw new Error('native_validation_rejected');
       accepted = true;

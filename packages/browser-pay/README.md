@@ -43,6 +43,12 @@ pending promise; a late response cannot subsequently fulfill it. Reconcile the e
 with the merchant before deciding what to do next, since verification failure is not proof of a
 declined payment.
 
+An HTTP-200 native validation reply is rejected as `native_validation_rejected` when its
+`errors` value is a nonempty array or a truthy non-array value. An empty error array remains
+allowed when the other required payment-method and 3DS fields are present. Rejection also
+rejects the original pending verifier promise and does not acknowledge delivery; reconcile
+the existing purchase instead of submitting another payment.
+
 Verification registration happens before the interceptor relays the card. If registration
 fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
 the existing checkout relay path and leaves `handle.verification` unavailable. Registration
