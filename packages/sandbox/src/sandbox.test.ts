@@ -107,6 +107,21 @@ function execHandlers(
   ];
 }
 
+/**
+ * {@link execHandlers} plus the log-stream endpoint, so an `execStream` call
+ * gets past the stream and into the post-stream status reconciliation.
+ */
+function execStreamHandlers(
+  pollStatuses: ProcessBody[],
+  logBody = "stdout:hello\n",
+): Array<(call: FetchCall) => Response | null> {
+  return [
+    (call: FetchCall) =>
+      /\/logs\/stream$/.test(call.url) ? new Response(logBody) : null,
+    ...execHandlers(pollStatuses),
+  ];
+}
+
 describe("SapiomSandbox — multipart methods", () => {
   describe("initiateMultipartUpload", () => {
     it("POSTs to the correct URL with permissions in the body", async () => {
@@ -789,5 +804,56 @@ describe("SapiomSandbox — exec process polling", () => {
     ]);
     // The log stream endpoint was never opened for an already-finished process.
     expect(calls.some((c) => c.url.includes("/logs/stream"))).toBe(false);
+  });
+
+  it("execStream reconciles an exit code reported after the log stream ends", async () => {
+    jest.useFakeTimers();
+    try {
+      const { sandbox } = await makeSandbox(
+        execStreamHandlers([
+          { status: "running" },
+          { status: "failed", exitCode: 3 },
+        ]),
+      );
+
+      const stream = await sandbox.execStream("false");
+      const drained = (async () => {
+        const seen: Array<{ stream: string; data: string }> = [];
+        for await (const line of stream.output) seen.push(line);
+        return seen;
+      })();
+
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(await drained).toEqual([{ stream: "stdout", data: "hello" }]);
+      expect(stream.exitCode).toBe(3);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  // Regression: the reconciliation poll above ran with no deadline, so a
+  // process that never reports a terminal status hung the consumer forever
+  // instead of failing with the exec timeout every other poll path applies.
+  it("execStream times out when the process never reaches a terminal status", async () => {
+    jest.useFakeTimers();
+    try {
+      const { sandbox } = await makeSandbox(
+        execStreamHandlers([{ status: "running" }]),
+      );
+
+      const stream = await sandbox.execStream("sleep 999");
+      const drained = (async () => {
+        for await (const line of stream.output) void line;
+      })();
+      const rejection = expect(drained).rejects.toThrow(
+        "Process p1 timed out after 60000ms",
+      );
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      await rejection;
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
