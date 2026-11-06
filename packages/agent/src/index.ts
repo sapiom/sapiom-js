@@ -11,13 +11,14 @@
  */
 
 // Directives — the load-bearing protocol contract
-export { DIRECTIVE_KIND, isContinue, isRetry, isPause, isTerminate, isFail } from './directives.js';
+export { DIRECTIVE_KIND, isContinue, isRetry, isPause, isTerminate, isFail, isPauseTimeout } from './directives.js';
 export type {
   DirectiveKind,
   NextStepDirective,
   ContinueDirective,
   RetryDirective,
   PauseUntilSignalDirective,
+  PauseTimeoutPayload,
   TerminateDirective,
   FailDirective,
 } from './directives.js';

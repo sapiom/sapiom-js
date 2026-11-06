@@ -143,6 +143,49 @@ describe("agentManifestSchema", () => {
     expect(() => agentManifestSchema.parse(bad)).toThrow();
   });
 
+  it("round-trips a pause transition's optional timeoutStep", () => {
+    const manifest = {
+      protocol: 1,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: {
+        a: {
+          timeoutMs: null,
+          inputSchema: null,
+          transitions: [{ kind: "pause", signal: "s", resumeStep: "a", timeoutStep: "b" }],
+        },
+        b: { timeoutMs: null, inputSchema: null, transitions: [{ kind: "terminate" }] },
+      },
+    };
+    const parsed = agentManifestSchema.parse(manifest);
+    expect(parsed.steps.a.transitions[0]).toEqual({
+      kind: "pause",
+      signal: "s",
+      resumeStep: "a",
+      timeoutStep: "b",
+    });
+  });
+
+  it("accepts a pause transition without timeoutStep (back-compat)", () => {
+    const manifest = {
+      protocol: 1,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: {
+        a: {
+          timeoutMs: null,
+          inputSchema: null,
+          transitions: [{ kind: "pause", signal: "s", resumeStep: "a" }],
+        },
+      },
+    };
+    expect(() => agentManifestSchema.parse(manifest)).not.toThrow();
+  });
+
   it("accepts null timeoutMs (engine default)", () => {
     const good = {
       protocol: 1,

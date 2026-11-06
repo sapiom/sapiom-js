@@ -176,3 +176,23 @@ describe('step completion error compatibility', () => {
     });
   });
 });
+
+describe('step completion pause directive', () => {
+  it('keeps timeoutStep through protocol 1', () => {
+    const parsed = stepCompletionPayloadSchema.parse({
+      protocol: 1,
+      correlationId: 'execution:1:0',
+      outcome: STEP_COMPLETION_OUTCOME.RESULT,
+      result: {
+        directive: {
+          kind: 'pause_until_signal',
+          signal: { name: 'vendor.confirmed' },
+          resumeStep: 'ship',
+          timeoutMs: 1000,
+          timeoutStep: 'escalate',
+        },
+      },
+    });
+    expect(parsed.result?.directive).toMatchObject({ kind: 'pause_until_signal', timeoutStep: 'escalate' });
+  });
+});
