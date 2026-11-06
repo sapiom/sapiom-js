@@ -37,6 +37,12 @@ transaction and credential configuration. Do not detach the current interceptor 
 customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
 same purchase using the returned version.
 
+For a qualified native return, the private delivery receipt is emitted before the merchant's
+original verification promise can continue checkout. A native validation timeout rejects that
+pending promise; a late response cannot subsequently fulfill it. Reconcile the existing purchase
+with the merchant before deciding what to do next, since verification failure is not proof of a
+declined payment.
+
 Verification registration happens before the interceptor relays the card. If registration
 fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
 the existing checkout relay path and leaves `handle.verification` unavailable. Registration

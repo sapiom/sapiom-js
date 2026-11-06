@@ -20,15 +20,38 @@ export type NativeCardinalTarget = {
  */
 export const DELIVER_NATIVE_CARDINAL = `async function(handler, cleanup, pending, method, payload, jwt, timeout, notify, receipt) {
   if (this._verifyCardPromisePlus !== pending || this._lookupPaymentMethod !== method ||
-      typeof method.nonce !== 'string' || typeof pending.then !== 'function') throw new Error('native_attempt_changed');
+      typeof method.nonce !== 'string' || typeof pending.then !== 'function' ||
+      typeof pending.resolve !== 'function' || typeof pending.reject !== 'function' ||
+      pending.isFulfilled === true) throw new Error('native_attempt_changed');
   const client = this._client, original = client.request, nonce = method.nonce;
-  let exchanges = 0, accepted = false, timer;
+  const resolvePending = pending.resolve, rejectPending = pending.reject;
+  let exchanges = 0, accepted = false, returned = false, expired = false, timer;
+  const timeoutError = new Error('native_validation_timeout');
+  const deadline = Date.now() + timeout;
+  // Emit the receipt in the original resolve call, before any merchant continuation can navigate.
+  const settle = function(value) {
+    if (this !== pending) throw new Error('native_attempt_changed');
+    if (pending.isFulfilled === true) return this;
+    if (expired || Date.now() >= deadline) {
+      expired = true;
+      return rejectPending.call(this, timeoutError);
+    }
+    if (!accepted || exchanges !== 1)
+      return rejectPending.call(this, new Error('native_validation_not_confirmed'));
+    const result = resolvePending.call(this, value);
+    if (!returned) {
+      returned = true;
+      globalThis[notify](receipt);
+    }
+    return result;
+  };
   const guarded = function(options, ...rest) {
     if (options.endpoint !== 'payment_methods/' + nonce + '/three_d_secure/authenticate_from_jwt')
       return original.call(this, options, ...rest);
     if (options.data?.jwt !== jwt || options.data?.paymentMethodNonce !== nonce || ++exchanges !== 1)
       return Promise.reject(new Error('native_validation_binding_mismatch'));
     return Promise.resolve(original.call(this, options, ...rest)).then(response => {
+      if (expired || Date.now() >= deadline) throw timeoutError;
       if ((response.errors && response.errors.length) || !response.paymentMethod ||
           typeof response.paymentMethod.nonce !== 'string' || !response.threeDSecureInfo)
         throw new Error('native_validation_rejected');
@@ -37,18 +60,30 @@ export const DELIVER_NATIVE_CARDINAL = `async function(handler, cleanup, pending
     });
   };
   client.request = guarded;
+  pending.resolve = settle;
   try {
+    if (pending.resolve !== settle) throw new Error('native_attempt_changed');
     cleanup();
     handler(payload, jwt);
     await Promise.race([pending, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('native_validation_timeout')), timeout);
+      timer = setTimeout(() => {
+        expired = true;
+        rejectPending.call(pending, timeoutError);
+        reject(timeoutError);
+      }, timeout);
     })]);
-    if (!accepted || exchanges !== 1) throw new Error('native_validation_not_confirmed');
-    globalThis[notify](receipt);
+    if (!returned) throw new Error('native_validation_not_confirmed');
     return true;
+  } catch (error) {
+    if (!returned) {
+      expired = true;
+      rejectPending.call(pending, error);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
     if (client.request === guarded) client.request = original;
+    if (pending.resolve === settle) pending.resolve = resolvePending;
   }
 }`;
 
