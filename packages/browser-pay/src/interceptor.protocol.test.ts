@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { CdpCommandError } from "./cdp";
+import type { VerificationState } from "./verification";
 import {
   attachInterceptor,
   type InterceptorEvent,
@@ -337,6 +338,121 @@ const success = (): RelayResponse => ({
     body: '{"id":"sess"}',
   },
 });
+
+it.each(["uncaptured", "captured", "launched", "uncertain"])(
+  "fences the credential relay only after registered capture (%s)",
+  async (stage) => {
+    const stub = await startStub();
+    const state: VerificationState = {
+      id: "verification",
+      version: 1,
+      status: "preparing",
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+      merchantOrigin: "https://shop.example",
+      total: { amount: "11.00", currency: "USD" },
+      challengeCaptured: stage === "captured",
+      launchClaimed: stage === "launched",
+      checkRequested: false,
+      continuationClaimed: false,
+    };
+    const relay = jest.fn(async () => success());
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reporting = false;
+    const handle = await attachInterceptor(stub.url, {
+      placeholder: HELD,
+      verificationAdapter: () => ({
+        inspect: async (request) =>
+          request.body === "creq=held"
+            ? { capture: { url: request.url, body: request.body } }
+            : "continue",
+        relayed() {},
+        reconcile: async () => null,
+      }),
+      relay: {
+        relay,
+        verification: {
+          register: async () => state,
+          sync: async () => state,
+          report: async (_id, input) => {
+            if (input.kind === "challenge_observed") {
+              reporting = true;
+              await gate;
+            }
+            return {
+              ...state,
+              version: 2,
+              status: "ended",
+              challengeCaptured: true,
+            };
+          },
+        },
+      },
+    });
+    try {
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "page interception",
+      );
+      if (stage === "uncertain") {
+        stub.emit({
+          method: "Fetch.requestPaused",
+          sessionId: "page-1",
+          params: {
+            requestId: "bank-capture",
+            frameId: "bank",
+            request: {
+              method: "POST",
+              url: "https://bank.example/challenge",
+              postData: "creq=held",
+            },
+          },
+        });
+        await waitFor(() => reporting, "reserved capture report");
+      }
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "another-card",
+          frameId: "checkout",
+          request: {
+            method: "POST",
+            url: "https://payments.sandbox.braintree-api.com/graphql",
+            postData: CARD,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (c) =>
+              ["Fetch.fulfillRequest", "Fetch.failRequest"].includes(
+                c.method,
+              ) && c.params.requestId === "another-card",
+          ),
+        "card settlement",
+      );
+      expect(relay).toHaveBeenCalledTimes(stage === "uncaptured" ? 1 : 0);
+      expect(
+        stub.commands.find(
+          (c) =>
+            ["Fetch.fulfillRequest", "Fetch.failRequest"].includes(c.method) &&
+            c.params.requestId === "another-card",
+        )?.method,
+      ).toBe(
+        stage === "uncaptured" ? "Fetch.fulfillRequest" : "Fetch.failRequest",
+      );
+    } finally {
+      release();
+      await handle.detach();
+      await stub.close();
+    }
+  },
+);
 
 function header(
   headers: RelayRequest["request"]["headers"],
