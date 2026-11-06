@@ -4,7 +4,7 @@ Quick start guide for integrating Sapiom into your AI agents.
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22.12+
 - An invite to Sapiom (check your email for signup link to https://app.sapiom.ai/)
 
 ## Setup
