@@ -22,8 +22,10 @@ the **attestation archive**: nothing is filed until a person explicitly signs of
   guessing. A wrong capability or method name fails typecheck.
 - **The durable pause is a primitive, not a capability.** `review` declares a
   static `pause: { signal, resumeStep }` edge AND returns
-  `pauseUntilSignal({ signal, resumeStep, correlationId: ctx.executionId })`. The
-  resume target (`onSignoff`) receives the signal payload as its `run` input.
+  `pauseUntilSignal({ signal, resumeStep, correlationId: ctx.executionId, timeoutMs: GATE_PAUSE_TIMEOUT_MS })`.
+  The resume target (`onSignoff`) receives the signal payload as its `run` input.
+  **A one-year `timeoutMs` (`GATE_PAUSE_TIMEOUT_MS`):** omitting it inherits the
+  engine's 7-day default, and a lapsed deadline fails the run instead of resuming it.
 - **Gate real side effects behind `dryRun`.** `archive` uploads the attestation
   only on a live run with `dryRun` off; otherwise it returns the computed
   attestation as a preview. The upload's presigned PUT is a raw `fetch` (not a

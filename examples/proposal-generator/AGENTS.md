@@ -24,9 +24,11 @@ Sapiom capabilities are pre-auth'd on `ctx.sapiom` (`ctx.sapiom.llm.run`,
 - **`review`** checks for an assigned approver first. With none — nothing will
   ever fire the decision signal on an unconfigured run — it takes the `pending`
   branch instead of pausing. With one, it emails them and returns
-  `pauseUntilSignal({ signal: "proposal.decision", resumeStep: "onDecision", correlationId: ctx.executionId })`.
+  `pauseUntilSignal({ signal: "proposal.decision", resumeStep: "onDecision", correlationId: ctx.executionId, timeoutMs: GATE_PAUSE_TIMEOUT_MS })`.
   It carries a static `pause: { signal, resumeStep: "onDecision" }` annotation —
   the build-time graph edge that must match the directive.
+  **A one-year `timeoutMs` (`GATE_PAUSE_TIMEOUT_MS`):** omitting it inherits the
+  engine's 7-day default, and a lapsed deadline fails the run instead of resuming it.
 - **`pending`** is the gate's honest off-ramp: terminal, carrying the rendered
   PDF's `fileId`/`downloadUrl` and `outcome: "pending-approval"`. This — not a
   hung pause — is what a `{}` run reaches.
