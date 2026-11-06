@@ -80,7 +80,7 @@ export class MerchantFrames {
 
   protected async descendant(
     frame: Frame,
-    request: VerificationRequest,
+    request: Pick<VerificationRequest, "sessionId" | "frameId">,
     exactUrl = true,
   ) {
     const result = (await this.cdp.send(

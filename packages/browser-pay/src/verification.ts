@@ -19,7 +19,7 @@ export interface VerificationState {
   continuationClaimed: boolean;
   interactionReturned?: boolean;
   nativeReturnAvailable?: boolean;
-  nativeReturnProtocol?: "braintree_cardinal";
+  nativeReturnProtocol?: NativeReturn["protocol"];
   merchantOrigin: string;
   total: { amount: string; currency: string };
   actionUrl?: string;
@@ -29,10 +29,9 @@ export interface VerificationState {
     confirmation?: string;
   };
 }
-export interface NativeReturn {
-  protocol: "braintree_cardinal";
-  jwt: string;
-}
+export type NativeReturn =
+  | { protocol: "braintree_cardinal"; jwt: string }
+  | { protocol: "stripe_3ds2"; cres: string };
 export interface VerificationRunnerReply extends VerificationState {
   nativeReturn?: NativeReturn;
 }
@@ -80,7 +79,7 @@ export interface VerificationAdapter {
         capture: {
           url: string;
           body: string;
-          nativeReturn?: "braintree_cardinal";
+          nativeReturn?: NativeReturn["protocol"];
         };
       }
   >;
@@ -537,7 +536,7 @@ export function verificationTransport(
       throw new Error("Unreadable purchase verification response");
     if (
       data.nativeReturnProtocol !== undefined &&
-      data.nativeReturnProtocol !== "braintree_cardinal"
+      !["braintree_cardinal", "stripe_3ds2"].includes(data.nativeReturnProtocol)
     )
       throw new Error("Unreadable purchase verification response");
     if (
@@ -546,12 +545,16 @@ export function verificationTransport(
         suffix.endsWith("/reports") &&
         (body as Record<string, unknown>)?.kind === "continuation_started"
       ) ||
-        data.nativeReturn?.protocol !== "braintree_cardinal" ||
-        typeof data.nativeReturn.jwt !== "string" ||
-        data.nativeReturn.jwt.length > 16384 ||
-        !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(
-          data.nativeReturn.jwt,
-        ))
+        !(data.nativeReturn?.protocol === "braintree_cardinal"
+          ? typeof data.nativeReturn.jwt === "string" &&
+            data.nativeReturn.jwt.length <= 16384 &&
+            /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(
+              data.nativeReturn.jwt,
+            )
+          : data.nativeReturn?.protocol === "stripe_3ds2" &&
+            typeof data.nativeReturn.cres === "string" &&
+            data.nativeReturn.cres.length <= 16384 &&
+            /^[A-Za-z0-9_+/-]+={0,2}$/.test(data.nativeReturn.cres)))
     )
       throw new Error("Unreadable purchase verification response");
     return data as VerificationRunnerReply;

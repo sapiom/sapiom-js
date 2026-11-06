@@ -1,4 +1,8 @@
 export { attachInterceptor } from "./interceptor.js";
+export {
+  StripePaymentElementVerification,
+  createStripePaymentElementVerification,
+} from "./stripe-verification.js";
 export type {
   AttachOptions,
   FailureReason,
