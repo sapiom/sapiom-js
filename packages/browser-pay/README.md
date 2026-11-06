@@ -26,11 +26,8 @@ expires. A buyer action URL is a credential: deliver it privately and do not log
 
 `handle.verification.current()` supplies sourced status, and `.wait()` resolves on an ended,
 canceled, expired or lost observation. A challenge/SDK completion is not a payment result.
-`interactionReturned: true` acknowledges delivery into the original native verifier. An `ended`
-status alone does not authorize resuming automation: expiry, binding changes or uncertain delivery
-can end observation without that acknowledgment. Keep `authentication` unknown and confirm an
-order independently. A custom relay wrapper must forward the original relay's `.verification`
-capability as well as `.relay()`. Native bank results never appear in `current()` or `wait()`.
+A custom relay wrapper must forward the original relay's `.verification` capability as well
+as `.relay()` to retain verification support.
 No verification operation creates another purchase or sends another card. Unsupported/custom
 relay integrations retain their existing behavior; the standard HTTP relay reuses its existing
 transaction and credential configuration. Do not detach the current interceptor while an active
@@ -47,8 +44,15 @@ The SDK never initiates another Pay to resolve uncertainty; reconcile the existi
 purchase before deciding whether to retry. A successfully registered observer still
 blocks another submission after challenge capture or while its capture report is uncertain.
 
+An interceptor's credential relay is bound to its configured `injectionRef`. A matching
+placeholder stays fenced across pages after capture; a browser request does not select another
+injection reference. An already-started relay keeps polling with its original idempotency key to
+read back the existing send. Capture fences new submissions and does not abandon that readback.
+
 `maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
-internal integration hook until U6 defines how other checkouts provide adapters.
+internal integration hook. The built-in observer supports the existing Shopify flow with
+Basis Theory presenting the captured challenge. Other processor-specific 3DS continuations
+are outside this integration's scope.
 Registration that already reports an ended, expired, canceled or error state
 returns the observation without starting a polling timer.
 

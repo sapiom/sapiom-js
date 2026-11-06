@@ -22,190 +22,50 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
-  it("reads the merchant receipt after a definite native acknowledgment rejection", async () => {
-    jest.useFakeTimers();
-    let state: VerificationState = {
-      ...initial(),
-      status: "checking",
-      challengeCaptured: true,
-      launchClaimed: true,
-      nativeReturnAvailable: true,
-    };
-    const resume = jest.fn(async () => ({
-      interactionReturned: true as const,
-    }));
-    const observation = {
-      outcome: "confirmed" as const,
-      source: "runner" as const,
-    };
-    const reconcile = jest
-      .fn()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue(observation);
-    const report = jest.fn(async (_id, body) => {
-      if (body.kind === "interaction_resumed")
-        throw new VerificationHttpError(422, "verification_report_invalid");
-      state = {
-        ...state,
-        version: state.version + 1,
-        continuationClaimed: true,
-      };
-      if (body.kind === "checkout_observed")
-        state = { ...state, status: "ended", observation };
-      return state;
-    });
-    const observer = await VerificationSession.attach(
-      { register: async () => state, sync: async () => state, report },
-      {
-        inspect: async () => "continue",
-        relayed() {},
-        reconcile,
-        continuation: async () => resume,
-      },
-      "injection",
-    );
-    await jest.advanceTimersByTimeAsync(4001);
-    expect(reconcile).toHaveBeenCalledTimes(2);
-    expect(resume).toHaveBeenCalledTimes(1);
-    expect(report.mock.calls.map(([, body]) => body.kind)).toEqual([
-      "continuation_started",
-      "interaction_resumed",
-      "checkout_observed",
-    ]);
-    expect(observer!.current().observation).toEqual(observation);
-    expect(observer!.current().interactionReturned).not.toBe(true);
-    await observer!.close();
-  });
-  it.each([false, true])(
-    "reconciles a lost native acknowledgment without redelivery or a contradictory failure (committed=%s)",
-    async (committed) => {
-      jest.useFakeTimers();
-      let state: VerificationState = {
-        ...initial(),
-        challengeCaptured: true,
-        launchClaimed: true,
-        status: "checking",
-        nativeReturnAvailable: true,
-      };
-      let acknowledgments = 0;
-      const resume = jest.fn(async () => ({
-        interactionReturned: true as const,
-      }));
-      const report = jest.fn(async (_id, body) => {
-        if (body.kind === "continuation_started") {
-          state = { ...state, version: 2, continuationClaimed: true };
-          return {
-            ...state,
-            nativeReturn: {
-              protocol: "braintree_cardinal" as const,
-              jwt: "header.payload.signature",
-            },
-          };
-        }
-        if (body.kind === "interaction_resumed") {
-          acknowledgments++;
-          if (committed || acknowledgments > 3)
-            state = {
-              ...state,
-              version: 3,
-              status: "ended",
-              interactionReturned: true,
-            };
-          if (acknowledgments <= 3)
-            throw new Error("lost acknowledgment reply");
-        }
-        return state;
-      });
-      const observer = await VerificationSession.attach(
-        { register: async () => state, sync: async () => state, report },
+  it.each(["unavailable", "failed"] as const)(
+    "settles %s registration even when adapter cleanup never settles",
+    async (mode) => {
+      const original = new Error("registration failed");
+      const dispose = jest.fn(() => new Promise<void>(() => {}));
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const result = VerificationSession.attach(
         {
-          inspect: async () => "continue",
-          relayed() {},
-          reconcile: async () => null,
-          continuation: async () => resume,
+          register: async () => {
+            if (mode === "failed") throw original;
+            return null;
+          },
+          sync: async () => initial(),
+          report: async () => initial(),
         },
-        "injection",
-      );
-      await jest.advanceTimersByTimeAsync(2001);
-      expect(
-        report.mock.calls.some(
-          ([, body]) => body.kind === "continuation_failed",
-        ),
-      ).toBe(false);
-      await jest.advanceTimersByTimeAsync(2001);
-      expect(resume).toHaveBeenCalledTimes(1);
-      expect(observer!.current().interactionReturned).toBe(true);
-      const keys = report.mock.calls
-        .filter(([, body]) => body.kind === "interaction_resumed")
-        .map(([, body]) => body.idempotencyKey);
-      expect(new Set(keys).size).toBe(1);
-      expect(acknowledgments).toBe(committed ? 3 : 4);
-      await observer!.close();
-    },
-  );
-  it.each([true, false])(
-    "keeps native return private and acknowledges only a completed native delivery (%s)",
-    async (succeeds) => {
-      jest.useFakeTimers();
-      let state: VerificationState = {
-        ...initial(),
-        challengeCaptured: true,
-        launchClaimed: true,
-        status: "checking",
-        nativeReturnAvailable: true,
-      };
-      const nativeReturn = {
-        protocol: "braintree_cardinal" as const,
-        jwt: "header.payload.signature",
-      };
-      let activeState: VerificationState | undefined;
-      const resume = jest.fn(async () => {
-        activeState = observer!.current();
-        if (!succeeds) throw new Error("native rejected");
-        return { interactionReturned: true as const };
-      });
-      const dispose = jest.fn();
-      const report = jest.fn(async (_id, body) => {
-        state = { ...state, version: state.version + 1 };
-        if (body.kind === "continuation_started") {
-          state.continuationClaimed = true;
-          return { ...state, nativeReturn };
-        }
-        state.status = body.kind === "interaction_resumed" ? "ended" : "error";
-        state.interactionReturned = body.kind === "interaction_resumed";
-        return state;
-      });
-      const observer = await VerificationSession.attach(
-        { register: async () => state, sync: async () => state, report },
         {
           inspect: async () => "continue",
           relayed() {},
           reconcile: async () => null,
-          continuation: async () => resume,
           dispose,
         },
         "injection",
+      ).then(
+        (value) => (mode === "failed" ? "unexpected fulfillment" : value),
+        (error) => (mode === "failed" ? error : "unexpected rejection"),
       );
-      await jest.advanceTimersByTimeAsync(2001);
-      expect(resume).toHaveBeenCalledWith(nativeReturn);
-      expect(activeState).toMatchObject({
-        status: "checking",
-        continuationClaimed: true,
-      });
-      expect(activeState).not.toHaveProperty("nativeReturn");
-      expect(report.mock.calls.map(([, body]) => body.kind)).toEqual([
-        "continuation_started",
-        succeeds ? "interaction_resumed" : "continuation_failed",
-      ]);
-      expect(observer!.current()).not.toHaveProperty("nativeReturn");
-      expect(await observer!.wait()).not.toHaveProperty("nativeReturn");
-      expect(observer!.current().interactionReturned).toBe(succeeds);
-      await jest.advanceTimersByTimeAsync(4000);
-      expect(resume).toHaveBeenCalledTimes(1);
-      expect(dispose).toHaveBeenCalledTimes(1);
-      await observer!.close();
+      try {
+        const settled = await Promise.race([
+          result,
+          new Promise<string>((resolve) => {
+            timeout = setTimeout(
+              () => resolve("cleanup blocked registration"),
+              50,
+            );
+          }),
+        ]);
+        expect(settled).toBe(mode === "failed" ? original : null);
+        expect(dispose).toHaveBeenCalledTimes(1);
+      } finally {
+        clearTimeout(timeout);
+      }
     },
   );
+
   it.each([400, 401, 403, 404, 409, 422, 429])(
     "leaves a definite HTTP %i capture refusal to the native checkout",
     async (status) => {
