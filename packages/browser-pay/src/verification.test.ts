@@ -158,7 +158,9 @@ describe("Existing-browser verification observation", () => {
         protocol: "braintree_cardinal" as const,
         jwt: "header.payload.signature",
       };
+      let activeState: VerificationState | undefined;
       const resume = jest.fn(async () => {
+        activeState = observer!.current();
         if (!succeeds) throw new Error("native rejected");
         return { interactionReturned: true as const };
       });
@@ -186,6 +188,11 @@ describe("Existing-browser verification observation", () => {
       );
       await jest.advanceTimersByTimeAsync(2001);
       expect(resume).toHaveBeenCalledWith(nativeReturn);
+      expect(activeState).toMatchObject({
+        status: "checking",
+        continuationClaimed: true,
+      });
+      expect(activeState).not.toHaveProperty("nativeReturn");
       expect(report.mock.calls.map(([, body]) => body.kind)).toEqual([
         "continuation_started",
         succeeds ? "interaction_resumed" : "continuation_failed",
