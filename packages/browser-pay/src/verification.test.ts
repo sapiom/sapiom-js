@@ -22,6 +22,50 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it.each(["unavailable", "failed"] as const)(
+    "settles %s registration even when adapter cleanup never settles",
+    async (mode) => {
+      const original = new Error("registration failed");
+      const dispose = jest.fn(() => new Promise<void>(() => {}));
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const result = VerificationSession.attach(
+        {
+          register: async () => {
+            if (mode === "failed") throw original;
+            return null;
+          },
+          sync: async () => initial(),
+          report: async () => initial(),
+        },
+        {
+          inspect: async () => "continue",
+          relayed() {},
+          reconcile: async () => null,
+          dispose,
+        },
+        "injection",
+      ).then(
+        (value) => (mode === "failed" ? "unexpected fulfillment" : value),
+        (error) => (mode === "failed" ? error : "unexpected rejection"),
+      );
+      try {
+        const settled = await Promise.race([
+          result,
+          new Promise<string>((resolve) => {
+            timeout = setTimeout(
+              () => resolve("cleanup blocked registration"),
+              50,
+            );
+          }),
+        ]);
+        expect(settled).toBe(mode === "failed" ? original : null);
+        expect(dispose).toHaveBeenCalledTimes(1);
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  );
+
   it("reads the merchant receipt after a definite native acknowledgment rejection", async () => {
     jest.useFakeTimers();
     let state: VerificationState = {
