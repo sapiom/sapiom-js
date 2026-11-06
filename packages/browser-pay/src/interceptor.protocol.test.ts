@@ -706,7 +706,7 @@ describe("interceptor CDP decisions", () => {
             {
               frame: {
                 id: "auth",
-                url: "https://hooks.stripe.com/3d_secure_2/hosted",
+                url: "https://js.stripe.com/v3/three-ds-2-challenge-abc123.html",
               },
               childFrames: [{ frame: { id: "acs", url: "about:blank" } }],
             },
@@ -723,7 +723,10 @@ describe("interceptor CDP decisions", () => {
                 status: "requires_action",
                 next_action: {
                   type: "use_stripe_sdk",
-                  use_stripe_sdk: { type: "stripe_3ds2_fingerprint" },
+                  use_stripe_sdk: {
+                    type: "stripe_3ds2_fingerprint",
+                    three_d_secure_2_source: "src_demo",
+                  },
                 },
               }
             : { error: { code: "payment_intent_authentication_failure" } },
@@ -874,7 +877,11 @@ describe("interceptor CDP decisions", () => {
           expect(reports).toContainEqual(
             expect.objectContaining({
               kind: "challenge_observed",
-              capture: { url: "https://bank.example/challenge", body },
+              capture: {
+                url: "https://bank.example/challenge",
+                body,
+                nativeReturn: "stripe_3ds2",
+              },
             }),
           );
           pause("duplicate", confirmUrl, "payment_method=pm_demo");

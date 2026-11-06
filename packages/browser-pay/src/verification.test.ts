@@ -649,6 +649,56 @@ describe("Existing-browser verification observation", () => {
       "Purchase verification request failed",
     );
   });
+  it("accepts a private Stripe ACS return only on the one-use continuation report", async () => {
+    const nativeReturn = {
+      protocol: "stripe_3ds2",
+      cres: "eyJtZXNzYWdlVHlwZSI6IkNSZXMifQ",
+    };
+    const reply = {
+      ...initial(),
+      nativeReturnProtocol: "stripe_3ds2",
+      nativeReturnAvailable: true,
+    };
+    const transport = verificationTransport(
+      async (_path, body) =>
+        new Response(
+          JSON.stringify({
+            ...reply,
+            ...((body as Record<string, unknown>).kind ===
+              "continuation_started" && { nativeReturn }),
+          }),
+        ),
+    );
+    expect(await transport.sync("verification")).toEqual(reply);
+    expect(
+      await transport.report("verification", { kind: "continuation_started" }),
+    ).toEqual({ ...reply, nativeReturn });
+    const exposed = verificationTransport(
+      async () => new Response(JSON.stringify({ ...reply, nativeReturn })),
+    );
+    await expect(exposed.sync("verification")).rejects.toThrow("Unreadable");
+    await expect(exposed.register("injection", "browser")).rejects.toThrow(
+      "Unreadable",
+    );
+  });
+  it.each([
+    { protocol: "stripe_3ds2", cres: "" },
+    { protocol: "stripe_3ds2", cres: "x".repeat(16385) },
+    { protocol: "stripe_3ds2", cres: "not base64" },
+    { protocol: "stripe_3ds2", jwt: "header.payload.signature" },
+    { protocol: "unknown", cres: "abc" },
+  ])(
+    "rejects unreadable private Stripe returns: case %#",
+    async (nativeReturn) => {
+      const transport = verificationTransport(
+        async () =>
+          new Response(JSON.stringify({ ...initial(), nativeReturn })),
+      );
+      await expect(
+        transport.report("verification", { kind: "continuation_started" }),
+      ).rejects.toThrow("Unreadable");
+    },
+  );
   it("keeps the exact captured request and never captures it a second time", async () => {
     let state = initial();
     const reports: any[] = [];

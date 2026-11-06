@@ -65,11 +65,26 @@ const challenge = (change = {}) => ({
   ...change,
 });
 
+const cres = (change = {}) =>
+  Buffer.from(
+    JSON.stringify({
+      acsTransID: "11111111-1111-4111-8111-111111111111",
+      threeDSServerTransID: "22222222-2222-4222-8222-222222222222",
+      messageType: "CRes",
+      messageVersion: "2.2.0",
+      challengeCompletionInd: "Y",
+      transStatus: "Y",
+      ...change,
+    }),
+  ).toString("base64url");
+
 function fixture(relayBody = '{"id":"pm_demo"}') {
   const state = initial();
   const listeners = new Set<(event: CdpEvent) => void>();
   let responseBody = "";
   let checkoutUrl = merchantOrigin + "/checkout";
+  let authUrl = "https://js.stripe.com/v3/three-ds-2-challenge-abc123.html";
+  const postMessage = jest.fn();
   const send = jest.fn(
     async (
       method: string,
@@ -90,7 +105,7 @@ function fixture(relayBody = '{"id":"pm_demo"}') {
               {
                 frame: {
                   id: "auth",
-                  url: "https://hooks.stripe.com/3d_secure_2/hosted",
+                  url: authUrl,
                 },
                 childFrames: [{ frame: { id: "acs", url: "about:blank" } }],
               },
@@ -99,6 +114,19 @@ function fixture(relayBody = '{"id":"pm_demo"}') {
         };
       if (method === "Network.getResponseBody")
         return { body: responseBody, base64Encoded: false };
+      if (method === "Page.createIsolatedWorld")
+        return { executionContextId: 12 };
+      if (method === "Runtime.callFunctionOn") {
+        const fn = new Function(
+          "window",
+          "location",
+          `return (${_params.functionDeclaration});`,
+        )({ postMessage }, { href: authUrl, origin: new URL(authUrl).origin });
+        const args = _params.arguments as { value: unknown }[];
+        return {
+          result: { value: await fn(...args.map(({ value }) => value)) },
+        };
+      }
       return {};
     },
   );
@@ -154,6 +182,10 @@ function fixture(relayBody = '{"id":"pm_demo"}') {
     respond,
     start,
     listeners,
+    postMessage,
+    navigateAuth: (url: string) => {
+      authUrl = url;
+    },
     navigate: (url: string) => {
       checkoutUrl = url;
     },
@@ -163,13 +195,386 @@ function fixture(relayBody = '{"id":"pm_demo"}') {
 describe("Stripe Payment Element verification on the existing browser", () => {
   afterEach(() => jest.useRealTimers());
 
+  it("returns real ACS completion to Stripe.js only after the durable continuation claim", async () => {
+    const f = fixture();
+    await f.start();
+    await f.adapter.inspect(challenge());
+    expect(await f.adapter.continuation?.()).toBeNull();
+    Object.assign(f.state, {
+      challengeCaptured: true,
+      launchClaimed: true,
+      nativeReturnAvailable: true,
+      nativeReturnProtocol: "stripe_3ds2",
+    });
+    const resume = await f.adapter.continuation?.();
+    expect(resume).toEqual(expect.any(Function));
+    await expect(resume!()).rejects.toThrow();
+    f.state.continuationClaimed = true;
+    await resume!({ protocol: "stripe_3ds2", cres: cres() });
+    expect(f.postMessage).toHaveBeenCalledWith(
+      {
+        type: "3ds2-trampoline",
+        data: Buffer.from(cres(), "base64url").toString("base64"),
+      },
+      "https://js.stripe.com",
+    );
+    const invocation = f.send.mock.calls.find(
+      ([method]) => method === "Runtime.callFunctionOn",
+    )!;
+    expect(invocation[1]).toMatchObject({
+      executionContextId: 12,
+      arguments: [
+        { value: "https://js.stripe.com/v3/three-ds-2-challenge-abc123.html" },
+        { value: Buffer.from(cres(), "base64url").toString("base64") },
+      ],
+    });
+    expect(await f.adapter.reconcile(f.state)).toBeNull();
+    await expect(
+      resume!({ protocol: "stripe_3ds2", cres: cres() }),
+    ).rejects.toThrow();
+    expect(await f.adapter.inspect(confirm())).toBe("block");
+  });
+
+  it.each(["Y", "N"])(
+    "lets native challenge_complete settle the original Confirm (CRes=%s)",
+    async (transStatus) => {
+      const f = fixture();
+      await f.start();
+      await f.adapter.inspect(challenge());
+      Object.assign(f.state, {
+        challengeCaptured: true,
+        launchClaimed: true,
+        nativeReturnAvailable: true,
+        nativeReturnProtocol: "stripe_3ds2",
+      });
+      const url = "https://api.stripe.com/v1/3ds2/challenge_complete";
+      const complete = confirm({
+        url,
+        body: "source=src_demo",
+        networkId: "complete",
+      });
+      expect(await f.adapter.inspect(complete)).toBe("block");
+      const resume = await f.adapter.continuation?.();
+      expect(resume).toEqual(expect.any(Function));
+      f.state.continuationClaimed = true;
+      await resume!({ protocol: "stripe_3ds2", cres: cres({ transStatus }) });
+      expect(await f.adapter.inspect(complete)).toBe("continue");
+      expect(
+        await f.adapter.inspect({ ...complete, body: "source=src_other" }),
+      ).toBe("block");
+      expect(
+        await f.adapter.inspect({ ...complete, frameId: "unrelated" }),
+      ).toBe("block");
+      expect(
+        await f.adapter.inspect(
+          confirm({ url: url.replace("challenge_complete", "authenticate") }),
+        ),
+      ).toBe("block");
+      await f.respond({ state: "succeeded" }, "complete", url);
+      expect(await f.adapter.reconcile(f.state)).toBeNull();
+      const retrieve = confirm({
+        url: confirmUrl.replace("/confirm", ""),
+        method: "GET",
+        body: "",
+        networkId: "retrieve",
+      });
+      expect(await f.adapter.inspect(retrieve)).toBe("continue");
+      await f.respond(
+        paymentIntent({
+          status: transStatus === "Y" ? "succeeded" : "requires_payment_method",
+          next_action: null,
+          ...(transStatus === "N" && {
+            last_payment_error: {
+              code: "payment_intent_authentication_failure",
+            },
+          }),
+        }),
+        "retrieve",
+        retrieve.url,
+      );
+      expect(await f.adapter.reconcile(f.state)).toMatchObject({
+        outcome: transStatus === "Y" ? "confirmed" : "failed",
+      });
+      expect(await f.adapter.inspect(confirm())).toBe("block");
+    },
+  );
+
+  it.each([
+    { acsTransID: "33333333-3333-4333-8333-333333333333" },
+    { threeDSServerTransID: "33333333-3333-4333-8333-333333333333" },
+    { messageVersion: "2.1.0" },
+    { messageType: "CReq" },
+    { challengeCompletionInd: "N" },
+    { transStatus: "U" },
+  ])("rejects mismatched or incomplete ACS return: case %#", async (change) => {
+    const f = fixture();
+    await f.start();
+    await f.adapter.inspect(challenge());
+    Object.assign(f.state, {
+      challengeCaptured: true,
+      launchClaimed: true,
+      nativeReturnAvailable: true,
+      nativeReturnProtocol: "stripe_3ds2",
+    });
+    const resume = await f.adapter.continuation?.();
+    f.state.continuationClaimed = true;
+    await expect(
+      resume!({ protocol: "stripe_3ds2", cres: cres(change) }),
+    ).rejects.toThrow();
+    expect(f.send.mock.calls.map(([method]) => method)).not.toContain(
+      "Runtime.callFunctionOn",
+    );
+    expect(await f.adapter.reconcile(f.state)).toBeNull();
+  });
+
+  it.each([
+    "no-return",
+    "wrong-protocol",
+    "fresh-adapter",
+    "claimed",
+    "expired",
+    "navigated",
+    "disposed",
+  ])("leaves continuation unavailable for %s", async (scenario) => {
+    const f = fixture();
+    await f.start();
+    await f.adapter.inspect(challenge());
+    Object.assign(f.state, {
+      challengeCaptured: true,
+      launchClaimed: true,
+      nativeReturnAvailable: true,
+      nativeReturnProtocol: "stripe_3ds2",
+    });
+    if (scenario === "no-return") f.state.nativeReturnAvailable = false;
+    if (scenario === "wrong-protocol")
+      f.state.nativeReturnProtocol = "braintree_cardinal";
+    if (scenario === "claimed") f.state.continuationClaimed = true;
+    if (scenario === "expired") f.state.expiresAt = new Date(0).toISOString();
+    if (scenario === "navigated") f.navigate("https://other.example/checkout");
+    if (scenario === "disposed") f.adapter.dispose?.();
+    const adapter =
+      scenario === "fresh-adapter"
+        ? createStripePaymentElementVerification(f.connection, () => f.state)
+        : f.adapter;
+    expect(await adapter.continuation?.()).toBeNull();
+    if (scenario === "fresh-adapter") adapter.dispose?.();
+  });
+
+  it.each([false, true])(
+    "never redelivers after an ambiguous or rejected frame delivery (%s)",
+    async (exception) => {
+      const f = fixture();
+      await f.start();
+      await f.adapter.inspect(challenge());
+      Object.assign(f.state, {
+        challengeCaptured: true,
+        launchClaimed: true,
+        nativeReturnAvailable: true,
+        nativeReturnProtocol: "stripe_3ds2",
+      });
+      const resume = await f.adapter.continuation?.();
+      f.state.continuationClaimed = true;
+      const original = f.send.getMockImplementation()!;
+      f.send.mockImplementation(async (method, params, session) => {
+        if (method === "Runtime.callFunctionOn") {
+          if (exception) throw new Error("CDP response lost");
+          return { result: { value: false } };
+        }
+        return original(method, params, session);
+      });
+      await expect(
+        resume!({ protocol: "stripe_3ds2", cres: cres() }),
+      ).rejects.toThrow();
+      await expect(
+        resume!({ protocol: "stripe_3ds2", cres: cres() }),
+      ).rejects.toThrow();
+      expect(
+        f.send.mock.calls.filter(
+          ([method]) => method === "Runtime.callFunctionOn",
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("refuses delivery when the pinned Stripe frame navigates after the claim", async () => {
+    const f = fixture();
+    await f.start();
+    await f.adapter.inspect(challenge());
+    Object.assign(f.state, {
+      challengeCaptured: true,
+      launchClaimed: true,
+      nativeReturnAvailable: true,
+      nativeReturnProtocol: "stripe_3ds2",
+    });
+    const resume = await f.adapter.continuation?.();
+    f.state.continuationClaimed = true;
+    f.navigateAuth("https://hooks.stripe.com/3d_secure_2/other");
+    await expect(
+      resume!({ protocol: "stripe_3ds2", cres: cres() }),
+    ).rejects.toThrow("frame changed");
+    expect(f.postMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://hooks.stripe.com/3d_secure_2/hosted",
+    "https://js.stripe.com/v3/three-ds-2-fingerprint-abc123.html",
+    "https://js.stripe.com/v3/unknown.html",
+  ])(
+    "leaves unrecognized native receivers outside capture: %s",
+    async (url) => {
+      const f = fixture();
+      await f.start();
+      f.navigateAuth(url);
+      expect(await f.adapter.inspect(challenge())).toBe("fallback");
+      expect(await f.adapter.continuation?.()).toBeNull();
+    },
+  );
+
+  it("binds a direct challenge's nested Stripe source before capture", async () => {
+    const f = fixture();
+    await f.adapter.inspect(confirm());
+    await f.respond(
+      paymentIntent({
+        next_action: {
+          type: "use_stripe_sdk",
+          use_stripe_sdk: {
+            type: "stripe_3ds2_challenge",
+            stripe_js: { three_d_secure_2_source: "src_demo" },
+          },
+        },
+      }),
+    );
+    expect(await f.adapter.inspect(challenge())).toMatchObject({
+      capture: { nativeReturn: "stripe_3ds2" },
+    });
+  });
+
+  it("leaves a challenge without a bound Stripe source native", async () => {
+    const f = fixture();
+    await f.adapter.inspect(confirm());
+    await f.respond(
+      paymentIntent({
+        next_action: {
+          type: "use_stripe_sdk",
+          use_stripe_sdk: { type: "stripe_3ds2_fingerprint" },
+        },
+      }),
+    );
+    expect(await f.adapter.inspect(challenge())).toBe("fallback");
+  });
+
+  it.each(["confirmed", "failed"] as const)(
+    "settles VerificationSession.wait after the hosted return: %s",
+    async (outcome) => {
+      jest.useFakeTimers();
+      const f = fixture();
+      const report = jest.fn(async (_id, input) => {
+        f.state.version++;
+        if (input.kind === "challenge_observed") {
+          expect(input.capture.nativeReturn).toBe("stripe_3ds2");
+          Object.assign(f.state, {
+            challengeCaptured: true,
+            status: "requires_action",
+          });
+        }
+        if (input.kind === "continuation_started") {
+          f.state.continuationClaimed = true;
+          return {
+            ...f.state,
+            nativeReturn: { protocol: "stripe_3ds2" as const, cres: cres() },
+          };
+        }
+        if (input.kind === "interaction_resumed")
+          f.state.interactionReturned = true;
+        if (input.kind === "checkout_observed")
+          Object.assign(f.state, {
+            status: "ended",
+            observation: {
+              outcome: input.observation.outcome,
+              source: "runner",
+            },
+          });
+        return { ...f.state };
+      });
+      const session = await VerificationSession.attach(
+        {
+          register: async () => f.state,
+          sync: async () => ({ ...f.state }),
+          report,
+        },
+        f.adapter,
+        "injection",
+      );
+      expect(await session!.inspect(confirm())).toBe("continue");
+      await f.respond(paymentIntent());
+      expect(await session!.inspect(challenge())).toBe("capture");
+      const finished = session!.wait();
+      Object.assign(f.state, {
+        launchClaimed: true,
+        nativeReturnAvailable: true,
+        nativeReturnProtocol: "stripe_3ds2",
+      });
+      await jest.advanceTimersByTimeAsync(2000);
+      expect(session!.current().interactionReturned).toBe(true);
+      expect(session!.current()).not.toHaveProperty("nativeReturn");
+      expect(session!.current().observation).toBeUndefined();
+      expect(await session!.inspect(confirm())).toBe("block");
+      const url = "https://api.stripe.com/v1/3ds2/challenge_complete";
+      expect(
+        await session!.inspect(
+          confirm({ url, body: "source=src_demo", networkId: "complete" }),
+        ),
+      ).toBe("continue");
+      if (outcome === "failed") {
+        await f.respond(
+          { error: { code: "payment_intent_authentication_failure" } },
+          "complete",
+          url,
+        );
+      } else {
+        const url = confirmUrl.replace("/confirm", "");
+        expect(
+          await session!.inspect(
+            confirm({ url, method: "GET", body: "", networkId: "retrieve" }),
+          ),
+        ).toBe("continue");
+        await f.respond(
+          paymentIntent({ status: "succeeded", next_action: null }),
+          "retrieve",
+          url,
+        );
+      }
+      await jest.advanceTimersByTimeAsync(4000);
+      expect((await finished).observation).toEqual({
+        outcome,
+        source: "runner",
+      });
+      expect(report.mock.calls.map(([, input]) => input.kind)).toEqual([
+        "challenge_observed",
+        "continuation_started",
+        "interaction_resumed",
+        "checkout_observed",
+      ]);
+      expect(
+        f.send.mock.calls.filter(
+          ([method]) => method === "Runtime.callFunctionOn",
+        ),
+      ).toHaveLength(1);
+      await session!.close();
+    },
+  );
+
   it("exports the adapter factory and captures only the original supported bank POST", async () => {
     const f = fixture();
     expect(f.adapter).toBeInstanceOf(StripePaymentElementVerification);
     await f.start();
     const request = challenge();
     expect(await f.adapter.inspect(request)).toEqual({
-      capture: { url: request.url, body: request.body },
+      capture: {
+        url: request.url,
+        body: request.body,
+        nativeReturn: "stripe_3ds2",
+      },
     });
     expect(await f.adapter.reconcile(f.state)).toBeNull();
     expect(
@@ -515,6 +920,7 @@ describe("Stripe Payment Element verification on the existing browser", () => {
       capture: {
         url: challenge().url,
         body: challenge().body,
+        nativeReturn: "stripe_3ds2",
       },
     });
   });
@@ -567,7 +973,7 @@ describe("Stripe Payment Element verification on the existing browser", () => {
                 frame: {
                   id: "auth",
                   parentId,
-                  url: "https://hooks.stripe.com/3d_secure_2/hosted",
+                  url: "https://js.stripe.com/v3/three-ds-2-challenge-abc123.html",
                 },
               },
             };
@@ -615,7 +1021,13 @@ describe("Stripe Payment Element verification on the existing browser", () => {
       const request = challenge({ sessionId: "acs-session" });
       expect(await f.adapter.inspect(request)).toEqual(
         parentId === "checkout"
-          ? { capture: { url: request.url, body: request.body } }
+          ? {
+              capture: {
+                url: request.url,
+                body: request.body,
+                nativeReturn: "stripe_3ds2",
+              },
+            }
           : "fallback",
       );
     },

@@ -4,6 +4,7 @@ import { MerchantFrames, type Frame } from "./merchant-frame.js";
 import { supportedCReq } from "./three-d-secure.js";
 import type {
   CheckoutObservation,
+  NativeReturn,
   VerificationAdapter,
   VerificationAdapterFactory,
   VerificationRelayContext,
@@ -45,8 +46,23 @@ type ResponseRequest = {
   kind: "confirm" | "retrieve" | "auth";
   ready?: boolean;
 };
+type Challenge = {
+  frame: Frame;
+  source: string;
+  acsTransID: string;
+  threeDSServerTransID: string;
+  messageVersion: string;
+};
 
-/** Passive Stripe PE observation; only supported, bound CReq POSTs transfer ownership. */
+const stripeChallengeFrame = (frame: Frame) => {
+  const url = new URL(frame.url);
+  return (
+    url.origin === "https://js.stripe.com" &&
+    /^\/v3\/three-ds-2-challenge-[a-f0-9]+\.html$/.test(url.pathname)
+  );
+};
+
+/** Bound Stripe PE capture and one-use native return on the original browser. */
 export class StripePaymentElementVerification
   extends MerchantFrames
   implements VerificationAdapter
@@ -56,6 +72,8 @@ export class StripePaymentElementVerification
   private submittedIntent?: string;
   private challengeExpected = false;
   private authSource?: string;
+  private challenge?: Challenge;
+  private returnAttempted = false;
   private observation?: CheckoutObservation;
   private disposed = false;
   private readonly requests = new Map<string, ResponseRequest>();
@@ -158,15 +176,35 @@ export class StripePaymentElementVerification
       url.origin !== state.merchantOrigin &&
       (form?.has("creq") ||
         (body && ("creq" in body || body.messageType === "CReq")));
+    const completing =
+      url.origin === "https://api.stripe.com" &&
+      url.pathname === "/v1/3ds2/challenge_complete" &&
+      request.method === "POST";
     const auth =
       url.origin === "https://api.stripe.com" &&
       /^\/v1\/3ds2\/(authenticate|challenge_complete)$/.test(url.pathname) &&
       request.method === "POST";
     if (
-      (confirming || bankPost || auth) &&
+      (confirming || bankPost || (auth && !completing)) &&
       (state.challengeCaptured || state.launchClaimed)
     )
       return "block" as const;
+    if (completing && (state.challengeCaptured || state.launchClaimed)) {
+      const challenge = this.challenge;
+      const checkout = await this.checkout;
+      if (
+        !challenge ||
+        !checkout ||
+        !this.returnAttempted ||
+        !state.continuationClaimed ||
+        !request.networkId ||
+        (body?.source ?? form?.get("source")) !== challenge.source ||
+        !(await this.descendant(checkout, request, false).catch(() => false))
+      )
+        return "block" as const;
+      this.track(request, "auth");
+      return "continue" as const;
+    }
     if (
       !confirming &&
       !bankPost &&
@@ -229,19 +267,33 @@ export class StripePaymentElementVerification
         !supportedCReq(form.get("creq") ?? "")
       )
         return "fallback" as const;
-      const stripeFrame =
-        (await this.merchantAncestor(request, "https://hooks.stripe.com").catch(
-          () => undefined,
-        )) ??
-        (await this.merchantAncestor(request, "https://js.stripe.com").catch(
-          () => undefined,
-        ));
+      const stripeFrame = await this.merchantAncestor(
+        request,
+        "https://js.stripe.com",
+      ).catch(() => undefined);
       if (
         !stripeFrame ||
-        !/3d_secure_2|3ds2/.test(new URL(stripeFrame.url).pathname)
+        !stripeChallengeFrame(stripeFrame) ||
+        !this.authSource
       )
         return "fallback" as const;
-      return { capture: { url: request.url, body: request.body } };
+      const message = JSON.parse(
+        Buffer.from(form.get("creq")!, "base64url").toString("utf8"),
+      );
+      this.challenge = {
+        frame: stripeFrame,
+        source: this.authSource,
+        acsTransID: message.acsTransID,
+        threeDSServerTransID: message.threeDSServerTransID,
+        messageVersion: message.messageVersion,
+      };
+      return {
+        capture: {
+          url: request.url,
+          body: request.body,
+          nativeReturn: "stripe_3ds2" as const,
+        },
+      };
     }
     if (this.submittedIntent && stripe?.[1] === this.submittedIntent)
       this.track(request, "retrieve");
@@ -252,6 +304,91 @@ export class StripePaymentElementVerification
     )
       this.track(request, "auth");
     return "continue" as const;
+  }
+
+  async continuation() {
+    const state = this.state();
+    const challenge = this.challenge;
+    const checkout = await this.checkout;
+    if (
+      this.disposed ||
+      !state ||
+      !challenge ||
+      !checkout ||
+      Date.now() >= Date.parse(state.expiresAt) ||
+      !state.challengeCaptured ||
+      !state.launchClaimed ||
+      state.continuationClaimed ||
+      !state.nativeReturnAvailable ||
+      state.nativeReturnProtocol !== "stripe_3ds2" ||
+      this.returnAttempted ||
+      this.observation ||
+      !(await this.descendant(checkout, challenge.frame, false).catch(
+        () => false,
+      ))
+    )
+      return null;
+    return async (
+      result?: NativeReturn,
+    ): Promise<{ interactionReturned: true }> => {
+      const current = this.state();
+      if (
+        this.disposed ||
+        this.returnAttempted ||
+        this.observation ||
+        !current?.continuationClaimed ||
+        !current.launchClaimed ||
+        !current.challengeCaptured ||
+        current.merchantOrigin !== state.merchantOrigin ||
+        Date.now() >= Date.parse(current.expiresAt) ||
+        result?.protocol !== "stripe_3ds2" ||
+        result.cres.length > 16384 ||
+        !/^[A-Za-z0-9_+/-]+={0,2}$/.test(result.cres)
+      )
+        throw new Error("Stripe native return unavailable");
+      const decoded = Buffer.from(result.cres, "base64url");
+      const message = json(decoded.toString("utf8"));
+      if (
+        !message ||
+        message.messageType !== "CRes" ||
+        decoded.toString("base64url") !==
+          result.cres
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/, "") ||
+        message.acsTransID !== challenge.acsTransID ||
+        message.threeDSServerTransID !== challenge.threeDSServerTransID ||
+        message.messageVersion !== challenge.messageVersion ||
+        message.challengeCompletionInd !== "Y" ||
+        !["Y", "N"].includes(String(message.transStatus)) ||
+        !(await this.descendant(checkout, challenge.frame, false).catch(
+          () => false,
+        ))
+      )
+        throw new Error("Stripe native return binding mismatch");
+      // Claim locally before delivery: an ambiguous CDP outcome must never redeliver CRes.
+      if (
+        this.returnAttempted ||
+        this.disposed ||
+        this.observation ||
+        !this.state()?.continuationClaimed ||
+        Date.now() >= Date.parse(this.state()!.expiresAt)
+      )
+        throw new Error("Stripe native return consumed");
+      this.returnAttempted = true;
+      const delivered = await this.evaluate(
+        challenge.frame,
+        `(frameUrl, cres) => {
+          if (location.href !== frameUrl) return false;
+          window.postMessage({type: '3ds2-trampoline', data: cres}, location.origin);
+          return true;
+        }`,
+        [challenge.frame.url, decoded.toString("base64")],
+      );
+      if (delivered !== true)
+        throw new Error("Stripe native return frame changed");
+      return { interactionReturned: true };
+    };
   }
 
   async reconcile(
@@ -277,6 +414,7 @@ export class StripePaymentElementVerification
     this.cardSession = undefined;
     this.checkout = undefined;
     this.authSource = undefined;
+    this.challenge = undefined;
     this.challengeExpected = false;
   }
 
@@ -421,7 +559,10 @@ export class StripePaymentElementVerification
         String(sdk?.type),
       );
     this.authSource = this.challengeExpected
-      ? id(sdk?.three_d_secure_2_source)
+      ? (id(sdk?.three_d_secure_2_source) ??
+        (isRecord(sdk?.stripe_js)
+          ? id(sdk.stripe_js.three_d_secure_2_source)
+          : undefined))
       : undefined;
   }
 }
