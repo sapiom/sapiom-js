@@ -4,9 +4,9 @@
   "private": true,
   "description": "Sapiom SDK example using Axios",
   "scripts": {
-    "start": "npx tsx index-free.ts",
-    "free": "npx tsx index-free.ts",
-    "full": "npx tsx index.ts"
+    "start": "node ../run-local-demo.mjs index-free.ts",
+    "free": "node ../run-local-demo.mjs index-free.ts",
+    "full": "node ../run-local-demo.mjs index.ts"
   },
   "dependencies": {
     "@sapiom/axios": "latest",

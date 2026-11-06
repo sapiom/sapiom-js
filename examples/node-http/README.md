@@ -22,6 +22,8 @@ npm run free    # Same as above
 npm run full    # All endpoints including paid (requires balance)
 ```
 
+`npm start`, `npm run free`, and `npm run full` start the local demo server automatically and set `DUMMY_SERVER_URL=http://localhost:3101` for the run. Override `DUMMY_SERVER_URL` only when you want to test against another compatible server.
+
 ## What This Shows
 
 - Create a Sapiom HTTP client with `createClient()`
