@@ -94,6 +94,8 @@ export interface TransactionResponse {
     version?: number;
     expiresAt?: string;
     status: string;
+    /** Runner acknowledged native return; authentication and merchant order remain separate evidence. */
+    interactionReturned?: boolean;
     authentication:
       | "unknown"
       | "successful"

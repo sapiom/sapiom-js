@@ -26,6 +26,11 @@ expires. A buyer action URL is a credential: deliver it privately and do not log
 
 `handle.verification.current()` supplies sourced status, and `.wait()` resolves on an ended,
 canceled, expired or lost observation. A challenge/SDK completion is not a payment result.
+`interactionReturned: true` acknowledges delivery into the original native verifier. An `ended`
+status alone does not authorize resuming automation: expiry, binding changes or uncertain delivery
+can end observation without that acknowledgment. Keep `authentication` unknown and confirm an
+order independently. A custom relay wrapper must forward the original relay's `.verification`
+capability as well as `.relay()`. Native bank results never appear in `current()` or `wait()`.
 No verification operation creates another purchase or sends another card. Unsupported/custom
 relay integrations retain their existing behavior; the standard HTTP relay reuses its existing
 transaction and credential configuration. Do not detach the current interceptor while an active
