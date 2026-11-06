@@ -85,7 +85,13 @@ const MAX_FILES = 30;
 const MAX_COMMANDS = 10;
 const MAX_COMMAND_CHARS = 120;
 
-/** The marker `truncateForPayload` (core/collector/normalizer.ts) leaves. */
+/**
+ * Fixed marker `clamp` appends when it cuts text short. Deliberately distinct
+ * from `truncateForPayload`'s `…[truncated N chars]` (core/collector/normalizer.ts)
+ * — that one records a dropped-char count computed by the collector; this one
+ * has no count to report (the resume brief clamps for display, not storage
+ * accounting), so it stays a plain, fixed string.
+ */
 const CLAMP_MARKER = "…[truncated]";
 
 /** The workflow the prior session was bound to, resolved by the caller against
@@ -120,12 +126,18 @@ export function estimateBriefTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-/** Clamp `text` to `maxChars`, marking the cut so nothing reads as complete
- *  when it isn't. */
+/**
+ * Clamp `text` to `maxChars` TOTAL (content + marker), marking the cut so
+ * nothing reads as complete when it isn't. CLAMP_MARKER's length is fixed
+ * (unlike a "chars dropped" marker whose length depends on where the slice
+ * lands), so a single subtraction — not a converging loop — correctly
+ * reserves room for it within maxChars.
+ */
 function clamp(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
-  return `${trimmed.slice(0, maxChars).trimEnd()}${CLAMP_MARKER}`;
+  const sliceLen = Math.max(0, maxChars - CLAMP_MARKER.length);
+  return `${trimmed.slice(0, sliceLen).trimEnd()}${CLAMP_MARKER}`.slice(0, maxChars);
 }
 
 /**
@@ -409,7 +421,9 @@ export function buildResumeBrief(
   //    pass strictly shortens `summaryText`, so this terminates.
   while (summaryText.length > 0 && over()) {
     const overflow = assemble().length - budgetChars;
-    summaryText = clamp(summaryText, Math.max(0, summaryText.length - overflow - CLAMP_MARKER.length));
+    // clamp() now self-enforces its own total-length bound, so no need to
+    // pre-subtract CLAMP_MARKER.length here the way this had to before.
+    summaryText = clamp(summaryText, Math.max(0, summaryText.length - overflow));
     if (summaryText === CLAMP_MARKER) summaryText = "";
   }
 
