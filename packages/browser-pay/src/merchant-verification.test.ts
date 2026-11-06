@@ -87,9 +87,12 @@ function fixture(
 beforeEach(() => {
   jest.spyOn(NativeCardinal.prototype, "enableLookup").mockResolvedValue({});
   jest.spyOn(NativeCardinal.prototype, "watchLookup").mockResolvedValue();
-  jest
-    .spyOn(NativeCardinal.prototype, "lookupNonce")
-    .mockResolvedValue("upgraded");
+  jest.spyOn(NativeCardinal.prototype, "lookupChallenge").mockResolvedValue({
+    nonce: "upgraded",
+    acsUrl: challenge.url,
+    acsTransactionId: "11111111-1111-4111-8111-111111111111",
+    threeDSecureServerTransactionId: "22222222-2222-4222-8222-222222222222",
+  });
   jest.spyOn(NativeCardinal.prototype, "bind").mockResolvedValue({
     frame: {
       frameId: "checkout",
@@ -372,3 +375,128 @@ it.each(["%0A", "%00", "%FF", "%E2%82%AC"])(
     await f.adapter.dispose();
   },
 );
+
+it("rechecks takeover after lookup ancestry inspection waits", async () => {
+  const f = fixture();
+  await f.adapter.inspect(lookup);
+  const tree = await f.send();
+  let release!: (value: typeof tree) => void;
+  f.send.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const later = f.adapter.inspect({ ...lookup, networkId: "later-lookup" });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(await f.adapter.inspect(challenge)).toEqual({
+    capture: expect.anything(),
+  });
+  release(tree);
+  expect(await later).toBe("block");
+  await f.adapter.dispose();
+});
+it.each([' {"messageType":"CReq"}', '\t\n\r{"creq":"unsupported"}'])(
+  "fences whitespace-prefixed JSON challenge markers after capture: %j",
+  async (body) => {
+    const f = fixture();
+    await f.adapter.inspect(lookup);
+    await f.adapter.inspect(challenge);
+    expect(await f.adapter.inspect({ ...challenge, body })).toBe("block");
+    await f.adapter.dispose();
+  },
+);
+it.each(["url", "acsTransID", "threeDSServerTransID"])(
+  "preserves the capture slot for the tracked lookup when another challenge differs in %s",
+  async (field) => {
+    const f = fixture();
+    await f.adapter.inspect(lookup);
+    const form = new URLSearchParams(challenge.body);
+    const creq = JSON.parse(
+      Buffer.from(form.get("creq")!, "base64url").toString("utf8"),
+    );
+    if (field !== "url") {
+      creq[field] = "33333333-3333-4333-8333-333333333333";
+      form.set("creq", Buffer.from(JSON.stringify(creq)).toString("base64url"));
+    }
+    expect(
+      await f.adapter.inspect({
+        ...challenge,
+        url:
+          field === "url"
+            ? "https://bank.example/other-challenge"
+            : challenge.url,
+        body: form.toString(),
+      }),
+    ).toBe("continue");
+    expect(NativeCardinal.prototype.bind).not.toHaveBeenCalled();
+    expect(await f.adapter.inspect(challenge)).toEqual({
+      capture: expect.anything(),
+    });
+    await f.adapter.dispose();
+  },
+);
+
+it.each(["ancestry", "lookup", "binding"])(
+  "admits only one capture while a competing challenge waits for %s",
+  async (stage) => {
+    const f = fixture();
+    await f.adapter.inspect(lookup);
+    const tree = await f.send();
+    const lookupResult = await NativeCardinal.prototype.lookupChallenge();
+    const target = await NativeCardinal.prototype.bind(
+      { sessionId: "session", frameId: "checkout", url: origin + "/checkout" },
+      "upgraded",
+    );
+    jest.mocked(NativeCardinal.prototype.bind).mockClear();
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pause = async () => {
+      started();
+      await gate;
+    };
+    if (stage === "ancestry")
+      f.send.mockImplementationOnce(async () => {
+        await pause();
+        return tree;
+      });
+    else if (stage === "lookup")
+      jest
+        .mocked(NativeCardinal.prototype.lookupChallenge)
+        .mockImplementationOnce(async () => {
+          await pause();
+          return lookupResult;
+        });
+    else
+      jest
+        .mocked(NativeCardinal.prototype.bind)
+        .mockImplementationOnce(async () => {
+          await pause();
+          return target;
+        });
+    const waiting = f.adapter.inspect(challenge);
+    await entered;
+    expect(await f.adapter.inspect(challenge)).toEqual({
+      capture: expect.anything(),
+    });
+    release();
+    expect(await waiting).toBe("block");
+    await f.adapter.dispose();
+  },
+);
+it("keeps the original checkout native when lookup challenge identities are unavailable", async () => {
+  const f = fixture();
+  await f.adapter.inspect(lookup);
+  jest
+    .mocked(NativeCardinal.prototype.lookupChallenge)
+    .mockResolvedValue(undefined);
+  expect(await f.adapter.inspect(challenge)).toBe("fallback");
+  expect(NativeCardinal.prototype.bind).not.toHaveBeenCalled();
+  await f.adapter.dispose();
+});

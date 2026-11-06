@@ -3,6 +3,7 @@ import {
   readNativeLookup,
   waitNativeLookup,
   type NativeLookup,
+  type NativeLookupChallenge,
 } from "./native-lookup.js";
 import type { CdpConnection } from "./cdp.js";
 import type { Frame } from "./merchant-frame.js";
@@ -124,8 +125,8 @@ export class NativeCardinal {
   async watchLookup(request: VerificationRequest) {
     if (this.lookup || !request.networkId)
       throw new Error("Native lookup unavailable");
-    let resolve!: (nonce?: string) => void;
-    const result = new Promise<string | undefined>((done) => {
+    let resolve!: (challenge?: NativeLookupChallenge) => void;
+    const result = new Promise<NativeLookupChallenge | undefined>((done) => {
       resolve = done;
     });
     this.lookup = {
@@ -144,7 +145,7 @@ export class NativeCardinal {
     }
   }
 
-  lookupNonce() {
+  lookupChallenge() {
     return waitNativeLookup(this.lookup);
   }
 

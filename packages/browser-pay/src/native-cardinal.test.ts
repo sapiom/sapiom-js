@@ -1,11 +1,26 @@
 import { NativeCardinal } from "./native-cardinal";
 import type { CdpEvent } from "./cdp";
+const lookupResult = {
+  nonce: "upgraded-original",
+  acsUrl: "https://bank.example/challenge",
+  acsTransactionId: "11111111-1111-4111-8111-111111111111",
+  threeDSecureServerTransactionId: "22222222-2222-4222-8222-222222222222",
+};
+const lookupBody = {
+  paymentMethod: { nonce: lookupResult.nonce },
+  lookup: { acsUrl: lookupResult.acsUrl },
+  threeDSecureInfo: {
+    acsTransactionId: lookupResult.acsTransactionId,
+    threeDSecureServerTransactionId:
+      lookupResult.threeDSecureServerTransactionId,
+  },
+};
 function observer() {
   let event!: (event: CdpEvent) => void;
   const send = jest.fn(async (method: string) => {
     if (method === "Network.getResponseBody")
       return {
-        body: JSON.stringify({ paymentMethod: { nonce: "upgraded-original" } }),
+        body: JSON.stringify(lookupBody),
       };
     return {};
   });
@@ -42,7 +57,7 @@ it("binds a successful original lookup response, including HTTP 201, to its upgr
     requestId: "exact-request",
     encodedDataLength: 3000,
   });
-  expect(await o.native.lookupNonce()).toBe("upgraded-original");
+  expect(await o.native.lookupChallenge()).toEqual(lookupResult);
   expect(o.send).toHaveBeenCalledWith(
     "Network.getResponseBody",
     { requestId: "exact-request" },
@@ -81,7 +96,7 @@ it("ignores other sessions/requests and rejects oversized or unsuccessful lookup
     requestId: "exact-request",
     encodedDataLength: 100000,
   });
-  expect(await o.native.lookupNonce()).toBeUndefined();
+  expect(await o.native.lookupChallenge()).toBeUndefined();
   await o.native.dispose();
 });
 it("leaves an unknown native runtime unsupported before capture", async () => {
@@ -99,3 +114,60 @@ it("leaves an unknown native runtime unsupported before capture", async () => {
   ).rejects.toThrow("context unavailable");
   await o.native.dispose();
 });
+
+it.each([
+  { ...lookupBody, lookup: {} },
+  { ...lookupBody, lookup: { acsUrl: "" } },
+  {
+    ...lookupBody,
+    threeDSecureInfo: { ...lookupBody.threeDSecureInfo, acsTransactionId: "" },
+  },
+  {
+    ...lookupBody,
+    threeDSecureInfo: { acsTransactionId: lookupResult.acsTransactionId },
+  },
+  { ...lookupBody, errors: { code: "lookup_rejected" } },
+  { ...lookupBody, errors: [{ code: "lookup_rejected" }] },
+])("rejects an unbound or rejected lookup response: %j", async (body) => {
+  const o = observer();
+  o.send.mockImplementation(async (method) =>
+    method === "Network.getResponseBody" ? { body: JSON.stringify(body) } : {},
+  );
+  await o.native.watchLookup(o.lookup);
+  o.emit("Network.responseReceived", {
+    requestId: "exact-request",
+    response: { url: o.lookup.url, status: 200 },
+  });
+  o.emit("Network.loadingFinished", {
+    requestId: "exact-request",
+    encodedDataLength: 3000,
+  });
+  expect(await o.native.lookupChallenge()).toBeUndefined();
+  await o.native.dispose();
+});
+it.each([false, true])(
+  "retains bound lookup identities with an empty errors array (base64=%s)",
+  async (base64Encoded) => {
+    const o = observer();
+    const text = JSON.stringify({ ...lookupBody, errors: [] });
+    o.send.mockImplementation(async (method) =>
+      method === "Network.getResponseBody"
+        ? {
+            body: base64Encoded ? Buffer.from(text).toString("base64") : text,
+            base64Encoded,
+          }
+        : {},
+    );
+    await o.native.watchLookup(o.lookup);
+    o.emit("Network.responseReceived", {
+      requestId: "exact-request",
+      response: { url: o.lookup.url, status: 200 },
+    });
+    o.emit("Network.loadingFinished", {
+      requestId: "exact-request",
+      encodedDataLength: 3000,
+    });
+    expect(await o.native.lookupChallenge()).toEqual(lookupResult);
+    await o.native.dispose();
+  },
+);

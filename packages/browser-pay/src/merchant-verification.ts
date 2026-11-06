@@ -107,8 +107,12 @@ export class MerchantVerification
     const url = new URL(request.url);
     if (this.pin) this.checkout = await this.pin;
     const checkout = this.checkout;
-    const captured =
-      this.target || state.challengeCaptured || state.launchClaimed;
+    const captured = () => {
+      const current = this.state();
+      return (
+        this.target || current?.challengeCaptured || current?.launchClaimed
+      );
+    };
     if (
       checkout &&
       this.nonce &&
@@ -118,14 +122,8 @@ export class MerchantVerification
       )
     ) {
       if (
-        captured &&
-        (await this.samePage(checkout, request).catch(() => undefined)) !==
-          false
-      )
-        return "block" as const;
-      if (
-        !state.challengeCaptured &&
-        (await this.descendant(checkout, request, false))
+        (await this.descendant(checkout, request, false).catch(() => false)) &&
+        !captured()
       ) {
         const body = JSON.parse(request.body);
         if (
@@ -141,10 +139,16 @@ export class MerchantVerification
           }
         }
       }
+      if (
+        captured() &&
+        (await this.samePage(checkout, request).catch(() => undefined)) !==
+          false
+      )
+        return "block" as const;
       return "continue" as const;
     }
     let jsonChallenge = false;
-    if (request.body.startsWith("{")) {
+    if (/^[\t\n\r ]*\{/.test(request.body)) {
       try {
         const body = JSON.parse(request.body);
         jsonChallenge =
@@ -158,17 +162,22 @@ export class MerchantVerification
     }
     if (!jsonChallenge && !new URLSearchParams(request.body).has("creq"))
       return "continue" as const;
-    if (captured)
+    if (captured())
       return checkout &&
         (await this.samePage(checkout, request).catch(() => undefined)) ===
           false
         ? ("continue" as const)
         : ("block" as const);
-    if (
-      !checkout ||
-      !(await this.descendant(checkout, request, false).catch(() => false))
-    )
-      return "continue" as const;
+    if (!checkout) return "continue" as const;
+    const owned = await this.descendant(checkout, request, false).catch(
+      () => false,
+    );
+    if (captured())
+      return (await this.samePage(checkout, request).catch(() => undefined)) ===
+        false
+        ? ("continue" as const)
+        : ("block" as const);
+    if (!owned) return "continue" as const;
     if (
       jsonChallenge ||
       this.mode !== "braintree" ||
@@ -197,11 +206,23 @@ export class MerchantVerification
       return "fallback" as const;
     if (!supportedCReq(form.get("creq")!)) return "fallback" as const;
     try {
-      const nonce = await this.native.lookupNonce();
-      if (!nonce) return "fallback" as const;
-      this.target = await this.native.bind(checkout, nonce);
+      const lookup = await this.native.lookupChallenge();
+      if (captured()) return "block" as const;
+      if (!lookup) return "fallback" as const;
+      const creq = JSON.parse(
+        Buffer.from(form.get("creq")!, "base64url").toString("utf8"),
+      );
+      if (
+        request.url !== lookup.acsUrl ||
+        creq.acsTransID !== lookup.acsTransactionId ||
+        creq.threeDSServerTransID !== lookup.threeDSecureServerTransactionId
+      )
+        return "continue" as const;
+      const target = await this.native.bind(checkout, lookup.nonce);
+      if (captured()) return "block" as const;
+      this.target = target;
     } catch {
-      return "fallback" as const;
+      return captured() ? ("block" as const) : ("fallback" as const);
     }
     return {
       capture: {

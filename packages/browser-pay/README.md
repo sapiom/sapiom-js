@@ -259,7 +259,9 @@ The initial additional composition is Braintree Web **3.139.0** with Cardinal **
 qualified in Chromium against its USD sandbox. This is separate from generic card-relay support.
 The observer pins the relayed token's merchant frame tree and exact 3DS lookup, including the
 upgraded native nonce. It admits only known native callback implementations before capturing
-one complete `creq` + `threeDSSessionData` form. Other SDK versions, protocols, frame lineages
+one complete `creq` + `threeDSSessionData` form. The form's ACS URL and both CReq transaction
+identifiers must match the original lookup response. Missing lookup identities preserve native
+checkout; another challenge cannot consume the tracked verifier's capture slot. Other SDK versions, protocols, frame lineages
 or amounts retain native checkout before capture. No browser/session/proxy settings change.
 
 The private hosted page preserves those form values and transports the genuine opaque Cardinal
