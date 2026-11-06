@@ -94,6 +94,31 @@ function isChallengeRequest(
 export const verificationIsActive = (state: VerificationState) =>
   ["preparing", "requires_action", "checking"].includes(state.status);
 
+const publicVerificationState = (
+  state: VerificationState,
+): VerificationState => ({
+  id: state.id,
+  version: state.version,
+  status: state.status,
+  expiresAt: state.expiresAt,
+  challengeCaptured: state.challengeCaptured,
+  launchClaimed: state.launchClaimed,
+  checkRequested: state.checkRequested,
+  continuationClaimed: state.continuationClaimed,
+  merchantOrigin: state.merchantOrigin,
+  total: { amount: state.total.amount, currency: state.total.currency },
+  ...(state.actionUrl !== undefined && { actionUrl: state.actionUrl }),
+  ...(state.observation && {
+    observation: {
+      outcome: state.observation.outcome,
+      source: state.observation.source,
+      ...(state.observation.confirmation !== undefined && {
+        confirmation: state.observation.confirmation,
+      }),
+    },
+  }),
+});
+
 /** Fixed-purpose observer on the existing browser; it never creates or closes a browser session. */
 export class VerificationSession implements VerificationHandle {
   private timer?: ReturnType<typeof setInterval>;
@@ -150,7 +175,7 @@ export class VerificationSession implements VerificationHandle {
     return observer;
   }
   current() {
-    return { ...this.state };
+    return publicVerificationState(this.state);
   }
   submissionBlocked() {
     return (
@@ -371,8 +396,8 @@ export class VerificationSession implements VerificationHandle {
       return;
     this.state =
       this.closed && verificationIsActive(state)
-        ? { ...state, status: "error" }
-        : state;
+        ? { ...publicVerificationState(state), status: "error" }
+        : publicVerificationState(state);
     if (!verificationIsActive(state)) {
       if (!this.disposed) {
         this.disposed = true;
@@ -455,7 +480,7 @@ export function verificationTransport(
     ) {
       throw new Error("Unreadable purchase verification response");
     }
-    return data as VerificationState;
+    return publicVerificationState(data);
   };
   return {
     register: (injectionRef, browserRef) =>

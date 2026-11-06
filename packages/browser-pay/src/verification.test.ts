@@ -22,6 +22,115 @@ const initial = (): VerificationState => ({
 });
 describe("Existing-browser verification observation", () => {
   afterEach(() => jest.useRealTimers());
+  it("exposes only documented state through HTTP transport and observer handles", async () => {
+    const clean: VerificationState = {
+      ...initial(),
+      status: "ended",
+      actionUrl: "https://buyer.example/verify#private-link",
+      observation: {
+        outcome: "confirmed",
+        source: "runner",
+        confirmation: "ORDER123",
+      },
+    };
+    const extra = {
+      ...clean,
+      privateBankData: { result: "private-result" },
+      total: { ...clean.total, privateBankData: "private-total" },
+      observation: {
+        ...clean.observation!,
+        privateBankData: "private-observation",
+      },
+    };
+    const http = verificationTransport(
+      async () => new Response(JSON.stringify(extra)),
+    );
+    expect(await http.register("injection", "browser")).toEqual(clean);
+    expect(await http.sync(clean.id)).toEqual(clean);
+    expect(await http.report(clean.id, {})).toEqual(clean);
+    const observer = await VerificationSession.attach(
+      {
+        register: async () => extra,
+        sync: async () => extra,
+        report: async () => extra,
+      },
+      {
+        inspect: async () => "continue",
+        relayed() {},
+        reconcile: async () => null,
+      },
+      "injection",
+    );
+    const current = observer!.current();
+    expect(current).toEqual(clean);
+    current.total.amount = "99.00";
+    current.observation!.confirmation = "CHANGED";
+    expect(await observer!.wait()).toEqual(clean);
+    await observer!.close();
+  });
+
+  it("reconciles a receipt after an ambiguous continuation without repeating it", async () => {
+    jest.useFakeTimers();
+    let state: VerificationState = {
+      ...initial(),
+      status: "checking",
+      challengeCaptured: true,
+      launchClaimed: true,
+    };
+    const resume = jest.fn(async () => {
+      throw new Error("CDP reply lost");
+    });
+    const report = jest.fn(async (_id, input) => {
+      state = {
+        ...state,
+        version: state.version + 1,
+        ...(input.kind === "continuation_started" && {
+          continuationClaimed: true,
+        }),
+        ...(input.kind === "checkout_observed" && {
+          status: "ended" as const,
+          observation: {
+            outcome: "confirmed" as const,
+            source: "runner" as const,
+          },
+        }),
+      };
+      return state;
+    });
+    const reconcile = jest
+      .fn<ReturnType<VerificationAdapter["reconcile"]>, []>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        outcome: "confirmed",
+        cardSession: "same",
+        amount: "11.00",
+        currency: "USD",
+      });
+    const observer = await VerificationSession.attach(
+      { register: async () => state, sync: async () => state, report },
+      {
+        inspect: async () => "continue",
+        relayed() {},
+        reconcile,
+        continuation: async () => resume,
+      },
+      "injection",
+    );
+    await jest.advanceTimersByTimeAsync(4000);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(observer!.current().continuationClaimed).toBe(true);
+    expect(observer!.current().observation).toBeUndefined();
+    await jest.advanceTimersByTimeAsync(2000);
+    expect((await observer!.wait()).observation?.outcome).toBe("confirmed");
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls.map(([, input]) => input.kind)).toEqual([
+      "continuation_started",
+      "checkout_observed",
+    ]);
+    await observer!.close();
+  });
+
   it.each(["unavailable", "failed"] as const)(
     "settles %s registration even when adapter cleanup never settles",
     async (mode) => {

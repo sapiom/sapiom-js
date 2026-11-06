@@ -8,3 +8,5 @@ Remove the unreleased Braintree/Cardinal native return implementation and acknow
 Prevent another credential relay after challenge capture is reserved, recorded, or launched, while preserving readback of an existing relay. Keep unavailable or failed observer registration from waiting on stalled adapter cleanup.
 
 Recognize the receipt-query revision observed in the retained Shopify checkout, with the same card-session, receipt and amount validation.
+
+Project verification responses and observer handles onto their documented fields so extra transport data is not retained or exposed.
