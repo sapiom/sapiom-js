@@ -82,6 +82,9 @@ function verifier(
   };
 }
 describe("guarded delivery to the existing native verifier", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
   it("uses the pinned pending promise and nonce, validates once, acknowledges and restores its wrapper", async () => {
     const native = verifier();
     await expect(native.call()).resolves.toBe(true);
