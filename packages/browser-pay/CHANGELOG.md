@@ -11,8 +11,7 @@
   Match the backend's whole-number `maxWaitSeconds` range of 0 to 25 and keep HTTP
   deadlines active through response-body reads. Report body-read aborts as timeouts
   without retrying. Skip polling timers for verification sessions that register in
-  a terminal state, and mark the adapter hook internal until U6 defines general
-  checkout integration.
+  a terminal state, and keep the adapter hook internal for now.
 
 - 427aa77: Automatically observe supported Shopify merchant challenges on the existing browser, wait for the native completion callback and reconcile the same card-session receipt without repeating the checkout submission.
 
@@ -22,7 +21,7 @@
 
   Validate the CReq encoding, padding and supported message schema before capture. If optional verification registration fails, keep the existing checkout relay path available without a verification observer.
 
-  Follow the human review's registration fallback policy for every error, including observer mismatches. With no optional observer, the interceptor preserves native Shopify submissions without blocking other merchant tabs. A registered observer retains its capture and takeover fences; the SDK never initiates another Pay to resolve uncertainty.
+  Keep the native checkout on every registration error, including observer mismatches. With no optional observer, the interceptor preserves native Shopify submissions without blocking other merchant tabs. A registered observer retains its capture and takeover fences; the SDK never initiates another Pay to resolve uncertainty.
 
   Resolve challenge ancestry across browser sessions and support the verified current Shopify receipt query alongside the prior version. Before managed capture, unsupported checkout shapes and definite capture refusals preserve the native browser flow. Ambiguous reports retain the capture fence even when a later retry is refused.
 
@@ -59,7 +58,7 @@
 - Continue supported Shopify bank verification on the original browser with a one-use native callback and correlated receipt observation.
 
 - Add transaction-bound verification observation over the existing browser CDP and relay credential channel. Preserve card-send retry fences and separate interaction from authentication and payment evidence.
-- Keep the verification adapter hook internal until U6 defines general checkout integration, and avoid starting a polling timer when registration already returns a terminal session.
+- Keep the verification adapter hook internal for now, and avoid starting a polling timer when registration already returns a terminal session.
 
 ## 0.4.0
 

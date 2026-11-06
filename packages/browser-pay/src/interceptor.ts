@@ -27,7 +27,7 @@ import {
 export interface AttachOptions {
   /**
    * Optional integration adapter; standard profiles supply their adapter without another browser setup.
-   * @internal Until U6 defines how other checkouts provide adapters.
+   * @internal Not yet a supported option for other checkouts.
    */
   verificationAdapter?: VerificationAdapterFactory;
   relay: PaymentRelay;
