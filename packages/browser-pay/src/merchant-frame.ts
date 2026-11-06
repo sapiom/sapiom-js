@@ -141,6 +141,29 @@ export class MerchantFrames {
     return false;
   }
 
+  /** Prove a separate page through browser-owned ancestry; missing lineage remains unknown. */
+  protected async samePage(
+    frame: Frame,
+    request: Pick<VerificationRequest, "sessionId">,
+  ) {
+    const seen = new Set<string>();
+    let sessionId: string | undefined = request.sessionId;
+    while (sessionId && !seen.has(sessionId) && seen.size < 32) {
+      if (sessionId === frame.sessionId) return true;
+      seen.add(sessionId);
+      const tree = (await this.cdp.send(
+        "Page.getFrameTree",
+        {},
+        sessionId,
+      )) as { frameTree?: { frame?: { id?: string; parentId?: string } } };
+      const root = tree.frameTree?.frame;
+      if (!root?.id) return;
+      const parent = this.parentSession(sessionId, root.parentId);
+      if (!parent && !root.parentId) return false;
+      sessionId = parent;
+    }
+  }
+
   protected async checkoutFrame(
     request: VerificationRequest,
     origin: string,
