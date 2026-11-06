@@ -142,6 +142,27 @@ new SapiomClient(config: SapiomClientConfig)
 
 The API key only travels over `https://`, or plain `http://` to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` `baseURL` or `servicesDomain` (a Docker service name, a LAN IP) makes every request fail with a `CredentialChannelError` before anything is sent. On a trusted private network, opt in with `allowInsecureHttp: true` or `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects to another origin never carry the key.
 
+#### Direct requests and HTTP errors
+
+Set `retry: false` on one request to disable automatic retries. Retain your own idempotency key and body when a write may need recovery.
+
+```typescript
+import { SapiomApiError } from '@sapiom/core';
+
+try {
+  await client.request({ method: 'PUT', url: '/your-endpoint', body,
+    headers: { 'Idempotency-Key': retainedKey }, retry: false });
+} catch (error) {
+  if (error instanceof SapiomApiError) {
+    console.error({ status: error.status, code: error.code, requestId: error.requestId });
+  } else {
+    throw error; // Network, timeout or credential-channel failure; no HTTP refusal was received.
+  }
+}
+```
+
+`SapiomApiError.body` preserves the HTTP response body. Keep it out of logs because it can contain sensitive data. Network and timeout failures do not prove that a write failed; read or reconcile its state before retrying.
+
 #### Methods
 
 ##### transactions.create()
