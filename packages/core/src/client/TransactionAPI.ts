@@ -88,6 +88,7 @@ export class TransactionAPI {
     });
   }
 
+  /** Check a bare hostname or HTTPS origin (no path); this does not prove Browser Pay can relay its card form. */
   async checkCompatibility(domain: string): Promise<TransactionCompatibility> {
     return this.httpClient.request({
       url: "/transaction-compatibility",
@@ -95,6 +96,7 @@ export class TransactionAPI {
     });
   }
 
+  /** Open/resume a transaction's UCP checkout with its merchant create body and a retained caller key; no payment data. */
   async openCheckout(
     transactionId: string,
     body: Record<string, unknown>,
@@ -109,6 +111,7 @@ export class TransactionAPI {
     });
   }
 
+  /** Read stored checkout state; optional since/maxWaitSeconds (whole 0–25) waits for a version change. */
   async getCheckout(
     transactionId: string,
     options?: PurchaseWaitOptions,
@@ -141,6 +144,7 @@ export class TransactionAPI {
     });
   }
 
+  /** Cancel an unfinished merchant checkout with a retained caller key; this never refunds a placed order. */
   async cancelCheckout(
     transactionId: string,
     options: PurchaseWriteOptions,

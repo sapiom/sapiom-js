@@ -1,4 +1,5 @@
 // Run with Node 20+: SAPIOM_API_KEY=... PURCHASE_REQUEST=./request.json node saved-method-purchase.mjs
+// Run check before choosing a UCP checkout; create/resume reuse the saved body and key without discovery.
 // request.json: { "idempotencyKey": "retain-this-key", "request": { "purchase":
 // { "type": "ucp_checkout", "merchant": { "origin": "https://shop.example" },
 // "checkout": { "line_items": [{ "item": { "id": "item-1" }, "quantity": 1 }] } },
@@ -40,21 +41,19 @@ try {
         process.env.PAYMENT_METHOD_ID,
       ),
     );
-  } else if (command === "create") {
+  } else if (["check", "create", "resume"].includes(command)) {
     const { request, idempotencyKey } = JSON.parse(
       await readFile(process.env.PURCHASE_REQUEST, "utf8"),
     );
-    const compatibility = await client.transactions.checkCompatibility(
-      request.purchase.merchant.origin,
-    );
-    if (
-      request.purchase.type === "ucp_checkout" &&
-      compatibility.status !== "supported"
-    )
-      throw new Error(
-        "Structured checkout unavailable. Browser checkout requires a ready card and its own purchase statement.",
+    if (command === "check") {
+      console.log(
+        await client.transactions.checkCompatibility(
+          request.purchase.merchant.origin,
+        ),
       );
-    safeStatus(await client.transactions.create(request, { idempotencyKey }));
+    } else {
+      safeStatus(await client.transactions.create(request, { idempotencyKey }));
+    }
   } else {
     if (!id) throw new Error("Set TRANSACTION_ID from the previous response.");
     if (command === "cancel")
@@ -83,7 +82,7 @@ try {
       );
     } else
       throw new Error(
-        "Use list, limits, create, poll, revise, reconcile or cancel.",
+        "Use list, limits, check, create, resume, poll, revise, reconcile or cancel.",
       );
   }
   // Follow nextAction.actor: buyer/approver actions belong to that person. Do not log their secret URLs.

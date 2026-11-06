@@ -346,4 +346,6 @@ Use `checkCompatibility(domain)`, `get(id, { since, maxWaitSeconds: 25 })`,
 `getCheckout`, `updateCheckout` (a full replacement), `refreshCheckout` (explicit
 reconciliation) and `cancel`. Follow `nextAction.actor`; buyer links are secrets.
 `payment_submitted` does not confirm an order, and `complete()` reports an ordinary
-operation outcome. See [the runnable purchase example](examples/saved-method-purchase.mjs).
+operation outcome. In [the runnable purchase example](examples/saved-method-purchase.mjs),
+`check` performs discovery before choosing a route; `create` and `resume` submit the
+retained body and key without requiring discovery to succeed again.
