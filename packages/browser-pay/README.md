@@ -53,6 +53,11 @@ The SDK never initiates another Pay to resolve uncertainty; reconcile the existi
 purchase before deciding whether to retry. A successfully registered observer still
 blocks another submission after challenge capture or while its capture report is uncertain.
 
+An interceptor's credential relay is bound to its configured `injectionRef`. A matching
+placeholder stays fenced across pages after capture; a browser request does not select another
+injection reference. An already-started relay keeps polling with its original idempotency key to
+read back the existing send. Capture fences new submissions and does not abandon that readback.
+
 `maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
 internal integration hook until U6 defines how other checkouts provide adapters.
 Registration that already reports an ended, expired, canceled or error state
