@@ -21,6 +21,13 @@ the current checkout. The SDK captures a supported merchant challenge on that sa
 connection and exposes `handle.verification` while the buyer acts on Sapiom's private hosted page.
 The `shopify-card-vault` profile supplies a default verification adapter when the backend enables
 it. Other profiles require an explicit `verificationAdapter` for challenge capture.
+
+Stripe/BigCommerce Payment Element demo: import `createStripePaymentElementVerification`
+from `@sapiom/browser-pay`, pass `verificationAdapter: createStripePaymentElementVerification`
+to `attachInterceptor`, and leave `profileId` unset; requires the relay's `.verification` capability.
+Captures supported CReq POSTs and observes authentication failures without replaying Confirm;
+unsupported auth stays native. Captured Stripe continuation and sandbox/live completion remain unproven.
+
 The checkout runner keeps its existing wait open until that activity ends or its session deadline
 expires. A buyer action URL is a credential: deliver it privately and do not log it.
 

@@ -9,9 +9,15 @@ import {
   type InterceptorEvent,
   type InterceptorTarget,
 } from "./interceptor";
-import type { HeldPlaceholder, RelayRequest, RelayResponse } from "./index";
+import {
+  createStripePaymentElementVerification,
+  type HeldPlaceholder,
+  type RelayRequest,
+  type RelayResponse,
+} from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
 import type { RelayCallOptions } from "./relay";
+import type { VerificationState } from "./verification";
 
 const HELD: HeldPlaceholder = {
   number: "4242424242424242",
@@ -36,6 +42,8 @@ interface Command {
 const REMOTE_STEP = "REMOTE_STEP_TEXT";
 
 interface StubOptions {
+  frameTree?: unknown;
+  responseBody?: string;
   failAutoAttach?: boolean;
   failChildAutoAttach?: boolean;
   failResume?: boolean;
@@ -183,6 +191,17 @@ async function startStub(options: StubOptions = {}): Promise<{
     }
     if (message.method === "Runtime.evaluate") {
       reply(message.id, {});
+      return;
+    }
+    if (message.method === "Page.getFrameTree" && options.frameTree) {
+      reply(message.id, { frameTree: options.frameTree });
+      return;
+    }
+    if (message.method === "Network.getResponseBody") {
+      reply(message.id, {
+        body: options.responseBody ?? "",
+        base64Encoded: false,
+      });
       return;
     }
     if (message.method === "Network.getRequestPostData") {
@@ -675,6 +694,227 @@ function stepLogger(warnings: StepWarning[]) {
 }
 
 describe("interceptor CDP decisions", () => {
+  it.each(["capture", "invisible-auth-failure"])(
+    "wires the explicit Stripe factory through attach and original CDP traffic: %s",
+    async (scenario) => {
+      const confirmUrl =
+        "https://api.stripe.com/v1/payment_intents/pi_demo/confirm";
+      const stub = await startStub({
+        frameTree: {
+          frame: { id: "checkout", url: "https://shop.example/checkout" },
+          childFrames: [
+            {
+              frame: {
+                id: "auth",
+                url: "https://hooks.stripe.com/3d_secure_2/hosted",
+              },
+              childFrames: [{ frame: { id: "acs", url: "about:blank" } }],
+            },
+          ],
+        },
+        responseBody: JSON.stringify(
+          scenario === "capture"
+            ? {
+                id: "pi_demo",
+                object: "payment_intent",
+                payment_method: "pm_demo",
+                amount: 1100,
+                currency: "usd",
+                status: "requires_action",
+                next_action: {
+                  type: "use_stripe_sdk",
+                  use_stripe_sdk: { type: "stripe_3ds2_fingerprint" },
+                },
+              }
+            : { error: { code: "payment_intent_authentication_failure" } },
+        ),
+      });
+      let state: VerificationState = {
+        id: "verification",
+        version: 1,
+        status: "preparing",
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        merchantOrigin: "https://shop.example",
+        total: { amount: "11.00", currency: "USD" },
+        challengeCaptured: false,
+        launchClaimed: false,
+        checkRequested: false,
+        continuationClaimed: false,
+      };
+      const relay = jest.fn(async () => ({
+        ...success(),
+        response: {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: '{"id":"pm_demo"}',
+        },
+      }));
+      const reports: Record<string, unknown>[] = [];
+      const handle = await attachInterceptor(stub.url, {
+        placeholder: HELD,
+        verificationAdapter: createStripePaymentElementVerification,
+        relay: {
+          ...stubPaymentRelay(relay),
+          verification: {
+            register: async () => state,
+            sync: async () => state,
+            report: async (_id, report) => {
+              reports.push(report);
+              state = {
+                ...state,
+                version: state.version + 1,
+                ...(report.kind === "challenge_observed"
+                  ? {
+                      status: "requires_action" as const,
+                      challengeCaptured: true,
+                    }
+                  : report.kind === "checkout_observed"
+                    ? {
+                        status: "ended" as const,
+                        observation: {
+                          outcome: "failed" as const,
+                          source: "runner" as const,
+                        },
+                      }
+                    : {}),
+              };
+              return state;
+            },
+          },
+        },
+      });
+      try {
+        expect(handle.verification).toBeDefined();
+        attachPage(stub.emit);
+        await waitFor(
+          () => stub.commands.some((c) => c.method === "Fetch.enable"),
+          "Fetch enabled",
+        );
+        const pause = (
+          requestId: string,
+          url: string,
+          body: string,
+          frameId = "checkout",
+        ) =>
+          stub.emit({
+            method: "Fetch.requestPaused",
+            sessionId: "page-1",
+            params: {
+              requestId,
+              frameId,
+              networkId: requestId,
+              request: {
+                url,
+                method: "POST",
+                postData: body,
+                headers: { "content-type": "application/json" },
+              },
+            },
+          });
+        pause("card", "https://api.stripe.com/v1/payment_methods", CARD);
+        await waitFor(
+          () =>
+            stub.commands.some(
+              (c) =>
+                c.method === "Fetch.fulfillRequest" &&
+                c.params.requestId === "card",
+            ),
+          "card relayed",
+        );
+        pause("confirm", confirmUrl, "payment_method=pm_demo");
+        await waitFor(
+          () =>
+            stub.commands.some(
+              (c) =>
+                c.method === "Fetch.continueRequest" &&
+                c.params.requestId === "confirm",
+            ),
+          "original Confirm continued",
+        );
+        stub.emit({
+          method: "Network.responseReceived",
+          sessionId: "page-1",
+          params: {
+            requestId: "confirm",
+            response: { url: confirmUrl, mimeType: "application/json" },
+          },
+        });
+        stub.emit({
+          method: "Network.loadingFinished",
+          sessionId: "page-1",
+          params: { requestId: "confirm", encodedDataLength: 500 },
+        });
+        await waitFor(
+          () =>
+            stub.commands.some((c) => c.method === "Network.getResponseBody"),
+          "original response observed",
+        );
+        if (scenario === "capture") {
+          const body =
+            "creq=" +
+            Buffer.from(
+              JSON.stringify({
+                acsTransID: "11111111-1111-4111-8111-111111111111",
+                threeDSServerTransID: "22222222-2222-4222-8222-222222222222",
+                messageType: "CReq",
+                messageVersion: "2.2.0",
+                challengeWindowSize: "05",
+              }),
+            ).toString("base64url");
+          pause("challenge", "https://bank.example/challenge", body, "acs");
+          await waitFor(
+            () =>
+              stub.commands.some(
+                (c) =>
+                  c.method === "Fetch.fulfillRequest" &&
+                  c.params.requestId === "challenge",
+              ),
+            "challenge captured",
+          );
+          expect(reports).toContainEqual(
+            expect.objectContaining({
+              kind: "challenge_observed",
+              capture: { url: "https://bank.example/challenge", body },
+            }),
+          );
+          pause("duplicate", confirmUrl, "payment_method=pm_demo");
+          await waitFor(
+            () =>
+              stub.commands.some(
+                (c) =>
+                  c.method === "Fetch.failRequest" &&
+                  c.params.requestId === "duplicate",
+              ),
+            "duplicate Confirm fenced",
+          );
+        } else {
+          expect((await handle.verification!.wait()).observation).toEqual({
+            outcome: "failed",
+            source: "runner",
+          });
+          expect(reports).toContainEqual(
+            expect.objectContaining({
+              kind: "checkout_observed",
+              observation: {
+                outcome: "failed",
+                cardSession: "pm_demo",
+                amount: "11.00",
+                currency: "USD",
+              },
+            }),
+          );
+        }
+        expect(relay).toHaveBeenCalledTimes(1);
+        expect(
+          stub.commands.some((c) => c.method === "Runtime.callFunctionOn"),
+        ).toBe(false);
+      } finally {
+        await handle.detach();
+        await stub.close();
+      }
+    },
+  );
+
   it("closes the CDP connection when start fails", async () => {
     const stub = await startStub({ failAutoAttach: true });
     try {
