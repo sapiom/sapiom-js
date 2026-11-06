@@ -78,8 +78,7 @@
   "devDependencies": {
     "@types/node": "^20.11.30",
     "typescript": "~5.9.3",
-    "vitest": "^3.0.0",
-    "@types/uuid": "^10.0.0",
+    "vitest": "^4.1.12",
     "esbuild": "^0.28.1"
   },
   "engines": {
@@ -89,7 +88,6 @@
     "access": "public"
   },
   "dependencies": {
-    "zod": "^3.25.0",
-    "uuid": "^10.0.0"
+    "zod": "^3.25.0"
   }
 }

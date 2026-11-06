@@ -449,6 +449,7 @@ describe("authenticated deployment evidence", () => {
     } finally {
       timeout.mockRestore();
     }
+  });
 
     describe("createDefinitionSlugResolver.listVisible (SAP-3214)", () => {
       let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -694,5 +695,4 @@ describe("authenticated deployment evidence", () => {
         expect(fetchImpl).toHaveBeenCalledTimes(1);
       });
     });
-  });
 });

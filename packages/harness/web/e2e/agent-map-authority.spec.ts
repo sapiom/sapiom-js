@@ -43,7 +43,10 @@ async function open(
   await page.route("**/src/lib/use-harness-state.ts", async (route) => {
     const response = await route.fetch();
     const body = await response.text();
-    if (!body.includes("    refreshWorkspaceScopes,")) {
+    // Match the field at any indentation: the dev server's transform decides
+    // whether the served source is indented with tabs or spaces.
+    const returnField = /^([ \t]+)refreshWorkspaceScopes,$/m;
+    if (!returnField.test(body)) {
       setupErrors.push(
         "use-harness-state.ts: missing refreshWorkspaceScopes return field",
       );
@@ -54,8 +57,8 @@ async function open(
     await route.fulfill({
       response,
       body: body.replace(
-        "    refreshWorkspaceScopes,",
-        "    refreshWorkspaceScopes: (window.__authority.activeSessionId = activeSessionId, window.__authority.reloadProjects = refreshWorkspaceScopes),",
+        returnField,
+        "$1refreshWorkspaceScopes: (window.__authority.activeSessionId = activeSessionId, window.__authority.reloadProjects = refreshWorkspaceScopes),",
       ),
     });
   });

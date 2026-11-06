@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "./codex-tailer.js";
 import type { RawHookPayload } from "./normalizer.js";
@@ -36,7 +36,7 @@ describe("tailCodexRollout", () => {
   let rolloutPath: string;
   let handle: CodexTailerHandle | undefined;
   let onEvent: ReturnType<typeof vi.fn<(hookEvent: string, payload: RawHookPayload) => void>>;
-  let onError: ReturnType<typeof vi.fn>;
+  let onError: Mock<(...args: any[]) => any>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "harness-codex-tailer-"));
