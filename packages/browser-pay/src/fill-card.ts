@@ -122,6 +122,8 @@ interface Candidate {
 
 interface Match {
   frame: FrameLike;
+  /** The frame's URL when it was scanned. */
+  url: string;
   origin: string;
   candidate: Candidate;
   field: CardField;
@@ -146,12 +148,15 @@ const DESCRIBE_FIELDS = `(() => {
     if (rect.width < 2 || rect.height < 2 || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return;
     // Card vaults put a copy of every card input in each field's iframe for autofill; only the
     // one a person can click is real. Hit-test its centre inside its own frame's viewport.
-    // A real field below the fold scrolls into view; a copy parked outside the document cannot.
+    // A card-vault iframe shows its real field in its own viewport, so a field there counts only as
+    // it is now. On the page itself a real field can sit below the fold: scroll it into view
+    // vertically (instantly, so the position is final), but never sideways, so a copy parked to the
+    // left or right stays out of view.
     const centre = (r) => [r.left + r.width / 2, r.top + r.height / 2];
     const visible = ([x, y]) => x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
     let [cx, cy] = centre(rect);
-    if (!visible([cx, cy])) {
-      el.scrollIntoView({ block: "center", inline: "center" });
+    if (!visible([cx, cy]) && window === window.top && cx >= 0 && cx <= window.innerWidth) {
+      el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
       [cx, cy] = centre(el.getBoundingClientRect());
     }
     const inView = visible([cx, cy]);
@@ -336,6 +341,7 @@ async function scan(
       else if (hit)
         matches.push({
           frame,
+          url: frame.url(),
           origin,
           candidate,
           field: hit.field,
@@ -422,10 +428,15 @@ async function readBack(m: Match, expectDigits: boolean): Promise<string> {
   return expectDigits ? digits(v) : v.trim();
 }
 
-/** Whether the frame still shows the document the match was found in, judged by its origin. */
+/**
+ * Whether the frame still shows the document the match was found in. A frame whose origin came from
+ * its URL must still be on that origin; one that inherited its parent's origin (`about:srcdoc`,
+ * `about:blank`) must still be on the same URL, so a navigation to `data:` or anywhere else fails.
+ */
 function sameDocumentOrigin(m: Match): boolean {
-  const now = originOf(m.frame.url());
-  return now === "" || now === "null" || now === m.origin;
+  const now = m.frame.url();
+  const inherited = originOf(m.url) === "" || originOf(m.url) === "null";
+  return inherited ? now === m.url : originOf(now) === m.origin;
 }
 
 /** Whether the field rejects what was typed: its constraint validation, or `aria-invalid` after blur. */

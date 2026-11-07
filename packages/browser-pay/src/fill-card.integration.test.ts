@@ -49,6 +49,10 @@ const FRAMES: Record<string, string> = {
 <input name="expiry" autocomplete="cc-exp" style="position:absolute;left:-9999px;width:200px;height:30px">
 <input name="verification_value" autocomplete="cc-csc" style="position:absolute;left:-9999px;width:200px;height:30px">
 <input id="real" name="number" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">`,
+  // A copy parked to the right, where scrolling sideways could reach it, before the real input.
+  "/vault/right": `<!doctype html><title>Field container for: Card number</title>
+<input id="copy" name="number" autocomplete="cc-number" style="position:absolute;left:9999px;top:0;width:200px;height:30px">
+<input id="real" name="number" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">`,
   "/stripe/card": `<!doctype html><title>Secure card payment input frame</title>${MASKS}
 <input name="cardnumber" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">
 <input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
@@ -187,6 +191,15 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <input autocomplete="cc-number" style="width:200px;height:30px">
 <input id="exp" autocomplete="cc-exp" maxlength="4" style="width:90px;height:30px">
 <input autocomplete="cc-csc" style="width:60px;height:30px">`,
+  "/copy-right": `<!doctype html><title>Checkout</title>
+<iframe src="FRAME_ORIGIN/vault/right" style="width:320px;height:60px"></iframe>
+${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
+  "/smooth": `<!doctype html><html style="scroll-behavior:smooth"><title>Checkout</title>
+<label>Email <input name="email" autocomplete="email" style="width:200px;height:30px"></label>
+<div style="height:3000px"></div>
+<label>Card number <input id="ccnum" autocomplete="cc-number" style="width:200px;height:30px"></label>
+<label>Expiry <input id="exp" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVV <input id="cvv" autocomplete="cc-csc" style="width:60px;height:30px"></label></html>`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
@@ -486,6 +499,43 @@ function serve(
         ),
       ).rejects.not.toThrow(new RegExp(CARD.number));
       expect(await page.locator("#ccnum").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("ignores an autofill copy parked to the right of a card-vault frame", async () => {
+      const page = await open("/copy-right");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      const vault = page
+        .frames()
+        .find((f) => f.url().includes("/vault/right"))!;
+      expect(await vault.locator("#real").inputValue()).toBe(CARD.number);
+      expect(await vault.locator("#copy").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("fills below-the-fold fields on a page with smooth scrolling", async () => {
+      const page = await open("/smooth");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#ccnum").inputValue()).toBe(CARD.number);
+      await page.close();
+    });
+
+    it("stops typing into a srcdoc card frame that navigated to a data: URL", async () => {
+      const page = await open("/srcdoc");
+      // Navigate the frame away the moment the number is typed; expiry and CVC must not follow it.
+      await page.evaluate(`(() => {
+        const f = document.querySelector("iframe");
+        f.contentDocument.querySelector("[autocomplete=cc-number]").addEventListener("input", () => {
+          f.removeAttribute("srcdoc");
+          f.src = "data:text/html,<input autocomplete=cc-exp><input autocomplete=cc-csc>";
+        });
+      })()`);
+      const result = await fill(page, { timeoutMs: 1000 });
+      expect(page.frames()[1].url()).toMatch(/^data:/);
+      expect(result.ok).toBe(false);
+      expect(result.filled).not.toContain("cvc");
       await page.close();
     });
 
