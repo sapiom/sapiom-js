@@ -348,19 +348,17 @@ const digits = (s: string) => s.replace(/\D/g, "");
 const two = (n: number) => String(n % 100).padStart(2, "0");
 
 /**
- * What to type into a combined expiry, in order of preference. A placeholder that spells the year
- * width decides. Otherwise two digits first, then four, and a candidate counts only if the field
- * reads it back and does not mark itself invalid; the field's own `pattern` takes part through
- * constraint validation. Length limits and patterns are not read as a year width: masks pad
- * `MM / YY` with spaces, and `\\d{4}` can mean MMYY.
+ * What to type into a combined expiry, in order: two-digit year first, unless the placeholder spells
+ * YYYY. Both are always tried, and a candidate counts only if the field reads it back and does not
+ * mark itself invalid; the field's own `pattern` takes part through constraint validation. Hints only
+ * order the attempts: a `YY` placeholder can sit on an `MM/YYYY` pattern, masks pad `MM / YY` with
+ * spaces, and `\\d{4}` can mean MMYY.
  */
 function expiryTexts(c: Candidate, card: CardToFill): string[] {
   const mm = two(card.expMonth);
   const short = `${mm}/${two(card.expYear)}`;
   const long = `${mm}/${card.expYear}`;
-  if (/yyyy/.test(c.placeholder)) return [long];
-  if (/\byy\b/.test(c.placeholder)) return [short];
-  return [short, long];
+  return /yyyy/.test(c.placeholder) ? [long, short] : [short, long];
 }
 
 /** Whether the field rejects what was typed: its constraint validation, or `aria-invalid` after blur. */

@@ -159,6 +159,10 @@ exp.addEventListener("blur", () => { const y = exp.value.split("/")[1] || ""; ex
 const e = document.getElementById("exp");
 e.addEventListener("input", () => { e.value = e.value.replace(/\\D/g, "").slice(0, 4); });
 </script>`,
+  "/yy-placeholder-four-pattern": `<!doctype html><title>Checkout</title>
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input id="exp" autocomplete="cc-exp" placeholder="MM/YY" pattern="\\d{2}/\\d{4}" style="width:90px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
@@ -392,6 +396,14 @@ function serve(
       const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(await page.locator("#exp").inputValue()).toBe("0329");
+      await page.close();
+    });
+
+    it("falls back to a four-digit year behind a YY placeholder when the pattern needs it", async () => {
+      const page = await open("/yy-placeholder-four-pattern");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#exp").inputValue()).toBe("03/2029");
       await page.close();
     });
 
