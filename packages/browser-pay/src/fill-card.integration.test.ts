@@ -1,0 +1,266 @@
+import http from "node:http";
+import { existsSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import type { Browser, Page } from "playwright";
+import { fillCard, type CardToFill, type PageLike } from "./fill-card";
+
+const CARD: CardToFill = {
+  number: "4000000000000002",
+  expMonth: 3,
+  expYear: 2029,
+  cvc: "321",
+  name: "Test Buyer",
+};
+
+/** Formats digits as the page types them, like Shopify's and Stripe's masks. */
+const MASKS = `<script>
+function maskCard(el){el.addEventListener('input',()=>{const d=el.value.replace(/\\D/g,'').slice(0,19);el.value=d.replace(/(.{4})/g,'$1 ').trim();});}
+function maskExpiry(el){el.addEventListener('input',()=>{const d=el.value.replace(/\\D/g,'').slice(0,4);el.value=d.length>2?d.slice(0,2)+' / '+d.slice(2):d;});}
+</script>`;
+
+function field(attrs: string, title: string, mask = ""): string {
+  return `<!doctype html><title>${title}</title>${MASKS}<input ${attrs} style="width:200px;height:30px">
+<script>${mask}</script>`;
+}
+
+/** Card-iframe documents, served from the second origin. */
+const FRAMES: Record<string, string> = {
+  "/shopify/number": field(
+    'id="number" name="number" autocomplete="cc-number" placeholder="Card number"',
+    "Field container for: Card number",
+    "maskCard(document.querySelector('input'))",
+  ),
+  "/shopify/expiry": field(
+    'id="expiry" name="expiry" autocomplete="cc-exp" placeholder="Expiration date (MM / YY)"',
+    "Field container for: Expiration date (MM / YY)",
+    "maskExpiry(document.querySelector('input'))",
+  ),
+  "/shopify/cvc": field(
+    'id="verification_value" name="verification_value" autocomplete="cc-csc" placeholder="Security code"',
+    "Field container for: Security code",
+  ),
+  "/shopify/name": field(
+    'id="name" name="name" autocomplete="cc-name" placeholder="Name on card"',
+    "Field container for: Name on card",
+  ),
+  "/stripe/card": `<!doctype html><title>Secure card payment input frame</title>${MASKS}
+<input name="cardnumber" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">
+<input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
+<input name="cvc" autocomplete="cc-csc" placeholder="CVC" style="width:60px;height:30px">
+<input name="postal" autocomplete="postal-code" placeholder="ZIP" style="width:60px;height:30px">
+<script>maskCard(document.querySelector('[name=cardnumber]'));maskExpiry(document.querySelector('[name=exp-date]'));</script>`,
+  "/braintree/number": field(
+    'id="credit-card-number" name="credit-card-number"',
+    "Secure Credit Card Frame - Credit Card Number",
+  ),
+  "/braintree/month": field(
+    'id="expiration-month" name="expiration-month" maxlength="2"',
+    "Secure Credit Card Frame - Expiration Month",
+  ),
+  "/braintree/year": field(
+    'id="expiration-year" name="expiration-year" maxlength="4"',
+    "Secure Credit Card Frame - Expiration Year",
+  ),
+  "/braintree/cvv": field(
+    'id="cvv" name="cvv"',
+    "Secure Credit Card Frame - CVV",
+  ),
+  "/adyen/number": field(
+    'data-fieldtype="encryptedCardNumber"',
+    "Iframe for card number",
+  ),
+  "/adyen/expiry": field(
+    'data-fieldtype="encryptedExpiryDate" placeholder="MM/YY"',
+    "Iframe for expiry date",
+    "maskExpiry(document.querySelector('input'))",
+  ),
+  "/adyen/cvc": field(
+    'data-fieldtype="encryptedSecurityCode"',
+    "Iframe for security code",
+  ),
+};
+
+/** Top-level checkout pages; FRAME_ORIGIN is replaced with the card-iframe origin. */
+const DECOYS = `<label>Email <input name="email" autocomplete="email" style="width:200px;height:30px"></label>
+<label>Phone number <input name="phone" autocomplete="tel" style="width:200px;height:30px"></label>
+<label>Apartment, suite <input name="address2" style="width:200px;height:30px"></label>
+<input type="hidden" name="checkout[number]" value="x">`;
+
+const frame = (path: string) =>
+  `<iframe src="FRAME_ORIGIN${path}" style="width:320px;height:60px"></iframe>`;
+
+const PAGES: Record<string, string> = {
+  "/shopify": `<!doctype html><title>Checkout - Example Store</title>${DECOYS}
+${frame("/shopify/number")}${frame("/shopify/expiry")}${frame("/shopify/cvc")}${frame("/shopify/name")}`,
+  "/stripe": `<!doctype html><title>Checkout</title>${DECOYS}<iframe src="FRAME_ORIGIN/stripe/card" style="width:600px;height:80px"></iframe>`,
+  "/braintree": `<!doctype html><title>Checkout</title>${DECOYS}
+${frame("/braintree/number")}${frame("/braintree/month")}${frame("/braintree/year")}${frame("/braintree/cvv")}`,
+  "/adyen": `<!doctype html><title>Checkout</title>${DECOYS}${frame("/adyen/number")}${frame("/adyen/expiry")}${frame("/adyen/cvc")}`,
+  "/plain": `<!doctype html><title>Checkout</title>${DECOYS}
+<label>Card number <input id="ccnum" style="width:200px;height:30px"></label>
+<label>Month <select id="m" autocomplete="cc-exp-month"><option value="">MM</option>${Array.from({ length: 12 }, (_, i) => `<option value="${String(i + 1).padStart(2, "0")}">${String(i + 1).padStart(2, "0")}</option>`).join("")}</select></label>
+<label>Year <select id="y" autocomplete="cc-exp-year"><option value="">YYYY</option>${[2027, 2028, 2029, 2030].map((y) => `<option value="${y}">${y}</option>`).join("")}</select></label>
+<label>CVV <input id="cvv" style="width:60px;height:30px"></label>`,
+  "/delayed": `<!doctype html><title>Checkout</title>${DECOYS}
+<script>setTimeout(() => {
+  for (const p of ["/shopify/number", "/shopify/expiry", "/shopify/cvc"]) {
+    const f = document.createElement("iframe");
+    f.src = "FRAME_ORIGIN" + p;
+    f.style.cssText = "width:320px;height:60px";
+    document.body.appendChild(f);
+  }
+}, 1500)</script>`,
+  "/none": `<!doctype html><title>Checkout</title>${DECOYS}`,
+};
+
+function findChromium(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require("playwright").chromium.executablePath() as string;
+    return Boolean(path && existsSync(path));
+  } catch {
+    return false;
+  }
+}
+
+function serve(
+  handler: (path: string) => string | undefined,
+): Promise<http.Server> {
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const body = handler(req.url ?? "/");
+      res.writeHead(body ? 200 : 404, { "content-type": "text/html" });
+      res.end(body ?? "not found");
+    });
+    server.listen(0, "127.0.0.1", () => resolve(server));
+  });
+}
+
+(findChromium() ? describe : describe.skip)(
+  "fillCard (Chromium, cross-origin card iframes)",
+  () => {
+    let browser: Browser;
+    let top: http.Server;
+    let frames: http.Server;
+    let topUrl: string;
+
+    beforeAll(async () => {
+      frames = await serve((p) => FRAMES[p]);
+      const framePort = (frames.address() as AddressInfo).port;
+      // Same host, different hostname spelling: localhost vs 127.0.0.1 are different origins.
+      const frameOrigin = `http://localhost:${framePort}`;
+      top = await serve((p) => PAGES[p]?.replace(/FRAME_ORIGIN/g, frameOrigin));
+      topUrl = `http://127.0.0.1:${(top.address() as AddressInfo).port}`;
+      const { chromium } = await import("playwright");
+      browser = await chromium.launch();
+    }, 60_000);
+
+    afterAll(async () => {
+      await browser?.close();
+      top?.close();
+      frames?.close();
+    });
+
+    async function open(path: string): Promise<Page> {
+      const page = await browser.newPage();
+      await page.goto(`${topUrl}${path}`, { waitUntil: "load" });
+      return page;
+    }
+
+    const valueIn = async (page: Page, urlPart: string, selector = "input") => {
+      const f = page.frames().find((fr) => fr.url().includes(urlPart));
+      return f!.locator(selector).first().inputValue();
+    };
+
+    it("fills Shopify's one-iframe-per-field card form, masks included, and skips decoys", async () => {
+      const page = await open("/shopify");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+      });
+      expect(result).toMatchObject({ ok: true, missing: [], unconfirmed: [] });
+      expect(result.filled).toEqual(["number", "expiry", "cvc", "name"]);
+      expect(await valueIn(page, "/shopify/number")).toBe(
+        "4000 0000 0000 0002",
+      );
+      expect(await valueIn(page, "/shopify/expiry")).toBe("03 / 29");
+      expect(await valueIn(page, "/shopify/cvc")).toBe("321");
+      expect(await page.locator('[name="phone"]').inputValue()).toBe("");
+      expect(await page.locator('[name="email"]').inputValue()).toBe("");
+      expect(result.origins.number).toMatch(/^http:\/\/localhost:\d+$/);
+      await page.close();
+    });
+
+    it("fills Stripe Elements' single iframe and leaves the postal code alone", async () => {
+      const page = await open("/stripe");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.filled).toEqual(["number", "expiry", "cvc"]);
+      expect(await valueIn(page, "/stripe/card", "[name=exp-date]")).toBe(
+        "03 / 29",
+      );
+      expect(await valueIn(page, "/stripe/card", "[name=postal]")).toBe("");
+      await page.close();
+    });
+
+    it("fills Braintree hosted fields with split month and year", async () => {
+      const page = await open("/braintree");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.filled).toEqual(["number", "expMonth", "expYear", "cvc"]);
+      expect(await valueIn(page, "/braintree/month")).toBe("03");
+      expect(await valueIn(page, "/braintree/year")).toBe("2029");
+      await page.close();
+    });
+
+    it("fills Adyen secured fields by their data-fieldtype", async () => {
+      const page = await open("/adyen");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.filled).toEqual(["number", "expiry", "cvc"]);
+      await page.close();
+    });
+
+    it("fills plain inputs and expiry selects on the page itself", async () => {
+      const page = await open("/plain");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.filled).toEqual(["number", "expMonth", "expYear", "cvc"]);
+      expect(await page.locator("#m").inputValue()).toBe("03");
+      expect(await page.locator("#y").inputValue()).toBe("2029");
+      await page.close();
+    });
+
+    it("waits for card iframes that load after the page", async () => {
+      const page = await open("/delayed");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+      });
+      expect(result).toMatchObject({ ok: true, missing: [] });
+      await page.close();
+    }, 20_000);
+
+    it("reports what is missing, without values, when there is no card form", async () => {
+      const page = await open("/none");
+      const result = await fillCard(page as unknown as PageLike, CARD, {
+        timeoutMs: 1000,
+      });
+      expect(result).toEqual({
+        ok: false,
+        filled: [],
+        missing: ["number", "expiry", "cvc"],
+        unconfirmed: [],
+        origins: {},
+      });
+      expect(JSON.stringify(result)).not.toContain(CARD.number);
+      await page.close();
+    });
+  },
+);

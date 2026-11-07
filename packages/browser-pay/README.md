@@ -1,6 +1,6 @@
 # @sapiom/browser-pay
 
-Browser-side payment interceptor. The agent types a governance placeholder into checkout. This package pauses that request over CDP and hands it to David's relay. The browser is fulfilled with the processor's response, or the request fails. The placeholder is never continued.
+Browser-side payment interceptor. The agent types a governance placeholder into checkout. This package pauses that request over CDP and hands it to Sapiom's relay. The browser is fulfilled with the processor's response, or the request fails. The placeholder is never continued.
 
 ## Sequence
 
@@ -12,6 +12,38 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 6. The page receives the processor status, headers, and body. A terminal refusal, an unknown outcome, or a relay error fails the paused request. `relay_in_progress` keeps the request paused and asks again with the same idempotency key.
 
 An agent that gives up before paying cancels the purchase, which revokes the placeholder: a UCP checkout with `POST /v1/transactions/{transactionId}/ucp/checkout/cancel`, a browser-checkout purchase with `POST /v1/transactions/{transactionId}/cancel`. The browser-checkout cancel answers 409 `card_relayed` once the card was relayed; the payment is spent, and the agent completes the transaction instead.
+
+## Filling the card form
+
+`fillCard(page, card)` types the placeholder into the checkout's card form, so the agent does not have to find and type into card fields itself. `page` is a Playwright page connected to the same browser with `chromium.connectOverCDP(cdpUrl)`; `card` is the placeholder's `number`, `expMonth`, `expYear` and `cvc`, plus an optional cardholder `name`.
+
+```typescript
+import {
+  attachInterceptor,
+  fillCard,
+  httpPaymentRelay,
+} from "@sapiom/browser-pay";
+
+const handle = await attachInterceptor(cdpUrl, {
+  relay,
+  placeholder: { number, injectionRef },
+});
+// … the agent reaches the payment step …
+const filled = await fillCard(page, { number, expMonth, expYear, cvc });
+if (filled.ok) {
+  await page
+    .getByRole("button", { name: /pay now|place order|complete order/i })
+    .click();
+} else {
+  // Nothing was sent. `filled.missing` names the fields it could not fill.
+}
+```
+
+It looks in every frame, including one cross-origin iframe per field (Shopify's card vault, Braintree hosted fields, Adyen secured fields) and one iframe for all fields (Stripe Elements), and classifies inputs and selects by `autocomplete` (`cc-number`, `cc-exp`, `cc-exp-month`, `cc-exp-year`, `cc-csc`, `cc-name`), name, id, placeholder, label and provider attributes. A card vault puts a copy of every card input in each field's iframe for autofill; `fillCard` types only into the copy a person could click (its centre is in the frame's viewport and nothing covers it). It types a combined expiry as `MM/YY` (`MM/YYYY` when the field asks for four digits), or fills split month and year inputs or selects. It waits up to `timeoutMs` (default 15 seconds) for card iframes that load after the page, types with a short delay so input masks keep up, and reads each field back.
+
+The result is `{ ok, filled, missing, unconfirmed, origins }`. `ok` is true when the number, the security code and the expiry were each typed and read back. `missing` lists `number`, `expiry` or `cvc` when one was not found or did not read back; `unconfirmed` lists fields found whose read-back differed; `origins` names the frame origin each field was filled in. The result never contains a card value, and `fillCard` never logs one.
+
+`fillCard` does not press Pay. Pressing it is the step that sends the card, so the caller keeps that decision and always knows whether it happened. If `ok` is false, nothing has been sent: retry the fill, or cancel the purchase so its placeholder is revoked.
 
 ## Relay contract
 
@@ -156,7 +188,7 @@ No answer after the send:
 
 The injection is consumed. The paused request fails and the same body is not sent again.
 
-A redirect, a non-2xx HTTP status other than 502, 503, or 504, or an unreadable body fails the paused browser request. David's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
+A redirect, a non-2xx HTTP status other than 502, 503, or 504, or an unreadable body fails the paused browser request. Sapiom's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
 
 ## What an agent does
 
@@ -193,7 +225,7 @@ Call `handle.on` after `attachInterceptor` resolves. Events emitted while attach
 
 An optional `logger` receives `browser step failed` when arming `Fetch.enable` fails, and when a nested auto-attach, resume, `Target.getTargets`, existing-frame attach, or close fails.
 
-A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
+A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. Sapiom decides whether the number is valid when the relay receives it. A paused request that does not hold the placeholder is continued.
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
