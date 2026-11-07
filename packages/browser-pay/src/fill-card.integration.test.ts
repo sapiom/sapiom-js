@@ -89,6 +89,12 @@ const FRAMES: Record<string, string> = {
   "/vault/bare-real": `<!doctype html><title>Field container for: Card number</title>
 <input id="copy" autocomplete="cc-number" style="position:absolute;left:0;top:400px;width:200px;height:30px">
 <input id="real" name="number" style="width:200px;height:30px">`,
+  // A payment frame with a visible purchase-order number above its below-fold card number.
+  "/vault/po": `<!doctype html><title>Secure payment input frame</title>
+<label>Purchase order number <input id="po" name="number" style="width:200px;height:30px"></label>
+<input id="ccnum" autocomplete="cc-number" style="position:absolute;left:0;top:400px;width:200px;height:30px">
+<input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:20px">
+<input autocomplete="cc-csc" style="width:60px;height:20px">`,
   "/stripe/card": `<!doctype html><title>Secure card payment input frame</title>${MASKS}
 <input name="cardnumber" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">
 <input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
@@ -268,6 +274,8 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
   "/bare-real": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/vault/bare-real" style="width:320px;height:60px"></iframe>
 ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
+  "/po-frame": `<!doctype html><title>Checkout</title>
+<iframe src="FRAME_ORIGIN/vault/po" style="width:320px;height:80px"></iframe>`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
@@ -652,6 +660,16 @@ function serve(
         .find((f) => f.url().includes("/vault/bare-real"))!;
       expect(await vault.locator("#real").inputValue()).toBe(CARD.number);
       expect(await vault.locator("#copy").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("keeps a payment frame's purchase-order number out of the card number", async () => {
+      const page = await open("/po-frame");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      const vault = page.frames().find((f) => f.url().includes("/vault/po"))!;
+      expect(await vault.locator("#ccnum").inputValue()).toBe(CARD.number);
+      expect(await vault.locator("#po").inputValue()).toBe("");
       await page.close();
     });
 

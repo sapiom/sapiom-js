@@ -120,6 +120,8 @@ interface Candidate {
   type: string;
   autocomplete: string;
   hints: string;
+  /** What a person reads for it: placeholder, aria-label and label text (not name or id). */
+  label: string;
   /** A person could click it: its centre is in the frame's viewport and nothing covers it. */
   hit: boolean;
   /** Not in view now, but scrolling vertically brings it into view uncovered. */
@@ -185,8 +187,10 @@ const DESCRIBE_FIELDS = `(() => {
       el.getAttribute("data-fieldtype"), el.getAttribute("data-elements-stable-field-name"),
       el.getAttribute("data-braintree-name"), labels, named]
       .filter(Boolean).join(" | ").toLowerCase();
+    const label = [el.getAttribute("placeholder"), el.getAttribute("aria-label"), labels, named]
+      .filter(Boolean).join(" ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
-      hints, hit, reachable, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
+      hints, label, hit, reachable, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
   });
   // Leave the frame where it was.
   window.scrollTo({ left: startX, top: startY, behavior: "instant" });
@@ -231,9 +235,36 @@ const PATTERNS: Array<[CardField, RegExp]> = [
   ["name", /name.?on.?card|card.?holder|holder.?name|cardholder|\bcc.?name\b/],
 ];
 
-/** Words that make a bare `number`/`name` field an address or contact field, not a card field. */
-const NOT_CARD =
-  /house|street|address|apartment|\bapt\b|suite|unit|building|flat|phone|\btel\b|mobile|zip|postal|company|first|last|e-?mail/;
+/**
+ * Words a bare card field's label may use. A bare `number`/`name`/`expiry` input counts only when
+ * every word a person reads for it (placeholder, aria-label, label text) is one of these, so a label
+ * that says what else the number is ("House number", "Purchase order number") rules it out. Its
+ * `name` and `id` are not read here: ids are arbitrary.
+ */
+const CARD_WORDS = new Set([
+  "number",
+  "name",
+  "expiry",
+  "expiration",
+  "exp",
+  "date",
+  "mm",
+  "yy",
+  "yyyy",
+  "card",
+  "credit",
+  "debit",
+  "on",
+  "holder",
+  "cardholder",
+  "the",
+  "your",
+  "of",
+]);
+
+/** Whether every word in a label is card vocabulary (an empty label passes). */
+const onlyCardWords = (label: string) =>
+  label.split(/[^a-z]+/).every((w) => w === "" || CARD_WORDS.has(w));
 
 /** A bare `number`/`name` field (Shopify's card vault, Stripe's Payment Element) counts only in a card frame. */
 const BARE: Array<[CardField, RegExp]> = [
@@ -253,8 +284,9 @@ function classify(
   if (ac) return { field: ac, score: 3 };
   for (const [field, re] of PATTERNS)
     if (re.test(c.hints)) return { field, score: 2 };
-  // A bare name is a card field only in a card frame, and never when it names an address or contact.
-  if (cardFrame && !NOT_CARD.test(c.hints))
+  // A bare name is a card field only in a card frame, and only when nothing in its hints says
+  // it is something else.
+  if (cardFrame && onlyCardWords(c.label))
     for (const [field, re] of BARE)
       if (re.test(c.hints)) return { field, score: 1 };
   return null;
@@ -416,7 +448,7 @@ async function rank(
       // Within one frame, a field in view now beats one reached only by scrolling: inside a card
       // frame on another origin (a vault, whose autofill copies can carry stronger attributes than
       // the real field) whatever the score, and on the page's own origin only at equal score.
-      // Address and contact fields never get here: they are not card fields at all (NOT_CARD).
+      // A bare field labelled as something else never gets here: it is not a card field at all.
       if (a.frame === b.frame && a.candidate.hit !== b.candidate.hit) {
         const vault = a.frame !== main && a.origin !== topOrigin;
         if (vault || a.score === b.score)
