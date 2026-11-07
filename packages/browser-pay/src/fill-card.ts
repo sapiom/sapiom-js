@@ -116,6 +116,8 @@ interface Candidate {
   hints: string;
   /** A person could click it: its centre is in the frame's viewport and nothing covers it. */
   hit: boolean;
+  /** It was hit only after scrolling to it, so a field already in view ranks ahead of it. */
+  scrolled: boolean;
   maxLength: number;
   placeholder: string;
 }
@@ -137,6 +139,7 @@ const SELECTOR = "input, select";
  * and selects with the attributes that name them. It never reads a field's value.
  */
 const DESCRIBE_FIELDS = `(() => {
+  const startX = window.scrollX, startY = window.scrollY;
   const skip = new Set(["hidden","checkbox","radio","submit","button","image","file","reset"]);
   const out = [];
   Array.from(document.querySelectorAll("input, select")).forEach((el, index) => {
@@ -154,13 +157,16 @@ const DESCRIBE_FIELDS = `(() => {
     const centre = (r) => [r.left + r.width / 2, r.top + r.height / 2];
     const visible = ([x, y]) => x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
     let [cx, cy] = centre(rect);
-    if (!visible([cx, cy]) && cx >= 0 && cx <= window.innerWidth) {
+    const scrolled = !visible([cx, cy]);
+    if (scrolled && cx >= 0 && cx <= window.innerWidth) {
       el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
       [cx, cy] = centre(el.getBoundingClientRect());
     }
     const inView = visible([cx, cy]);
     const top = inView ? document.elementFromPoint(cx, cy) : null;
     const hit = !!top && (top === el || el.contains(top) || (top.tagName === "LABEL" && top.control === el));
+    // Measure every field from the same starting scroll position.
+    if (scrolled) window.scrollTo({ left: startX, top: startY, behavior: "instant" });
     const labels = Array.from(el.labels || []).map((l) => l.textContent || "").join(" ");
     const named = (el.getAttribute("aria-labelledby") || "").split(/\\s+/)
       .map((id) => (id && document.getElementById(id) ? document.getElementById(id).textContent || "" : "")).join(" ");
@@ -169,8 +175,10 @@ const DESCRIBE_FIELDS = `(() => {
       el.getAttribute("data-braintree-name"), labels, named]
       .filter(Boolean).join(" | ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
-      hints, hit, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
+      hints, hit, scrolled, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
   });
+  // Leave the frame where it was; each field was hit-tested at its own scroll position.
+  window.scrollTo({ left: startX, top: startY, behavior: "instant" });
   // The browser lets a frame read its parent's document only when they share an origin, so this
   // cannot be spoofed by the frame's own script.
   let parentAccessible = false;
@@ -351,12 +359,21 @@ async function scan(
   return matches;
 }
 
-/** Matches per field, best first: highest score, then document order. */
+/**
+ * Matches per field, best first: highest score, then already in view ahead of reached by scrolling
+ * (an autofill copy parked below a frame's fold can scroll into view; the real field is in view),
+ * then document order.
+ */
 function rank(matches: Match[]): Map<CardField, Match[]> {
   const ranked = new Map<CardField, Match[]>();
   for (const m of matches)
     ranked.set(m.field, [...(ranked.get(m.field) ?? []), m]);
-  for (const list of ranked.values()) list.sort((a, b) => b.score - a.score);
+  for (const list of ranked.values())
+    list.sort(
+      (a, b) =>
+        b.score - a.score ||
+        Number(a.candidate.scrolled) - Number(b.candidate.scrolled),
+    );
   return ranked;
 }
 

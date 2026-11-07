@@ -58,6 +58,10 @@ const FRAMES: Record<string, string> = {
 <input name="cardnumber" autocomplete="cc-number" style="display:block;margin-top:10px;width:200px;height:30px">
 <input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="display:block;margin-top:70px;width:80px;height:30px">
 <input name="cvc" autocomplete="cc-csc" style="display:block;margin-top:20px;width:60px;height:30px">`,
+  // A copy parked below the frame's fold, before the real input that is in view.
+  "/vault/below": `<!doctype html><title>Field container for: Card number</title>
+<input id="copy" name="number" autocomplete="cc-number" style="position:absolute;left:0;top:400px;width:200px;height:30px">
+<input id="real" name="number" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">`,
   "/stripe/card": `<!doctype html><title>Secure card payment input frame</title>${MASKS}
 <input name="cardnumber" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">
 <input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
@@ -207,6 +211,9 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <label>CVV <input id="cvv" autocomplete="cc-csc" style="width:60px;height:30px"></label></html>`,
   "/stacked-frame": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/card-stack" style="width:320px;height:80px"></iframe>`,
+  "/copy-below": `<!doctype html><title>Checkout</title>
+<iframe src="FRAME_ORIGIN/vault/below" style="width:320px;height:60px"></iframe>
+${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
@@ -543,6 +550,18 @@ function serve(
       expect(page.frames()[1].url()).toMatch(/^data:/);
       expect(result.ok).toBe(false);
       expect(result.filled).not.toContain("cvc");
+      await page.close();
+    });
+
+    it("prefers the in-view field over an autofill copy parked below a frame's fold", async () => {
+      const page = await open("/copy-below");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      const vault = page
+        .frames()
+        .find((f) => f.url().includes("/vault/below"))!;
+      expect(await vault.locator("#real").inputValue()).toBe(CARD.number);
+      expect(await vault.locator("#copy").inputValue()).toBe("");
       await page.close();
     });
 
