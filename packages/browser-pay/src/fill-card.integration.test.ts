@@ -111,6 +111,31 @@ ${frame("/braintree/number")}${frame("/braintree/month")}${frame("/braintree/yea
   }
 }, 1500)</script>`,
   "/none": `<!doctype html><title>Checkout</title>${DECOYS}`,
+  "/untrusted": `<!doctype html><title>Checkout</title>${DECOYS}
+<iframe src="OTHER_ORIGIN/evil" style="width:600px;height:80px"></iframe>
+${frame("/shopify/number")}${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
+  "/titled": `<!doctype html><title>Card Number</title>
+<label>Email <input name="email" autocomplete="email" style="width:200px;height:30px"></label>
+<label>Card <input name="cardnumber" style="width:200px;height:30px"></label>
+<label>Expiry <input name="exp-date" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVC <input name="cvc" style="width:60px;height:30px"></label>`,
+  "/select-reset": `<!doctype html><title>Checkout</title>
+<label>Card number <input id="ccnum" style="width:200px;height:30px"></label>
+<select id="m" autocomplete="cc-exp-month"><option value="">MM</option><option value="03">03</option></select>
+<select id="y" autocomplete="cc-exp-year"><option value="">YYYY</option><option value="2029">2029</option></select>
+<label>CVV <input id="cvv" style="width:60px;height:30px"></label>
+<script>document.getElementById("m").addEventListener("change", (e) => { e.target.value = ""; });</script>`,
+  "/stray-month": `<!doctype html><title>Checkout</title>${MASKS}
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input id="exp" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
+<input id="month" autocomplete="cc-exp-month" style="width:40px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">
+<script>maskExpiry(document.getElementById("exp"));</script>`,
+  "/padded": `<!doctype html><title>Checkout</title>${MASKS}
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input id="exp" autocomplete="cc-exp" maxlength="9" placeholder="Expiration" style="width:80px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">
+<script>maskExpiry(document.getElementById("exp"));</script>`,
 };
 
 function findChromium(): boolean {
@@ -142,14 +167,38 @@ function serve(
     let browser: Browser;
     let top: http.Server;
     let frames: http.Server;
+    let other: http.Server;
     let topUrl: string;
+    let frameOrigin: string;
+    let otherOrigin: string;
+
+    // The fixture card iframes are on plain-http localhost, not a built-in card-vault host.
+    const fill = (page: Page, opts: { timeoutMs?: number } = {}) =>
+      fillCard(page as unknown as PageLike, CARD, {
+        keyDelayMs: 5,
+        frameOrigins: [frameOrigin],
+        ...opts,
+      });
 
     beforeAll(async () => {
       frames = await serve((p) => FRAMES[p]);
-      const framePort = (frames.address() as AddressInfo).port;
       // Same host, different hostname spelling: localhost vs 127.0.0.1 are different origins.
-      const frameOrigin = `http://localhost:${framePort}`;
-      top = await serve((p) => PAGES[p]?.replace(/FRAME_ORIGIN/g, frameOrigin));
+      frameOrigin = `http://localhost:${(frames.address() as AddressInfo).port}`;
+      // An unrelated embedded iframe that advertises card fields.
+      other = await serve((p) =>
+        p === "/evil"
+          ? `<!doctype html><title>Card</title>
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input autocomplete="cc-exp" style="width:80px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">`
+          : undefined,
+      );
+      otherOrigin = `http://localhost:${(other.address() as AddressInfo).port}`;
+      top = await serve((p) =>
+        PAGES[p]
+          ?.replace(/FRAME_ORIGIN/g, frameOrigin)
+          .replace(/OTHER_ORIGIN/g, otherOrigin),
+      );
       topUrl = `http://127.0.0.1:${(top.address() as AddressInfo).port}`;
       const { chromium } = await import("playwright");
       browser = await chromium.launch();
@@ -159,6 +208,7 @@ function serve(
       await browser?.close();
       top?.close();
       frames?.close();
+      other?.close();
     });
 
     async function open(path: string): Promise<Page> {
@@ -174,10 +224,13 @@ function serve(
 
     it("fills Shopify's one-iframe-per-field card form, masks included, and skips decoys", async () => {
       const page = await open("/shopify");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        keyDelayMs: 5,
+      const result = await fill(page);
+      expect(result).toMatchObject({
+        ok: true,
+        missing: [],
+        unconfirmed: [],
+        untrusted: [],
       });
-      expect(result).toMatchObject({ ok: true, missing: [], unconfirmed: [] });
       expect(result.filled).toEqual(["number", "expiry", "cvc", "name"]);
       expect(await valueIn(page, "/shopify/number")).toBe(
         "4000 0000 0000 0002",
@@ -186,15 +239,13 @@ function serve(
       expect(await valueIn(page, "/shopify/cvc")).toBe("321");
       expect(await page.locator('[name="phone"]').inputValue()).toBe("");
       expect(await page.locator('[name="email"]').inputValue()).toBe("");
-      expect(result.origins.number).toMatch(/^http:\/\/localhost:\d+$/);
+      expect(result.origins.number).toBe(frameOrigin);
       await page.close();
     });
 
     it("fills Stripe Elements' single iframe and leaves the postal code alone", async () => {
       const page = await open("/stripe");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        keyDelayMs: 5,
-      });
+      const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(result.filled).toEqual(["number", "expiry", "cvc"]);
       expect(await valueIn(page, "/stripe/card", "[name=exp-date]")).toBe(
@@ -206,9 +257,7 @@ function serve(
 
     it("fills Braintree hosted fields with split month and year", async () => {
       const page = await open("/braintree");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        keyDelayMs: 5,
-      });
+      const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(result.filled).toEqual(["number", "expMonth", "expYear", "cvc"]);
       expect(await valueIn(page, "/braintree/month")).toBe("03");
@@ -218,9 +267,7 @@ function serve(
 
     it("fills Adyen secured fields by their data-fieldtype", async () => {
       const page = await open("/adyen");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        keyDelayMs: 5,
-      });
+      const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(result.filled).toEqual(["number", "expiry", "cvc"]);
       await page.close();
@@ -228,9 +275,7 @@ function serve(
 
     it("fills plain inputs and expiry selects on the page itself", async () => {
       const page = await open("/plain");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        keyDelayMs: 5,
-      });
+      const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(result.filled).toEqual(["number", "expMonth", "expYear", "cvc"]);
       expect(await page.locator("#m").inputValue()).toBe("03");
@@ -240,24 +285,77 @@ function serve(
 
     it("waits for card iframes that load after the page", async () => {
       const page = await open("/delayed");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        keyDelayMs: 5,
-      });
+      const result = await fill(page);
       expect(result).toMatchObject({ ok: true, missing: [] });
       await page.close();
     }, 20_000);
 
+    it("never types into an iframe on an origin it was not given, and names it", async () => {
+      const page = await open("/untrusted");
+      const result = await fill(page);
+      expect(result).toMatchObject({ ok: true, untrusted: [otherOrigin] });
+      expect(Object.values(result.origins)).toEqual([
+        frameOrigin,
+        frameOrigin,
+        frameOrigin,
+      ]);
+      const evil = page.frames().find((f) => f.url().startsWith(otherOrigin))!;
+      for (const ac of ["cc-number", "cc-exp", "cc-csc"])
+        expect(await evil.locator(`[autocomplete=${ac}]`).inputValue()).toBe(
+          "",
+        );
+      await page.close();
+    });
+
+    it("does not read the page title as a field's label", async () => {
+      const page = await open("/titled");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator('[name="email"]').inputValue()).toBe("");
+      expect(await page.locator('[name="cardnumber"]').inputValue()).toBe(
+        CARD.number,
+      );
+      await page.close();
+    });
+
+    it("reports a select its change handler reset as unconfirmed", async () => {
+      const page = await open("/select-reset");
+      const result = await fill(page);
+      expect(result).toMatchObject({ ok: false, missing: ["expiry"] });
+      expect(result.unconfirmed).toContain("expMonth");
+      await page.close();
+    });
+
+    it("uses the combined expiry when only one split field exists", async () => {
+      const page = await open("/stray-month");
+      const result = await fill(page);
+      expect(result).toMatchObject({
+        ok: true,
+        filled: ["number", "expiry", "cvc"],
+      });
+      expect(await page.locator("#exp").inputValue()).toBe("03 / 29");
+      expect(await page.locator("#month").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("types a two-digit year into a padded MM / YY mask with a long maxlength", async () => {
+      const page = await open("/padded");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#exp").inputValue()).toBe("03 / 29");
+      await page.close();
+    });
+
     it("reports what is missing, without values, when there is no card form", async () => {
       const page = await open("/none");
-      const result = await fillCard(page as unknown as PageLike, CARD, {
-        timeoutMs: 1000,
-      });
+      const result = await fill(page, { timeoutMs: 1000 });
       expect(result).toEqual({
         ok: false,
         filled: [],
         missing: ["number", "expiry", "cvc"],
         unconfirmed: [],
         origins: {},
+        untrusted: [],
       });
       expect(JSON.stringify(result)).not.toContain(CARD.number);
       await page.close();

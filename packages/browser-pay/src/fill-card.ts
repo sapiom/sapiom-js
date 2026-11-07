@@ -48,6 +48,11 @@ export interface FillCardResult {
   unconfirmed: CardField[];
   /** Origin of each frame a field was filled in, keyed by field. */
   origins: Partial<Record<CardField, string>>;
+  /**
+   * Origins of frames that hold card fields but were not typed into, because they are neither the
+   * page's origin, a built-in card-vault origin, nor in `frameOrigins`.
+   */
+  untrusted: string[];
 }
 
 export interface FillCardOptions {
@@ -55,6 +60,11 @@ export interface FillCardOptions {
   keyDelayMs?: number;
   /** How long to wait for card fields to appear, in milliseconds. Defaults to 15000. */
   timeoutMs?: number;
+  /**
+   * Extra frame origins allowed to receive the card, such as a payment provider not in the built-in
+   * list. The page's own origin and the built-in card-vault origins are always allowed.
+   */
+  frameOrigins?: string[];
 }
 
 /** The parts of a Playwright `Locator` this helper uses. */
@@ -135,12 +145,12 @@ const DESCRIBE_FIELDS = `(() => {
       .map((id) => (id && document.getElementById(id) ? document.getElementById(id).textContent || "" : "")).join(" ");
     const hints = [el.getAttribute("name"), el.id, el.getAttribute("placeholder"), el.getAttribute("aria-label"),
       el.getAttribute("data-fieldtype"), el.getAttribute("data-elements-stable-field-name"),
-      el.getAttribute("data-braintree-name"), labels, named, document.title]
+      el.getAttribute("data-braintree-name"), labels, named]
       .filter(Boolean).join(" | ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
       hints, hit, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
   });
-  return out;
+  return { title: (document.title || "").toLowerCase(), fields: out };
 })()`;
 
 const AUTOCOMPLETE: Record<string, CardField> = {
@@ -200,6 +210,45 @@ function classify(
   return null;
 }
 
+/**
+ * Hosts of card vaults and payment providers that serve card-field iframes. A frame on any other
+ * origin than the page's own gets the card only when the caller lists it in `frameOrigins`, so an
+ * unrelated embedded iframe advertising card fields is never typed into.
+ */
+const CARD_VAULT_HOSTS = [
+  "shopifyinc.com",
+  "shopifycs.com",
+  "stripe.com",
+  "braintreegateway.com",
+  "braintree-api.com",
+  "adyen.com",
+  "adyenpayments.com",
+  "paypal.com",
+  "squareup.com",
+  "squarecdn.com",
+  "checkout.com",
+  "recurly.com",
+  "chargebee.com",
+  "spreedly.com",
+  "authorize.net",
+];
+
+/** Frame titles that mark a card iframe, where a bare `number`/`name`/`expiry` input is a card field. */
+const CARD_TITLE = /card|credit|payment|security code|cvv|cvc|expir/;
+
+function trusted(origin: string, top: string, extra: Set<string>): boolean {
+  if (origin === top || extra.has(origin)) return true;
+  try {
+    const { protocol, hostname } = new URL(origin);
+    return (
+      protocol === "https:" &&
+      CARD_VAULT_HOSTS.some((h) => hostname === h || hostname.endsWith(`.${h}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function originOf(url: string): string {
   try {
     return new URL(url).origin;
@@ -208,13 +257,23 @@ function originOf(url: string): string {
   }
 }
 
-async function scan(page: PageLike): Promise<Match[]> {
+async function scan(
+  page: PageLike,
+  extra: Set<string>,
+  untrusted: Set<string>,
+): Promise<Match[]> {
   const top = originOf(page.frames()[0]?.url() ?? "");
   const matches: Match[] = [];
   for (const frame of page.frames()) {
     let candidates: Candidate[];
+    let title: string;
     try {
-      candidates = await frame.evaluate<Candidate[]>(DESCRIBE_FIELDS);
+      const described = await frame.evaluate<{
+        title: string;
+        fields: Candidate[];
+      }>(DESCRIBE_FIELDS);
+      candidates = described.fields;
+      title = described.title;
     } catch {
       continue; // detached or navigating frame
     }
@@ -224,13 +283,18 @@ async function scan(page: PageLike): Promise<Match[]> {
     const origin = originOf(frame.url());
     // A frame on another origin holding few inputs is a card iframe; so is one with any field
     // that already names itself a card field.
+    // The title marks the frame, never a field: it is not one input's own label.
     const strong = candidates.some((c) => classify(c, false));
     const cardFrame =
       strong ||
-      (origin !== top && candidates.length > 0 && candidates.length <= 4);
+      (origin !== top &&
+        candidates.length > 0 &&
+        (candidates.length <= 4 || CARD_TITLE.test(title)));
+    const allowed = trusted(origin, top, extra);
     for (const candidate of candidates) {
       const hit = classify(candidate, cardFrame);
-      if (hit)
+      if (hit && !allowed) untrusted.add(origin);
+      else if (hit)
         matches.push({
           frame,
           origin,
@@ -256,10 +320,18 @@ function choose(matches: Match[]): Map<CardField, Match> {
 const digits = (s: string) => s.replace(/\D/g, "");
 const two = (n: number) => String(n % 100).padStart(2, "0");
 
-function expiryText(c: Candidate, card: CardToFill): string {
+/**
+ * What to type into a combined expiry, in order of preference. A placeholder that spells the year
+ * decides; otherwise two-digit first, then four-digit if the field did not read back. Length limits
+ * are not a hint: masks pad `MM / YY` with spaces.
+ */
+function expiryTexts(c: Candidate, card: CardToFill): string[] {
   const mm = two(card.expMonth);
-  const long = /yyyy/.test(c.placeholder) || c.maxLength >= 9;
-  return `${mm}/${long ? String(card.expYear) : two(card.expYear)}`;
+  const short = `${mm}/${two(card.expYear)}`;
+  const long = `${mm}/${card.expYear}`;
+  if (/yyyy/.test(c.placeholder)) return [long];
+  if (/\byy\b/.test(c.placeholder)) return [short];
+  return [short, long];
 }
 
 async function typeInto(
@@ -289,7 +361,12 @@ async function chooseOption(m: Match, options: string[]): Promise<boolean> {
     for (const spec of [{ value: o }, { label: o }]) {
       try {
         const picked = await el.selectOption([spec], { timeout: 2000 });
-        if (picked.length) return true;
+        // Read the field back after its change handlers ran; a handler may have reset it.
+        if (
+          picked.length &&
+          (await el.inputValue({ timeout: 2000 })) === picked[0]
+        )
+          return true;
       } catch {
         // try the next spelling
       }
@@ -311,7 +388,9 @@ export async function fillCard(
   const delay = options.keyDelayMs ?? 25;
   const deadline = Date.now() + (options.timeoutMs ?? 15000);
 
-  let best = choose(await scan(page));
+  const extra = new Set(options.frameOrigins ?? []);
+  const untrusted = new Set<string>();
+  let best = choose(await scan(page, extra, untrusted));
   // Card iframes load after the page; wait until a number field shows up or time runs out.
   const complete = () =>
     best.has("number") &&
@@ -319,7 +398,7 @@ export async function fillCard(
     (best.has("expiry") || (best.has("expMonth") && best.has("expYear")));
   while (!complete() && Date.now() < deadline) {
     await page.waitForTimeout(500);
-    best = choose(await scan(page));
+    best = choose(await scan(page, extra, untrusted));
   }
 
   const filled: CardField[] = [];
@@ -343,13 +422,24 @@ export async function fillCard(
     const m = best.get(field);
     if (!m) continue;
     if (field === "name" && !card.name) continue;
-    if (field === "expiry" && (best.has("expMonth") || best.has("expYear")))
+    if (field === "expiry" && best.has("expMonth") && best.has("expYear"))
+      continue;
+    if (
+      (field === "expMonth" || field === "expYear") &&
+      !(best.has("expMonth") && best.has("expYear"))
+    )
       continue;
     let ok: boolean;
     if (field === "expMonth" && m.candidate.tag === "select") {
       ok = await chooseOption(m, [two(card.expMonth), String(card.expMonth)]);
     } else if (field === "expYear" && m.candidate.tag === "select") {
       ok = await chooseOption(m, [String(card.expYear), two(card.expYear)]);
+    } else if (field === "expiry") {
+      ok = false;
+      for (const text of expiryTexts(m.candidate, card)) {
+        ok = await typeInto(m, text, true, delay).catch(() => false);
+        if (ok) break;
+      }
     } else {
       const text =
         field === "number"
@@ -358,13 +448,11 @@ export async function fillCard(
             ? card.cvc
             : field === "name"
               ? card.name!
-              : field === "expiry"
-                ? expiryText(m.candidate, card)
-                : field === "expMonth"
-                  ? two(card.expMonth)
-                  : m.candidate.maxLength === 2
-                    ? two(card.expYear)
-                    : String(card.expYear);
+              : field === "expMonth"
+                ? two(card.expMonth)
+                : m.candidate.maxLength === 2
+                  ? two(card.expYear)
+                  : String(card.expYear);
       ok = await typeInto(m, text, field !== "name", delay).catch(() => false);
     }
     record(field, ok);
@@ -376,5 +464,12 @@ export async function fillCard(
   if (!has("expiry") && !(has("expMonth") && has("expYear")))
     missing.push("expiry");
   if (!has("cvc")) missing.push("cvc");
-  return { ok: missing.length === 0, filled, missing, unconfirmed, origins };
+  return {
+    ok: missing.length === 0,
+    filled,
+    missing,
+    unconfirmed,
+    origins,
+    untrusted: [...untrusted],
+  };
 }
