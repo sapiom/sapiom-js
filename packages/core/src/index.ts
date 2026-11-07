@@ -73,6 +73,7 @@ export type {
   CompleteTransactionRequest,
   CompleteTransactionResult,
   CreateTransactionRequest,
+  CreatePurchaseRequest,
   TransactionResponse,
   PaymentTransactionResponse,
   PaymentProtocolData,
@@ -153,3 +154,18 @@ export type {
   CardSpendingLimitsSummary,
   CardAllowanceUsage,
 } from "./types/payment-card.js";
+
+export type {
+  PurchaseRequest,
+  PurchaseShipping,
+  PurchaseMerchant,
+  PurchaseMoney,
+  TransactionFunding,
+  PurchaseWriteOptions,
+  PurchaseWaitOptions,
+  PurchaseView,
+  PurchaseOrder,
+  TransactionCompatibility,
+  CheckoutEnvelope,
+  CheckoutNextAction,
+} from "./types/purchase.js";

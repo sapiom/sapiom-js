@@ -35,7 +35,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "examples"
   ],
   "scripts": {
     "build": "npm run build:cjs && npm run build:esm && npm run build:esm-pkg",

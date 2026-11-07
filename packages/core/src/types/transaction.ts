@@ -1,3 +1,11 @@
+import type {
+  PurchaseRequest,
+  PurchaseShipping,
+  TransactionFunding,
+  PurchaseView,
+  PurchaseOrder,
+} from "./purchase.js";
+
 export enum TransactionStatus {
   PENDING = "pending",
   PREPARING = "preparing",
@@ -20,6 +28,9 @@ export interface TransactionCostInput {
 }
 
 export interface CreateTransactionRequest {
+  purchase?: never;
+  funding?: TransactionFunding;
+  shipping?: PurchaseShipping;
   requestFacts?: {
     source: string;
     version: string;
@@ -40,7 +51,35 @@ export interface CreateTransactionRequest {
   costs?: TransactionCostInput[];
 }
 
+export type CreatePurchaseRequest = Omit<
+  CreateTransactionRequest,
+  | "requestFacts"
+  | "serviceName"
+  | "actionName"
+  | "resourceName"
+  | "paymentData"
+  | "shipping"
+  | "purchase"
+> & {
+  funding: TransactionFunding;
+} & (
+    | {
+        purchase: Extract<PurchaseRequest, { type: "ucp_checkout" }>;
+        shipping?: PurchaseShipping;
+      }
+    | {
+        purchase: Extract<PurchaseRequest, { type: "browser_checkout" }>;
+        shipping?: never;
+      }
+  );
+
 export interface PaymentTransactionResponse {
+  paymentMethodId?: string | null;
+  paymentMethodKind?: string | null;
+  paymentCardId?: string | null;
+  fundingSource?: string;
+  fiatAmount?: string | null;
+  fiatAssetSymbol?: string | null;
   id: string;
   transactionId: string;
   protocol: string;
@@ -80,6 +119,10 @@ export interface TransactionCostResponse {
 }
 
 export interface TransactionResponse {
+  purchase?: PurchaseView;
+  order?: PurchaseOrder | null;
+  paymentMethodId?: string | null;
+  paymentMethodKind?: string | null;
   /** Changes with the actionable purchase/verification state; usable with a bounded get. */
   version?: string;
   nextAction?: {
