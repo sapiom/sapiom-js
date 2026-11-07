@@ -371,8 +371,9 @@ async function scan(
 }
 
 /**
- * Matches per field, best first. Within one frame and at equal score, a field in view now beats one
- * reached by scrolling. Otherwise highest score; then, among duplicates of a field, one a person can
+ * Matches per field, best first. Within one frame, a field in view now beats one reached by
+ * scrolling: in a card frame on another origin always, on the page's own origin at equal score.
+ * Otherwise highest score; then, among duplicates of a field, one a person can
  * see on the page right now (uncovered in its frame and inside the main viewport, judged through
  * every iframe by Playwright's bounding box); then document order. Positions inside one frame's
  * viewport are never compared with another frame's.
@@ -385,6 +386,7 @@ async function rank(
   for (const m of matches)
     ranked.set(m.field, [...(ranked.get(m.field) ?? []), m]);
   const main = page.frames()[0];
+  const topOrigin = originOf(main?.url() ?? "");
   const viewport = await main
     ?.evaluate<{
       w: number;
@@ -406,15 +408,15 @@ async function rank(
     const seen = new Map<Match, boolean>();
     for (const m of list) seen.set(m, await onScreen(m));
     list.sort((a, b) => {
-      // Within one frame, between equally scored matches (an autofill copy carries the real field's
-      // attributes), the one in view now beats one reached only by scrolling, whatever the frame's
-      // place on the page. A card-specific match still outranks a bare one.
-      if (
-        a.frame === b.frame &&
-        a.score === b.score &&
-        a.candidate.hit !== b.candidate.hit
-      )
-        return Number(b.candidate.hit) - Number(a.candidate.hit);
+      // Within one frame, a field in view now beats one reached only by scrolling: inside a card
+      // frame on another origin (a vault, whose autofill copies can carry stronger attributes than
+      // the real field) whatever the score, and on the page's own origin only at equal score, so a
+      // visible bare match such as a house number never outranks a card-specific field.
+      if (a.frame === b.frame && a.candidate.hit !== b.candidate.hit) {
+        const vault = a.frame !== main && a.origin !== topOrigin;
+        if (vault || a.score === b.score)
+          return Number(b.candidate.hit) - Number(a.candidate.hit);
+      }
       return b.score - a.score || Number(seen.get(b)) - Number(seen.get(a));
     });
     ranked.set(field, list);
