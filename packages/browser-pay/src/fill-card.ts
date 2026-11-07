@@ -148,14 +148,13 @@ const DESCRIBE_FIELDS = `(() => {
     if (rect.width < 2 || rect.height < 2 || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return;
     // Card vaults put a copy of every card input in each field's iframe for autofill; only the
     // one a person can click is real. Hit-test its centre inside its own frame's viewport.
-    // A card-vault iframe shows its real field in its own viewport, so a field there counts only as
-    // it is now. On the page itself a real field can sit below the fold: scroll it into view
-    // vertically (instantly, so the position is final), but never sideways, so a copy parked to the
-    // left or right stays out of view.
+    // A real field can sit below the fold of the page or of a scrollable card frame: scroll it into
+    // view vertically (instantly, so the position is final). Never scroll sideways, so an autofill
+    // copy parked to the left or right of the viewport stays out of view.
     const centre = (r) => [r.left + r.width / 2, r.top + r.height / 2];
     const visible = ([x, y]) => x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
     let [cx, cy] = centre(rect);
-    if (!visible([cx, cy]) && window === window.top && cx >= 0 && cx <= window.innerWidth) {
+    if (!visible([cx, cy]) && cx >= 0 && cx <= window.innerWidth) {
       el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
       [cx, cy] = centre(el.getBoundingClientRect());
     }
