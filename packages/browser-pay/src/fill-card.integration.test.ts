@@ -43,6 +43,12 @@ const FRAMES: Record<string, string> = {
     'id="name" name="name" autocomplete="cc-name" placeholder="Name on card"',
     "Field container for: Name on card",
   ),
+  // Like Shopify's card vault: every card input is in the frame, only one is on screen.
+  "/vault/number": `<!doctype html><title>Field container for: Card number</title>
+<input name="name" autocomplete="cc-name" style="position:absolute;left:-9999px;width:200px;height:30px">
+<input name="expiry" autocomplete="cc-exp" style="position:absolute;left:-9999px;width:200px;height:30px">
+<input name="verification_value" autocomplete="cc-csc" style="position:absolute;left:-9999px;width:200px;height:30px">
+<input id="real" name="number" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">`,
   "/stripe/card": `<!doctype html><title>Secure card payment input frame</title>${MASKS}
 <input name="cardnumber" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">
 <input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
@@ -162,6 +168,24 @@ e.addEventListener("input", () => { e.value = e.value.replace(/\\D/g, "").slice(
   "/yy-placeholder-four-pattern": `<!doctype html><title>Checkout</title>
 <input autocomplete="cc-number" style="width:200px;height:30px">
 <input id="exp" autocomplete="cc-exp" placeholder="MM/YY" pattern="\\d{2}/\\d{4}" style="width:90px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">`,
+  "/autofill-copies": `<!doctype html><title>Checkout</title>
+<iframe src="FRAME_ORIGIN/vault/number" style="width:320px;height:60px"></iframe>
+${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
+  "/below-fold": `<!doctype html><title>Checkout</title>
+<label>Email <input name="email" autocomplete="email" style="width:200px;height:30px"></label>
+<div style="height:3000px"></div>
+<label>Card number <input id="ccnum" autocomplete="cc-number" style="width:200px;height:30px"></label>
+<label>Expiry <input id="exp" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVV <input id="cvv" autocomplete="cc-csc" style="width:60px;height:30px"></label>`,
+  "/month-names": `<!doctype html><title>Checkout</title>
+<label>Card number <input id="ccnum" style="width:200px;height:30px"></label>
+<select id="m" autocomplete="cc-exp-month"><option value="">Month</option>${["January", "February", "March", "April"].map((n) => `<option>${n}</option>`).join("")}</select>
+<select id="y" autocomplete="cc-exp-year"><option value="">Year</option><option>2029</option></select>
+<label>CVV <input id="cvv" style="width:60px;height:30px"></label>`,
+  "/compact": `<!doctype html><title>Checkout</title>
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input id="exp" autocomplete="cc-exp" maxlength="4" style="width:90px;height:30px">
 <input autocomplete="cc-csc" style="width:60px;height:30px">`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
@@ -404,6 +428,64 @@ function serve(
       const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(await page.locator("#exp").inputValue()).toBe("03/2029");
+      await page.close();
+    });
+
+    it("types into the on-screen field of a card-vault frame, not its autofill copies", async () => {
+      const page = await open("/autofill-copies");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      const vault = page
+        .frames()
+        .find((f) => f.url().includes("/vault/number"))!;
+      expect(await vault.locator("#real").inputValue()).toBe(CARD.number);
+      for (const name of ["name", "expiry", "verification_value"])
+        expect(await vault.locator(`[name=${name}]`).inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("fills card fields below the fold on the page itself", async () => {
+      const page = await open("/below-fold");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#ccnum").inputValue()).toBe(CARD.number);
+      expect(await page.locator('[name="email"]').inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("picks an expiry month select that uses month names", async () => {
+      const page = await open("/month-names");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#m").inputValue()).toBe("March");
+      await page.close();
+    });
+
+    it("falls back to compact MMYY for an unmasked four-character expiry", async () => {
+      const page = await open("/compact");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#exp").inputValue()).toBe("0329");
+      await page.close();
+    });
+
+    it("refuses an unusable card before touching any field, without echoing it", async () => {
+      const page = await open("/plain");
+      await expect(
+        fillCard(
+          page as unknown as PageLike,
+          { ...CARD, expMonth: Number.NaN },
+          { frameOrigins: [frameOrigin] },
+        ),
+      ).rejects.toThrow(/not usable/);
+      await expect(
+        fillCard(
+          page as unknown as PageLike,
+          { ...CARD, cvc: "" },
+          { frameOrigins: [frameOrigin] },
+        ),
+      ).rejects.not.toThrow(new RegExp(CARD.number));
+      expect(await page.locator("#ccnum").inputValue()).toBe("");
       await page.close();
     });
 

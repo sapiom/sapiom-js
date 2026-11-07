@@ -90,6 +90,7 @@ export interface FieldElement {
   validity?: { valid: boolean };
   getAttribute(name: string): string | null;
   blur?(): void;
+  options?: ArrayLike<{ value: string; text: string }>;
 }
 
 /** The parts of a Playwright `Frame` this helper uses. */
@@ -145,8 +146,15 @@ const DESCRIBE_FIELDS = `(() => {
     if (rect.width < 2 || rect.height < 2 || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return;
     // Card vaults put a copy of every card input in each field's iframe for autofill; only the
     // one a person can click is real. Hit-test its centre inside its own frame's viewport.
-    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
-    const inView = cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight;
+    // A real field below the fold scrolls into view; a copy parked outside the document cannot.
+    const centre = (r) => [r.left + r.width / 2, r.top + r.height / 2];
+    const visible = ([x, y]) => x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
+    let [cx, cy] = centre(rect);
+    if (!visible([cx, cy])) {
+      el.scrollIntoView({ block: "center", inline: "center" });
+      [cx, cy] = centre(el.getBoundingClientRect());
+    }
+    const inView = visible([cx, cy]);
     const top = inView ? document.elementFromPoint(cx, cy) : null;
     const hit = !!top && (top === el || el.contains(top) || (top.tagName === "LABEL" && top.control === el));
     const labels = Array.from(el.labels || []).map((l) => l.textContent || "").join(" ");
@@ -207,6 +215,7 @@ const BARE: Array<[CardField, RegExp]> = [
   ["expiry", /^expiry\b/],
 ];
 
+/** The card field a candidate is, and how sure: 3 by `autocomplete`, 2 by a card-specific name, 1 bare. */
 function classify(
   c: Candidate,
   cardFrame: boolean,
@@ -249,6 +258,7 @@ const CARD_VAULT_HOSTS = [
 /** Frame titles that mark a card iframe, where a bare `number`/`name`/`expiry` input is a card field. */
 const CARD_TITLE = /card|credit|payment|security code|cvv|cvc|expir/;
 
+/** Whether a frame on `origin` may receive the card. */
 function trusted(origin: string, top: string, extra: Set<string>): boolean {
   if (origin === top || extra.has(origin)) return true;
   try {
@@ -262,6 +272,7 @@ function trusted(origin: string, top: string, extra: Set<string>): boolean {
   }
 }
 
+/** The origin of a URL, or "" when it has none. */
 function originOf(url: string): string {
   try {
     return new URL(url).origin;
@@ -270,6 +281,7 @@ function originOf(url: string): string {
   }
 }
 
+/** Every allowed card-field match in every frame; origins of disallowed card frames go to `untrusted`. */
 async function scan(
   page: PageLike,
   extra: Set<string>,
@@ -334,36 +346,91 @@ async function scan(
   return matches;
 }
 
-/** The best match per field: highest score, then document order. */
-function choose(matches: Match[]): Map<CardField, Match> {
-  const best = new Map<CardField, Match>();
-  for (const m of matches) {
-    const cur = best.get(m.field);
-    if (!cur || m.score > cur.score) best.set(m.field, m);
-  }
-  return best;
+/** Matches per field, best first: highest score, then document order. */
+function rank(matches: Match[]): Map<CardField, Match[]> {
+  const ranked = new Map<CardField, Match[]>();
+  for (const m of matches)
+    ranked.set(m.field, [...(ranked.get(m.field) ?? []), m]);
+  for (const list of ranked.values()) list.sort((a, b) => b.score - a.score);
+  return ranked;
 }
 
+/** Only the digits of `s`. */
 const digits = (s: string) => s.replace(/\D/g, "");
+/** The last two digits of `n`, zero-padded. */
 const two = (n: number) => String(n % 100).padStart(2, "0");
+
+const MONTHS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
 
 /**
  * What to type into a combined expiry, in order: two-digit year first, unless the placeholder spells
- * YYYY. Both are always tried, and a candidate counts only if the field reads it back and does not
- * mark itself invalid; the field's own `pattern` takes part through constraint validation. Hints only
- * order the attempts: a `YY` placeholder can sit on an `MM/YYYY` pattern, masks pad `MM / YY` with
- * spaces, and `\\d{4}` can mean MMYY.
+ * YYYY, then the compact `MMYY`. Every spelling is tried, and one counts only if the field reads it
+ * back and does not mark itself invalid; the field's own `pattern` takes part through constraint
+ * validation. Hints only order the attempts: a `YY` placeholder can sit on an `MM/YYYY` pattern,
+ * masks pad `MM / YY` with spaces, and `\\d{4}` can mean MMYY.
  */
 function expiryTexts(c: Candidate, card: CardToFill): string[] {
   const mm = two(card.expMonth);
   const short = `${mm}/${two(card.expYear)}`;
   const long = `${mm}/${card.expYear}`;
-  return /yyyy/.test(c.placeholder) ? [long, short] : [short, long];
+  const ordered = /yyyy/.test(c.placeholder) ? [long, short] : [short, long];
+  return [...ordered, `${mm}${two(card.expYear)}`];
+}
+
+/** Rejects a card that cannot be typed, before any field is touched. Messages carry no values. */
+function assertCard(card: CardToFill): void {
+  const n = digits(card.number ?? "");
+  const cvc = digits(card.cvc ?? "");
+  const ok =
+    n.length >= 12 &&
+    n.length <= 19 &&
+    n === card.number.replace(/[\s-]/g, "") &&
+    cvc.length >= 3 &&
+    cvc.length <= 4 &&
+    cvc === card.cvc &&
+    Number.isInteger(card.expMonth) &&
+    card.expMonth >= 1 &&
+    card.expMonth <= 12 &&
+    Number.isInteger(card.expYear) &&
+    card.expYear >= 2000 &&
+    card.expYear <= 2099;
+  if (!ok)
+    throw new TypeError(
+      "fillCard: the card's number, security code or expiry is not usable",
+    );
+}
+
+/** The field a match points at. */
+const fieldOf = (m: Match) => m.frame.locator(SELECTOR).nth(m.candidate.index);
+
+/** The field's current value, as digits or trimmed text. */
+async function readBack(m: Match, expectDigits: boolean): Promise<string> {
+  const v = await fieldOf(m).inputValue({ timeout: 2000 });
+  return expectDigits ? digits(v) : v.trim();
+}
+
+/** Whether the frame still shows the document the match was found in, judged by its origin. */
+function sameDocumentOrigin(m: Match): boolean {
+  const now = originOf(m.frame.url());
+  return now === "" || now === "null" || now === m.origin;
 }
 
 /** Whether the field rejects what was typed: its constraint validation, or `aria-invalid` after blur. */
 async function invalid(m: Match): Promise<boolean> {
-  const el = m.frame.locator(SELECTOR).nth(m.candidate.index);
+  const el = fieldOf(m);
   await el.evaluate((e) => e.blur?.()).catch(() => undefined);
   await new Promise((r) => setTimeout(r, 150));
   return el
@@ -375,130 +442,194 @@ async function invalid(m: Match): Promise<boolean> {
     .catch(() => false);
 }
 
+/** Types `text` like a person and reads it back; a direct fill is the fallback for masks that drop keys. */
 async function typeInto(
   m: Match,
   text: string,
   expectDigits: boolean,
   delay: number,
 ): Promise<boolean> {
-  const el = m.frame.locator(SELECTOR).nth(m.candidate.index);
-  const read = async () => {
-    const v = await el.inputValue({ timeout: 2000 });
-    return expectDigits ? digits(v) : v.trim();
-  };
+  // A frame that navigated away may now hold someone else's document: never type into it.
+  if (!sameDocumentOrigin(m)) return false;
+  const el = fieldOf(m);
   const want = expectDigits ? digits(text) : text.trim();
   await el.click({ timeout: 5000 });
   await el.fill("", { timeout: 5000 }).catch(() => undefined);
   await el.pressSequentially(text, { delay, timeout: 15000 });
-  if ((await read().catch(() => "")) === want) return true;
-  // Some masks drop keystrokes typed too fast; a direct fill is the fallback.
+  if ((await readBack(m, expectDigits).catch(() => "")) === want) return true;
+  if (!sameDocumentOrigin(m)) return false;
   await el.fill(text, { timeout: 5000 }).catch(() => undefined);
-  return (await read().catch(() => "")) === want;
+  return (await readBack(m, expectDigits).catch(() => "")) === want;
 }
 
-async function chooseOption(m: Match, options: string[]): Promise<boolean> {
-  const el = m.frame.locator(SELECTOR).nth(m.candidate.index);
-  for (const o of options) {
-    for (const spec of [{ value: o }, { label: o }]) {
-      try {
-        const picked = await el.selectOption([spec], { timeout: 2000 });
-        // Read the field back after its change handlers ran; a handler may have reset it.
-        if (
-          picked.length &&
-          (await el.inputValue({ timeout: 2000 })) === picked[0]
-        )
-          return true;
-      } catch {
-        // try the next spelling
-      }
+/**
+ * Tries each spelling in turn. With `validate`, a spelling counts only if the field is valid after
+ * blur and still holds it. Returns the digits or text that stuck, or null.
+ */
+async function typeFirst(
+  m: Match,
+  texts: string[],
+  expectDigits: boolean,
+  validate: boolean,
+  delay: number,
+): Promise<string | null> {
+  for (const text of texts) {
+    const want = expectDigits ? digits(text) : text.trim();
+    if (!(await typeInto(m, text, expectDigits, delay).catch(() => false)))
+      continue;
+    if (!validate) return want;
+    if (await invalid(m)) continue;
+    // A blur handler may clear or rewrite the field.
+    if ((await readBack(m, expectDigits).catch(() => "")) === want) return want;
+  }
+  return null;
+}
+
+/** Picks the first option that matches a spelling and survives the select's change handlers. */
+async function chooseOption(
+  m: Match,
+  spellings: string[],
+): Promise<string | null> {
+  const el = fieldOf(m);
+  const options = await el
+    .evaluate((e) =>
+      Array.from(e.options ?? []).map((o) => [o.value, o.text.trim()]),
+    )
+    .catch(() => [] as string[][]);
+  const lower = (s: string) => s.toLowerCase();
+  for (const s of spellings) {
+    const hit = options.find(
+      ([value, text]) => lower(value) === lower(s) || lower(text) === lower(s),
+    );
+    if (!hit) continue;
+    try {
+      const picked = await el.selectOption([{ value: hit[0] }], {
+        timeout: 2000,
+      });
+      // Read the field back after its change handlers ran; a handler may have reset it.
+      if (
+        picked.length &&
+        (await el.inputValue({ timeout: 2000 })) === picked[0]
+      )
+        return picked[0];
+    } catch {
+      // try the next spelling
     }
   }
-  return false;
+  return null;
+}
+
+/** Spellings of the expiry month an `<option>` might use: 03, 3, March, Mar. */
+function monthOptions(month: number): string[] {
+  const name = MONTHS[month - 1];
+  return [two(month), String(month), name, name.slice(0, 3)];
 }
 
 /**
  * Types `card` into the checkout's card form on `page` (a Playwright page connected over CDP).
  * Call it after `attachInterceptor`, with the placeholder the purchase returned, once the payment
- * form is on screen. It does not press Pay.
+ * form is on screen. It does not press Pay. It throws a `TypeError` (with no card values) before
+ * touching any field when the card's number, security code or expiry is not usable.
  */
 export async function fillCard(
   page: PageLike,
   card: CardToFill,
   options: FillCardOptions = {},
 ): Promise<FillCardResult> {
+  assertCard(card);
   const delay = options.keyDelayMs ?? 25;
   const deadline = Date.now() + (options.timeoutMs ?? 15000);
 
   const extra = new Set(options.frameOrigins ?? []);
   const untrusted = new Set<string>();
-  let best = choose(await scan(page, extra, untrusted));
-  // Card iframes load after the page; wait until a number field shows up or time runs out.
+  let ranked = rank(await scan(page, extra, untrusted));
+  // Card iframes load after the page; wait until the whole card form is there or time runs out.
   const complete = () =>
-    best.has("number") &&
-    best.has("cvc") &&
-    (best.has("expiry") || (best.has("expMonth") && best.has("expYear")));
+    ranked.has("number") &&
+    ranked.has("cvc") &&
+    (ranked.has("expiry") || (ranked.has("expMonth") && ranked.has("expYear")));
   while (!complete() && Date.now() < deadline) {
     await page.waitForTimeout(500);
-    best = choose(await scan(page, extra, untrusted));
+    ranked = rank(await scan(page, extra, untrusted));
   }
+
+  const split = ranked.has("expMonth") && ranked.has("expYear");
+  const mm = two(card.expMonth);
+  const plan: Array<[CardField, (m: Match) => Promise<string | null>]> = [
+    ["number", (m) => typeFirst(m, [card.number], true, false, delay)],
+    ...(split
+      ? ([
+          [
+            "expMonth",
+            (m: Match) =>
+              m.candidate.tag === "select"
+                ? chooseOption(m, monthOptions(card.expMonth))
+                : typeFirst(m, [mm, String(card.expMonth)], true, true, delay),
+          ],
+          [
+            "expYear",
+            (m: Match) =>
+              m.candidate.tag === "select"
+                ? chooseOption(m, [String(card.expYear), two(card.expYear)])
+                : typeFirst(
+                    m,
+                    m.candidate.maxLength === 2
+                      ? [two(card.expYear)]
+                      : [String(card.expYear), two(card.expYear)],
+                    true,
+                    true,
+                    delay,
+                  ),
+          ],
+        ] as Array<[CardField, (m: Match) => Promise<string | null>]>)
+      : ([
+          [
+            "expiry",
+            (m: Match) =>
+              typeFirst(m, expiryTexts(m.candidate, card), true, true, delay),
+          ],
+        ] as Array<[CardField, (m: Match) => Promise<string | null>]>)),
+    ["cvc", (m) => typeFirst(m, [card.cvc], true, false, delay)],
+    ...(card.name
+      ? ([
+          [
+            "name",
+            (m: Match) => typeFirst(m, [card.name!], false, false, delay),
+          ],
+        ] as Array<[CardField, (m: Match) => Promise<string | null>]>)
+      : []),
+  ];
 
   const filled: CardField[] = [];
   const unconfirmed: CardField[] = [];
   const origins: Partial<Record<CardField, string>> = {};
-  const record = (field: CardField, ok: boolean) => {
-    const m = best.get(field)!;
-    origins[field] = m.origin;
-    (ok ? filled : unconfirmed).push(field);
-  };
-
-  const order: CardField[] = [
-    "number",
-    "expiry",
-    "expMonth",
-    "expYear",
-    "cvc",
-    "name",
-  ];
-  for (const field of order) {
-    const m = best.get(field);
-    if (!m) continue;
-    if (field === "name" && !card.name) continue;
-    if (field === "expiry" && best.has("expMonth") && best.has("expYear"))
-      continue;
-    if (
-      (field === "expMonth" || field === "expYear") &&
-      !(best.has("expMonth") && best.has("expYear"))
-    )
-      continue;
-    let ok: boolean;
-    if (field === "expMonth" && m.candidate.tag === "select") {
-      ok = await chooseOption(m, [two(card.expMonth), String(card.expMonth)]);
-    } else if (field === "expYear" && m.candidate.tag === "select") {
-      ok = await chooseOption(m, [String(card.expYear), two(card.expYear)]);
-    } else if (field === "expiry") {
-      ok = false;
-      for (const text of expiryTexts(m.candidate, card)) {
-        ok =
-          (await typeInto(m, text, true, delay).catch(() => false)) &&
-          !(await invalid(m));
-        if (ok) break;
+  const stuck = new Map<CardField, { m: Match; value: string }>();
+  for (const [field, write] of plan) {
+    const matches = ranked.get(field);
+    if (!matches) continue;
+    // A covered or detached field fails its click; the next match for the field gets a turn.
+    let done: { m: Match; value: string } | null = null;
+    for (const m of matches) {
+      const value = await write(m).catch(() => null);
+      if (value !== null) {
+        done = { m, value };
+        break;
       }
-    } else {
-      const text =
-        field === "number"
-          ? card.number
-          : field === "cvc"
-            ? card.cvc
-            : field === "name"
-              ? card.name!
-              : field === "expMonth"
-                ? two(card.expMonth)
-                : m.candidate.maxLength === 2
-                  ? two(card.expYear)
-                  : String(card.expYear);
-      ok = await typeInto(m, text, field !== "name", delay).catch(() => false);
     }
-    record(field, ok);
+    origins[field] = (done?.m ?? matches[0]).origin;
+    if (done) stuck.set(field, done);
+    else unconfirmed.push(field);
+  }
+
+  // A later field's handlers can reset an earlier one: read every field back once more.
+  for (const [field, { m, value }] of stuck) {
+    const now =
+      m.candidate.tag === "select"
+        ? await fieldOf(m)
+            .inputValue({ timeout: 2000 })
+            .catch(() => "")
+        : await readBack(m, field !== "name").catch(() => "");
+    (now === value ? filled : unconfirmed).push(field);
   }
 
   const has = (f: CardField) => filled.includes(f);

@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   // Only field kinds and frame origins: safe to log.
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!result.ok) {
-    // Nothing was sent. Cancel the purchase or retry the fill; never press Pay half-filled.
+    // Never press Pay half-filled. Read the purchase before retrying the fill or cancelling.
     process.exitCode = 1;
   }
   await browser.close();
