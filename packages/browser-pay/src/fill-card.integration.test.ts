@@ -236,6 +236,10 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <iframe src="FRAME_ORIGIN/lone-number" style="width:320px;height:60px"></iframe>`,
   "/scrollbox-frame": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/box-card" style="width:320px;height:140px"></iframe>`,
+  "/vault-below-fold": `<!doctype html><title>Checkout</title>
+<div style="height:2000px"></div>
+<iframe src="FRAME_ORIGIN/vault/below" style="width:320px;height:60px"></iframe>
+${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
@@ -577,6 +581,18 @@ function serve(
 
     it("prefers the in-view field over an autofill copy parked below a frame's fold", async () => {
       const page = await open("/copy-below");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      const vault = page
+        .frames()
+        .find((f) => f.url().includes("/vault/below"))!;
+      expect(await vault.locator("#real").inputValue()).toBe(CARD.number);
+      expect(await vault.locator("#copy").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("prefers a vault frame's in-view field over its copy when the frame is below the page fold", async () => {
+      const page = await open("/vault-below-fold");
       const result = await fill(page);
       expect(result.ok).toBe(true);
       const vault = page

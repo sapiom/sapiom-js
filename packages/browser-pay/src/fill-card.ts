@@ -371,7 +371,8 @@ async function scan(
 }
 
 /**
- * Matches per field, best first: highest score; then, among duplicates of a field, one a person can
+ * Matches per field, best first. Within one frame, a field in view now beats one reached by scrolling.
+ * Otherwise highest score; then, among duplicates of a field, one a person can
  * see on the page right now (uncovered in its frame and inside the main viewport, judged through
  * every iframe by Playwright's bounding box); then document order. Positions inside one frame's
  * viewport are never compared with another frame's.
@@ -404,9 +405,13 @@ async function rank(
     if (list.length < 2) continue;
     const seen = new Map<Match, boolean>();
     for (const m of list) seen.set(m, await onScreen(m));
-    list.sort(
-      (a, b) => b.score - a.score || Number(seen.get(b)) - Number(seen.get(a)),
-    );
+    list.sort((a, b) => {
+      // Within one frame, a field in view now beats one reached only by scrolling (an autofill copy
+      // further down a vault's document), whatever the frame's place on the page or the score.
+      if (a.frame === b.frame && a.candidate.hit !== b.candidate.hit)
+        return Number(b.candidate.hit) - Number(a.candidate.hit);
+      return b.score - a.score || Number(seen.get(b)) - Number(seen.get(a));
+    });
     ranked.set(field, list);
   }
   return ranked;
