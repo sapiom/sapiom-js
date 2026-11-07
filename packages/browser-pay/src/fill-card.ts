@@ -117,8 +117,6 @@ interface Candidate {
   hit: boolean;
   maxLength: number;
   placeholder: string;
-  /** The input's `pattern` attribute, which can require a four-digit year. */
-  pattern: string;
 }
 
 interface Match {
@@ -159,7 +157,7 @@ const DESCRIBE_FIELDS = `(() => {
       el.getAttribute("data-braintree-name"), labels, named]
       .filter(Boolean).join(" | ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
-      hints, hit, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase(), pattern: el.getAttribute("pattern") || "" });
+      hints, hit, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
   });
   // The browser lets a frame read its parent's document only when they share an origin, so this
   // cannot be spoofed by the frame's own script.
@@ -350,20 +348,17 @@ const digits = (s: string) => s.replace(/\D/g, "");
 const two = (n: number) => String(n % 100).padStart(2, "0");
 
 /**
- * What to type into a combined expiry, in order of preference. A `pattern` or placeholder that
- * spells the year width decides. Otherwise two digits first, then four, and a candidate counts only
- * if the field reads it back and does not mark itself invalid. Length limits are not a hint: masks
- * pad `MM / YY` with spaces.
+ * What to type into a combined expiry, in order of preference. A placeholder that spells the year
+ * width decides. Otherwise two digits first, then four, and a candidate counts only if the field
+ * reads it back and does not mark itself invalid; the field's own `pattern` takes part through
+ * constraint validation. Length limits and patterns are not read as a year width: masks pad
+ * `MM / YY` with spaces, and `\\d{4}` can mean MMYY.
  */
 function expiryTexts(c: Candidate, card: CardToFill): string[] {
   const mm = two(card.expMonth);
   const short = `${mm}/${two(card.expYear)}`;
   const long = `${mm}/${card.expYear}`;
-  if (
-    /\\d\{4\}|\[0-9\]\{4\}|(\\d){4}/.test(c.pattern) ||
-    /yyyy/.test(c.placeholder)
-  )
-    return [long];
+  if (/yyyy/.test(c.placeholder)) return [long];
   if (/\byy\b/.test(c.placeholder)) return [short];
   return [short, long];
 }
