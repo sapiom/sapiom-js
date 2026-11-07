@@ -62,6 +62,19 @@ const FRAMES: Record<string, string> = {
   "/vault/below": `<!doctype html><title>Field container for: Card number</title>
 <input id="copy" name="number" autocomplete="cc-number" style="position:absolute;left:0;top:400px;width:200px;height:30px">
 <input id="real" name="number" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">`,
+  // A card-number input at the top of its own frame; used where the frame sits below the page's fold.
+  "/lone-number": `<!doctype html><title>Card</title>
+<input id="other" autocomplete="cc-number" style="width:200px;height:30px">`,
+  // A scrollbox whose real input sits below its fold, followed closely by a duplicate.
+  "/box-card": `<!doctype html><title>Card</title>
+<div id="box" style="height:60px;overflow:auto">
+  <div style="height:200px"></div>
+  <input id="real" autocomplete="cc-number" style="display:block;width:200px;height:30px">
+  <input id="dup" autocomplete="cc-number" style="display:block;margin-top:15px;width:200px;height:30px">
+  <div style="height:200px"></div>
+</div>
+<input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:20px">
+<input autocomplete="cc-csc" style="width:60px;height:20px">`,
   "/stripe/card": `<!doctype html><title>Secure card payment input frame</title>${MASKS}
 <input name="cardnumber" autocomplete="cc-number" placeholder="Card number" style="width:200px;height:30px">
 <input name="exp-date" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px">
@@ -214,6 +227,15 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
   "/copy-below": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/vault/below" style="width:320px;height:60px"></iframe>
 ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
+  "/form-then-frame": `<!doctype html><title>Checkout</title>
+<div style="height:2000px"></div>
+<label>Card number <input id="ccnum" autocomplete="cc-number" style="width:200px;height:30px"></label>
+<label>Expiry <input id="exp" autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVV <input id="cvv" autocomplete="cc-csc" style="width:60px;height:30px"></label>
+<div style="height:500px"></div>
+<iframe src="FRAME_ORIGIN/lone-number" style="width:320px;height:60px"></iframe>`,
+  "/scrollbox-frame": `<!doctype html><title>Checkout</title>
+<iframe src="FRAME_ORIGIN/box-card" style="width:320px;height:140px"></iframe>`,
   "/sandboxed": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
@@ -562,6 +584,24 @@ function serve(
         .find((f) => f.url().includes("/vault/below"))!;
       expect(await vault.locator("#real").inputValue()).toBe(CARD.number);
       expect(await vault.locator("#copy").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("prefers the page's own below-fold form over a later off-screen iframe", async () => {
+      const page = await open("/form-then-frame");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#ccnum").inputValue()).toBe(CARD.number);
+      expect(await valueIn(page, "/lone-number", "#other")).toBe("");
+      await page.close();
+    });
+
+    it("measures a duplicate inside a scrollbox from the box's original position", async () => {
+      const page = await open("/scrollbox-frame");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await valueIn(page, "/box-card", "#real")).toBe(CARD.number);
+      expect(await valueIn(page, "/box-card", "#dup")).toBe("");
       await page.close();
     });
 

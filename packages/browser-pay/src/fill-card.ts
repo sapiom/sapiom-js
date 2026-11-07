@@ -78,6 +78,12 @@ export interface LocatorLike {
   ): Promise<void>;
   press(key: string, options?: { timeout?: number }): Promise<void>;
   inputValue(options?: { timeout?: number }): Promise<string>;
+  boundingBox(): Promise<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>;
   evaluate<R>(fn: (el: FieldElement) => R): Promise<R>;
   selectOption(
     values: Array<{ value?: string; label?: string }>,
@@ -116,8 +122,8 @@ interface Candidate {
   hints: string;
   /** A person could click it: its centre is in the frame's viewport and nothing covers it. */
   hit: boolean;
-  /** It was hit only after scrolling to it, so a field already in view ranks ahead of it. */
-  scrolled: boolean;
+  /** Not in view now, but scrolling vertically brings it into view uncovered. */
+  reachable: boolean;
   maxLength: number;
   placeholder: string;
 }
@@ -150,23 +156,28 @@ const DESCRIBE_FIELDS = `(() => {
     const style = window.getComputedStyle(el);
     if (rect.width < 2 || rect.height < 2 || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return;
     // Card vaults put a copy of every card input in each field's iframe for autofill; only the
-    // one a person can click is real. Hit-test its centre inside its own frame's viewport.
-    // A real field can sit below the fold of the page or of a scrollable card frame: scroll it into
-    // view vertically (instantly, so the position is final). Never scroll sideways, so an autofill
-    // copy parked to the left or right of the viewport stays out of view.
+    // one a person can click is real. \`hit\`: its centre is in the frame's viewport now and nothing
+    // covers it. \`reachable\`: not in view, but scrolling vertically (instantly, so the position is
+    // final) brings it into view uncovered; a copy parked to the left or right is never scrolled to.
+    // Every scroll container moved is put back before the next field is measured.
     const centre = (r) => [r.left + r.width / 2, r.top + r.height / 2];
     const visible = ([x, y]) => x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
-    let [cx, cy] = centre(rect);
-    const scrolled = !visible([cx, cy]);
-    if (scrolled && cx >= 0 && cx <= window.innerWidth) {
+    const hitAt = ([x, y]) => {
+      if (!visible([x, y])) return false;
+      const top = document.elementFromPoint(x, y);
+      return !!top && (top === el || el.contains(top) || (top.tagName === "LABEL" && top.control === el));
+    };
+    const [cx, cy] = centre(rect);
+    const hit = hitAt([cx, cy]);
+    let reachable = false;
+    if (!hit && cx >= 0 && cx <= window.innerWidth) {
+      const moved = [];
+      for (let n = el.parentElement; n; n = n.parentElement) moved.push([n, n.scrollLeft, n.scrollTop]);
       el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-      [cx, cy] = centre(el.getBoundingClientRect());
+      reachable = hitAt(centre(el.getBoundingClientRect()));
+      for (const [n, l, tp] of moved) { n.scrollLeft = l; n.scrollTop = tp; }
+      window.scrollTo({ left: startX, top: startY, behavior: "instant" });
     }
-    const inView = visible([cx, cy]);
-    const top = inView ? document.elementFromPoint(cx, cy) : null;
-    const hit = !!top && (top === el || el.contains(top) || (top.tagName === "LABEL" && top.control === el));
-    // Measure every field from the same starting scroll position.
-    if (scrolled) window.scrollTo({ left: startX, top: startY, behavior: "instant" });
     const labels = Array.from(el.labels || []).map((l) => l.textContent || "").join(" ");
     const named = (el.getAttribute("aria-labelledby") || "").split(/\\s+/)
       .map((id) => (id && document.getElementById(id) ? document.getElementById(id).textContent || "" : "")).join(" ");
@@ -175,9 +186,9 @@ const DESCRIBE_FIELDS = `(() => {
       el.getAttribute("data-braintree-name"), labels, named]
       .filter(Boolean).join(" | ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
-      hints, hit, scrolled, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
+      hints, hit, reachable, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
   });
-  // Leave the frame where it was; each field was hit-tested at its own scroll position.
+  // Leave the frame where it was.
   window.scrollTo({ left: startX, top: startY, behavior: "instant" });
   // The browser lets a frame read its parent's document only when they share an origin, so this
   // cannot be spoofed by the frame's own script.
@@ -330,8 +341,8 @@ async function scan(
     }
     effective.set(frame, origin);
     // Off-screen or covered copies are autofill decoys whenever the frame shows a real field.
-    if (candidates.some((c) => c.hit))
-      candidates = candidates.filter((c) => c.hit);
+    if (candidates.some((c) => c.hit || c.reachable))
+      candidates = candidates.filter((c) => c.hit || c.reachable);
     // A frame on another origin holding few inputs is a card iframe; so is one with any field
     // that already names itself a card field.
     // The title marks the frame, never a field: it is not one input's own label.
@@ -360,20 +371,44 @@ async function scan(
 }
 
 /**
- * Matches per field, best first: highest score, then already in view ahead of reached by scrolling
- * (an autofill copy parked below a frame's fold can scroll into view; the real field is in view),
- * then document order.
+ * Matches per field, best first: highest score; then, among duplicates of a field, one a person can
+ * see on the page right now (uncovered in its frame and inside the main viewport, judged through
+ * every iframe by Playwright's bounding box); then document order. Positions inside one frame's
+ * viewport are never compared with another frame's.
  */
-function rank(matches: Match[]): Map<CardField, Match[]> {
+async function rank(
+  page: PageLike,
+  matches: Match[],
+): Promise<Map<CardField, Match[]>> {
   const ranked = new Map<CardField, Match[]>();
   for (const m of matches)
     ranked.set(m.field, [...(ranked.get(m.field) ?? []), m]);
-  for (const list of ranked.values())
+  const main = page.frames()[0];
+  const viewport = await main
+    ?.evaluate<{
+      w: number;
+      h: number;
+    }>("({ w: window.innerWidth, h: window.innerHeight })")
+    .catch(() => null);
+  const onScreen = async (m: Match): Promise<boolean> => {
+    if (!m.candidate.hit || !viewport) return false;
+    const box = await fieldOf(m)
+      .boundingBox()
+      .catch(() => null);
+    if (!box) return false;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    return x >= 0 && y >= 0 && x <= viewport.w && y <= viewport.h;
+  };
+  for (const [field, list] of ranked) {
+    if (list.length < 2) continue;
+    const seen = new Map<Match, boolean>();
+    for (const m of list) seen.set(m, await onScreen(m));
     list.sort(
-      (a, b) =>
-        b.score - a.score ||
-        Number(a.candidate.scrolled) - Number(b.candidate.scrolled),
+      (a, b) => b.score - a.score || Number(seen.get(b)) - Number(seen.get(a)),
     );
+    ranked.set(field, list);
+  }
   return ranked;
 }
 
@@ -569,7 +604,7 @@ export async function fillCard(
 
   const extra = new Set(options.frameOrigins ?? []);
   const untrusted = new Set<string>();
-  let ranked = rank(await scan(page, extra, untrusted));
+  let ranked = await rank(page, await scan(page, extra, untrusted));
   // Card iframes load after the page; wait until the whole card form is there or time runs out.
   const complete = () =>
     ranked.has("number") &&
@@ -577,7 +612,7 @@ export async function fillCard(
     (ranked.has("expiry") || (ranked.has("expMonth") && ranked.has("expYear")));
   while (!complete() && Date.now() < deadline) {
     await page.waitForTimeout(500);
-    ranked = rank(await scan(page, extra, untrusted));
+    ranked = await rank(page, await scan(page, extra, untrusted));
   }
 
   const split = ranked.has("expMonth") && ranked.has("expYear");
