@@ -136,6 +136,23 @@ ${frame("/shopify/number")}${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <input id="exp" autocomplete="cc-exp" maxlength="9" placeholder="Expiration" style="width:80px;height:30px">
 <input autocomplete="cc-csc" style="width:60px;height:30px">
 <script>maskExpiry(document.getElementById("exp"));</script>`,
+  "/four-digit": `<!doctype html><title>Checkout</title>
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input id="exp" autocomplete="cc-exp" maxlength="9" placeholder="Expiration" style="width:90px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">
+<script>
+const exp = document.getElementById("exp");
+exp.addEventListener("input", () => { const d = exp.value.replace(/\\D/g, "").slice(0, 6); exp.value = d.length > 2 ? d.slice(0, 2) + " / " + d.slice(2) : d; });
+exp.addEventListener("blur", () => { const y = exp.value.split("/")[1] || ""; exp.setAttribute("aria-invalid", String(y.trim().length !== 4)); });
+</script>`,
+  "/pattern-four": `<!doctype html><title>Checkout</title>
+<input autocomplete="cc-number" style="width:200px;height:30px">
+<input id="exp" autocomplete="cc-exp" pattern="\\d{2}/\\d{4}" style="width:90px;height:30px">
+<input autocomplete="cc-csc" style="width:60px;height:30px">`,
+  "/srcdoc": `<!doctype html><title>Checkout</title>
+<iframe style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
+  "/sandboxed": `<!doctype html><title>Checkout</title>
+<iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
 
 function findChromium(): boolean {
@@ -343,6 +360,41 @@ function serve(
       const result = await fill(page);
       expect(result.ok).toBe(true);
       expect(await page.locator("#exp").inputValue()).toBe("03 / 29");
+      await page.close();
+    });
+
+    it("retries a four-digit year when the field marks two digits invalid", async () => {
+      const page = await open("/four-digit");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#exp").inputValue()).toBe("03 / 2029");
+      await page.close();
+    });
+
+    it("types a four-digit year when the field's pattern requires one", async () => {
+      const page = await open("/pattern-four");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#exp").inputValue()).toBe("03/2029");
+      await page.close();
+    });
+
+    it("fills a same-origin srcdoc card frame as the page's own origin", async () => {
+      const page = await open("/srcdoc");
+      const result = await fill(page);
+      expect(result).toMatchObject({ ok: true, untrusted: [] });
+      expect(result.origins.number).toBe(topUrl);
+      await page.close();
+    });
+
+    it("never types into a sandboxed srcdoc frame, whose origin is opaque", async () => {
+      const page = await open("/sandboxed");
+      const result = await fill(page, { timeoutMs: 1000 });
+      expect(result).toMatchObject({
+        ok: false,
+        filled: [],
+        untrusted: ["null"],
+      });
       await page.close();
     });
 

@@ -78,15 +78,24 @@ export interface LocatorLike {
   ): Promise<void>;
   press(key: string, options?: { timeout?: number }): Promise<void>;
   inputValue(options?: { timeout?: number }): Promise<string>;
+  evaluate<R>(fn: (el: FieldElement) => R): Promise<R>;
   selectOption(
     values: Array<{ value?: string; label?: string }>,
     options?: { timeout?: number },
   ): Promise<string[]>;
 }
 
+/** The parts of a form field read inside the page to check its validity. */
+export interface FieldElement {
+  validity?: { valid: boolean };
+  getAttribute(name: string): string | null;
+  blur?(): void;
+}
+
 /** The parts of a Playwright `Frame` this helper uses. */
 export interface FrameLike {
   url(): string;
+  parentFrame(): FrameLike | null;
   locator(selector: string): LocatorLike;
   evaluate<R>(expression: string): Promise<R>;
 }
@@ -108,6 +117,8 @@ interface Candidate {
   hit: boolean;
   maxLength: number;
   placeholder: string;
+  /** The input's `pattern` attribute, which can require a four-digit year. */
+  pattern: string;
 }
 
 interface Match {
@@ -148,9 +159,13 @@ const DESCRIBE_FIELDS = `(() => {
       el.getAttribute("data-braintree-name"), labels, named]
       .filter(Boolean).join(" | ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
-      hints, hit, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
+      hints, hit, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase(), pattern: el.getAttribute("pattern") || "" });
   });
-  return { title: (document.title || "").toLowerCase(), fields: out };
+  // The browser lets a frame read its parent's document only when they share an origin, so this
+  // cannot be spoofed by the frame's own script.
+  let parentAccessible = false;
+  try { parentAccessible = parent !== self && !!parent.document; } catch (e) { parentAccessible = false; }
+  return { title: (document.title || "").toLowerCase(), fields: out, parentAccessible };
 })()`;
 
 const AUTOCOMPLETE: Record<string, CardField> = {
@@ -264,23 +279,37 @@ async function scan(
 ): Promise<Match[]> {
   const top = originOf(page.frames()[0]?.url() ?? "");
   const matches: Match[] = [];
+  const effective = new Map<FrameLike, string>();
   for (const frame of page.frames()) {
     let candidates: Candidate[];
     let title: string;
+    let parentAccessible: boolean;
     try {
       const described = await frame.evaluate<{
         title: string;
         fields: Candidate[];
+        parentAccessible: boolean;
       }>(DESCRIBE_FIELDS);
       candidates = described.fields;
       title = described.title;
+      parentAccessible = described.parentAccessible;
     } catch {
       continue; // detached or navigating frame
     }
+    // An `about:srcdoc` or `about:blank` frame has no origin in its URL. It shares its parent's
+    // origin when the browser lets it read the parent's document; otherwise it is opaque.
+    let origin = originOf(frame.url());
+    if (origin === "" || origin === "null") {
+      const parentFrame = frame.parentFrame();
+      origin =
+        parentAccessible && parentFrame
+          ? (effective.get(parentFrame) ?? originOf(parentFrame.url()))
+          : "null";
+    }
+    effective.set(frame, origin);
     // Off-screen or covered copies are autofill decoys whenever the frame shows a real field.
     if (candidates.some((c) => c.hit))
       candidates = candidates.filter((c) => c.hit);
-    const origin = originOf(frame.url());
     // A frame on another origin holding few inputs is a card iframe; so is one with any field
     // that already names itself a card field.
     // The title marks the frame, never a field: it is not one input's own label.
@@ -321,17 +350,36 @@ const digits = (s: string) => s.replace(/\D/g, "");
 const two = (n: number) => String(n % 100).padStart(2, "0");
 
 /**
- * What to type into a combined expiry, in order of preference. A placeholder that spells the year
- * decides; otherwise two-digit first, then four-digit if the field did not read back. Length limits
- * are not a hint: masks pad `MM / YY` with spaces.
+ * What to type into a combined expiry, in order of preference. A `pattern` or placeholder that
+ * spells the year width decides. Otherwise two digits first, then four, and a candidate counts only
+ * if the field reads it back and does not mark itself invalid. Length limits are not a hint: masks
+ * pad `MM / YY` with spaces.
  */
 function expiryTexts(c: Candidate, card: CardToFill): string[] {
   const mm = two(card.expMonth);
   const short = `${mm}/${two(card.expYear)}`;
   const long = `${mm}/${card.expYear}`;
-  if (/yyyy/.test(c.placeholder)) return [long];
+  if (
+    /\\d\{4\}|\[0-9\]\{4\}|(\\d){4}/.test(c.pattern) ||
+    /yyyy/.test(c.placeholder)
+  )
+    return [long];
   if (/\byy\b/.test(c.placeholder)) return [short];
   return [short, long];
+}
+
+/** Whether the field rejects what was typed: its constraint validation, or `aria-invalid` after blur. */
+async function invalid(m: Match): Promise<boolean> {
+  const el = m.frame.locator(SELECTOR).nth(m.candidate.index);
+  await el.evaluate((e) => e.blur?.()).catch(() => undefined);
+  await new Promise((r) => setTimeout(r, 150));
+  return el
+    .evaluate(
+      (e) =>
+        (!!e.validity && !e.validity.valid) ||
+        e.getAttribute("aria-invalid") === "true",
+    )
+    .catch(() => false);
 }
 
 async function typeInto(
@@ -437,7 +485,9 @@ export async function fillCard(
     } else if (field === "expiry") {
       ok = false;
       for (const text of expiryTexts(m.candidate, card)) {
-        ok = await typeInto(m, text, true, delay).catch(() => false);
+        ok =
+          (await typeInto(m, text, true, delay).catch(() => false)) &&
+          !(await invalid(m));
         if (ok) break;
       }
     } else {
