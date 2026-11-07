@@ -377,8 +377,7 @@ async function scan(
 
 /**
  * Matches per field, best first. Within one frame, a field in view now beats one reached by
- * scrolling: in a card frame on another origin when the visible one is card-specific, otherwise at
- * equal score.
+ * scrolling: in a card frame on another origin always, on the page's own origin at equal score.
  * Otherwise highest score; then, among duplicates of a field, one a person can
  * see on the page right now (uncovered in its frame and inside the main viewport, judged through
  * every iframe by Playwright's bounding box); then document order. Positions inside one frame's
@@ -416,12 +415,11 @@ async function rank(
     list.sort((a, b) => {
       // Within one frame, a field in view now beats one reached only by scrolling: inside a card
       // frame on another origin (a vault, whose autofill copies can carry stronger attributes than
-      // the real field) when the visible one is itself card-specific, and otherwise only at equal
-      // score, so a visible bare match never outranks a card-specific field.
+      // the real field) whatever the score, and on the page's own origin only at equal score.
+      // Address and contact fields never get here: they are not card fields at all (NOT_CARD).
       if (a.frame === b.frame && a.candidate.hit !== b.candidate.hit) {
         const vault = a.frame !== main && a.origin !== topOrigin;
-        const shown = a.candidate.hit ? a : b;
-        if ((vault && shown.score >= 2) || a.score === b.score)
+        if (vault || a.score === b.score)
           return Number(b.candidate.hit) - Number(a.candidate.hit);
       }
       return b.score - a.score || Number(seen.get(b)) - Number(seen.get(a));
