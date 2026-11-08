@@ -15,6 +15,11 @@ An agent that gives up before paying cancels the purchase, which revokes the pla
 
 ## Hosted MCP card selection
 
+The following describes the hosted-backend change in
+[Sapiom #6539](https://github.com/sapiom/Sapiom/pull/6539). It applies only
+after that change is deployed; deployment is not confirmed by this documentation
+update.
+
 For transactions created through hosted Pay MCP, `sapiom_set_default_payment_method`
 chooses the tenant default for new transactions. In `sapiom_request_transaction`,
 pass `paymentMethodId` or `setupLinkId`, never both; omit both to use the tenant
@@ -38,7 +43,7 @@ These refusals create no transaction and retain
 finish setup, then retry with the same key.
 
 This is hosted-backend compatibility guidance; it adds no browser-pay SDK method.
-See [the hosted MCP guide](../../docs/mcp-servers.md#hosted-pay-mcp-card-selection)
+See [the hosted MCP guide](https://github.com/sapiom/sapiom-js/blob/main/docs/mcp-servers.md#hosted-pay-mcp-card-selection)
 and [Sapiom documentation](https://docs.sapiom.ai) for the hosted reference.
 
 ## Relay contract
