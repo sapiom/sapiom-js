@@ -35,6 +35,13 @@
 
 ## Unreleased
 
+- Documentation only: clarify hosted Pay MCP tenant defaults for new transactions,
+  pinned-card retries with the same idempotency key, and the
+  `no_saved_card`, `card_unavailable`, and `no_card_route` creation refusals.
+  See [hosted MCP card selection](README.md#hosted-mcp-card-selection).
+  This describes hosted-backend compatibility and adds no SDK method or runtime
+  change.
+
 - Discard receipt reconciliation that finishes after the checkout has returned to native handling.
 
 - Preserve native bank requests when polling has already ended an uncaptured checkout observation, while retaining captured and ambiguous-capture fences.

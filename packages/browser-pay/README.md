@@ -13,6 +13,34 @@ Browser-side payment interceptor. The agent types a governance placeholder into 
 
 An agent that gives up before paying cancels the purchase, which revokes the placeholder: a UCP checkout with `POST /v1/transactions/{transactionId}/ucp/checkout/cancel`, a browser-checkout purchase with `POST /v1/transactions/{transactionId}/cancel`. The browser-checkout cancel answers 409 `card_relayed` once the card was relayed; the payment is spent, and the agent completes the transaction instead.
 
+## Hosted MCP card selection
+
+For transactions created through hosted Pay MCP, `sapiom_set_default_payment_method`
+chooses the tenant default for new transactions. In `sapiom_request_transaction`,
+pass `paymentMethodId` or `setupLinkId`, never both; omit both to use the tenant
+default. Once created, the transaction keeps its pinned card on retries with the
+same idempotency key, even if the tenant default changes.
+
+Before creation, card-funding refusals use `error.code`:
+
+- `no_saved_card`: no card is explicitly selected, no tenant default exists, and
+  no active, setup-complete card exists in this payment environment.
+- `card_unavailable` with `error.details.cardReason: missing`: no card is
+  explicitly selected and no default exists, but an active, setup-complete card
+  exists in this payment environment. Choose a ready card with `paymentMethodId`
+  or set a default, then retry with the same idempotency key.
+- Other unusable selected/default cards return `card_unavailable` with their
+  `error.details.cardReason`, or `no_card_route` when no card route can pay.
+  `no_card_route` has no `cardReason`.
+
+These refusals create no transaction and retain
+`error.details.retryWithSameIdempotencyKey: true`. Correct the card selection or
+finish setup, then retry with the same key.
+
+This is hosted-backend compatibility guidance; it adds no browser-pay SDK method.
+See [the hosted MCP guide](../../docs/mcp-servers.md#hosted-pay-mcp-card-selection)
+and [Sapiom documentation](https://docs.sapiom.ai) for the hosted reference.
+
 ## Relay contract
 
 The existing browser/relay integration also carries managed bank verification for supported

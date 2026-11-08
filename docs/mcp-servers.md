@@ -4,15 +4,15 @@ Two MCP servers carry the Sapiom name. They do different jobs, and conflating
 them is the most common source of confusion. This is the short version of which
 to use when.
 
-| | **Remote `sapiom`** | **Local `sapiom-dev`** |
-| --- | --- | --- |
-| What it is | The production **capability surface** | The local **developer** surface |
-| Server name | `sapiom` | `sapiom-dev` |
-| Package | — (hosted connector) | [`@sapiom/mcp`](../packages/mcp) (`npx -y @sapiom/mcp`) |
-| Transport | Remote / hosted | stdio (runs on your machine) |
-| Tools | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_{authenticate,status,logout,send_feedback}`, `sapiom_dev_agents_{scaffold,check,run_local,link,clone,deploy,run,inspect,signal,schedule,…}`, `sapiom_dev_sandbox_*` — full list in the [package README](../packages/mcp#tools) |
-| Cost | Paid — capability calls are gateway-routed and metered (x402) | Unmetered — the surface itself makes no paid capability calls. `run` / `deploy` trigger real cloud runs whose capability calls are metered |
-| Use it to… | **call** a capability directly from an agent or client | **build, test, and operate on** Sapiom (today: author & ship agents that orchestrate capabilities) |
+|             | **Remote `sapiom`**                                                                            | **Local `sapiom-dev`**                                                                                                                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What it is  | The production **capability surface**                                                          | The local **developer** surface                                                                                                                                                                                                        |
+| Server name | `sapiom`                                                                                       | `sapiom-dev`                                                                                                                                                                                                                           |
+| Package     | — (hosted connector)                                                                           | [`@sapiom/mcp`](../packages/mcp) (`npx -y @sapiom/mcp`)                                                                                                                                                                                |
+| Transport   | Remote / hosted                                                                                | stdio (runs on your machine)                                                                                                                                                                                                           |
+| Tools       | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_{authenticate,status,logout,send_feedback}`, `sapiom_dev_agents_{scaffold,check,run_local,link,clone,deploy,run,inspect,signal,schedule,…}`, `sapiom_dev_sandbox_*` — full list in the [package README](../packages/mcp#tools) |
+| Cost        | Paid — capability calls are gateway-routed and metered (x402)                                  | Unmetered — the surface itself makes no paid capability calls. `run` / `deploy` trigger real cloud runs whose capability calls are metered                                                                                             |
+| Use it to…  | **call** a capability directly from an agent or client                                         | **build, test, and operate on** Sapiom (today: author & ship agents that orchestrate capabilities)                                                                                                                                     |
 
 ## Remote `sapiom` — the production capability surface
 
@@ -26,6 +26,26 @@ paid for via x402.
 Reach for it when you want an agent to **use** a capability right now — "scrape
 this page", "run this code in a sandbox", "search the web".
 
+## Hosted Pay MCP card selection
+
+Hosted Pay MCP uses `sapiom_set_default_payment_method` to choose the tenant
+default for new transactions. In `sapiom_request_transaction`, pass
+`paymentMethodId` or `setupLinkId`, never both; omit both to select that default.
+Created transactions keep their pinned card on retries with the same idempotency
+key, even after a default change. With neither an explicit card nor a default,
+`no_saved_card` means no active, setup-complete card exists in this environment;
+an active, setup-complete card in this payment environment without a default
+instead returns `card_unavailable` with `error.details.cardReason: missing`.
+Choose a ready card or set a default, then
+retry with the same key. Other unusable selected/default cards return
+`card_unavailable` with their `cardReason`, or `no_card_route` without a
+`cardReason`. These creation refusals retain
+`error.details.retryWithSameIdempotencyKey: true` and create no transaction.
+See [the payment README](../packages/browser-pay/README.md#hosted-mcp-card-selection)
+and [Sapiom documentation](https://docs.sapiom.ai) for the hosted reference.
+These hosted tools are separate from the local `@sapiom/mcp` developer package;
+this compatibility note adds no SDK method.
+
 ## Local `sapiom-dev` — the developer surface
 
 The local MCP is published as [`@sapiom/mcp`](../packages/mcp) and runs on your
@@ -38,12 +58,12 @@ in the cloud. The `sapiom_dev_` prefix leaves room for other non-capability
 developer tooling later (e.g. governance, log inspection) without colliding with
 the capability namespace.
 
-A handful of its tools are deliberately *unprefixed* — `sapiom_authenticate`,
+A handful of its tools are deliberately _unprefixed_ — `sapiom_authenticate`,
 `sapiom_status`, `sapiom_logout`, `sapiom_send_feedback`. Those act on the
 client's relationship with Sapiom (who am I, log me in, here's what I think of
 the product) rather than on anything being built, so the `_dev_` infix would
-misdescribe them. The prefix marks *developer operations*, not *server
-membership*.
+misdescribe them. The prefix marks _developer operations_, not _server
+membership_.
 
 It deliberately does **not** expose capability tools. There is no
 `sapiom_dev_scrape` or `sapiom_dev_sandbox_create`. Instead you write a agent
@@ -61,7 +81,7 @@ Reach for it when you want to **build or operate on** something rather than
 The `sapiom-dev` MCP is **not** a second, local copy of the product. It is the
 local developer surface for building things that, at run time, call the same
 capabilities the remote `sapiom` MCP exposes. The dividing line is billing, not
-task: one surface *makes* paid, metered capability calls; the other is the
+task: one surface _makes_ paid, metered capability calls; the other is the
 local, unmetered developer surface for everything that isn't a paid capability
 call. The capability implementations live in exactly one place
 ([`@sapiom/tools`](../packages/tools) + the remote MCP) — see the policy below.
