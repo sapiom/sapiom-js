@@ -37,8 +37,9 @@ export interface AttachOptions {
    * Relay profile, for example `shopify-card-vault`. Omit it for any other
    * checkout: the relay sends the paused request to its own URL when that is
    * https to a public host, and finds the card fields by the placeholder's
-   * values. Without a profile every header is forwarded but the connection's,
-   * `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints.
+   * values. Without a profile headers including `cookie` are forwarded, except
+   * the connection's, `host`, `content-length`, and the browser's `sec-fetch-*`
+   * and `sec-ch-*` hints.
    */
   profileId?: string;
   /**
@@ -1332,7 +1333,6 @@ const FORWARDED_HEADERS = new Set([
 const UNFORWARDED_HEADERS = new Set([
   "connection",
   "content-length",
-  "cookie",
   "host",
   "keep-alive",
   "proxy-authorization",

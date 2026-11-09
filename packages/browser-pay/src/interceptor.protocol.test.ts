@@ -11,7 +11,7 @@ import {
 } from "./interceptor";
 import type { HeldPlaceholder, RelayRequest, RelayResponse } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
-import type { RelayCallOptions } from "./relay";
+import { httpPaymentRelay, type RelayCallOptions } from "./relay";
 
 const HELD: HeldPlaceholder = {
   number: "4242424242424242",
@@ -1299,17 +1299,32 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("relays to any checkout without a profile, forwarding its headers but the connection's, cookies and fetch hints", async () => {
+  it("relays to any checkout without a profile, forwarding cookies but excluding connection headers and fetch hints", async () => {
     const stub = await startStub({ postData: CARD });
     const calls: RelayRequest[] = [];
     const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
     try {
       const handle = await attachInterceptor(stub.url, {
-        relay: stubPaymentRelay(async (request) => {
-          calls.push(request);
-          return success();
+        relay: httpPaymentRelay({
+          baseUrl: "https://api.sapiom.ai",
+          apiKey: "test-key",
+          transactionId: "tx_cookie_fixture",
+          fetchImpl: async (url, init) => {
+            expect(url).toBe(
+              "https://api.sapiom.ai/v1/transactions/tx_cookie_fixture/payment/relay",
+            );
+            expect(init?.method).toBe("POST");
+            expect(new Headers(init?.headers).has("cookie")).toBe(false);
+            calls.push(JSON.parse(String(init?.body)) as RelayRequest);
+            return new Response(JSON.stringify(success()), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          },
         }),
         placeholder: HELD,
+        logger: stepLogger(warnings),
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -1319,7 +1334,7 @@ describe("interceptor CDP decisions", () => {
         "Fetch.enable",
       );
       const many = Object.fromEntries(
-        Array.from({ length: 28 }, (_, i) => [`x-extra-${i}`, "1"]),
+        Array.from({ length: 27 }, (_, i) => [`x-extra-${i}`, "1"]),
       );
       stub.emit({
         method: "Fetch.requestPaused",
@@ -1358,7 +1373,8 @@ describe("interceptor CDP decisions", () => {
       const headers = calls[0].request.headers;
       expect(header(headers, "content-type")).toBe("application/json");
       expect(header(headers, "authorization")).toBe("Bearer pk_test_example");
-      for (const dropped of ["cookie", "host", "sec-fetch-site", "sec-ch-ua"]) {
+      expect(header(headers, "cookie")).toBe("session=secret");
+      for (const dropped of ["host", "sec-fetch-site", "sec-ch-ua"]) {
         expect(headers).not.toHaveProperty(dropped);
       }
       expect(Object.keys(headers)).toContain("__proto__");
@@ -1366,12 +1382,24 @@ describe("interceptor CDP decisions", () => {
       expect(header(headers, "constructor")).toBe("constructor-example");
       expect(Object.keys(headers)).toHaveLength(32);
       await handle.detach();
+      expect(
+        JSON.stringify({ events, warnings, commands: stub.commands }),
+      ).not.toContain("session=secret");
     } finally {
       await stub.close();
     }
   });
 
   it.each([
+    ["a cookie longer than the relay takes", { Cookie: "x".repeat(8193) }, {}],
+    [
+      "a cookie exceeding the header count limit",
+      Object.fromEntries([
+        ...Array.from({ length: 30 }, (_, i) => [`x-extra-${i}`, "1"]),
+        ["Cookie", "session=example"],
+      ]),
+      {},
+    ],
     [
       "more headers than the relay takes",
       Object.fromEntries(
@@ -2265,7 +2293,7 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("forwards only the headers David accepts", async () => {
+  it("forwards only Shopify profile headers, excluding cookies", async () => {
     const stub = await startStub();
     const calls: RelayRequest[] = [];
     const events: InterceptorEvent[] = [];
@@ -2309,6 +2337,7 @@ describe("interceptor CDP decisions", () => {
         () => events.some((event) => event.type === "relayed"),
         "relayed",
       );
+      expect(calls[0].request.headers).not.toHaveProperty("cookie");
       expect(calls[0].request.headers).toEqual({
         accept: "application/json",
         "content-type": "application/json",
