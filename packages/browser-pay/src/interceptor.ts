@@ -39,7 +39,8 @@ export interface AttachOptions {
    * https to a public host, and finds the card fields by the placeholder's
    * values. Without a profile headers including `cookie` are forwarded, except
    * the connection's, `host`, `content-length`, and the browser's `sec-fetch-*`
-   * and `sec-ch-*` hints.
+   * and `sec-ch-*` hints. Oversized cookies lose known analytics pairs first;
+   * cookies still exceeding the relay's value or header-count limit are omitted.
    */
   profileId?: string;
   /**
@@ -1348,6 +1349,25 @@ const MAX_FORWARDED_HEADERS = 32;
 const MAX_HEADER_NAME_LENGTH = 128;
 const MAX_HEADER_VALUE_LENGTH = 8192;
 
+const ANALYTICS_COOKIE_PREFIXES = [
+  "_ga",
+  "_gid",
+  "_gcl_",
+  "_fbp",
+  "_fbc",
+  "_hj",
+  "_clck",
+  "_clsk",
+  "_uet",
+  "ajs_",
+  "amplitude",
+  "amp_",
+  "mp_",
+  "_tt_",
+  "_ttp",
+  "_pin_",
+];
+
 const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
 const genericHeader = (key: string) =>
   !UNFORWARDED_HEADERS.has(key) &&
@@ -1357,8 +1377,8 @@ const genericHeader = (key: string) =>
 
 /**
  * The headers relayed with a paused request, or `undefined` when the relay
- * can't take every one that should go: past its limits, a header would be
- * dropped, and the merchant could refuse the changed request after the card
+ * can't take every non-cookie header that should go: past its limits, a header
+ * would be dropped, and the merchant could refuse the changed request after the card
  * was sent. Which header matters (a CSRF token, an authorization) can't be
  * told from its name, so none is chosen.
  */
@@ -1370,9 +1390,14 @@ function forwardedHeaders(
   // `constructor` counts toward the limit like any other.
   const out: Record<string, string> = Object.create(null);
   let unrelayable = false;
+  let cookie: string | undefined;
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();
     if (!forwarded(key)) return;
+    if (key === "cookie") {
+      cookie = value;
+      return;
+    }
     if (
       key.length > MAX_HEADER_NAME_LENGTH ||
       value.length > MAX_HEADER_VALUE_LENGTH ||
@@ -1398,14 +1423,29 @@ function forwardedHeaders(
         take(entry.name, typeof entry.value === "string" ? entry.value : "");
       }
     }
-    return unrelayable ? undefined : out;
-  }
-  if (isRecord(raw)) {
+  } else if (isRecord(raw)) {
     for (const [key, value] of Object.entries(raw)) {
       if (typeof value === "string") take(key, value);
     }
   }
-  return unrelayable ? undefined : out;
+  if (unrelayable) return undefined;
+  if (cookie !== undefined && Object.keys(out).length < MAX_FORWARDED_HEADERS) {
+    if (cookie.length > MAX_HEADER_VALUE_LENGTH) {
+      cookie = cookie
+        .split(";")
+        .map((pair) => pair.trim())
+        .filter((pair) => {
+          const name = pair.split("=", 1)[0].trim();
+          return !ANALYTICS_COOKIE_PREFIXES.some((prefix) =>
+            name.startsWith(prefix),
+          );
+        })
+        .join("; ");
+      if (!cookie) return out;
+    }
+    if (cookie.length <= MAX_HEADER_VALUE_LENGTH) out.cookie = cookie;
+  }
+  return out;
 }
 
 function parseAttachedTarget(value: unknown):

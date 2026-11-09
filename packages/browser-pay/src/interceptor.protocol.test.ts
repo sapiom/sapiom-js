@@ -1391,15 +1391,163 @@ describe("interceptor CDP decisions", () => {
   });
 
   it.each([
-    ["a cookie longer than the relay takes", { Cookie: "x".repeat(8193) }, {}],
-    [
-      "a cookie exceeding the header count limit",
-      Object.fromEntries([
-        ...Array.from({ length: 30 }, (_, i) => [`x-extra-${i}`, "1"]),
-        ["Cookie", "session=example"],
-      ]),
-      {},
-    ],
+    {
+      name: "keeps an empty cookie unchanged",
+      cookie: "",
+      expected: "",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "keeps a fitting cookie unchanged",
+      cookie: "_ga=analytics;  session_id=abc; _fbp=tracking",
+      expected: "_ga=analytics;  session_id=abc; _fbp=tracking",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "keeps a cookie exactly at the value limit",
+      cookie: `session_id=${"x".repeat(8181)}`,
+      expected: `session_id=${"x".repeat(8181)}`,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "drops only explicit analytics prefixes from an oversized cookie",
+      cookie: [
+        "_ga",
+        "_gid",
+        "_gcl_",
+        "_fbp",
+        "_fbc",
+        "_hj",
+        "_clck",
+        "_clsk",
+        "_uet",
+        "ajs_",
+        "amplitude",
+        "amp_",
+        "mp_",
+        "_tt_",
+        "_ttp",
+        "_pin_",
+      ]
+        .map((prefix) => `${prefix}fixture=${"x".repeat(600)}`)
+        .concat("session_id=abc", "custom=_ga", "ga_session=keep")
+        .join("; "),
+      expected: "session_id=abc; custom=_ga; ga_session=keep",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits a cookie still oversized after analytics removal",
+      cookie: `_ga=analytics; session_id=${"x".repeat(8192)}`,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits an oversized cookie without analytics",
+      cookie: `session_id=${"x".repeat(8192)}`,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits a cookie when only analytics remain",
+      cookie: `_ga=${"x".repeat(8192)}`,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    ...[true, false].map((cookieFirst) => ({
+      name: `omits a cookie past the header cap (cookieFirst=${cookieFirst})`,
+      cookie: "session_id=abc",
+      expected: undefined,
+      extraCount: 30,
+      cookieFirst,
+    })),
+  ])(
+    "$name and still relays",
+    async ({ cookie, expected, extraCount, cookieFirst }) => {
+      const stub = await startStub({ postData: CARD });
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const warnings: StepWarning[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async (request) => {
+            calls.push(request);
+            return success();
+          }),
+          placeholder: HELD,
+          logger: stepLogger(warnings),
+        });
+        handle.on((event) => events.push(event));
+        attachPage(stub.emit);
+        await waitFor(
+          () =>
+            stub.commands.some((command) => command.method === "Fetch.enable"),
+          "Fetch.enable",
+        );
+        stub.emit({
+          method: "Fetch.requestPaused",
+          sessionId: "page-1",
+          params: {
+            requestId: "req-1",
+            networkId: "net-1",
+            request: {
+              url: "https://api.pay.example/v1/tokens",
+              method: "POST",
+              headers: {
+                ...(cookieFirst ? { Cookie: cookie } : {}),
+                "Content-Type": "application/json",
+                ...Object.fromEntries(
+                  Array.from({ length: extraCount }, (_, i) => [
+                    `x-extra-${i}`,
+                    "1",
+                  ]),
+                ),
+                "X-CSRF-Token": "csrf-example",
+                ...(!cookieFirst ? { Cookie: cookie } : {}),
+              },
+              hasPostData: true,
+              postDataEntries: [{}],
+            },
+            resourceType: "Fetch",
+          },
+        });
+        await waitFor(
+          () =>
+            events.some(
+              (event) => event.type === "relayed" || event.type === "failed",
+            ),
+          "terminal event",
+        );
+        expect(calls).toHaveLength(1);
+        const headers = calls[0].request.headers;
+        if (expected === undefined)
+          expect(headers).not.toHaveProperty("cookie");
+        else expect(headers.cookie).toBe(expected);
+        expect(headers["x-csrf-token"]).toBe("csrf-example");
+        expect(Object.keys(headers)).toHaveLength(
+          2 + extraCount + (expected === undefined ? 0 : 1),
+        );
+        expect(events.some((event) => event.type === "failed")).toBe(false);
+        expect(stub.commands).toContainEqual(
+          expect.objectContaining({ method: "Fetch.fulfillRequest" }),
+        );
+        await handle.detach();
+        expect(
+          JSON.stringify({ events, warnings, commands: stub.commands }),
+        ).not.toMatch(/session_id|_ga|_fbp|fixture/);
+      } finally {
+        await stub.close();
+      }
+    },
+  );
+
+  it.each([
     [
       "more headers than the relay takes",
       Object.fromEntries(
