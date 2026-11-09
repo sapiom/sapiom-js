@@ -1349,22 +1349,27 @@ const MAX_FORWARDED_HEADERS = 32;
 const MAX_HEADER_NAME_LENGTH = 128;
 const MAX_HEADER_VALUE_LENGTH = 8192;
 
-const ANALYTICS_COOKIE_PREFIXES = [
+const ANALYTICS_COOKIE_NAMES = [
   "_ga",
   "_gid",
-  "_gcl_",
+  "_gat",
   "_fbp",
   "_fbc",
-  "_hj",
+  "_ttp",
   "_clck",
   "_clsk",
+];
+const ANALYTICS_COOKIE_PREFIXES = [
+  "_ga_",
+  "_gat_",
+  "_gcl_",
+  "_hj",
   "_uet",
   "ajs_",
   "amplitude",
   "amp_",
   "mp_",
   "_tt_",
-  "_ttp",
   "_pin_",
 ];
 
@@ -1435,9 +1440,11 @@ function forwardedHeaders(
         .split(";")
         .map((pair) => pair.trim())
         .filter((pair) => {
+          if (!pair) return false;
           const name = pair.split("=", 1)[0].trim();
-          return !ANALYTICS_COOKIE_PREFIXES.some((prefix) =>
-            name.startsWith(prefix),
+          return (
+            !ANALYTICS_COOKIE_NAMES.includes(name) &&
+            !ANALYTICS_COOKIE_PREFIXES.some((prefix) => name.startsWith(prefix))
           );
         })
         .join("; ");
