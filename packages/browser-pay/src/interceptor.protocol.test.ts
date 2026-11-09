@@ -2293,6 +2293,105 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
+  it.each([
+    ["with a profile", "shopify-card-vault"],
+    ["without a profile", undefined],
+  ])(
+    "fulfills %s with one Set-Cookie header per relayed setCookies entry, never logging them",
+    async (_label, profileId) => {
+      const sentinel = "sid=SET_COOKIE_SENTINEL";
+      const setCookies = [`${sentinel}; Path=/; HttpOnly`, "b=2; Path=/"];
+      const outcomes: RelayResponse[] = [
+        success(),
+        {
+          outcome: "relayed",
+          response: {
+            status: 201,
+            headers: { "content-type": "application/json" },
+            setCookies,
+            body: '{"id":"sess"}',
+          },
+        },
+      ];
+      const stub = await startStub();
+      const events: InterceptorEvent[] = [];
+      const warnings: StepWarning[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async () => outcomes.shift()!),
+          placeholder: HELD,
+          profileId,
+          logger: stepLogger(warnings),
+        });
+        handle.on((event) => events.push(event));
+        attachPage(stub.emit);
+        await waitFor(
+          () =>
+            stub.commands.some((command) => command.method === "Fetch.enable"),
+          "Fetch.enable",
+        );
+        for (const [requestId, month] of [
+          ["req-plain", 11],
+          ["req-cookies", 12],
+        ] as const) {
+          stub.emit({
+            method: "Fetch.requestPaused",
+            sessionId: "page-1",
+            params: {
+              requestId,
+              request: {
+                url: "https://checkout.example/sessions",
+                method: "POST",
+                postData: JSON.stringify({
+                  credit_card: { number: HELD.number, month },
+                }),
+              },
+            },
+          });
+          await waitFor(
+            () =>
+              stub.commands.some(
+                (command) =>
+                  command.method === "Fetch.fulfillRequest" &&
+                  command.params.requestId === requestId,
+              ),
+            requestId,
+          );
+        }
+        const fulfilled = stub.commands
+          .filter((command) => command.method === "Fetch.fulfillRequest")
+          .map((command) => command.params);
+        const body = Buffer.from('{"id":"sess"}').toString("base64");
+        expect(fulfilled).toStrictEqual([
+          {
+            requestId: "req-plain",
+            responseCode: 201,
+            responseHeaders: [
+              { name: "content-type", value: "application/json" },
+            ],
+            body,
+          },
+          {
+            requestId: "req-cookies",
+            responseCode: 201,
+            responseHeaders: [
+              { name: "content-type", value: "application/json" },
+              { name: "Set-Cookie", value: setCookies[0] },
+              { name: "Set-Cookie", value: setCookies[1] },
+            ],
+            body,
+          },
+        ]);
+        await handle.detach();
+        expect(JSON.stringify({ events, warnings })).not.toContain(
+          "SET_COOKIE_SENTINEL",
+        );
+      } finally {
+        await stub.close();
+      }
+    },
+  );
+
   it("forwards only Shopify profile headers, excluding cookies", async () => {
     const stub = await startStub();
     const calls: RelayRequest[] = [];

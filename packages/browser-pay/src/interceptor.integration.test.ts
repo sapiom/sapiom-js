@@ -1105,6 +1105,99 @@ if (!chromeBin) {
       }
     }, 60_000);
 
+    it("stores relayed Set-Cookie values and sends them on the next native and relayed request", async () => {
+      const nativeCookies: { path?: string; cookie?: string }[] = [];
+      const shop = await new Promise<{ server: http.Server; port: number }>(
+        (resolve) => {
+          const server = http.createServer((req, res) => {
+            if (req.url === "/") {
+              res.writeHead(200, { "content-type": "text/html" });
+              res.end("<!doctype html><title>shop</title>");
+              return;
+            }
+            nativeCookies.push({ path: req.url, cookie: req.headers.cookie });
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end("{}");
+          });
+          server.listen(0, "localhost", () => {
+            const address = server.address();
+            resolve({
+              server,
+              port: typeof address === "object" && address ? address.port : 0,
+            });
+          });
+        },
+      );
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const handle = await attachInterceptor(cdpUrl, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return {
+            outcome: "relayed",
+            response: {
+              status: 200,
+              headers: { "content-type": "application/json" },
+              ...(calls.length === 1
+                ? { setCookies: ["a=1; Path=/", "b=2; Path=/"] }
+                : {}),
+              body: '{"id":"relayed"}',
+            },
+          };
+        }),
+        placeholder: PLACEHOLDER,
+        timeoutMs: 5_000,
+      });
+      handle.on((event) => events.push(event));
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const context = browser.contexts()[0];
+      const page = await context.newPage();
+      const shopOrigin = `http://localhost:${shop.port}`;
+      try {
+        await page.goto(`${shopOrigin}/`, { waitUntil: "domcontentloaded" });
+        const texts = await page.evaluate(
+          async (bodies) => {
+            const post = (body: string) =>
+              fetch("/pay", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body,
+              }).then((response) => response.text());
+            const first = await post(bodies.first);
+            const native = await fetch("/next").then((response) =>
+              response.text(),
+            );
+            const second = await post(bodies.second);
+            return [first, native, second];
+          },
+          { first: CARD, second: MISMATCH },
+        );
+        expect(texts).toEqual(['{"id":"relayed"}', "{}", '{"id":"relayed"}']);
+        const jar = await context.cookies(shopOrigin);
+        expect(
+          jar
+            .map(({ name, value }) => `${name}=${value}`)
+            .sort((left, right) => left.localeCompare(right)),
+        ).toEqual(["a=1", "b=2"]);
+        expect(
+          nativeCookies.filter(({ path }) => path !== "/favicon.ico"),
+        ).toEqual([{ path: "/next", cookie: "a=1; b=2" }]);
+        expect(calls).toHaveLength(2);
+        expect(calls[0].request.headers).not.toHaveProperty("cookie");
+        expect(calls[1].request.headers.cookie).toBe("a=1; b=2");
+        expect(events.filter((event) => event.type === "relayed")).toHaveLength(
+          2,
+        );
+        expect(JSON.stringify(events)).not.toMatch(/a=1|b=2/);
+      } finally {
+        await page.close().catch(() => {});
+        await context.clearCookies();
+        await handle.detach();
+        await new Promise((resolve) => shop.server.close(resolve));
+      }
+    }, 60_000);
+
     it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
       const { chromium } = await import("playwright");
       const browser = await chromium.connectOverCDP(cdpUrl);

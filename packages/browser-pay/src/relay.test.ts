@@ -223,6 +223,49 @@ describe("httpPaymentRelay", () => {
     }
   });
 
+  it("keeps a setCookies string array and rejects any other setCookies type", async () => {
+    const withCookies = {
+      outcome: "relayed",
+      response: {
+        ...RELAYED.response,
+        setCookies: ["a=1; Path=/", "b=2; Path=/, c=3"],
+      },
+    };
+    const payloads = [
+      RELAYED,
+      withCookies,
+      { ...withCookies, response: { ...RELAYED.response, setCookies: [] } },
+      ...["a=1", [1], ["a=1", null], { a: "1" }, null].map((setCookies) => ({
+        outcome: "relayed",
+        response: { ...RELAYED.response, setCookies },
+      })),
+    ];
+    const server = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(payloads.shift()));
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      await expect(relay.relay(REQUEST)).resolves.toStrictEqual(RELAYED);
+      await expect(relay.relay(REQUEST)).resolves.toStrictEqual(withCookies);
+      await expect(relay.relay(REQUEST)).resolves.toStrictEqual({
+        outcome: "relayed",
+        response: { ...RELAYED.response, setCookies: [] },
+      });
+      for (let i = 0; i < 5; i += 1) {
+        await expect(relay.relay(REQUEST)).rejects.toThrow(
+          "Payment relay failed (HTTP 200)",
+        );
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("aborts when the caller signal fires", async () => {
     let arrived: () => void = () => {};
     const requestArrived = new Promise<void>((resolve) => {

@@ -1592,12 +1592,16 @@ async function fulfillRequest(
   requestId: string,
   response: RelayedHttpResponse,
 ): Promise<void> {
-  const responseHeaders = Object.entries(response.headers).flatMap(
-    ([name, value]) => {
+  const responseHeaders = [
+    ...Object.entries(response.headers).flatMap(([name, value]) => {
       if (RESPONSE_HOP.has(name.toLowerCase())) return [];
       return [{ name, value }];
-    },
-  );
+    }),
+    ...(response.setCookies ?? []).map((value) => ({
+      name: "Set-Cookie",
+      value,
+    })),
+  ];
   await connection.send(
     "Fetch.fulfillRequest",
     {

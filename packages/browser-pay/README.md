@@ -96,12 +96,13 @@ Success:
   "response": {
     "status": 200,
     "headers": { "content-type": "application/json" },
+    "setCookies": ["session=abc; Path=/; HttpOnly"],
     "body": "<processor body>"
   }
 }
 ```
 
-`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself.
+`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself. `response.setCookies` is optional: the merchant's raw `Set-Cookie` values, one per entry and never comma-joined. Each becomes its own `Set-Cookie` header on the fulfilled response, with or without a profile, so the browser stores the cookies and sends them on its next request. A relay response whose `setCookies` is not an array of strings is rejected like any other malformed response. The interceptor never logs cookie values. End to end this works only when the Sapiom relay backend and Basis Theory return the merchant's `Set-Cookie` values in `setCookies`; until then the field is absent and nothing changes.
 
 Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay may omit either field.
 
