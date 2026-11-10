@@ -26,8 +26,10 @@ export interface AttachOptions {
    * Relay profile, for example `shopify-card-vault`. Omit it for any other
    * checkout: the relay sends the paused request to its own URL when that is
    * https to a public host, and finds the card fields by the placeholder's
-   * values. Without a profile every header is forwarded but the connection's,
-   * `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints.
+   * values. Without a profile headers including `cookie` are forwarded, except
+   * the connection's, `host`, `content-length`, and the browser's `sec-fetch-*`
+   * and `sec-ch-*` hints. Oversized cookies lose known analytics pairs first;
+   * cookies still exceeding the relay's value or header-count limit are omitted.
    */
   profileId?: string;
   /**
@@ -1241,7 +1243,6 @@ const FORWARDED_HEADERS = new Set([
 const UNFORWARDED_HEADERS = new Set([
   "connection",
   "content-length",
-  "cookie",
   "host",
   "keep-alive",
   "proxy-authorization",
@@ -1257,6 +1258,30 @@ const MAX_FORWARDED_HEADERS = 32;
 const MAX_HEADER_NAME_LENGTH = 128;
 const MAX_HEADER_VALUE_LENGTH = 8192;
 
+const ANALYTICS_COOKIE_NAMES = [
+  "_ga",
+  "_gid",
+  "_gat",
+  "_fbp",
+  "_fbc",
+  "_ttp",
+  "_clck",
+  "_clsk",
+];
+const ANALYTICS_COOKIE_PREFIXES = [
+  "_ga_",
+  "_gat_",
+  "_gcl_",
+  "_hj",
+  "_uet",
+  "ajs_",
+  "amplitude",
+  "amp_",
+  "mp_",
+  "_tt_",
+  "_pin_",
+];
+
 const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
 const genericHeader = (key: string) =>
   !UNFORWARDED_HEADERS.has(key) &&
@@ -1266,8 +1291,8 @@ const genericHeader = (key: string) =>
 
 /**
  * The headers relayed with a paused request, or `undefined` when the relay
- * can't take every one that should go: past its limits, a header would be
- * dropped, and the merchant could refuse the changed request after the card
+ * can't take every non-cookie header that should go: past its limits, a header
+ * would be dropped, and the merchant could refuse the changed request after the card
  * was sent. Which header matters (a CSRF token, an authorization) can't be
  * told from its name, so none is chosen.
  */
@@ -1279,9 +1304,14 @@ function forwardedHeaders(
   // `constructor` counts toward the limit like any other.
   const out: Record<string, string> = Object.create(null);
   let unrelayable = false;
+  let cookie: string | undefined;
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();
     if (!forwarded(key)) return;
+    if (key === "cookie") {
+      cookie = value;
+      return;
+    }
     if (
       key.length > MAX_HEADER_NAME_LENGTH ||
       value.length > MAX_HEADER_VALUE_LENGTH ||
@@ -1307,14 +1337,31 @@ function forwardedHeaders(
         take(entry.name, typeof entry.value === "string" ? entry.value : "");
       }
     }
-    return unrelayable ? undefined : out;
-  }
-  if (isRecord(raw)) {
+  } else if (isRecord(raw)) {
     for (const [key, value] of Object.entries(raw)) {
       if (typeof value === "string") take(key, value);
     }
   }
-  return unrelayable ? undefined : out;
+  if (unrelayable) return undefined;
+  if (cookie !== undefined && Object.keys(out).length < MAX_FORWARDED_HEADERS) {
+    if (cookie.length > MAX_HEADER_VALUE_LENGTH) {
+      cookie = cookie
+        .split(";")
+        .map((pair) => pair.trim())
+        .filter((pair) => {
+          if (!pair) return false;
+          const name = pair.split("=", 1)[0].trim();
+          return (
+            !ANALYTICS_COOKIE_NAMES.includes(name) &&
+            !ANALYTICS_COOKIE_PREFIXES.some((prefix) => name.startsWith(prefix))
+          );
+        })
+        .join("; ");
+      if (!cookie) return out;
+    }
+    if (cookie.length <= MAX_HEADER_VALUE_LENGTH) out.cookie = cookie;
+  }
+  return out;
 }
 
 function parseAttachedTarget(value: unknown):
@@ -1500,12 +1547,16 @@ async function fulfillRequest(
   requestId: string,
   response: RelayedHttpResponse,
 ): Promise<void> {
-  const responseHeaders = Object.entries(response.headers).flatMap(
-    ([name, value]) => {
+  const responseHeaders = [
+    ...Object.entries(response.headers).flatMap(([name, value]) => {
       if (RESPONSE_HOP.has(name.toLowerCase())) return [];
       return [{ name, value }];
-    },
-  );
+    }),
+    ...(response.setCookies ?? []).map((value) => ({
+      name: "Set-Cookie",
+      value,
+    })),
+  ];
   await connection.send(
     "Fetch.fulfillRequest",
     {

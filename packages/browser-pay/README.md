@@ -32,7 +32,7 @@ An agent that gives up before paying cancels the purchase, which revokes the pla
 }
 ```
 
-`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints. That includes `Authorization` and any other credential the checkout sends with its payment request, since the relay has to send the same request on; the relay records their names, never their values. The relay takes at most 32 headers, each name at most 128 characters and each value at most 8192. When a paused request has a header past those limits, it fails with `headers_unrelayable` and nothing is relayed: a request missing a header (a CSRF token, an authorization) could be refused after the card was sent. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
+`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, and the browser's `sec-fetch-*` and `sec-ch-*` hints. That includes `Cookie`, `Authorization`, and any other credential the checkout sends with its payment request, since the relay has to send the same request on; the relay records their names, never their values. The relay takes at most 32 headers, each name at most 128 characters and each value at most 8192. For generic requests, a `Cookie` value over 8192 characters first loses pairs whose names are exactly `_ga`, `_gid`, `_gat`, `_fbp`, `_fbc`, `_ttp`, `_clck`, or `_clsk`, or start with `_ga_`, `_gat_`, `_gcl_`, `_hj`, `_uet`, `ajs_`, `amplitude`, `amp_`, `mp_`, `_tt_`, or `_pin_`. Empty pairs are dropped on this trim path; an empty result omits `Cookie`. Fitting cookies stay unchanged. If the remaining cookie still exceeds the value limit (even from a single non-analytics cookie), or would exceed the header count, the whole `Cookie` header is omitted and payment still relays. When a paused request has any other header past those limits, it fails with `headers_unrelayable` and nothing is relayed: a request missing a header (a CSRF token, an authorization) could be refused after the card was sent. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
 
 Success:
 
@@ -42,12 +42,13 @@ Success:
   "response": {
     "status": 200,
     "headers": { "content-type": "application/json" },
+    "setCookies": ["session=abc; Path=/; HttpOnly"],
     "body": "<processor body>"
   }
 }
 ```
 
-`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself.
+`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself. `response.setCookies` is optional: the merchant's raw `Set-Cookie` values, one per entry and never comma-joined. Each becomes its own `Set-Cookie` header on the fulfilled response, with or without a profile, so the browser stores the cookies and sends them on its next request. If `response.headers` also contains `set-cookie`, both entries are emitted; `setCookies` is applied last, so it wins in the cookie jar. A relay response whose `setCookies` is not an array of strings is rejected like any other malformed response. The interceptor never logs cookie values. End to end this works only when the Sapiom relay backend and Basis Theory return the merchant's `Set-Cookie` values in `setCookies`; until then the field is absent and nothing changes.
 
 Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay may omit either field.
 

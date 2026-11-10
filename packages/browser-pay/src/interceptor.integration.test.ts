@@ -612,6 +612,155 @@ if (!chromeBin) {
       }
     }, 60_000);
 
+    it("relays a card POST with three 3 KB analytics cookies while preserving its session", async () => {
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const handle = await attachInterceptor(cdpUrl, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return {
+            outcome: "relayed",
+            response: {
+              status: 200,
+              headers: { "content-type": "application/json" },
+              body: '{"id":"relayed"}',
+            },
+          };
+        }),
+        placeholder: PLACEHOLDER,
+        timeoutMs: 5_000,
+      });
+      handle.on((event) => events.push(event));
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const origin = `http://127.0.0.1:${card.port}`;
+      try {
+        await context.addCookies([
+          ...["_ga", "_fbp", "_hj"].map((name) => ({
+            name,
+            value: "x".repeat(3000),
+            url: origin,
+          })),
+          { name: "session_id", value: "abc", url: origin },
+        ]);
+        await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+        const result = await page.evaluate(async (body) => {
+          const response = await fetch("/sessions", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          });
+          return { status: response.status, text: await response.text() };
+        }, CARD);
+        expect(calls).toHaveLength(1);
+        expect(result).toEqual({ status: 200, text: '{"id":"relayed"}' });
+        expect(calls[0].request.headers.cookie).toBe("session_id=abc");
+        expect(calls[0].request.headers.cookie).not.toMatch(/_ga|_fbp|_hj/);
+        expect(events.some((event) => event.type === "failed")).toBe(false);
+        expect(JSON.stringify(events)).not.toMatch(/session_id|_ga|_fbp|_hj/);
+        expect(hits.filter((hit) => hit.path === "/sessions")).toEqual([]);
+      } finally {
+        await page.close();
+        await context.close();
+        await handle.detach();
+      }
+    }, 60_000);
+
+    it("stores relayed Set-Cookie values and sends them on the next native and relayed request", async () => {
+      const nativeCookies: { path?: string; cookie?: string }[] = [];
+      const shop = await new Promise<{ server: http.Server; port: number }>(
+        (resolve) => {
+          const server = http.createServer((req, res) => {
+            if (req.url === "/") {
+              res.writeHead(200, { "content-type": "text/html" });
+              res.end("<!doctype html><title>shop</title>");
+              return;
+            }
+            nativeCookies.push({ path: req.url, cookie: req.headers.cookie });
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end("{}");
+          });
+          server.listen(0, "localhost", () => {
+            const address = server.address();
+            resolve({
+              server,
+              port: typeof address === "object" && address ? address.port : 0,
+            });
+          });
+        },
+      );
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const handle = await attachInterceptor(cdpUrl, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return {
+            outcome: "relayed",
+            response: {
+              status: 200,
+              headers: { "content-type": "application/json" },
+              ...(calls.length === 1
+                ? { setCookies: ["a=1; Path=/", "b=2; Path=/"] }
+                : {}),
+              body: '{"id":"relayed"}',
+            },
+          };
+        }),
+        placeholder: PLACEHOLDER,
+        timeoutMs: 5_000,
+      });
+      handle.on((event) => events.push(event));
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const context = browser.contexts()[0];
+      const page = await context.newPage();
+      const shopOrigin = `http://localhost:${shop.port}`;
+      try {
+        await page.goto(`${shopOrigin}/`, { waitUntil: "domcontentloaded" });
+        const texts = await page.evaluate(
+          async (bodies) => {
+            const post = (body: string) =>
+              fetch("/pay", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body,
+              }).then((response) => response.text());
+            const first = await post(bodies.first);
+            const native = await fetch("/next").then((response) =>
+              response.text(),
+            );
+            const second = await post(bodies.second);
+            return [first, native, second];
+          },
+          { first: CARD, second: MISMATCH },
+        );
+        expect(texts).toEqual(['{"id":"relayed"}', "{}", '{"id":"relayed"}']);
+        const jar = await context.cookies(shopOrigin);
+        expect(
+          jar
+            .map(({ name, value }) => `${name}=${value}`)
+            .sort((left, right) => left.localeCompare(right)),
+        ).toEqual(["a=1", "b=2"]);
+        expect(
+          nativeCookies.filter(({ path }) => path !== "/favicon.ico"),
+        ).toEqual([{ path: "/next", cookie: "a=1; b=2" }]);
+        expect(calls).toHaveLength(2);
+        expect(calls[0].request.headers).not.toHaveProperty("cookie");
+        expect(calls[1].request.headers.cookie).toBe("a=1; b=2");
+        expect(events.filter((event) => event.type === "relayed")).toHaveLength(
+          2,
+        );
+        expect(JSON.stringify(events)).not.toMatch(/a=1|b=2/);
+      } finally {
+        await page.close().catch(() => {});
+        await context.clearCookies();
+        await handle.detach();
+        await new Promise((resolve) => shop.server.close(resolve));
+      }
+    }, 60_000);
+
     it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
       const { chromium } = await import("playwright");
       const browser = await chromium.connectOverCDP(cdpUrl);
