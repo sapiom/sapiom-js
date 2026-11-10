@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.9.0
+
+### Minor Changes
+
+- 1a3fd6f: Remove the `verification` field from `TransactionResponse`. The API never returned it. `version`, `nextAction` and the bounded `transactions.get(id, { since, maxWaitSeconds })` read are unchanged.
+
 ## 0.8.0
 
 ### Minor Changes
