@@ -17,7 +17,6 @@ import {
 } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
 import type { RelayCallOptions } from "./relay";
-import type { VerificationState } from "./verification";
 
 const HELD: HeldPlaceholder = {
   number: "4242424242424242",
