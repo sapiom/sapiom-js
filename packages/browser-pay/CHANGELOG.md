@@ -1,5 +1,12 @@
 # @sapiom/browser-pay
 
+## 0.6.1
+
+### Patch Changes
+
+- 15613e6: Forward Cookie headers for generic payment relays so merchant endpoints can use the browser session. Keep the Shopify profile header allowlist unchanged.
+- 15613e6: Apply merchant `Set-Cookie` values from the relay response's optional `setCookies` field to the fulfilled payment response.
+
 ## 0.6.0
 
 ### Minor Changes
