@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/fetch",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Fetch API integration for Sapiom SDK",
   "keywords": [
     "sapiom",
