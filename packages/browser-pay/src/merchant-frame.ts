@@ -71,7 +71,11 @@ export class MerchantFrames {
           typeof frame.url === "string" &&
           new URL(frame.url).origin === origin
         )
-          return { sessionId, frameId, url: frame.url };
+          return {
+            sessionId,
+            frameId,
+            url: frame.url + (frame.urlFragment ?? ""),
+          };
         frameId = frame.parentId;
       }
       sessionId = this.parentSession(sessionId, frameId);
@@ -96,7 +100,7 @@ export class MerchantFrames {
     if (!callback || typeof callback.frame.url !== "string") return false;
     if (
       exactUrl
-        ? callback.frame.url !== frame.url
+        ? callback.frame.url + (callback.frame.urlFragment ?? "") !== frame.url
         : new URL(callback.frame.url).origin !== new URL(frame.url).origin
     )
       return false;

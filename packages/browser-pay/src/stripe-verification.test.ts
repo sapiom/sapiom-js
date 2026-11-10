@@ -105,7 +105,8 @@ function fixture(relayBody = '{"id":"pm_demo"}') {
               {
                 frame: {
                   id: "auth",
-                  url: authUrl,
+                  url: authUrl.split("#")[0],
+                  urlFragment: new URL(authUrl).hash,
                 },
                 childFrames: [{ frame: { id: "acs", url: "about:blank" } }],
               },
@@ -194,6 +195,36 @@ function fixture(relayBody = '{"id":"pm_demo"}') {
 
 describe("Stripe Payment Element verification on the existing browser", () => {
   afterEach(() => jest.useRealTimers());
+
+  it("returns ACS completion to the captured Stripe frame when CDP supplies its URL fragment separately", async () => {
+    const f = fixture();
+    f.navigateAuth(
+      "https://js.stripe.com/v3/three-ds-2-challenge-abc123.html#challenge",
+    );
+    await f.start();
+    expect(await f.adapter.inspect(challenge())).toMatchObject({
+      capture: { nativeReturn: "stripe_3ds2" },
+    });
+    Object.assign(f.state, {
+      challengeCaptured: true,
+      launchClaimed: true,
+      nativeReturnAvailable: true,
+      nativeReturnProtocol: "stripe_3ds2",
+    });
+    const resume = await f.adapter.continuation?.();
+    expect(resume).toEqual(expect.any(Function));
+    f.state.continuationClaimed = true;
+    await expect(
+      resume!({ protocol: "stripe_3ds2", cres: cres() }),
+    ).resolves.toEqual({ interactionReturned: true });
+    expect(f.postMessage).toHaveBeenCalledWith(
+      {
+        type: "3ds2-trampoline",
+        data: Buffer.from(cres(), "base64url").toString("base64"),
+      },
+      "https://js.stripe.com",
+    );
+  });
 
   it("returns real ACS completion to Stripe.js only after the durable continuation claim", async () => {
     const f = fixture();
