@@ -59,7 +59,7 @@
     "test:package": "pnpm --filter \"@sapiom/mcp...\" build && node scripts/check-package.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/sandbox-preview": "workspace:^",

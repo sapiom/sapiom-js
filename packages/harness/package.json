@@ -63,7 +63,7 @@
     "e2e:live": "tsx scripts/e2e-live.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
