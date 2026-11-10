@@ -331,6 +331,19 @@ export async function b(ctx: any, id: string) { await ctx.sapiom.agents.run({ de
     });
   });
 
+  it("ignores a sapiom.json whose env holds a non-string value", async () => {
+    const root = await project({
+      "door/sapiom.json": '{ "resources": { "web": { "env": { "PORT": 8080, "WORKER_SLUG": "worker" } } } }',
+      "door/index.ts": agentSource("door"),
+      "worker/index.ts": agentSource("worker"),
+    });
+
+    const map = await mapOf(root);
+
+    expect(map.agents.map((agent) => agent.slug)).toEqual(["door", "worker"]);
+    expect(edgesOf(map)).toEqual([]);
+  });
+
   it("uses a zod default only for the input the step itself reads", async () => {
     const root = await project({
       "caller/index.ts": agentSource(
