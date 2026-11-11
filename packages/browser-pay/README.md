@@ -183,3 +183,22 @@ Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` ru
 `detach()` fails in-flight paused requests before it disables Fetch. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames, client-side-encrypted card payloads, and worklet targets are not visible to this check.
 
 `examples/attach.ts` is the agent-side script. It is not published.
+
+## Stripe Payment Element demo
+
+Stripe/BigCommerce Payment Element demo: import `createStripePaymentElementVerification`
+from `@sapiom/browser-pay`, pass `verificationAdapter: createStripePaymentElementVerification`
+to `attachInterceptor`, and leave `profileId` unset. Explicitly supply
+`verification: { initial, runner }`: a prebound purchase state and runner implementing
+`sync(id)` / `report(id, input)`. The hook does not register verification automatically
+or obtain it from the relay.
+Captures supported CReq POSTs with `nativeReturn: "stripe_3ds2"`; continuation requires the backend
+to collect the real issuer CRes and expose `nativeReturnAvailable` / `nativeReturnProtocol: "stripe_3ds2"`.
+After the existing one-use continuation claim, the private report reply must carry
+`nativeReturn: { protocol: "stripe_3ds2", cres: "<base64-encoded issuer CRes>" }`.
+The adapter binds that final CRes to the captured transaction IDs, version and original Stripe frame,
+delivers it through Stripe's native trampoline, and permits the bound native `challenge_complete` request.
+Stripe.js settles its original Confirm; the adapter never sends Confirm or replays network responses.
+Only a correlated intent response establishes success or authentication failure; delivery alone does not.
+Unsupported auth stays native; absent return evidence stays pending. Backend CRes collection and actual
+Stripe sandbox/live completion remain unproven by the local fixtures. Leave `profileId` unset.
