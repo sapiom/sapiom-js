@@ -45,6 +45,8 @@ export class VerificationSession implements VerificationHandle {
   private native = false;
   private nativeReturn?: NativeReturn;
   private nativeAckKey?: string;
+  private interactionReturned = false;
+  private resume?: Awaited<ReturnType<VerificationAdapter["continuation"]>>;
   private disposed = false;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly waiters = new Set<(state: VerificationState) => void>();
@@ -112,7 +114,7 @@ export class VerificationSession implements VerificationHandle {
       return action === "continue" &&
         request.method.toUpperCase() === "POST" &&
         this.submissionBlocked() &&
-        (!this.state.interactionReturned ||
+        (!(this.interactionReturned || this.state.interactionReturned) ||
           isChallengeRequest(request, this.state.merchantOrigin))
         ? ("block" as const)
         : action;
@@ -179,7 +181,7 @@ export class VerificationSession implements VerificationHandle {
     ]);
     if (timer) clearTimeout(timer);
   }
-  /** Serialize reports with stable replay keys, dropping receipts when native checkout takes over. */
+  /** Serialize transports independently of caller deadlines; late receipts can still commit state. */
   private async report(
     input: Record<string, unknown>,
     capture = false,
@@ -202,8 +204,6 @@ export class VerificationSession implements VerificationHandle {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const reply = await this.runner.report(this.state.id, body);
-          if (expired)
-            throw new Error("Purchase verification report timed out");
           const result = validated(
             reply,
             this.state,
@@ -233,31 +233,34 @@ export class VerificationSession implements VerificationHandle {
           return true;
         } catch {
           ambiguous = true;
-          if (expired || attempt === 2)
+          if (expired || attempt === 2) {
+            if (input.kind === "continuation_started") this.resume = undefined;
             throw new Error("Purchase verification report failed");
+          }
         }
       }
     };
-    const pending = this.queue.then(async () => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          operation(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => {
-              expired = true;
-              reject(new Error("Purchase verification report timed out"));
-            }, 1000);
-            timer.unref?.();
-          }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    });
-    this.queue = pending.catch(() => {});
-    return pending;
+    const transport = this.queue.then(operation);
+    this.queue = transport.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        transport,
+        new Promise<boolean>((resolve, reject) => {
+          timer = setTimeout(() => {
+            expired = true;
+            // A capture may already be durable. Keep its local reservation fenced.
+            if (capture) resolve(true);
+            else reject(new Error("Purchase verification report timed out"));
+          }, 1000);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
+
   private async acknowledgeNativeReturn() {
     await this.report(
       { kind: "interaction_resumed" },
@@ -272,7 +275,7 @@ export class VerificationSession implements VerificationHandle {
     if (!this.canObserve() || this.ticking) return;
     this.ticking = true;
     try {
-      await this.queue;
+      // Sync must reconcile unknown outcomes even while a report transport hangs.
       if (!this.canObserve()) return;
       const synced = validated(
         await this.runner.sync(this.state.id),
@@ -287,27 +290,40 @@ export class VerificationSession implements VerificationHandle {
         if (!this.canObserve() || this.native) return;
         if (observation && observation.outcome !== "unknown")
           await this.report({ kind: "checkout_observed", observation });
-        else if (this.state.launchClaimed && !this.state.continuationClaimed) {
+        else if (
+          this.state.launchClaimed &&
+          !this.state.continuationClaimed &&
+          !this.resume
+        ) {
           const resume = await this.adapter.continuation();
           if (!this.canObserve()) return;
           if (resume) {
+            this.resume = resume;
             await this.report({ kind: "continuation_started" });
-            if (this.canObserve() && this.state.continuationClaimed) {
-              const result = this.nativeReturn;
-              this.nativeReturn = undefined;
-              let acknowledged;
-              try {
-                acknowledged = await resume(result);
-              } catch {
-                if (this.canObserve())
-                  await this.report({ kind: "continuation_failed" });
-                return;
-              }
-              if (this.canObserve() && acknowledged.interactionReturned) {
-                this.nativeAckKey = randomUUID();
-                await this.acknowledgeNativeReturn();
-              }
-            }
+          }
+        }
+        if (
+          this.canObserve() &&
+          this.state.continuationClaimed &&
+          this.resume &&
+          (!this.state.nativeReturnAvailable || this.nativeReturn)
+        ) {
+          const resume = this.resume;
+          this.resume = undefined;
+          const result = this.nativeReturn;
+          this.nativeReturn = undefined;
+          let acknowledged;
+          try {
+            acknowledged = await resume(result);
+          } catch {
+            if (this.canObserve())
+              await this.report({ kind: "continuation_failed" });
+            return;
+          }
+          if (this.canObserve() && acknowledged.interactionReturned) {
+            this.interactionReturned = true;
+            this.nativeAckKey = randomUUID();
+            await this.acknowledgeNativeReturn();
           }
         }
       }

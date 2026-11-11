@@ -120,8 +120,13 @@ a challenge. An accepted capture fulfills the original request with an inert
 verification page. Captured or uncertain handoffs retain their submission
 fence. Hook timeout falls back to native before a capture or launch claim.
 Exhausted capture reports release the local claim and fall back to native;
-durable capture and launch claims remain fenced. Reports have a one-second
-deadline so queued browser-loss delivery cannot wait indefinitely.
+durable capture and launch claims remain fenced. A report timeout leaves the
+outcome unknown: capture stays blocked while normal sync reconciles state.
+Late newer receipts still apply, including native return material. Reports stay
+serialized until their transports settle; local detach remains bounded to one
+second. Once the adapter acknowledges return dispatch, adapter-approved
+completion traffic can continue before the runner acknowledges it, while
+recognized challenge traffic stays blocked.
 After termination, the SDK disposes the adapter and preserves the fence for
 recognized challenge traffic without calling the disposed inspector.
 
