@@ -141,6 +141,42 @@ describe("purchase-bound VerificationSession", () => {
     },
   );
 
+  it.each([false, true])(
+    "allows adapter-approved completion only after durable interactionReturned: %s",
+    async (interactionReturned) => {
+      const f = fixture({
+        challengeCaptured: true,
+        launchClaimed: true,
+        continuationClaimed: true,
+        interactionReturned,
+      });
+      const completion = request(
+        "source=src_demo",
+        "https://api.stripe.com/v1/3ds2/challenge_complete",
+      );
+      f.adapter.inspect = jest.fn(async () => "continue");
+      expect(await f.session.inspect(completion)).toBe(
+        interactionReturned ? "continue" : "block",
+      );
+      expect(await f.session.inspect(request())).toBe("block");
+      expect(
+        await f.session.inspect(
+          request(JSON.stringify({ messageType: "CReq" })),
+        ),
+      ).toBe("block");
+      expect(f.session.submissionBlocked()).toBe(true);
+      f.adapter.inspect = jest.fn(async () => "block");
+      expect(
+        await f.session.inspect(
+          request("confirm=true", "https://api.stripe.com/confirm"),
+        ),
+      ).toBe("block");
+      f.adapter.inspect = jest.fn(async () => "fallback");
+      expect(await f.session.inspect(completion)).toBe("block");
+      await f.session.close();
+    },
+  );
+
   it("delivers browser_lost after a queued report deadline and ignores late receipts", async () => {
     const f = fixture();
     const receipt = pending<VerificationRunnerReply>();

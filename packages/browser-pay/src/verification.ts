@@ -111,7 +111,9 @@ export class VerificationSession implements VerificationHandle {
     if (typeof action !== "object")
       return action === "continue" &&
         request.method.toUpperCase() === "POST" &&
-        this.submissionBlocked()
+        this.submissionBlocked() &&
+        (!this.state.interactionReturned ||
+          isChallengeRequest(request, this.state.merchantOrigin))
         ? ("block" as const)
         : action;
     if (
