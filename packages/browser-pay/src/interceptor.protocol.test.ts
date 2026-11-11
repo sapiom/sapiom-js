@@ -3021,6 +3021,59 @@ describe("experimental verification hook", () => {
         ].includes(c.method) && c.params.requestId === id,
     );
 
+  it("aborts pending relays before waiting for a hung verification shutdown", async () => {
+    const stub = await startStub();
+    let signal: AbortSignal | undefined;
+    let release!: (state: VerificationState) => void;
+    const state = initial();
+    const report = jest.fn(
+      () =>
+        new Promise<VerificationState>((resolve) => {
+          release = resolve;
+        }),
+    );
+    let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+    let detached: Promise<void> | undefined;
+    try {
+      handle = await attachInterceptor(stub.url, {
+        placeholder: HELD,
+        verification: {
+          initial: state,
+          runner: { sync: async () => state, report },
+        },
+        verificationAdapter: adapter,
+        relay: stubPaymentRelay(
+          (_request, options) =>
+            new Promise((_resolve, reject) => {
+              signal = options?.signal;
+              signal?.addEventListener(
+                "abort",
+                () => reject(new Error("aborted")),
+                { once: true },
+              );
+            }),
+        ),
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      pause(stub, "pending-relay", CARD);
+      await waitFor(() => signal !== undefined, "relay started");
+      detached = handle.detach();
+      await waitFor(
+        () => report.mock.calls.length === 1,
+        "shutdown report started",
+      );
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      release?.({ ...state, version: 1, status: "error" });
+      await (detached ?? handle?.detach());
+      await stub.close();
+    }
+  });
+
   it("preserves main behavior without an adapter, even with prebound runner options", async () => {
     const stub = await startStub();
     const runner = { sync: jest.fn(), report: jest.fn() };

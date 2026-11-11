@@ -1084,10 +1084,10 @@ class PaymentInterceptor {
   private async detach(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.stopVerification();
     this.buffering = false;
     this.backlog = null;
-    for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {
       await this.connection

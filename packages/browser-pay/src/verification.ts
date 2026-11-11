@@ -86,13 +86,12 @@ export class VerificationSession implements VerificationHandle {
   /** Inspect checkout traffic while preserving captured and uncertain handoffs during native fallback. */
   async inspect(request: VerificationRequest) {
     this.canObserve();
-    if (
-      !verificationIsActive(this.state) &&
-      !this.captureClaimed &&
-      !this.state.challengeCaptured &&
-      !this.state.launchClaimed
-    )
-      this.native = true;
+    if (!verificationIsActive(this.state)) {
+      return this.submissionBlocked() &&
+        isChallengeRequest(request, this.state.merchantOrigin)
+        ? ("block" as const)
+        : ("continue" as const);
+    }
     if (this.native) {
       if (
         this.captureClaimed ||
