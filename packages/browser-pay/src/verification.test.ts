@@ -278,7 +278,7 @@ describe("purchase-bound VerificationSession", () => {
     { version: 0 },
     { version: NaN },
     { expiresAt: "invalid" },
-    { expiresAt: new Date(0).toISOString() },
+    { expiresAt: new Date(Date.now() + 120_000).toISOString() },
     { merchantOrigin: "https://other.example" },
     { total: { amount: "11.00", currency: "USD" } },
     { total: { amount: "10.00", currency: "EUR" } },
@@ -294,6 +294,29 @@ describe("purchase-bound VerificationSession", () => {
     await jest.advanceTimersByTimeAsync(2000);
     expect(f.session.current()).toEqual(f.state);
     expect(f.adapter.reconcile).not.toHaveBeenCalled();
+    await f.session.close();
+  });
+
+  it("accepts a shortened capture deadline and expires at the new deadline", async () => {
+    const f = fixture();
+    const expiresAt = new Date(Date.now() + 10_000).toISOString();
+    f.runner.report = jest.fn(
+      async (): Promise<VerificationRunnerReply> => ({
+        ...f.state,
+        version: 2,
+        status: "requires_action",
+        challengeCaptured: true,
+        expiresAt,
+      }),
+    );
+    expect(await f.session.inspect(request())).toBe("capture");
+    expect(f.session.current()).toMatchObject({
+      version: 2,
+      challengeCaptured: true,
+      expiresAt,
+    });
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(f.session.current().status).toBe("expired");
     await f.session.close();
   });
 

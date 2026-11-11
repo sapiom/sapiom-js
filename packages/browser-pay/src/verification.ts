@@ -423,7 +423,7 @@ function validated(
       value.merchantOrigin !== previous.merchantOrigin ||
       value.total.amount !== previous.total.amount ||
       value.total.currency !== previous.total.currency ||
-      value.expiresAt !== previous.expiresAt ||
+      Date.parse(value.expiresAt) > Date.parse(previous.expiresAt) ||
       ["challengeCaptured", "launchClaimed", "continuationClaimed"].some(
         (key) =>
           previous[key as keyof VerificationState] === true &&
