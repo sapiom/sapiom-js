@@ -114,6 +114,69 @@ describe("purchase-bound VerificationSession", () => {
     await f.session.close();
   });
 
+  it("F1 keeps a timed-out capture blocked and reconciles through sync", async () => {
+    const f = fixture();
+    const receipt = pending<VerificationRunnerReply>();
+    f.runner.report = jest.fn((_id, input) =>
+      input.kind === "challenge_observed"
+        ? receipt.promise
+        : Promise.resolve(f.state),
+    );
+    let decision: string | undefined;
+    const first = f.session.inspect(request()).then((value) => {
+      decision = value;
+    });
+    await flush();
+    // Server commits capture; its response remains in flight beyond the deadline.
+    f.state = { ...f.state, version: 2, challengeCaptured: true };
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(decision).toBe("block");
+    expect(f.session.submissionBlocked()).toBe(true);
+    expect(f.session.fallback()).toBe("block");
+    expect(await f.session.inspect(request())).toBe("block");
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(f.runner.sync).toHaveBeenCalledTimes(1);
+    expect(f.session.current()).toMatchObject({
+      version: 2,
+      challengeCaptured: true,
+    });
+    receipt.resolve(f.state);
+    await first;
+    await flush();
+    await f.session.close();
+  });
+
+  it("F4 serializes the next report behind a timed-out transport", async () => {
+    const f = fixture();
+    const receipt = pending<VerificationRunnerReply>();
+    f.runner.report = jest.fn((_id, input) =>
+      input.kind === "challenge_observed"
+        ? receipt.promise
+        : Promise.resolve(f.state),
+    );
+    const first = f.session.inspect(request());
+    await jest.advanceTimersByTimeAsync(1000);
+    f.adapter.reconcile = jest.fn(async () => ({
+      outcome: "confirmed" as const,
+      amount: "10.00",
+      currency: "USD",
+    }));
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(f.runner.report).toHaveBeenCalledTimes(1);
+    f.state = { ...f.state, version: 2, challengeCaptured: true };
+    receipt.resolve(f.state);
+    await flush();
+    expect(f.runner.report).toHaveBeenCalledWith(
+      "v-1",
+      expect.objectContaining({
+        kind: "checkout_observed",
+        expectedVersion: 2,
+      }),
+    );
+    await first;
+    await f.session.close();
+  });
+
   it.each(["challengeCaptured", "launchClaimed", "uncertain"] as const)(
     "fences active adapter continue during %s",
     async (claim) => {
@@ -177,7 +240,7 @@ describe("purchase-bound VerificationSession", () => {
     },
   );
 
-  it("delivers browser_lost after a queued report deadline and ignores late receipts", async () => {
+  it("closes locally while browser_lost waits for a timed-out capture transport", async () => {
     const f = fixture();
     const receipt = pending<VerificationRunnerReply>();
     f.runner.report = jest.fn((_id, input) =>
@@ -189,14 +252,15 @@ describe("purchase-bound VerificationSession", () => {
     await flush();
     const close = f.session.close();
     await jest.advanceTimersByTimeAsync(1000);
-    expect(f.runner.report).toHaveBeenCalledWith(
-      "v-1",
-      expect.objectContaining({ kind: "browser_lost" }),
-    );
+    expect(f.runner.report).toHaveBeenCalledTimes(1);
     await close;
     await first;
     receipt.resolve({ ...f.state, version: 2, challengeCaptured: true });
     await flush();
+    expect(f.runner.report).toHaveBeenCalledWith(
+      "v-1",
+      expect.objectContaining({ kind: "browser_lost" }),
+    );
     expect(f.session.current()).toMatchObject({
       status: "error",
       challengeCaptured: false,
@@ -480,6 +544,99 @@ describe("purchase-bound VerificationSession", () => {
     expect(acks).toHaveLength(4);
     expect(new Set(acks.map((i) => i.idempotencyKey)).size).toBe(1);
     expect(f.session.current().interactionReturned).toBe(true);
+    await f.session.close();
+  });
+
+  it.each([3100, 6100])(
+    "F2 applies a late continuation receipt after %i ms and delivers its return once",
+    async (delay) => {
+      const f = fixture({
+        challengeCaptured: true,
+        launchClaimed: true,
+        nativeReturnAvailable: true,
+        nativeReturnProtocol: "stripe_3ds2",
+      });
+      const receipt = pending<VerificationRunnerReply>();
+      const resume = jest.fn(async () => ({
+        interactionReturned: true as const,
+      }));
+      f.adapter.continuation = jest.fn(async () => resume);
+      f.runner.report = jest.fn((_id, input) => {
+        if (input.kind === "continuation_started") {
+          f.state = { ...f.state, version: 2, continuationClaimed: true };
+          return receipt.promise;
+        }
+        f.state = { ...f.state, version: 3, interactionReturned: true };
+        return Promise.resolve(f.state);
+      });
+      await jest.advanceTimersByTimeAsync(delay);
+      expect(resume).not.toHaveBeenCalled();
+      receipt.resolve({
+        ...f.state,
+        nativeReturn: { protocol: "stripe_3ds2", cres: "Y3Jlcw" },
+      });
+      await flush();
+      await jest.advanceTimersByTimeAsync(4900);
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(resume).toHaveBeenCalledWith({
+        protocol: "stripe_3ds2",
+        cres: "Y3Jlcw",
+      });
+      expect(f.session.current()).toMatchObject({
+        version: 3,
+        continuationClaimed: true,
+        interactionReturned: true,
+      });
+      expect(f.session.current()).not.toHaveProperty("nativeReturn");
+      expect(
+        (f.runner.report as jest.Mock).mock.calls.filter(
+          ([, input]) => input.kind === "continuation_started",
+        ),
+      ).toHaveLength(1);
+      await f.session.close();
+    },
+  );
+
+  it("F3 allows challenge_complete before the interaction_resumed receipt", async () => {
+    const f = fixture({ challengeCaptured: true, launchClaimed: true });
+    const receipt = pending<VerificationRunnerReply>();
+    const resume = jest.fn(async () => ({
+      interactionReturned: true as const,
+    }));
+    f.adapter.continuation = jest.fn(async () => resume);
+    f.adapter.inspect = jest.fn(async () => "continue");
+    f.runner.report = jest.fn((_id, input) => {
+      if (input.kind === "interaction_resumed") return receipt.promise;
+      f.state = { ...f.state, version: 2, continuationClaimed: true };
+      return Promise.resolve(f.state);
+    });
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(f.runner.report).toHaveBeenCalledWith(
+      "v-1",
+      expect.objectContaining({ kind: "interaction_resumed" }),
+    );
+    expect(f.session.current().interactionReturned).not.toBe(true);
+    expect(
+      await f.session.inspect(
+        request(
+          "source=src_demo",
+          "https://api.stripe.com/v1/3ds2/challenge_complete",
+        ),
+      ),
+    ).toBe("continue");
+    expect(await f.session.inspect(request())).toBe("block");
+    expect(
+      await f.session.inspect(request(JSON.stringify({ messageType: "CReq" }))),
+    ).toBe("block");
+    await jest.advanceTimersByTimeAsync(2100);
+    expect(resume).toHaveBeenCalledTimes(1);
+    f.state = { ...f.state, version: 3, interactionReturned: true };
+    receipt.resolve(f.state);
+    await flush();
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(await f.session.inspect(request())).toBe("block");
     await f.session.close();
   });
 
