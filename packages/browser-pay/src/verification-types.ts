@@ -14,7 +14,6 @@ export interface VerificationState {
   expiresAt: string;
   challengeCaptured: boolean;
   launchClaimed: boolean;
-  checkRequested: boolean;
   continuationClaimed: boolean;
   interactionReturned?: boolean;
   nativeReturnAvailable?: boolean;
@@ -34,7 +33,6 @@ export interface VerificationRunnerReply extends VerificationState {
 }
 export interface VerificationRelayContext {
   frameId?: string;
-  url?: string;
 }
 export interface VerificationRunner {
   sync(id: string): Promise<VerificationState>;
@@ -59,11 +57,10 @@ export interface CheckoutObservation {
   confirmation?: string;
 }
 export interface VerificationAdapter {
-  continuation?(): Promise<
-    | ((result?: NativeReturn) => Promise<void | { interactionReturned: true }>)
-    | null
+  continuation(): Promise<
+    ((result?: NativeReturn) => Promise<{ interactionReturned: true }>) | null
   >;
-  dispose?(): void | Promise<void>;
+  dispose(): void | Promise<void>;
   inspect(request: VerificationRequest): Promise<
     | "continue"
     | "block"

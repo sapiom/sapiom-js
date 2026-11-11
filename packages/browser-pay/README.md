@@ -112,13 +112,16 @@ Verification is opt-in: supply both `verification: { initial, runner }` and
 to the purchase, merchant origin, amount and currency. It supplies `sync` and
 `report`; the SDK does not register verification or provide a runner transport.
 The adapter factory receives the existing CDP connection and a state reader.
-No adapter is installed by default. Supplying only `verification` preserves
-ordinary relay behavior; supplying an adapter without a runner fails attach.
+No adapter is installed by default. Supplying `verification` without an
+adapter throws a `TypeError`; supplying an adapter without a runner fails attach.
 
 The adapter may continue or block traffic, request native fallback, or capture
 a challenge. An accepted capture fulfills the original request with an inert
 verification page. Captured or uncertain handoffs retain their submission
-fence; native fallback is permitted only before a capture or launch claim.
+fence. Hook timeout falls back to native before a capture or launch claim.
+Exhausted capture reports release the local claim and fall back to native;
+durable capture and launch claims remain fenced. Reports have a one-second
+deadline so queued browser-loss delivery cannot wait indefinitely.
 After termination, the SDK disposes the adapter and preserves the fence for
 recognized challenge traffic without calling the disposed inspector.
 

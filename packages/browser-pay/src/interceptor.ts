@@ -394,6 +394,8 @@ class PaymentInterceptor {
   }
 
   async start(): Promise<InterceptorHandle> {
+    if (this.options.verification && !this.options.verificationAdapter)
+      throw new TypeError("Verification options require a verificationAdapter");
     if (this.options.verificationAdapter) {
       const config = this.options.verification;
       if (
@@ -413,7 +415,7 @@ class PaymentInterceptor {
         );
       } catch (error) {
         try {
-          Promise.resolve(adapter.dispose?.()).catch(() => {});
+          Promise.resolve(adapter.dispose()).catch(() => {});
         } catch {
           /* Preserve attach failure. */
         }
@@ -741,17 +743,25 @@ class PaymentInterceptor {
     }
     if (read.kind === "miss") {
       if (!this.verification) return { action: "continue" };
+      const inspection = new AbortController();
       const action = await failAfter(
-        this.verification.inspect({
-          url: request.url,
-          method: request.method,
-          body: read.body,
-          sessionId: entry.sessionId,
-          frameId: request.frameId,
-          networkId: request.networkId,
-        }),
+        this.verification.inspect(
+          {
+            url: request.url,
+            method: request.method,
+            body: read.body,
+            sessionId: entry.sessionId,
+            frameId: request.frameId,
+            networkId: request.networkId,
+          },
+          inspection.signal,
+        ),
         this.timeoutMs,
-      );
+      ).catch((error: unknown) => {
+        inspection.abort();
+        if (isRelayTimeout(error)) return this.verification!.fallback();
+        throw error;
+      });
       return action === "capture"
         ? { action: "challenge" }
         : action === "block"
@@ -989,7 +999,6 @@ class PaymentInterceptor {
     }
     this.verification?.relayed(decision.response, entry.sessionId, {
       frameId: request.frameId,
-      url,
     });
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
     this.emit(
