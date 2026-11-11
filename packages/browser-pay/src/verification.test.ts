@@ -267,6 +267,42 @@ describe("purchase-bound VerificationSession", () => {
     await f.session.close();
   });
 
+  it.each(["ended", "expired", "canceled", "error"] as const)(
+    "preserves the fence without a disposed inspector after %s",
+    async (status) => {
+      for (const claim of ["challengeCaptured", "launchClaimed"] as const) {
+        const f = fixture({ status, [claim]: true });
+        (f.adapter.inspect as jest.Mock).mockResolvedValue("continue");
+        expect(await f.session.inspect(request())).toBe("block");
+        expect(
+          await f.session.inspect({ ...request(), method: "GET", body: "" }),
+        ).toBe("continue");
+        expect(f.adapter.inspect).not.toHaveBeenCalled();
+        expect(f.adapter.dispose).toHaveBeenCalledTimes(1);
+        expect(f.session.submissionBlocked()).toBe(true);
+        await f.session.close();
+      }
+    },
+  );
+
+  it("keeps an uncertain capture fenced after expiry without using the disposed adapter", async () => {
+    const f = fixture({ expiresAt: new Date(Date.now() + 500).toISOString() });
+    const receipt = pending<VerificationRunnerReply>();
+    f.runner.report = jest.fn(() => receipt.promise);
+    const first = f.session.inspect(request());
+    await flush();
+    jest.setSystemTime(Date.now() + 1000);
+    (f.adapter.inspect as jest.Mock).mockResolvedValue("continue");
+    expect(await f.session.inspect(request())).toBe("block");
+    expect(
+      await f.session.inspect({ ...request(), method: "GET", body: "" }),
+    ).toBe("continue");
+    expect(f.adapter.inspect).toHaveBeenCalledTimes(1);
+    receipt.resolve({ ...f.state, version: 2, challengeCaptured: true });
+    expect(await first).toBe("block");
+    await f.session.close();
+  });
+
   it("closes locally within one second even when browser_lost hangs", async () => {
     const f = fixture();
     f.runner.report = jest.fn(() => new Promise(() => {}));

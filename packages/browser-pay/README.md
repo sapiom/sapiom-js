@@ -105,6 +105,28 @@ The injection is consumed. The paused request fails and the same body is not sen
 
 A redirect, a non-2xx HTTP status other than 502, 503, or 504, or an unreadable body fails the paused browser request. David's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
 
+## Experimental verification hook
+
+Verification is opt-in: supply both `verification: { initial, runner }` and
+`verificationAdapter` to `attachInterceptor`. The runner must already be bound
+to the purchase, merchant origin, amount and currency. It supplies `sync` and
+`report`; the SDK does not register verification or provide a runner transport.
+The adapter factory receives the existing CDP connection and a state reader.
+No adapter is installed by default. Supplying only `verification` preserves
+ordinary relay behavior; supplying an adapter without a runner fails attach.
+
+The adapter may continue or block traffic, request native fallback, or capture
+a challenge. An accepted capture fulfills the original request with an inert
+verification page. Captured or uncertain handoffs retain their submission
+fence; native fallback is permitted only before a capture or launch claim.
+After termination, the SDK disposes the adapter and preserves the fence for
+recognized challenge traffic without calling the disposed inspector.
+
+`handle.verification` exists only with an adapter. `current()` returns a state
+snapshot; `wait()` resolves on a terminal state, including expiry or browser
+loss. Neither exposes native return material. Detach ends local observation;
+calling `wait()` does not itself prove a successful purchase.
+
 ## What an agent does
 
 ```typescript
