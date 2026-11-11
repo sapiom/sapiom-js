@@ -29,7 +29,6 @@ const initial = (): VerificationState => ({
   total: { amount: "11.00", currency: "USD" },
   challengeCaptured: false,
   launchClaimed: false,
-  checkRequested: false,
   continuationClaimed: false,
 });
 const paymentIntent = (change = {}) => ({

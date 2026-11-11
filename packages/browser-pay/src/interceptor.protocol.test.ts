@@ -431,7 +431,6 @@ describe("interceptor CDP decisions", () => {
         total: { amount: "11.00", currency: "USD" },
         challengeCaptured: false,
         launchClaimed: false,
-        checkRequested: false,
         continuationClaimed: false,
       };
       const relay = jest.fn(async () => ({
