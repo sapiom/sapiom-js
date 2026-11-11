@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.9.0
+
+### Minor Changes
+
+- 1a3fd6f: Remove the `verification` field from `TransactionResponse`. The API never returned it. `version`, `nextAction` and the bounded `transactions.get(id, { since, maxWaitSeconds })` read are unchanged.
+
 ## 0.8.0
 
 ### Minor Changes
@@ -11,8 +17,7 @@
   Match the backend's whole-number `maxWaitSeconds` range of 0 to 25 and keep HTTP
   deadlines active through response-body reads. Report body-read aborts as timeouts
   without retrying. Skip polling timers for verification sessions that register in
-  a terminal state, and mark the adapter hook internal until U6 defines general
-  checkout integration.
+  a terminal state, and keep the adapter hook internal for now.
 
 ## Unreleased
 

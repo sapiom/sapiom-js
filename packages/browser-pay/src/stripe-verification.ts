@@ -10,7 +10,7 @@ import type {
   VerificationRelayContext,
   VerificationRequest,
   VerificationState,
-} from "./verification.js";
+} from "./verification-types.js";
 
 const json = (body: string): Record<string, unknown> | null => {
   try {

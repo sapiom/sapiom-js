@@ -20,6 +20,8 @@ export interface RelayRequest {
 export interface RelayedHttpResponse {
   status: number;
   headers: Record<string, string>;
+  /** Raw Set-Cookie values, one header per entry, never comma-joined. */
+  setCookies?: string[];
   body: string;
 }
 
@@ -57,6 +59,11 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
   return out;
 }
 
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.every((entry) => typeof entry === "string") ? value : undefined;
+}
+
 export function parseRelayResponse(value: unknown): RelayResponse {
   if (!isRecord(value) || typeof value.outcome !== "string") {
     throw new Error("Payment relay returned an unreadable response");
@@ -82,18 +89,25 @@ export function parseRelayResponse(value: unknown): RelayResponse {
   }
   const response = value.response;
   const headers = stringRecord(response.headers);
+  const setCookies = stringArray(response.setCookies);
   if (
     typeof response.status !== "number" ||
     !Number.isInteger(response.status) ||
     response.status < 100 ||
     response.status > 599 ||
     typeof response.body !== "string" ||
-    !headers
+    !headers ||
+    (response.setCookies !== undefined && !setCookies)
   ) {
     throw new Error("Payment relay returned an unreadable response");
   }
   return {
     outcome: "relayed",
-    response: { status: response.status, headers, body: response.body },
+    response: {
+      status: response.status,
+      headers,
+      ...(setCookies ? { setCookies } : {}),
+      body: response.body,
+    },
   };
 }

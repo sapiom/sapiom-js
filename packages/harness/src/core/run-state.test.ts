@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 import {
   createRunStateFetcher,
@@ -216,7 +216,7 @@ describe("createRunStateFetcher — success path (proves succeeded→passed fix 
 
     expect(mockFetch).toHaveBeenCalledWith(
       "https://agents.test/agents/v1/executions/exec_invoice_001",
-      { headers: { "x-sapiom-api-key": "sk-my-key" } },
+      expect.objectContaining({ headers: { "x-sapiom-api-key": "sk-my-key" } }),
     );
   });
 });
@@ -338,13 +338,13 @@ describe("createRunStateFetcher — refresh-on-401", () => {
     expect(mockFetch).toHaveBeenNthCalledWith(
       1,
       "https://agents.test/agents/v1/executions/exec_invoice_001",
-      { headers: { "x-sapiom-api-key": "sk-stale" } },
+      expect.objectContaining({ headers: { "x-sapiom-api-key": "sk-stale" } }),
     );
     // …the retry used the refreshed key.
     expect(mockFetch).toHaveBeenNthCalledWith(
       2,
       "https://agents.test/agents/v1/executions/exec_invoice_001",
-      { headers: { "x-sapiom-api-key": "sk-fresh" } },
+      expect.objectContaining({ headers: { "x-sapiom-api-key": "sk-fresh" } }),
     );
   });
 
@@ -465,5 +465,42 @@ describe("createRunStateFetcher — refresh-on-401", () => {
       error: "harness is not signed in to Sapiom",
     });
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("createRunStateFetcher — credential channel", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("refuses plaintext http to a non-loopback host without calling fetch", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "");
+    const mockFetch = makeFetch(200, RAW_SUCCESS_DOC);
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test",
+      baseUrl: "http://agents.internal",
+      fetchImpl: mockFetch,
+    });
+
+    expect(await fetcher.fetch("exec_invoice_001")).toEqual({
+      ok: false,
+      status: 502,
+      error: "gateway unreachable",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("sends the key over plaintext http when SAPIOM_ALLOW_INSECURE_HTTP=1", async () => {
+    vi.stubEnv("SAPIOM_ALLOW_INSECURE_HTTP", "1");
+    const mockFetch = makeFetch(200, RAW_SUCCESS_DOC);
+    const fetcher = createRunStateFetcher({
+      apiKey: "sk-test",
+      baseUrl: "http://agents.internal",
+      fetchImpl: mockFetch,
+    });
+
+    await fetcher.fetch("exec_invoice_001");
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://agents.internal/agents/v1/executions/exec_invoice_001",
+      expect.objectContaining({ headers: { "x-sapiom-api-key": "sk-test" } }),
+    );
   });
 });

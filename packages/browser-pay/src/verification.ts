@@ -1,99 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { CdpConnection } from "./cdp.js";
+import { isRecord } from "./guards.js";
+import type {
+  VerificationState,
+  NativeReturn,
+  VerificationRunnerReply,
+  VerificationRunner,
+  VerificationAdapter,
+  VerificationHandle,
+  VerificationRequest,
+  VerificationRelayContext,
+} from "./verification-types.js";
 
-export interface VerificationState {
-  id: string;
-  version: number;
-  status:
-    | "preparing"
-    | "requires_action"
-    | "checking"
-    | "ended"
-    | "expired"
-    | "canceled"
-    | "error";
-  expiresAt: string;
-  challengeCaptured: boolean;
-  launchClaimed: boolean;
-  checkRequested: boolean;
-  continuationClaimed: boolean;
-  interactionReturned?: boolean;
-  nativeReturnAvailable?: boolean;
-  nativeReturnProtocol?: NativeReturn["protocol"];
-  merchantOrigin: string;
-  total: { amount: string; currency: string };
-  actionUrl?: string;
-  observation?: {
-    outcome: "confirmed" | "failed" | "unknown";
-    source: "runner";
-    confirmation?: string;
-  };
-}
-export type NativeReturn =
-  | { protocol: "braintree_cardinal"; jwt: string }
-  | { protocol: "stripe_3ds2"; cres: string };
-export interface VerificationRunnerReply extends VerificationState {
-  nativeReturn?: NativeReturn;
-}
-export interface VerificationRelayContext {
-  frameId?: string;
-  url?: string;
-}
-export interface VerificationTransport {
-  register(
-    injectionRef: string,
-    browserRef: string,
-  ): Promise<VerificationState | null>;
-  sync(id: string): Promise<VerificationState>;
-  report(
-    id: string,
-    input: Record<string, unknown>,
-  ): Promise<VerificationRunnerReply>;
-}
-export interface VerificationRequest {
-  url: string;
-  method: string;
-  body: string;
-  sessionId: string;
-  frameId?: string;
-  networkId?: string;
-}
-export interface CheckoutObservation {
-  outcome: "confirmed" | "failed" | "unknown";
-  cardSession?: string;
-  amount: string;
-  currency: string;
-  confirmation?: string;
-}
-export interface VerificationAdapter {
-  continuation?(): Promise<
-    | ((result?: NativeReturn) => Promise<void | { interactionReturned: true }>)
-    | null
-  >;
-  dispose?(): void | Promise<void>;
-  inspect(request: VerificationRequest): Promise<
-    | "continue"
-    | "block"
-    | "fallback"
-    | {
-        capture: {
-          url: string;
-          body: string;
-          nativeReturn?: NativeReturn["protocol"];
-        };
-      }
-  >;
-  relayed(
-    response: { body: string },
-    sessionId: string,
-    context?: VerificationRelayContext,
-  ): void;
-  reconcile(state: VerificationState): Promise<CheckoutObservation | null>;
-}
-export interface VerificationHandle {
-  current(): VerificationState;
-  wait(): Promise<VerificationState>;
-}
 function isChallengeRequest(
   request: VerificationRequest,
   merchantOrigin: string,
@@ -132,52 +49,27 @@ export class VerificationSession implements VerificationHandle {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly waiters = new Set<(state: VerificationState) => void>();
   private constructor(
-    private readonly transport: VerificationTransport,
+    private readonly runner: VerificationRunner,
     private readonly adapter: VerificationAdapter,
     private state: VerificationState,
   ) {}
 
-  /**
-   * Register an observer for the existing checkout without creating another browser or credential channel.
-   * @param transport The purchase-bound verification transport carried by the existing relay.
-   * @param adapter The internal integration that inspects this checkout and reads back its result.
-   * @param injectionRef The existing card injection to bind to the observer.
-   * @returns Null when unavailable, otherwise a session; only active registrations start a polling timer.
-   */
-  static async attach(
-    transport: VerificationTransport,
+  static attach(
+    runner: VerificationRunner,
     adapter: VerificationAdapter,
-    injectionRef: string,
+    initial: VerificationState,
   ) {
-    let state;
-    try {
-      state = await transport.register(injectionRef, randomUUID());
-    } catch (error) {
-      try {
-        Promise.resolve(adapter.dispose?.()).catch(() => {});
-      } catch {
-        /* Registration failure keeps native checkout in charge. */
-      }
-      throw error;
-    }
-    if (!state) {
-      try {
-        Promise.resolve(adapter.dispose?.()).catch(() => {});
-      } catch {
-        /* Cleanup cannot disable the ordinary relay. */
-      }
-      return null;
-    }
-    const observer = new VerificationSession(transport, adapter, state);
+    const state = validated(initial);
+    const observer = new VerificationSession(runner, adapter, state);
     observer.finish(state);
-    if (verificationIsActive(state)) {
+    if (observer.canObserve()) {
       observer.timer = setInterval(() => void observer.tick(), 2000);
       observer.timer.unref?.();
     }
     return observer;
   }
-  current() {
-    return { ...this.state };
+  current(): VerificationState {
+    return structuredClone(this.state);
   }
   submissionBlocked() {
     return (
@@ -193,6 +85,7 @@ export class VerificationSession implements VerificationHandle {
   }
   /** Inspect checkout traffic while preserving captured and uncertain handoffs during native fallback. */
   async inspect(request: VerificationRequest) {
+    this.canObserve();
     if (
       !verificationIsActive(this.state) &&
       !this.captureClaimed &&
@@ -201,7 +94,11 @@ export class VerificationSession implements VerificationHandle {
     )
       this.native = true;
     if (this.native) {
-      if (this.state.challengeCaptured || this.state.launchClaimed)
+      if (
+        this.captureClaimed ||
+        this.state.challengeCaptured ||
+        this.state.launchClaimed
+      )
         this.native = false;
       else return "continue" as const;
     }
@@ -303,7 +200,11 @@ export class VerificationSession implements VerificationHandle {
       let ambiguous = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const result = await this.transport.report(this.state.id, body);
+          const result = validated(
+            await this.runner.report(this.state.id, body),
+            this.state,
+            input.kind === "continuation_started",
+          );
           if (
             input.kind === "continuation_started" &&
             result.id === this.state.id &&
@@ -326,39 +227,8 @@ export class VerificationSession implements VerificationHandle {
           )
             return false;
           return true;
-        } catch (error) {
-          if (
-            error instanceof VerificationHttpError &&
-            error.code === "verification_version_conflict"
-          ) {
-            this.finish(await this.transport.sync(this.state.id));
-            body.expectedVersion = this.state.version;
-            if (
-              attempt === 2 &&
-              capture &&
-              !ambiguous &&
-              error.status >= 400 &&
-              error.status < 500 &&
-              !this.state.challengeCaptured &&
-              !this.state.launchClaimed
-            )
-              return false;
-          } else if (
-            error instanceof VerificationHttpError &&
-            error.status < 500
-          ) {
-            if (input.kind === "interaction_resumed" && error.status !== 429)
-              return false;
-            if (
-              capture &&
-              !ambiguous &&
-              error.status >= 400 &&
-              !this.state.challengeCaptured &&
-              !this.state.launchClaimed
-            )
-              return false;
-            throw error;
-          } else ambiguous = true;
+        } catch {
+          ambiguous = true;
           if (attempt === 2)
             throw new Error("Purchase verification report failed");
         }
@@ -384,13 +254,16 @@ export class VerificationSession implements VerificationHandle {
     try {
       await this.queue;
       if (!this.canObserve()) return;
-      const synced = await this.transport.sync(this.state.id);
+      const synced = validated(
+        await this.runner.sync(this.state.id),
+        this.state,
+      );
       if (!this.canObserve()) return;
       this.finish(synced);
       if (this.canObserve() && !this.native) {
         if (this.nativeAckKey) await this.acknowledgeNativeReturn();
         if (!this.canObserve()) return;
-        const observation = await this.adapter.reconcile(this.state);
+        const observation = await this.adapter.reconcile(this.current());
         if (!this.canObserve() || this.native) return;
         if (observation && observation.outcome !== "unknown")
           await this.report({ kind: "checkout_observed", observation });
@@ -436,10 +309,10 @@ export class VerificationSession implements VerificationHandle {
   private finish(state: VerificationState) {
     if (state.id !== this.state.id || state.version < this.state.version)
       return;
-    if (!verificationIsActive(this.state) && verificationIsActive(state))
+    if (!verificationIsActive(this.state) && state.status !== this.state.status)
       return;
     // Sensitive native material never reaches current(), wait(), transaction reads or caller logs.
-    const safeState = { ...state } as VerificationRunnerReply;
+    const safeState = structuredClone(state) as VerificationRunnerReply;
     delete safeState.nativeReturn;
     this.state =
       this.closed && verificationIsActive(state)
@@ -462,113 +335,130 @@ export class VerificationSession implements VerificationHandle {
   }
 }
 
-export class VerificationHttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-  ) {
-    super("Purchase verification request failed");
+/** Validate injected runner replies before they can change claims or deliver a return. */
+function validated(
+  value: unknown,
+  previous?: VerificationState,
+  allowReturn = false,
+): VerificationRunnerReply {
+  const invalid = () => new Error("Invalid purchase verification state");
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    typeof value.status !== "string" ||
+    !Number.isSafeInteger(value.version) ||
+    Number(value.version) < 0 ||
+    ![
+      "preparing",
+      "requires_action",
+      "checking",
+      "ended",
+      "expired",
+      "canceled",
+      "error",
+    ].includes(value.status) ||
+    typeof value.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.expiresAt)) ||
+    typeof value.merchantOrigin !== "string" ||
+    !isRecord(value.total) ||
+    typeof value.total.amount !== "string" ||
+    typeof value.total.currency !== "string" ||
+    ![
+      value.challengeCaptured,
+      value.launchClaimed,
+      value.checkRequested,
+      value.continuationClaimed,
+    ].every((v) => typeof v === "boolean")
+  )
+    throw invalid();
+  const origin = new URL(value.merchantOrigin);
+  if (
+    origin.origin !== value.merchantOrigin ||
+    !["https:", "http:"].includes(origin.protocol)
+  )
+    throw invalid();
+  if (
+    [value.nativeReturnAvailable, value.interactionReturned].some(
+      (v) => v !== undefined && typeof v !== "boolean",
+    ) ||
+    (value.nativeReturnProtocol !== undefined &&
+      value.nativeReturnProtocol !== "stripe_3ds2") ||
+    (value.actionUrl !== undefined && typeof value.actionUrl !== "string")
+  )
+    throw invalid();
+  if (
+    value.observation !== undefined &&
+    (!isRecord(value.observation) ||
+      typeof value.observation.outcome !== "string" ||
+      !["confirmed", "failed", "unknown"].includes(value.observation.outcome) ||
+      value.observation.source !== "runner" ||
+      (value.observation.confirmation !== undefined &&
+        typeof value.observation.confirmation !== "string"))
+  )
+    throw invalid();
+  if (
+    previous &&
+    (value.id !== previous.id ||
+      Number(value.version) < previous.version ||
+      value.merchantOrigin !== previous.merchantOrigin ||
+      value.total.amount !== previous.total.amount ||
+      value.total.currency !== previous.total.currency ||
+      value.expiresAt !== previous.expiresAt ||
+      ["challengeCaptured", "launchClaimed", "continuationClaimed"].some(
+        (key) =>
+          previous[key as keyof VerificationState] === true &&
+          value[key] !== true,
+      ))
+  )
+    throw invalid();
+  if (
+    value.nativeReturn !== undefined &&
+    (!allowReturn ||
+      !isRecord(value.nativeReturn) ||
+      value.nativeReturn.protocol !== "stripe_3ds2" ||
+      typeof value.nativeReturn.cres !== "string" ||
+      value.nativeReturn.cres.length > 16384 ||
+      !/^[A-Za-z0-9_+/-]+={0,2}$/.test(value.nativeReturn.cres))
+  )
+    throw invalid();
+  // Select known fields: arbitrary runner properties must never reach the public handle.
+  const state: VerificationRunnerReply = {
+    id: value.id,
+    version: Number(value.version),
+    status: value.status as VerificationState["status"],
+    expiresAt: value.expiresAt,
+    merchantOrigin: value.merchantOrigin,
+    total: { amount: value.total.amount, currency: value.total.currency },
+    challengeCaptured: value.challengeCaptured as boolean,
+    launchClaimed: value.launchClaimed as boolean,
+    checkRequested: value.checkRequested as boolean,
+    continuationClaimed: value.continuationClaimed as boolean,
+  };
+  for (const key of [
+    "interactionReturned",
+    "nativeReturnAvailable",
+    "nativeReturnProtocol",
+    "actionUrl",
+  ] as const) {
+    if (value[key] !== undefined)
+      Object.assign(state, { [key]: structuredClone(value[key]) });
   }
+  if (isRecord(value.observation)) {
+    state.observation = {
+      outcome: value.observation.outcome as NonNullable<
+        VerificationState["observation"]
+      >["outcome"],
+      source: "runner",
+      ...(typeof value.observation.confirmation === "string" && {
+        confirmation: value.observation.confirmation,
+      }),
+    };
+  }
+  if (isRecord(value.nativeReturn))
+    state.nativeReturn = {
+      protocol: "stripe_3ds2",
+      cres: value.nativeReturn.cres as string,
+    };
+  return state;
 }
-
-/** The caller supplies the existing relay's credential-safe POST, not another credential channel. */
-export function verificationTransport(
-  post: (suffix: string, body: unknown) => Promise<Response>,
-): VerificationTransport {
-  const read = async (
-    suffix: string,
-    body: unknown,
-    registering = false,
-  ): Promise<VerificationRunnerReply | null> => {
-    const response = await post(suffix, body);
-    if (registering && response.status === 404) {
-      await response.arrayBuffer().catch(() => {});
-      return null;
-    }
-    let data: any;
-    try {
-      data = await response.json();
-    } catch {
-      throw new Error("Unreadable purchase verification response");
-    }
-    if (
-      registering &&
-      response.status === 503 &&
-      data?.code === "verification_unavailable"
-    )
-      return null;
-    if (!response.ok)
-      throw new VerificationHttpError(
-        response.status,
-        typeof data?.code === "string" ? data.code : "verification_error",
-      );
-    if (
-      !data ||
-      typeof data.id !== "string" ||
-      !Number.isInteger(data.version) ||
-      ![
-        "preparing",
-        "requires_action",
-        "checking",
-        "ended",
-        "expired",
-        "canceled",
-        "error",
-      ].includes(data.status) ||
-      !Number.isFinite(Date.parse(data.expiresAt)) ||
-      typeof data.merchantOrigin !== "string" ||
-      typeof data.total?.amount !== "string" ||
-      typeof data.total?.currency !== "string" ||
-      ![
-        data.challengeCaptured,
-        data.launchClaimed,
-        data.checkRequested,
-        data.continuationClaimed,
-      ].every((v) => typeof v === "boolean")
-    ) {
-      throw new Error("Unreadable purchase verification response");
-    }
-    if (
-      [data.interactionReturned, data.nativeReturnAvailable].some(
-        (value) => value !== undefined && typeof value !== "boolean",
-      )
-    )
-      throw new Error("Unreadable purchase verification response");
-    if (
-      data.nativeReturnProtocol !== undefined &&
-      !["braintree_cardinal", "stripe_3ds2"].includes(data.nativeReturnProtocol)
-    )
-      throw new Error("Unreadable purchase verification response");
-    if (
-      data.nativeReturn !== undefined &&
-      (!(
-        suffix.endsWith("/reports") &&
-        (body as Record<string, unknown>)?.kind === "continuation_started"
-      ) ||
-        !(data.nativeReturn?.protocol === "braintree_cardinal"
-          ? typeof data.nativeReturn.jwt === "string" &&
-            data.nativeReturn.jwt.length <= 16384 &&
-            /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(
-              data.nativeReturn.jwt,
-            )
-          : data.nativeReturn?.protocol === "stripe_3ds2" &&
-            typeof data.nativeReturn.cres === "string" &&
-            data.nativeReturn.cres.length <= 16384 &&
-            /^[A-Za-z0-9_+/-]+={0,2}$/.test(data.nativeReturn.cres)))
-    )
-      throw new Error("Unreadable purchase verification response");
-    return data as VerificationRunnerReply;
-  };
-  return {
-    register: (injectionRef, browserRef) =>
-      read("", { injectionRef, browserRef }, true),
-    sync: async (id) => (await read(`/${encodeURIComponent(id)}/sync`, {}))!,
-    report: async (id, input) =>
-      (await read(`/${encodeURIComponent(id)}/reports`, input))!,
-  };
-}
-
-export type VerificationAdapterFactory = (
-  connection: CdpConnection,
-  state: () => VerificationState | undefined,
-) => VerificationAdapter;

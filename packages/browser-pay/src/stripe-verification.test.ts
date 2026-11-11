@@ -3,7 +3,8 @@ import {
   createStripePaymentElementVerification,
   StripePaymentElementVerification,
 } from "./index";
-import { VerificationSession, type VerificationState } from "./verification";
+import { VerificationSession } from "./verification";
+import type { VerificationState } from "./verification-types";
 
 const merchantOrigin = "https://shop.example";
 const intentId = "pi_demo";
@@ -377,8 +378,10 @@ describe("Stripe Payment Element verification on the existing browser", () => {
       nativeReturnProtocol: "stripe_3ds2",
     });
     if (scenario === "no-return") f.state.nativeReturnAvailable = false;
-    if (scenario === "wrong-protocol")
-      f.state.nativeReturnProtocol = "braintree_cardinal";
+    if (scenario === "wrong-protocol") {
+      // @ts-expect-error Exercise an unsupported protocol received at runtime.
+      f.state.nativeReturnProtocol = "unsupported";
+    }
     if (scenario === "claimed") f.state.continuationClaimed = true;
     if (scenario === "expired") f.state.expiresAt = new Date(0).toISOString();
     if (scenario === "navigated") f.navigate("https://other.example/checkout");
@@ -529,12 +532,11 @@ describe("Stripe Payment Element verification on the existing browser", () => {
       });
       const session = await VerificationSession.attach(
         {
-          register: async () => f.state,
           sync: async () => ({ ...f.state }),
           report,
         },
         f.adapter,
-        "injection",
+        f.state,
       );
       expect(await session!.inspect(confirm())).toBe("continue");
       await f.respond(paymentIntent());
@@ -1091,12 +1093,11 @@ describe("Stripe Payment Element verification on the existing browser", () => {
     });
     const session = await VerificationSession.attach(
       {
-        register: async () => state,
         sync: async () => state,
         report,
       },
       f.adapter,
-      "injection",
+      state,
     );
     expect(await session!.inspect(confirm())).toBe("continue");
     const finished = session!.wait();

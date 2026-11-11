@@ -1,4 +1,4 @@
-/** The CReq subset accepted by the existing verification transport. */
+/** The CReq subset accepted by the verification adapter. */
 export const supportedCReq = (encoded: string) => {
   if (!/^[A-Za-z0-9_-]+={0,2}$/.test(encoded)) return false;
   const unpadded = encoded.replace(/=+$/, "");

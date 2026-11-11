@@ -28,6 +28,8 @@
  * mirroring `run-state.ts`, so a rotated key recovers in place.
  */
 
+import { credentialFetch } from "@sapiom/analytics-core/credential";
+import { harnessCredentialPolicy } from "./credential-policy.js";
 import type {
   TemplateComplexity,
   TemplateDetailView,
@@ -345,11 +347,15 @@ export function createTemplateCatalog(opts: {
 
     const attempt = async (key: string): Promise<Response | null> => {
       try {
-        return await fetchImpl(`${baseUrl}${path}`, {
-          // Core (`api.*`) takes a Bearer token; the agents surface (`tools.*`)
-          // takes `x-sapiom-api-key`. Sending the latter here 401s — verified.
-          headers: { Authorization: `Bearer ${key}` },
-        });
+        // Core (`api.*`) takes a Bearer token; the agents surface (`tools.*`)
+        // takes `x-sapiom-api-key`. Sending the latter here 401s.
+        return await credentialFetch(
+          fetchImpl,
+          `${baseUrl}${path}`,
+          {},
+          { header: "authorization", value: `Bearer ${key}` },
+          harnessCredentialPolicy(),
+        );
       } catch (err) {
         warnOnce(err instanceof Error ? err.message : String(err));
         return null;

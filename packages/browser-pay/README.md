@@ -15,75 +15,6 @@ An agent that gives up before paying cancels the purchase, which revokes the pla
 
 ## Relay contract
 
-The existing browser/relay integration also carries managed bank verification for supported
-profiles when the backend enables it. Browser creation, ownership, cookies and proxy stay with
-the current checkout. The SDK captures a supported merchant challenge on that same CDP
-connection and exposes `handle.verification` while the buyer acts on Sapiom's private hosted page.
-The `shopify-card-vault` profile supplies a default verification adapter when the backend enables
-it. Other profiles require an explicit `verificationAdapter` for challenge capture.
-
-Stripe/BigCommerce Payment Element demo: import `createStripePaymentElementVerification`
-from `@sapiom/browser-pay`, pass `verificationAdapter: createStripePaymentElementVerification`
-to `attachInterceptor`, and leave `profileId` unset; requires the relay's `.verification` capability.
-Captures supported CReq POSTs with `nativeReturn: "stripe_3ds2"`; continuation requires the backend
-to collect the real issuer CRes and expose `nativeReturnAvailable` / `nativeReturnProtocol: "stripe_3ds2"`.
-After the existing one-use continuation claim, the private report reply must carry
-`nativeReturn: { protocol: "stripe_3ds2", cres: "<base64-encoded issuer CRes>" }`.
-The adapter binds that final CRes to the captured transaction IDs, version and original Stripe frame,
-delivers it through Stripe's native trampoline, and permits the bound native `challenge_complete` request.
-Stripe.js settles its original Confirm; the adapter never sends Confirm or replays network responses.
-Only a correlated intent response establishes success or authentication failure; delivery alone does not.
-Unsupported auth stays native; absent return evidence stays pending. Backend CRes collection and actual
-Stripe sandbox/live completion remain unproven by the local fixtures. Leave `profileId` unset.
-
-The checkout runner keeps its existing wait open until that activity ends or its session deadline
-expires. A buyer action URL is a credential: deliver it privately and do not log it.
-
-`handle.verification.current()` supplies sourced status, and `.wait()` resolves on an ended,
-canceled, expired or lost observation. A challenge/SDK completion is not a payment result.
-`interactionReturned: true` acknowledges delivery into the original native verifier. An `ended`
-status alone does not authorize resuming automation: expiry, binding changes or uncertain delivery
-can end observation without that acknowledgment. Keep `authentication` unknown and confirm an
-order independently. A custom relay wrapper must forward the original relay's `.verification`
-capability as well as `.relay()`. Native bank results never appear in `current()` or `wait()`.
-No verification operation creates another purchase or sends another card. Unsupported/custom
-relay integrations retain their existing behavior; the standard HTTP relay reuses its existing
-transaction and credential configuration. Do not detach the current interceptor while an active
-customer step is using it. Core `transactions.get(id, { since, maxWaitSeconds })` can observe the
-same purchase using the returned version.
-
-For a qualified native return, the private delivery receipt is emitted before the merchant's
-original verification promise can continue checkout. A native validation timeout rejects that
-pending promise; a late response cannot subsequently fulfill it. Reconcile the existing purchase
-with the merchant before deciding what to do next, since verification failure is not proof of a
-declined payment.
-
-An HTTP-200 native validation reply is rejected as `native_validation_rejected` when its
-`errors` value is a nonempty array or a truthy non-array value. An empty error array remains
-allowed when the other required payment-method and 3DS fields are present. Rejection also
-rejects the original pending verifier promise and does not acknowledge delivery; reconcile
-the existing purchase instead of submitting another payment.
-
-Verification registration happens before the interceptor relays the card. If registration
-fails, including a timeout, rate limit, backend error or observer mismatch, attachment keeps
-the existing checkout relay path and leaves `handle.verification` unavailable. Registration
-failure does not cancel or retry a payment and does not resume a previous verification.
-This includes an HTTP 409 observer mismatch: the unavailable optional observer does
-not impose a submission fence on this merchant or other tabs in the attached browser.
-The SDK never initiates another Pay to resolve uncertainty; reconcile the existing
-purchase before deciding whether to retry. A successfully registered observer still
-blocks another submission after challenge capture or while its capture report is uncertain.
-
-An interceptor's credential relay is bound to its configured `injectionRef`. A matching
-placeholder stays fenced across pages after capture; a browser request does not select another
-injection reference. An already-started relay keeps polling with its original idempotency key to
-read back the existing send. Capture fences new submissions and does not abandon that readback.
-
-`maxWaitSeconds` accepts whole numbers from 0 to 25. `verificationAdapter` is an
-internal integration hook until U6 defines how other checkouts provide adapters.
-Registration that already reports an ended, expired, canceled or error state
-returns the observation without starting a polling timer.
-
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
 
 ```json
@@ -101,7 +32,7 @@ returns the observation without starting a polling timer.
 }
 ```
 
-`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints. That includes `Authorization` and any other credential the checkout sends with its payment request, since the relay has to send the same request on; the relay records their names, never their values. The relay takes at most 32 headers, each name at most 128 characters and each value at most 8192. When a paused request has a header past those limits, it fails with `headers_unrelayable` and nothing is relayed: a request missing a header (a CSRF token, an authorization) could be refused after the card was sent. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
+`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, and the browser's `sec-fetch-*` and `sec-ch-*` hints. That includes `Cookie`, `Authorization`, and any other credential the checkout sends with its payment request, since the relay has to send the same request on; the relay records their names, never their values. The relay takes at most 32 headers, each name at most 128 characters and each value at most 8192. For generic requests, a `Cookie` value over 8192 characters first loses pairs whose names are exactly `_ga`, `_gid`, `_gat`, `_fbp`, `_fbc`, `_ttp`, `_clck`, or `_clsk`, or start with `_ga_`, `_gat_`, `_gcl_`, `_hj`, `_uet`, `ajs_`, `amplitude`, `amp_`, `mp_`, `_tt_`, or `_pin_`. Empty pairs are dropped on this trim path; an empty result omits `Cookie`. Fitting cookies stay unchanged. If the remaining cookie still exceeds the value limit (even from a single non-analytics cookie), or would exceed the header count, the whole `Cookie` header is omitted and payment still relays. When a paused request has any other header past those limits, it fails with `headers_unrelayable` and nothing is relayed: a request missing a header (a CSRF token, an authorization) could be refused after the card was sent. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
 
 Success:
 
@@ -111,12 +42,13 @@ Success:
   "response": {
     "status": 200,
     "headers": { "content-type": "application/json" },
+    "setCookies": ["session=abc; Path=/; HttpOnly"],
     "body": "<processor body>"
   }
 }
 ```
 
-`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself.
+`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself. `response.setCookies` is optional: the merchant's raw `Set-Cookie` values, one per entry and never comma-joined. Each becomes its own `Set-Cookie` header on the fulfilled response, with or without a profile, so the browser stores the cookies and sends them on its next request. If `response.headers` also contains `set-cookie`, both entries are emitted; `setCookies` is applied last, so it wins in the cookie jar. A relay response whose `setCookies` is not an array of strings is rejected like any other malformed response. The interceptor never logs cookie values. End to end this works only when the Sapiom relay backend and Basis Theory return the merchant's `Set-Cookie` values in `setCookies`; until then the field is absent and nothing changes.
 
 Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay may omit either field.
 
@@ -222,53 +154,21 @@ Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` ru
 
 `examples/attach.ts` is the agent-side script. It is not published.
 
-The standard `shopify-card-vault` profile selects its merchant verification adapter
-when the backend enables this capability. It observes the original card session
-and captures supported CReq forms only inside that checkout's authentication frame tree,
-including nested frames in separate browser processes. Check polls the existing native
-callback; a pending bank step never triggers another payment or a blind navigation.
-The tracked checkout may navigate within its merchant origin before opening the
-callback; the callback itself remains bound to its exact URL.
-When the merchant iframe supplies an authentication polling URL, it must use the
-merchant's fixed polling path and the original callback's exact payment arguments.
-The original merchant frame receives its completion message only after a durable
-one-use claim. Receipt reads use the pinned Shopify `PollForReceipt` query on the
-same browser, cookies and proxy and must match the receipt, card session and terms.
-Callback and receipt responses are read incrementally with byte limits; oversized
-responses are canceled before the complete body is buffered.
-These remain runner observations; `order` and issuer authentication require
-independent backend evidence. Unknown query versions, callback formats and receipt
-shapes remain pending until the bound deadline. Merchant-created sessions rendered
-through the BT web SDK are experimental and must be validated before live enablement.
+## Stripe Payment Element demo
 
-The adapter refuses another checkout submission when the backend reports a
-captured or launched challenge, including when the adapter instance is new.
-Before capture, an unsupported checkout shape, a retry or an unresolved frame withdraws
-managed observation and preserves the native checkout. An unsupported challenge or a
-definite backend capture refusal likewise leaves the original bank request intact.
-An observer that ends without a captured or launched challenge also leaves subsequent
-bank requests native, including when polling discovers the end before the request arrives.
-An ambiguous capture timeout or server error retains the capture fence, including if
-a later retry is refused. Native fallback never resubmits the card or Pay.
-Custom adapters can return `fallback` to withdraw inspection and reconciliation before
-capture; the observer still synchronizes durable state until it ends or expires.
-
-Card-session identifiers are limited to 255 characters. Captured URLs are limited to 2,048 characters,
-and form bodies to 8,192 characters, matching the backend contract. Only a single
-base64url `creq` field containing the supported five-field 3DS 2.1.0 or 2.2.0 message
-is accepted; duplicate or extra fields, control characters in the URL, invalid encoding
-or padding, and unsupported challenge messages are excluded from managed capture. Accepted URLs
-and form bodies are forwarded unchanged through the private verification transport.
-Never include raw challenge material in logs or agent messages.
-
-The current and previous supported Shopify receipt-query IDs remain explicitly pinned.
-The [4 November 2026 source inspection](test/fixtures/shopify-receipt-query-2026-11-04.json)
-records the current query descriptor, client read operations and matching pending receipt.
-Unknown query IDs remain unsupported.
-
-Live activation remains blocked for the current test-store composition: a real replay
-captures the challenge and BT emits matching CReq fields, but the merchant's
-authentication poll remains pending after the simulator step. Buyer-visible bank
-rendering, merchant continuation and a correlated completed receipt still require
-end-to-end validation. A pending poll never authorizes a completion message or
-consumes the continuation claim.
+Stripe/BigCommerce Payment Element demo: import `createStripePaymentElementVerification`
+from `@sapiom/browser-pay`, pass `verificationAdapter: createStripePaymentElementVerification`
+to `attachInterceptor`, and leave `profileId` unset. Explicitly supply
+`verification: { initial, runner }`: a prebound purchase state and runner implementing
+`sync(id)` / `report(id, input)`. The hook does not register verification automatically
+or obtain it from the relay.
+Captures supported CReq POSTs with `nativeReturn: "stripe_3ds2"`; continuation requires the backend
+to collect the real issuer CRes and expose `nativeReturnAvailable` / `nativeReturnProtocol: "stripe_3ds2"`.
+After the existing one-use continuation claim, the private report reply must carry
+`nativeReturn: { protocol: "stripe_3ds2", cres: "<base64-encoded issuer CRes>" }`.
+The adapter binds that final CRes to the captured transaction IDs, version and original Stripe frame,
+delivers it through Stripe's native trampoline, and permits the bound native `challenge_complete` request.
+Stripe.js settles its original Confirm; the adapter never sends Confirm or replays network responses.
+Only a correlated intent response establishes success or authentication failure; delivery alone does not.
+Unsupported auth stays native; absent return evidence stays pending. Backend CRes collection and actual
+Stripe sandbox/live completion remain unproven by the local fixtures. Leave `profileId` unset.

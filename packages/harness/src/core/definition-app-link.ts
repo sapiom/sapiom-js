@@ -18,6 +18,8 @@
  * A broken dashboard read must never take the session bar down.
  */
 
+import { credentialFetch } from "@sapiom/analytics-core/credential";
+import { harnessCredentialPolicy } from "./credential-policy.js";
 import type { DefinitionAppLinkView } from "../shared/types.js";
 import {
   type ApiKeyProvider,
@@ -86,11 +88,14 @@ export function createDefinitionAppLinkReader(opts: {
     signal: AbortSignal,
   ): Promise<Response | null> => {
     try {
-      return await fetchImpl(`${baseUrl}${path}`, {
-        // Core (`api.*`) takes a Bearer token — see template-catalog.ts.
-        headers: { Authorization: `Bearer ${key}` },
-        signal,
-      });
+      // Core (`api.*`) takes a Bearer token: see template-catalog.ts.
+      return await credentialFetch(
+        fetchImpl,
+        `${baseUrl}${path}`,
+        { signal },
+        { header: "authorization", value: `Bearer ${key}` },
+        harnessCredentialPolicy(),
+      );
     } catch {
       return null;
     }

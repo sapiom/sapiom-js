@@ -453,11 +453,11 @@ class WebSocketClient {
 }
 
 export class CdpConnection {
+  private readonly closeListeners = new Set<() => void>();
   private nextId = 0;
   private closed = false;
   private readonly pending = new Map<number, Pending>();
   private readonly listeners = new Set<(event: CdpEvent) => void>();
-  private readonly closeListeners = new Set<() => void>();
 
   private constructor(private readonly socket: WebSocketClient) {
     socket.onmessage = (data) => {
@@ -508,7 +508,7 @@ export class CdpConnection {
         try {
           listener();
         } catch {
-          // A failing listener must not interrupt the remaining close notifications.
+          /* One observer cannot prevent others from cleaning up. */
         }
       }
       this.closeListeners.clear();
@@ -562,11 +562,6 @@ export class CdpConnection {
     });
   }
 
-  onEvent(listener: (event: CdpEvent) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
   onClose(listener: () => void): () => void {
     if (this.closed) {
       listener();
@@ -574,6 +569,11 @@ export class CdpConnection {
     }
     this.closeListeners.add(listener);
     return () => this.closeListeners.delete(listener);
+  }
+
+  onEvent(listener: (event: CdpEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   close(): void {

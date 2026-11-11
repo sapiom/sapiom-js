@@ -1,28 +1,42 @@
 import type { CdpConnection } from "./cdp.js";
-import type { VerificationRequest } from "./verification.js";
+import { isRecord } from "./guards.js";
+import type { VerificationRequest } from "./verification-types.js";
 
-export const READ_VERIFICATION_TEXT = `async (response, limit) => {
-  if (Number(response.headers.get('content-length')) > limit) {
-    await response.body?.cancel();
-    return null;
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const decoder = new TextDecoder();
-  let size = 0, text = '';
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return text + decoder.decode();
-      size += value.byteLength;
-      if (size > limit) { await reader.cancel(); return null; }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally { reader.releaseLock(); }
-}`;
 export type Frame = { sessionId: string; frameId: string; url: string };
+type TreeFrame = { id: string; parentId?: string; url: string };
 
-/** Existing merchant frame ancestry and bounded observation on the caller-owned connection. */
+function frames(value: unknown): Map<string, TreeFrame> {
+  const result = new Map<string, TreeFrame>();
+  const collect = (node: unknown, parentId?: string, depth = 0) => {
+    if (depth >= 32 || !isRecord(node) || !isRecord(node.frame)) return;
+    const frame = node.frame;
+    if (typeof frame.id !== "string" || typeof frame.url !== "string") return;
+    result.set(frame.id, {
+      id: frame.id,
+      parentId:
+        parentId ??
+        (typeof frame.parentId === "string" ? frame.parentId : undefined),
+      // CDP separates the fragment from frame.url, including on Stripe trampolines.
+      url:
+        frame.url +
+        (typeof frame.urlFragment === "string" ? frame.urlFragment : ""),
+    });
+    if (Array.isArray(node.childFrames))
+      for (const child of node.childFrames) collect(child, frame.id, depth + 1);
+  };
+  if (isRecord(value)) collect(value.frameTree);
+  return result;
+}
+
+function origin(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Frame ancestry and isolated-world delivery on the caller-owned browser. */
 export class MerchantFrames {
   constructor(
     protected readonly cdp: Pick<CdpConnection, "send">,
@@ -34,7 +48,7 @@ export class MerchantFrames {
 
   protected async merchantAncestor(
     request: { sessionId: string; frameId?: string },
-    origin: string,
+    merchantOrigin: string,
   ): Promise<Frame | undefined> {
     let sessionId: string | undefined = request.sessionId;
     let frameId = request.frameId;
@@ -46,36 +60,16 @@ export class MerchantFrames {
       !sessions.has(sessionId)
     ) {
       sessions.add(sessionId);
-      const tree = (await this.cdp.send(
-        "Page.getFrameTree",
-        {},
-        sessionId,
-      )) as any;
-      const frames = new Map<string, any>();
-      const collect = (node: any, parentId?: string) => {
-        if (typeof node?.frame?.id !== "string") return;
-        frames.set(node.frame.id, {
-          ...node.frame,
-          parentId: parentId ?? node.frame.parentId,
-        });
-        for (const child of node.childFrames ?? [])
-          collect(child, node.frame.id);
-      };
-      collect(tree.frameTree);
+      const tree = frames(
+        await this.cdp.send("Page.getFrameTree", {}, sessionId),
+      );
       const seen = new Set<string>();
       while (frameId && !seen.has(frameId)) {
         seen.add(frameId);
-        const frame = frames.get(frameId);
+        const frame = tree.get(frameId);
         if (!frame) break;
-        if (
-          typeof frame.url === "string" &&
-          new URL(frame.url).origin === origin
-        )
-          return {
-            sessionId,
-            frameId,
-            url: frame.url + (frame.urlFragment ?? ""),
-          };
+        if (origin(frame.url) === merchantOrigin)
+          return { sessionId, frameId, url: frame.url };
         frameId = frame.parentId;
       }
       sessionId = this.parentSession(sessionId, frameId);
@@ -86,86 +80,49 @@ export class MerchantFrames {
     frame: Frame,
     request: Pick<VerificationRequest, "sessionId" | "frameId">,
     exactUrl = true,
-  ) {
-    const result = (await this.cdp.send(
-      "Page.getFrameTree",
-      {},
-      frame.sessionId,
-    )) as any;
-    const find = (tree: any): any =>
-      tree?.frame?.id === frame.frameId
-        ? tree
-        : tree?.childFrames?.map(find).find(Boolean);
-    const callback = find(result?.frameTree);
-    if (!callback || typeof callback.frame.url !== "string") return false;
+  ): Promise<boolean> {
+    const tree = frames(
+      await this.cdp.send("Page.getFrameTree", {}, frame.sessionId),
+    );
+    const callback = tree.get(frame.frameId);
     if (
-      exactUrl
-        ? callback.frame.url + (callback.frame.urlFragment ?? "") !== frame.url
-        : new URL(callback.frame.url).origin !== new URL(frame.url).origin
+      !callback ||
+      (exactUrl
+        ? callback.url !== frame.url
+        : origin(callback.url) !== origin(frame.url))
     )
       return false;
-    const parents = new Map<string, string>();
-    const collect = (tree: any, parent?: string) => {
-      if (typeof tree?.frame?.id !== "string") return;
-      const id = tree.frame.id;
-      const parentId = parent ?? tree.frame.parentId;
-      if (typeof parentId === "string") parents.set(id, parentId);
-      for (const child of tree.childFrames ?? []) collect(child, id);
-    };
-    collect(result.frameTree);
     const contains = () => {
       const seen = new Set<string>();
       let id = request.frameId;
       while (id && !seen.has(id)) {
         if (id === frame.frameId) return true;
         seen.add(id);
-        id = parents.get(id);
+        id = tree.get(id)?.parentId;
       }
       return false;
     };
     if (contains()) return true;
-    // OOP iframe roots retain their browser-owned parent frame ID in their own session.
     const seen = new Set<string>();
     let sessionId: string | undefined = request.sessionId;
-    while (sessionId && sessionId !== frame.sessionId && seen.size < 32) {
-      if (seen.has(sessionId)) return false;
+    while (
+      sessionId &&
+      sessionId !== frame.sessionId &&
+      seen.size < 32 &&
+      !seen.has(sessionId)
+    ) {
       seen.add(sessionId);
-      const tree = (await this.cdp.send(
-        "Page.getFrameTree",
-        {},
-        sessionId,
-      )) as any;
-      collect(tree?.frameTree);
+      const children = frames(
+        await this.cdp.send("Page.getFrameTree", {}, sessionId),
+      );
+      for (const [id, child] of children) tree.set(id, child);
       if (contains()) return true;
       sessionId = this.parentSession(
         sessionId,
-        tree?.frameTree?.frame?.parentId,
+        children.values().next().value?.parentId,
       );
     }
     return false;
-  }
-
-  protected async checkoutFrame(
-    request: VerificationRequest,
-    origin: string,
-  ): Promise<Frame | undefined> {
-    if (!request.frameId) return;
-    const result = (await this.cdp.send(
-      "Page.getFrameTree",
-      {},
-      request.sessionId,
-    )) as any;
-    const find = (tree: any): any =>
-      tree?.frame?.id === request.frameId
-        ? tree.frame
-        : tree?.childFrames?.map(find).find(Boolean);
-    const frame = find(result?.frameTree);
-    if (!frame?.url || new URL(frame.url).origin !== origin) return;
-    return {
-      frameId: request.frameId,
-      sessionId: request.sessionId,
-      url: frame.url,
-    };
   }
 
   protected async evaluate(
@@ -173,18 +130,20 @@ export class MerchantFrames {
     fn: string,
     args: unknown[],
   ): Promise<unknown> {
-    const world = (await this.cdp.send(
+    const world = await this.cdp.send(
       "Page.createIsolatedWorld",
       {
         frameId: frame.frameId,
         worldName: "sapiom-checkout-verification",
       },
       frame.sessionId,
-    )) as any;
-    const evaluated = (await this.cdp.send(
+    );
+    if (!isRecord(world) || typeof world.executionContextId !== "number")
+      throw new Error("Merchant observation unavailable");
+    const evaluated = await this.cdp.send(
       "Runtime.callFunctionOn",
       {
-        functionDeclaration: `function(...args) { const readText = ${READ_VERIFICATION_TEXT}; return (${fn})(...args); }`,
+        functionDeclaration: `function(...args) { return (${fn})(...args); }`,
         executionContextId: world.executionContextId,
         arguments: args.map((value) => ({ value })),
         awaitPromise: true,
@@ -192,9 +151,9 @@ export class MerchantFrames {
       },
       frame.sessionId,
       15000,
-    )) as any;
-    if (evaluated.exceptionDetails)
+    );
+    if (!isRecord(evaluated) || evaluated.exceptionDetails)
       throw new Error("Merchant observation unavailable");
-    return evaluated.result?.value;
+    return isRecord(evaluated.result) ? evaluated.result.value : undefined;
   }
 }
