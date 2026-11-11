@@ -1,3 +1,9 @@
+import { VerificationSession } from "./verification.js";
+import type {
+  ExperimentalVerificationOptions,
+  VerificationAdapterFactory,
+  VerificationHandle,
+} from "./verification-types.js";
 import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
   paymentIdempotencyKey,
@@ -19,6 +25,10 @@ import {
 } from "./relay.js";
 
 export interface AttachOptions {
+  /** @experimental Prebound runner, used only with an explicit adapter. */
+  verification?: ExperimentalVerificationOptions;
+  /** @experimental No adapter is registered by default. */
+  verificationAdapter?: VerificationAdapterFactory;
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
   placeholder: HeldPlaceholder;
@@ -54,6 +64,7 @@ export interface AttachOptions {
 }
 
 export type FailureReason =
+  | "verification"
   | "intercept_unavailable"
   | "unknown_session"
   | "unreadable_body"
@@ -120,6 +131,8 @@ type PublicRefusal = Omit<
 >;
 
 export interface InterceptorHandle {
+  /** @experimental Present only when verification was explicitly configured. */
+  verification?: VerificationHandle;
   detach(): Promise<void>;
   /** Subscribe to outcomes. Returns an unsubscribe function. */
   on(listener: (event: InterceptorEvent) => void): () => void;
@@ -299,6 +312,7 @@ interface PausedRequest {
   hasPostData?: boolean;
   postDataEntries?: { bytes?: string }[];
   networkId?: string;
+  frameId?: string;
 }
 
 interface Flight {
@@ -309,10 +323,11 @@ interface Flight {
 
 type HeldRead =
   | { kind: "unreadable" }
-  | { kind: "miss" }
+  | { kind: "miss"; body: string }
   | { kind: "held"; body: string };
 
 type Decision =
+  | { action: "challenge" }
   | { action: "continue" }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
@@ -329,7 +344,13 @@ export async function attachInterceptor(
   assertAttachOptions(options);
   const connection = await CdpConnection.connect(resolveCdpUrl(target));
   try {
-    return await new PaymentInterceptor(connection, options).start();
+    const interceptor = new PaymentInterceptor(connection, options);
+    try {
+      return await interceptor.start();
+    } catch (error) {
+      await interceptor.stopVerification();
+      throw error;
+    }
   } catch (error) {
     connection.close();
     throw error;
@@ -352,6 +373,7 @@ class PaymentInterceptor {
   private backlog: InterceptorEvent[] | null = [];
   private buffering = true;
   private closed = false;
+  private verification?: VerificationSession;
 
   constructor(
     private readonly connection: CdpConnection,
@@ -363,11 +385,44 @@ class PaymentInterceptor {
     this.logger = options.logger ?? silentLogger;
   }
 
+  async stopVerification(): Promise<void> {
+    await this.verification?.close();
+  }
+
   private get number(): string {
     return this.options.placeholder.number;
   }
 
   async start(): Promise<InterceptorHandle> {
+    if (this.options.verificationAdapter) {
+      const config = this.options.verification;
+      if (
+        !config ||
+        typeof config.runner?.sync !== "function" ||
+        typeof config.runner?.report !== "function"
+      )
+        throw new Error("Verification requires a prebound runner");
+      const adapter = this.options.verificationAdapter(this.connection, () =>
+        this.verification?.current(),
+      );
+      try {
+        this.verification = VerificationSession.attach(
+          config.runner,
+          adapter,
+          config.initial,
+        );
+      } catch (error) {
+        try {
+          Promise.resolve(adapter.dispose?.()).catch(() => {});
+        } catch {
+          /* Preserve attach failure. */
+        }
+        throw error;
+      }
+      this.connection.onClose(() => {
+        void this.verification?.close();
+      });
+    }
     this.connection.onEvent((event) => this.dispatch(event));
     await this.connection.send("Target.setAutoAttach", {
       autoAttach: true,
@@ -384,6 +439,12 @@ class PaymentInterceptor {
     return {
       on: (listener) => this.subscribe(listener),
       detach: () => this.detach(),
+      ...(this.verification && {
+        verification: {
+          current: () => this.verification!.current(),
+          wait: () => this.verification!.wait(),
+        },
+      }),
     };
   }
 
@@ -643,6 +704,7 @@ class PaymentInterceptor {
     };
     this.inflight.set(key, entry);
     if (
+      !this.verification &&
       canContinueWithoutReading(
         request.method,
         request.url,
@@ -662,7 +724,7 @@ class PaymentInterceptor {
   ): Promise<void> {
     try {
       const decision = await this.decide(entry, request);
-      await this.apply(entry, request.url, decision);
+      await this.apply(entry, request, decision);
     } catch {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url: request.url, reason: "network" });
@@ -677,7 +739,25 @@ class PaymentInterceptor {
     if (read.kind === "unreadable") {
       return { action: "fail", reason: "unreadable_body" };
     }
-    if (read.kind === "miss") return { action: "continue" };
+    if (read.kind === "miss") {
+      if (!this.verification) return { action: "continue" };
+      const action = await failAfter(
+        this.verification.inspect({
+          url: request.url,
+          method: request.method,
+          body: read.body,
+          sessionId: entry.sessionId,
+          frameId: request.frameId,
+          networkId: request.networkId,
+        }),
+        this.timeoutMs,
+      );
+      return action === "capture"
+        ? { action: "challenge" }
+        : action === "block"
+          ? { action: "fail", reason: "verification" }
+          : { action: "continue" };
+    }
     if (this.closed) return { action: "fail", reason: "detached" };
     const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
     this.emit({
@@ -710,6 +790,8 @@ class PaymentInterceptor {
       this.options.profileId ? profileHeader : genericHeader,
     );
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
+    if (this.verification?.submissionBlocked())
+      return { action: "fail", reason: "verification" };
     return this.awaitRelay(
       request,
       headers,
@@ -840,14 +922,14 @@ class PaymentInterceptor {
     const urlHeld = textHoldsPlaceholderNumber(request.url, this.number);
     if (urlHeld && this.closed) return { kind: "held", body: "" };
     if (postDataPlan(request) === "empty") {
-      return urlHeld ? { kind: "held", body: "" } : { kind: "miss" };
+      return urlHeld ? { kind: "held", body: "" } : { kind: "miss", body: "" };
     }
     const body = await readBody(this.connection, sessionId, request);
     if (body === undefined) return { kind: "unreadable" };
     if (urlHeld || textHoldsPlaceholderNumber(body, this.number)) {
       return { kind: "held", body };
     }
-    return { kind: "miss" };
+    return { kind: "miss", body };
   }
 
   private decisionForOutcome(
@@ -877,9 +959,20 @@ class PaymentInterceptor {
 
   private async apply(
     entry: Inflight,
-    url: string,
+    request: PausedRequest,
     decision: Decision,
   ): Promise<void> {
+    const { url } = request;
+    if (decision.action === "challenge") {
+      await this.settle(entry, {
+        fulfill: {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+          body: "<!doctype html><title>Verification</title><p>Continue verification on purchase page.</p>",
+        },
+      });
+      return;
+    }
     if (decision.action === "continue") {
       await this.settle(entry, "continue");
       return;
@@ -894,6 +987,10 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
+    this.verification?.relayed(decision.response, entry.sessionId, {
+      frameId: request.frameId,
+      url,
+    });
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
     this.emit(
       fulfilled
@@ -987,6 +1084,7 @@ class PaymentInterceptor {
   private async detach(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    await this.stopVerification();
     this.buffering = false;
     this.backlog = null;
     for (const flight of this.relayFlights.values()) flight.controller.abort();
@@ -1404,6 +1502,7 @@ function parsePaused(
         typeof request.postData === "string" ? request.postData : undefined,
       hasPostData: request.hasPostData === true,
       postDataEntries: parsePostDataEntries(request.postDataEntries),
+      ...(typeof value.frameId === "string" ? { frameId: value.frameId } : {}),
       ...(typeof value.networkId === "string" && value.networkId.length > 0
         ? { networkId: value.networkId }
         : {}),

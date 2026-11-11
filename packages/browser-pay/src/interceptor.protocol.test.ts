@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import type {
+  VerificationAdapter,
+  VerificationState,
+} from "./verification-types";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -2967,4 +2971,360 @@ describe("interceptor CDP decisions", () => {
       await stub.close();
     }
   });
+});
+
+describe("experimental verification hook", () => {
+  const initial = (): VerificationState => ({
+    id: "verification-1",
+    version: 0,
+    status: "preparing",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    merchantOrigin: "https://shop.example",
+    total: { amount: "10.00", currency: "USD" },
+    challengeCaptured: false,
+    launchClaimed: false,
+    continuationClaimed: false,
+    checkRequested: false,
+  });
+  const adapter = (): VerificationAdapter => ({
+    inspect: jest.fn(async () => "continue" as const),
+    relayed: jest.fn(),
+    reconcile: jest.fn(async () => null),
+    dispose: jest.fn(),
+  });
+  const pause = (
+    stub: Awaited<ReturnType<typeof startStub>>,
+    id: string,
+    body?: string,
+  ) =>
+    stub.emit({
+      method: "Fetch.requestPaused",
+      sessionId: "page-1",
+      params: {
+        requestId: id,
+        frameId: "frame-1",
+        networkId: "network-1",
+        request: {
+          url: "https://bank.example/challenge",
+          method: body === undefined ? "GET" : "POST",
+          postData: body,
+        },
+      },
+    });
+  const settled = (stub: Awaited<ReturnType<typeof startStub>>, id: string) =>
+    stub.commands.filter(
+      (c) =>
+        [
+          "Fetch.continueRequest",
+          "Fetch.fulfillRequest",
+          "Fetch.failRequest",
+        ].includes(c.method) && c.params.requestId === id,
+    );
+
+  it("preserves main behavior without an adapter, even with prebound runner options", async () => {
+    const stub = await startStub();
+    const runner = { sync: jest.fn(), report: jest.fn() };
+    const relay = jest.fn(async () => success());
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        placeholder: HELD,
+        relay: stubPaymentRelay(relay),
+        verification: { initial: initial(), runner },
+      });
+      expect(handle.verification).toBeUndefined();
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "arm",
+      );
+      pause(stub, "ordinary-get");
+      pause(stub, "ordinary-acs", "creq=ordinary");
+      pause(stub, "held", CARD);
+      await waitFor(
+        () =>
+          ["ordinary-get", "ordinary-acs", "held"].every(
+            (id) => settled(stub, id).length === 1,
+          ),
+        "settled",
+      );
+      expect(settled(stub, "ordinary-get")[0].method).toBe(
+        "Fetch.continueRequest",
+      );
+      expect(settled(stub, "ordinary-acs")[0].method).toBe(
+        "Fetch.continueRequest",
+      );
+      expect(settled(stub, "held")[0].method).toBe("Fetch.fulfillRequest");
+      expect(relay).toHaveBeenCalledTimes(1);
+      expect(runner.sync).not.toHaveBeenCalled();
+      expect(runner.report).not.toHaveBeenCalled();
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it.each(["continue", "block", "capture", "fallback"] as const)(
+    "settles hook %s exactly once and preserves frame correlation",
+    async (action) => {
+      const stub = await startStub();
+      const a = adapter();
+      a.inspect = jest.fn(async (r) =>
+        action === "capture"
+          ? { capture: { url: r.url, body: r.body } }
+          : action,
+      );
+      let state = initial();
+      const report = jest.fn(async (_id, input) => {
+        state = {
+          ...state,
+          version: state.version + 1,
+          challengeCaptured:
+            input.kind === "challenge_observed" || state.challengeCaptured,
+        };
+        return state;
+      });
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          placeholder: HELD,
+          relay: stubPaymentRelay(async () => success()),
+          verification: {
+            initial: state,
+            runner: { sync: async () => state, report },
+          },
+          verificationAdapter: () => a,
+        });
+        attachPage(stub.emit);
+        await waitFor(
+          () => stub.commands.some((c) => c.method === "Fetch.enable"),
+          "arm",
+        );
+        pause(stub, "hook", "creq=challenge");
+        await waitFor(
+          () => settled(stub, "hook").length === 1,
+          "hook settlement",
+        );
+        expect(a.inspect).toHaveBeenCalledWith(
+          expect.objectContaining({
+            frameId: "frame-1",
+            networkId: "network-1",
+            sessionId: "page-1",
+            body: "creq=challenge",
+          }),
+        );
+        const command = settled(stub, "hook")[0];
+        expect(command.method).toBe(
+          action === "capture"
+            ? "Fetch.fulfillRequest"
+            : action === "block"
+              ? "Fetch.failRequest"
+              : "Fetch.continueRequest",
+        );
+        if (action === "capture") {
+          expect(
+            Buffer.from(command.params.body as string, "base64").toString(),
+          ).toContain("Continue verification on purchase page.");
+          pause(stub, "duplicate", "creq=challenge");
+          pause(stub, "new-card", CARD);
+          await waitFor(
+            () =>
+              settled(stub, "duplicate").length === 1 &&
+              settled(stub, "new-card").length === 1,
+            "fence",
+          );
+          expect(settled(stub, "duplicate")[0].method).toBe(
+            "Fetch.failRequest",
+          );
+          expect(settled(stub, "new-card")[0].method).toBe("Fetch.failRequest");
+          expect(
+            report.mock.calls.filter(
+              ([, input]) => input.kind === "challenge_observed",
+            ),
+          ).toHaveLength(1);
+        }
+        const terminal = handle.verification!.wait();
+        await handle.detach();
+        await expect(terminal).resolves.toMatchObject({ status: "error" });
+        expect(a.dispose).toHaveBeenCalledTimes(1);
+      } finally {
+        await stub.close();
+      }
+    },
+  );
+
+  it("fails a hung hook once within the interceptor deadline", async () => {
+    const stub = await startStub();
+    const a = adapter();
+    a.inspect = jest.fn(() => new Promise(() => {}));
+    const state = initial();
+    const events: InterceptorEvent[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        placeholder: HELD,
+        relay: stubPaymentRelay(async () => success()),
+        timeoutMs: 20,
+        verification: {
+          initial: state,
+          runner: { sync: async () => state, report: async () => state },
+        },
+        verificationAdapter: () => a,
+      });
+      handle.on((e) => events.push(e));
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "arm",
+      );
+      pause(stub, "hung", "creq=challenge");
+      await waitFor(
+        () => settled(stub, "hung").length === 1,
+        "hung settlement",
+      );
+      expect(settled(stub, "hung")[0].method).toBe("Fetch.failRequest");
+      expect(events).toContainEqual({
+        type: "failed",
+        url: "https://bank.example",
+        reason: "network",
+      });
+      await handle.detach();
+      expect(settled(stub, "hung")).toHaveLength(1);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("inspects GET and binds relayed response before browser fulfillment", async () => {
+    const stub = await startStub();
+    const a = adapter();
+    const state = initial();
+    a.relayed = jest.fn(() => {
+      expect(
+        stub.commands.some((c) => c.method === "Fetch.fulfillRequest"),
+      ).toBe(false);
+    });
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        placeholder: HELD,
+        relay: stubPaymentRelay(async () => success()),
+        verification: {
+          initial: state,
+          runner: { sync: async () => state, report: async () => state },
+        },
+        verificationAdapter: () => a,
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "arm",
+      );
+      pause(stub, "get");
+      await waitFor(() => settled(stub, "get").length === 1, "get");
+      expect(a.inspect).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", body: "" }),
+      );
+      pause(stub, "card", CARD);
+      await waitFor(() => settled(stub, "card").length === 1, "card");
+      expect(a.inspect).toHaveBeenCalledTimes(1);
+      expect(a.relayed).toHaveBeenCalledWith(
+        expect.objectContaining({ body: '{"id":"sess"}' }),
+        "page-1",
+        {
+          frameId: "frame-1",
+          url: "https://bank.example/challenge",
+        },
+      );
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+});
+
+it("fails unreadable hook bodies without inspection or fabricated empty bytes", async () => {
+  const stub = await startStub({ postDataError: true });
+  const inspect = jest.fn(async () => "continue" as const);
+  const initial: VerificationState = {
+    id: "v",
+    version: 0,
+    status: "preparing",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    merchantOrigin: "https://shop.example",
+    total: { amount: "10.00", currency: "USD" },
+    challengeCaptured: false,
+    launchClaimed: false,
+    checkRequested: false,
+    continuationClaimed: false,
+  };
+  try {
+    const events: InterceptorEvent[] = [];
+    const handle = await attachInterceptor(stub.url, {
+      placeholder: HELD,
+      relay: stubPaymentRelay(async () => success()),
+      verification: {
+        initial,
+        runner: { sync: async () => initial, report: async () => initial },
+      },
+      verificationAdapter: () => ({
+        inspect,
+        relayed: () => {},
+        reconcile: async () => null,
+      }),
+    });
+    handle.on((e) => events.push(e));
+    attachPage(stub.emit);
+    await waitFor(
+      () => stub.commands.some((c) => c.method === "Fetch.enable"),
+      "arm",
+    );
+    stub.emit(multipartPause("unreadable-hook", "network-unreadable"));
+    await waitFor(
+      () => events.some((e) => e.type === "failed"),
+      "failed unreadable hook",
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "failed", reason: "unreadable_body" }),
+    );
+    expect(inspect).not.toHaveBeenCalled();
+    await handle.detach();
+  } finally {
+    await stub.close();
+  }
+});
+
+it("resolves verification waiters on unexpected idle CDP loss", async () => {
+  const stub = await startStub();
+  const dispose = jest.fn();
+  const initial: VerificationState = {
+    id: "v",
+    version: 0,
+    status: "preparing",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    merchantOrigin: "https://shop.example",
+    total: { amount: "10.00", currency: "USD" },
+    challengeCaptured: false,
+    launchClaimed: false,
+    checkRequested: false,
+    continuationClaimed: false,
+  };
+  const report = jest.fn(async () => initial);
+  const handle = await attachInterceptor(stub.url, {
+    placeholder: HELD,
+    relay: stubPaymentRelay(async () => success()),
+    verification: { initial, runner: { sync: async () => initial, report } },
+    verificationAdapter: () => ({
+      inspect: async () => "continue",
+      relayed: () => {},
+      reconcile: async () => null,
+      dispose,
+    }),
+  });
+  const terminal = handle.verification!.wait();
+  await stub.close();
+  await expect(terminal).resolves.toMatchObject({ status: "error" });
+  expect(dispose).toHaveBeenCalledTimes(1);
+  await waitFor(() => report.mock.calls.length === 1, "browser_lost receipt");
+  expect(report).toHaveBeenCalledWith(
+    "v",
+    expect.objectContaining({ kind: "browser_lost" }),
+  );
+  await handle.detach();
 });
