@@ -33,7 +33,7 @@ function isChallengeRequest(
     return new URLSearchParams(request.body).has("creq");
   }
 }
-export const verificationIsActive = (state: VerificationState) =>
+const verificationIsActive = (state: VerificationState) =>
   ["preparing", "requires_action", "checking"].includes(state.status);
 
 /** Fixed-purpose observer on the existing browser; it never creates or closes a browser session. */
@@ -84,7 +84,7 @@ export class VerificationSession implements VerificationHandle {
       : Promise.resolve(this.current());
   }
   /** Inspect checkout traffic while preserving captured and uncertain handoffs during native fallback. */
-  async inspect(request: VerificationRequest) {
+  async inspect(request: VerificationRequest, signal?: AbortSignal) {
     this.canObserve();
     if (!verificationIsActive(this.state)) {
       return this.submissionBlocked() &&
@@ -93,12 +93,7 @@ export class VerificationSession implements VerificationHandle {
         : ("continue" as const);
     }
     if (this.native) {
-      if (
-        this.captureClaimed ||
-        this.state.challengeCaptured ||
-        this.state.launchClaimed
-      )
-        this.native = false;
+      if (this.submissionBlocked()) this.native = false;
       else return "continue" as const;
     }
     let action: Awaited<ReturnType<VerificationAdapter["inspect"]>>;
@@ -110,18 +105,15 @@ export class VerificationSession implements VerificationHandle {
         ? ("block" as const)
         : ("continue" as const);
     }
-    if (action === "fallback") {
-      if (
-        this.captureClaimed ||
-        this.state.challengeCaptured ||
-        this.state.launchClaimed
-      )
-        return "block" as const;
-      this.native = true;
-      return "continue" as const;
-    }
-    if (this.native) return "continue" as const;
-    if (typeof action !== "object") return action;
+    if (signal?.aborted) return "continue" as const;
+    if (action === "fallback") return this.fallback();
+    if (this.native && !this.submissionBlocked()) return "continue" as const;
+    if (typeof action !== "object")
+      return action === "continue" &&
+        request.method.toUpperCase() === "POST" &&
+        this.submissionBlocked()
+        ? ("block" as const)
+        : action;
     if (
       this.closed ||
       this.captureClaimed ||
@@ -131,20 +123,27 @@ export class VerificationSession implements VerificationHandle {
       action.capture.body !== request.body
     )
       return "block" as const;
-    // Reserve synchronously: an ambiguous capture report must never admit another ACS request.
+    // Reserve before awaiting so concurrent handoffs cannot escape the pending report.
     this.captureClaimed = true;
     const reported = await this.report(
       { kind: "challenge_observed", capture: action.capture },
       true,
-    );
+    ).catch(() => false);
     if (!reported) {
       this.captureClaimed = false;
-      this.native = true;
-      return "continue" as const;
+      this.canObserve();
+      if (this.closed || this.state.status === "expired")
+        return "block" as const;
+      return this.fallback();
     }
     return verificationIsActive(this.state) && this.state.challengeCaptured
       ? ("capture" as const)
       : ("block" as const);
+  }
+  fallback() {
+    if (this.submissionBlocked()) return "block" as const;
+    this.native = true;
+    return "continue" as const;
   }
   relayed(
     response: { body: string },
@@ -184,6 +183,7 @@ export class VerificationSession implements VerificationHandle {
     capture = false,
     idempotencyKey: string = randomUUID(),
   ) {
+    let expired = false;
     const operation = async () => {
       // A native fallback can win while this receipt waits for earlier reports to finish.
       if (
@@ -199,8 +199,11 @@ export class VerificationSession implements VerificationHandle {
       let ambiguous = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
+          const reply = await this.runner.report(this.state.id, body);
+          if (expired)
+            throw new Error("Purchase verification report timed out");
           const result = validated(
-            await this.runner.report(this.state.id, body),
+            reply,
             this.state,
             input.kind === "continuation_started",
           );
@@ -228,12 +231,28 @@ export class VerificationSession implements VerificationHandle {
           return true;
         } catch {
           ambiguous = true;
-          if (attempt === 2)
+          if (expired || attempt === 2)
             throw new Error("Purchase verification report failed");
         }
       }
     };
-    const pending = this.queue.then(operation);
+    const pending = this.queue.then(async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          operation(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+              expired = true;
+              reject(new Error("Purchase verification report timed out"));
+            }, 1000);
+            timer.unref?.();
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    });
     this.queue = pending.catch(() => {});
     return pending;
   }
@@ -267,7 +286,7 @@ export class VerificationSession implements VerificationHandle {
         if (observation && observation.outcome !== "unknown")
           await this.report({ kind: "checkout_observed", observation });
         else if (this.state.launchClaimed && !this.state.continuationClaimed) {
-          const resume = await this.adapter.continuation?.();
+          const resume = await this.adapter.continuation();
           if (!this.canObserve()) return;
           if (resume) {
             await this.report({ kind: "continuation_started" });
@@ -282,7 +301,7 @@ export class VerificationSession implements VerificationHandle {
                   await this.report({ kind: "continuation_failed" });
                 return;
               }
-              if (this.canObserve() && acknowledged?.interactionReturned) {
+              if (this.canObserve() && acknowledged.interactionReturned) {
                 this.nativeAckKey = randomUUID();
                 await this.acknowledgeNativeReturn();
               }
@@ -322,7 +341,7 @@ export class VerificationSession implements VerificationHandle {
       if (!this.disposed) {
         this.disposed = true;
         try {
-          Promise.resolve(this.adapter.dispose?.()).catch(() => {});
+          Promise.resolve(this.adapter.dispose()).catch(() => {});
         } catch {
           /* Cleanup cannot change a terminal observation. */
         }
@@ -366,7 +385,6 @@ function validated(
     ![
       value.challengeCaptured,
       value.launchClaimed,
-      value.checkRequested,
       value.continuationClaimed,
     ].every((v) => typeof v === "boolean")
   )
@@ -431,7 +449,6 @@ function validated(
     total: { amount: value.total.amount, currency: value.total.currency },
     challengeCaptured: value.challengeCaptured as boolean,
     launchClaimed: value.launchClaimed as boolean,
-    checkRequested: value.checkRequested as boolean,
     continuationClaimed: value.continuationClaimed as boolean,
   };
   for (const key of [

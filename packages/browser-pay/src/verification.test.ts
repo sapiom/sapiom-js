@@ -18,7 +18,6 @@ function fixture(change: Partial<VerificationState> = {}) {
     challengeCaptured: false,
     launchClaimed: false,
     continuationClaimed: false,
-    checkRequested: false,
     ...change,
   };
   const adapter: VerificationAdapter = {
@@ -96,14 +95,12 @@ describe("purchase-bound VerificationSession", () => {
     await f.session.close();
   });
 
-  it("keeps ambiguous reports fenced and retries with the same version and key", async () => {
+  it("falls back after exhausted reports and releases the submission claim", async () => {
     const f = fixture();
     f.runner.report = jest.fn(async () => {
       throw new Error("private transport details");
     });
-    await expect(f.session.inspect(request())).rejects.toThrow(
-      "Purchase verification report failed",
-    );
+    expect(await f.session.inspect(request())).toBe("continue");
     const calls = (f.runner.report as jest.Mock).mock.calls;
     expect(calls).toHaveLength(3);
     expect(calls[0]).toEqual(calls[1]);
@@ -112,8 +109,70 @@ describe("purchase-bound VerificationSession", () => {
       expectedVersion: 1,
       idempotencyKey: expect.any(String),
     });
-    expect(f.session.submissionBlocked()).toBe(true);
-    expect(await f.session.inspect(request())).toBe("block");
+    expect(f.session.submissionBlocked()).toBe(false);
+    expect(await f.session.inspect(request())).toBe("continue");
+    await f.session.close();
+  });
+
+  it.each(["challengeCaptured", "launchClaimed", "uncertain"] as const)(
+    "fences active adapter continue during %s",
+    async (claim) => {
+      const f = fixture(claim === "uncertain" ? {} : { [claim]: true });
+      const receipt = pending<VerificationRunnerReply>();
+      let first: Promise<unknown> | undefined;
+      if (claim === "uncertain") {
+        f.runner.report = jest.fn(() => receipt.promise);
+        first = f.session.inspect(request());
+        await flush();
+      }
+      f.adapter.inspect = jest.fn(async () => "continue");
+      expect(await f.session.inspect(request())).toBe("block");
+      expect(
+        await f.session.inspect(
+          request("confirm=true", "https://api.stripe.com/confirm"),
+        ),
+      ).toBe("block");
+      expect(
+        await f.session.inspect({ ...request(), method: "GET", body: "" }),
+      ).toBe("continue");
+      receipt.resolve({ ...f.state, version: 2, challengeCaptured: true });
+      await first;
+      await f.session.close();
+    },
+  );
+
+  it("delivers browser_lost after a queued report deadline and ignores late receipts", async () => {
+    const f = fixture();
+    const receipt = pending<VerificationRunnerReply>();
+    f.runner.report = jest.fn((_id, input) =>
+      input.kind === "challenge_observed"
+        ? receipt.promise
+        : Promise.resolve(f.state),
+    );
+    const first = f.session.inspect(request());
+    await flush();
+    const close = f.session.close();
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(f.runner.report).toHaveBeenCalledWith(
+      "v-1",
+      expect.objectContaining({ kind: "browser_lost" }),
+    );
+    await close;
+    await first;
+    receipt.resolve({ ...f.state, version: 2, challengeCaptured: true });
+    await flush();
+    expect(f.session.current()).toMatchObject({
+      status: "error",
+      challengeCaptured: false,
+    });
+  });
+
+  it("accepts runner state without the unused checkRequested field", async () => {
+    const f = fixture();
+    const session = VerificationSession.attach(f.runner, f.adapter, f.state);
+    expect(session.current()).not.toHaveProperty("checkRequested");
+    expect(await session.inspect(request())).toBe("capture");
+    await session.close();
     await f.session.close();
   });
 
@@ -244,7 +303,7 @@ describe("purchase-bound VerificationSession", () => {
   });
 
   it("expires while capture receipt hangs, never allowing late challenge fulfillment", async () => {
-    const f = fixture({ expiresAt: new Date(Date.now() + 3000).toISOString() });
+    const f = fixture({ expiresAt: new Date(Date.now() + 500).toISOString() });
     const report = pending<VerificationRunnerReply>();
     f.runner.report = jest.fn(() => report.promise);
     const capture = f.session.inspect(request());

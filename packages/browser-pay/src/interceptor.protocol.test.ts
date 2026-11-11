@@ -2984,13 +2984,13 @@ describe("experimental verification hook", () => {
     challengeCaptured: false,
     launchClaimed: false,
     continuationClaimed: false,
-    checkRequested: false,
   });
   const adapter = (): VerificationAdapter => ({
     inspect: jest.fn(async () => "continue" as const),
     relayed: jest.fn(),
     reconcile: jest.fn(async () => null),
     dispose: jest.fn(),
+    continuation: async () => null,
   });
   const pause = (
     stub: Awaited<ReturnType<typeof startStub>>,
@@ -3074,15 +3074,13 @@ describe("experimental verification hook", () => {
     }
   });
 
-  it("preserves main behavior without an adapter, even with prebound runner options", async () => {
+  it("preserves main behavior without verification options", async () => {
     const stub = await startStub();
-    const runner = { sync: jest.fn(), report: jest.fn() };
     const relay = jest.fn(async () => success());
     try {
       const handle = await attachInterceptor(stub.url, {
         placeholder: HELD,
         relay: stubPaymentRelay(relay),
-        verification: { initial: initial(), runner },
       });
       expect(handle.verification).toBeUndefined();
       attachPage(stub.emit);
@@ -3108,10 +3106,86 @@ describe("experimental verification hook", () => {
       );
       expect(settled(stub, "held")[0].method).toBe("Fetch.fulfillRequest");
       expect(relay).toHaveBeenCalledTimes(1);
-      expect(runner.sync).not.toHaveBeenCalled();
-      expect(runner.report).not.toHaveBeenCalled();
       await handle.detach();
     } finally {
+      await stub.close();
+    }
+  });
+
+  it("rejects verification options without an adapter with a clear TypeError", async () => {
+    const stub = await startStub();
+    let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+    try {
+      const attached = attachInterceptor(stub.url, {
+        placeholder: HELD,
+        relay: stubPaymentRelay(async () => success()),
+        verification: {
+          initial: initial(),
+          runner: { sync: jest.fn(), report: jest.fn() },
+        },
+      }).then((value) => {
+        handle = value;
+      });
+      await expect(attached).rejects.toBeInstanceOf(TypeError);
+      await expect(attached).rejects.toThrow(
+        "Verification options require a verificationAdapter",
+      );
+    } finally {
+      await handle?.detach();
+      await stub.close();
+    }
+  });
+
+  it("ignores late inspection after the request deadline without reporting capture", async () => {
+    const stub = await startStub();
+    const a = adapter();
+    let release!: (action: { capture: { url: string; body: string } }) => void;
+    a.inspect = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const state = initial();
+    const report = jest.fn(async () => state);
+    let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+    try {
+      handle = await attachInterceptor(stub.url, {
+        placeholder: HELD,
+        relay: stubPaymentRelay(async () => success()),
+        timeoutMs: 20,
+        verification: {
+          initial: state,
+          runner: { sync: async () => state, report },
+        },
+        verificationAdapter: () => a,
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () => stub.commands.some((c) => c.method === "Fetch.enable"),
+        "arm",
+      );
+      pause(stub, "late", "creq=challenge");
+      await waitFor(() => settled(stub, "late").length === 1, "deadline");
+      release({
+        capture: {
+          url: "https://bank.example/challenge",
+          body: "creq=challenge",
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(report).not.toHaveBeenCalled();
+      expect(settled(stub, "late")).toHaveLength(1);
+      pause(stub, "later-card", CARD);
+      await waitFor(
+        () => settled(stub, "later-card").length === 1,
+        "later submission",
+      );
+      expect(settled(stub, "later-card")[0].method).toBe(
+        "Fetch.fulfillRequest",
+      );
+    } finally {
+      await handle?.detach();
       await stub.close();
     }
   });
@@ -3204,7 +3278,7 @@ describe("experimental verification hook", () => {
     },
   );
 
-  it("fails a hung hook once within the interceptor deadline", async () => {
+  it("continues a hung hook natively once within the interceptor deadline", async () => {
     const stub = await startStub();
     const a = adapter();
     a.inspect = jest.fn(() => new Promise(() => {}));
@@ -3232,12 +3306,10 @@ describe("experimental verification hook", () => {
         () => settled(stub, "hung").length === 1,
         "hung settlement",
       );
-      expect(settled(stub, "hung")[0].method).toBe("Fetch.failRequest");
-      expect(events).toContainEqual({
-        type: "failed",
-        url: "https://bank.example",
-        reason: "network",
-      });
+      expect(settled(stub, "hung")[0].method).toBe("Fetch.continueRequest");
+      expect(events).not.toContainEqual(
+        expect.objectContaining({ type: "failed" }),
+      );
       await handle.detach();
       expect(settled(stub, "hung")).toHaveLength(1);
     } finally {
@@ -3282,7 +3354,6 @@ describe("experimental verification hook", () => {
         "page-1",
         {
           frameId: "frame-1",
-          url: "https://bank.example/challenge",
         },
       );
       await handle.detach();
@@ -3304,7 +3375,6 @@ it("fails unreadable hook bodies without inspection or fabricated empty bytes", 
     total: { amount: "10.00", currency: "USD" },
     challengeCaptured: false,
     launchClaimed: false,
-    checkRequested: false,
     continuationClaimed: false,
   };
   try {
@@ -3320,6 +3390,8 @@ it("fails unreadable hook bodies without inspection or fabricated empty bytes", 
         inspect,
         relayed: () => {},
         reconcile: async () => null,
+        continuation: async () => null,
+        dispose: () => {},
       }),
     });
     handle.on((e) => events.push(e));
@@ -3355,7 +3427,6 @@ it("resolves verification waiters on unexpected idle CDP loss", async () => {
     total: { amount: "10.00", currency: "USD" },
     challengeCaptured: false,
     launchClaimed: false,
-    checkRequested: false,
     continuationClaimed: false,
   };
   const report = jest.fn(async () => initial);
@@ -3367,6 +3438,7 @@ it("resolves verification waiters on unexpected idle CDP loss", async () => {
       inspect: async () => "continue",
       relayed: () => {},
       reconcile: async () => null,
+      continuation: async () => null,
       dispose,
     }),
   });
