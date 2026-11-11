@@ -272,6 +272,13 @@ export interface PaymentProtocolData {
  */
 export interface CompleteTransactionRequest {
   outcome: "success" | "error";
+  /**
+   * What the store said when it refused a card purchase's payment after the card was sent (for
+   * example "Your card's security code is incorrect"), at most 500 characters. Only with outcome
+   * `error` on a card purchase whose card was sent; the API rejects it anywhere else. The purchase
+   * then reads `closed` with reason `merchant_declined` and this message.
+   */
+  merchantMessage?: string;
   responseFacts?: {
     source: string;
     version: string;
