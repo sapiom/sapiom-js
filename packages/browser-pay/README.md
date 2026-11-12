@@ -1,6 +1,6 @@
 # @sapiom/browser-pay
 
-Browser-side payment interceptor. The agent types a governance placeholder into checkout. This package pauses that request over CDP and hands it to David's relay. The browser is fulfilled with the processor's response, or the request fails. The placeholder is never continued.
+Browser Pay for Sapiom Pay. The agent types a governance placeholder into checkout. This package pauses that request over CDP and hands it to Sapiom's payment relay (`POST /v1/transactions/{id}/payment/relay`). The browser is fulfilled with the processor's response, or the request fails. The placeholder is never continued.
 
 ## Sequence
 
@@ -48,7 +48,7 @@ Success:
 }
 ```
 
-`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself. `response.setCookies` is optional: the merchant's raw `Set-Cookie` values, one per entry and never comma-joined. Each becomes its own `Set-Cookie` header on the fulfilled response, with or without a profile, so the browser stores the cookies and sends them on its next request. If `response.headers` also contains `set-cookie`, both entries are emitted; `setCookies` is applied last, so it wins in the cookie jar. A relay response whose `setCookies` is not an array of strings is rejected like any other malformed response. The interceptor never logs cookie values. End to end this works only when the Sapiom relay backend and Basis Theory return the merchant's `Set-Cookie` values in `setCookies`; until then the field is absent and nothing changes.
+`response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself. `response.setCookies` is optional: the merchant's raw `Set-Cookie` values, one per entry and never comma-joined. Each becomes its own `Set-Cookie` header on the fulfilled response, with or without a profile, so the browser stores the cookies and sends them on its next request. If `response.headers` also contains `set-cookie`, both entries are emitted; `setCookies` is applied last, so it wins in the cookie jar. A relay response whose `setCookies` is not an array of strings is rejected like any other malformed response. Browser Pay never logs cookie values. End to end this works only when the Sapiom relay backend and Basis Theory return the merchant's `Set-Cookie` values in `setCookies`; until then the field is absent and nothing changes.
 
 Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay may omit either field.
 
@@ -103,7 +103,7 @@ No answer after the send:
 
 The injection is consumed. The paused request fails and the same body is not sent again.
 
-A redirect, a non-2xx HTTP status other than 502, 503, or 504, or an unreadable body fails the paused browser request. David's relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
+A redirect, a non-2xx HTTP status other than 502, 503, or 504, or an unreadable body fails the paused browser request. The payment relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
 
 ## What an agent does
 
@@ -132,7 +132,7 @@ const handle = await attachInterceptor(cdpUrl, {
 });
 ```
 
-The relay records every request it is asked to send (host, path, header names, the body's shape and where the card fields were, never a value). It refuses `destination_not_allowed` for a URL that isn't https to a public host or a method other than POST, and `card_fields_invalid` when the placeholder's number isn't in the body exactly once, a card field can't be told apart from another holding the same value, or a card number shows up in the URL or headers. A form that encrypts card fields in the page (Adyen client-side encryption and similar) never shows the placeholder, so it can't be paid this way. A provider may decline a card sent from the card vault's servers rather than the buyer's browser.
+The relay records every request it is asked to send (host, path, header names, the body's shape and where the card fields were, never a value). It refuses `destination_not_allowed` for a URL that isn't https to a public host or a method other than POST, and `card_fields_invalid` when the placeholder's number isn't in the body exactly once, a card field can't be told apart from another holding the same value, or a card number shows up in the URL or headers. A form that encrypts card fields in the page (Adyen client-side encryption and similar) never shows the placeholder, so it can't be paid this way. A provider may decline a card sent from the card vault's servers rather than the user's browser.
 
 `baseUrl` must be https, or plain http to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` URL makes `httpPaymentRelay` throw a `CredentialChannelError` before a request is sent. On a trusted private network, set `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects from the relay are always refused.
 

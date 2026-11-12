@@ -132,7 +132,7 @@ export interface InterceptorHandle {
  * `wsEndpoint()`. Playwright's `Browser` and `Page` have no `wsEndpoint()`
  * (only its `BrowserServer` does, and that URL speaks Playwright's own
  * protocol, not CDP), so with Playwright pass the CDP URL instead. A URL with
- * any other scheme is refused before a connection opens. The interceptor
+ * any other scheme is refused before a connection opens. Browser Pay
  * always opens its own connection.
  */
 export type InterceptorTarget =
