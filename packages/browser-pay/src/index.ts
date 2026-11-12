@@ -21,3 +21,6 @@ export type { RelayRequest, RelayResponse } from "./contract.js";
 export type { HeldPlaceholder } from "./detect.js";
 
 export type { PayLogger } from "./logger.js";
+
+/** @experimental Purchase-bound verification opt-in; no built-in adapter. */
+export type { ExperimentalVerificationOptions } from "./verification-types.js";

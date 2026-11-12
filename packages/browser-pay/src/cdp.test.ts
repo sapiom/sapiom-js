@@ -322,3 +322,32 @@ describe("CdpConnection discovery", () => {
     ).toBe("wss:");
   });
 });
+
+it("notifies idle close observers once, isolates errors, and supports unsubscribe", async () => {
+  const stub = await listen();
+  try {
+    const connection = await CdpConnection.connect(stub.url);
+    const removed = jest.fn();
+    connection.onClose(removed)();
+    connection.onClose(() => {
+      throw new Error("observer failure");
+    });
+    const observed = jest.fn();
+    const closed = new Promise<void>((resolve) =>
+      connection.onClose(() => {
+        observed();
+        resolve();
+      }),
+    );
+    (await stub.onceSocket).destroy();
+    await closed;
+    connection.close();
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(removed).not.toHaveBeenCalled();
+    const late = jest.fn();
+    connection.onClose(late);
+    expect(late).toHaveBeenCalledTimes(1);
+  } finally {
+    await stub.close();
+  }
+});
