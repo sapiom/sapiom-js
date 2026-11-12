@@ -1,11 +1,10 @@
 /**
  * The documentation the finder can reach.
  *
- * One page, not a mirror of the site's nav: which models a capability can
- * call. The list also held the agents and workflows quick starts and the two
- * halves of MCP setup until those pages were retired (2026-10-23).
- * Everything else is one click away behind the footer link, which is why this
- * list gets to stay short instead of growing a page per release.
+ * Empty for now. The list held the AI models page, the agents and workflows
+ * quick starts and the two halves of MCP setup until docs.sapiom.ai moved to
+ * the Sapiom Pay docs (2026-10-23) and those pages were retired. The footer
+ * link still opens the docs site, so the Docs tab keeps a way out.
  */
 export const DOCS_SITE = "https://docs.sapiom.ai/";
 
@@ -17,10 +16,4 @@ export interface DocLink {
   href: string;
 }
 
-export const DOC_LINKS: readonly DocLink[] = [
-  {
-    label: "AI models",
-    meta: "Which models a capability can call",
-    href: "https://docs.sapiom.ai/capabilities/ai-models",
-  },
-];
+export const DOC_LINKS: readonly DocLink[] = [];

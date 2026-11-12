@@ -83,8 +83,6 @@ export interface BrowserSession {
    * Treat it like a credential: send it to one
    * person over a channel you trust, and close the session when the step is done.
    * Absent from Local Run stub sessions.
-   *
-   * @see https://docs.sapiom.ai/capabilities/browser#hand-a-step-to-a-human
    */
   liveViewUrl?: string;
   /** Lifetime the capability applied to `liveViewUrl`; see {@link LiveViewMode}. */

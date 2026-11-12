@@ -106,18 +106,13 @@ test("the Actions tab lists the app's verbs, and Enter runs one", async ({ page 
   await expect(page.locator(".rail-workflows")).toBeHidden();
 });
 
-test("the Docs tab searches the doc links and offers the docs site in the footer", async ({ page }) => {
+test("the Docs tab lists no retired pages and offers the docs site in the footer", async ({ page }) => {
   await page.getByTestId("palette-trigger").click();
   await page.getByTestId("command-palette-filter-docs").click();
 
   const list = page.getByTestId("command-palette-list");
-  await expect(list.getByText("AI models")).toBeVisible();
+  await expect(list.getByText("No matches")).toBeVisible();
   await expect(page.getByTestId("command-palette-destination")).toContainText("Open documentation");
-
-  await page.getByTestId("command-palette-input").fill("models");
-  await expect(list.getByText("AI models")).toBeVisible();
-  await page.getByTestId("command-palette-input").fill("mcp");
-  await expect(list.getByText("AI models")).toBeHidden();
 });
 
 test("a scoped tab never leaks other kinds into the results", async ({ page }) => {
