@@ -261,6 +261,20 @@ export function CommandPalette({
     onClose();
   };
 
+  // The footer CTA: open the tab's external page, or run the verb it names.
+  const runDestination = (): void => {
+    if (!destination) return;
+    if (destination.href) {
+      window.open(destination.href, "_blank", "noopener,noreferrer");
+    } else if (destination.actionId) {
+      const verb = actions.find((action) => action.id === destination.actionId);
+      if (verb) {
+        verb.run();
+        onClose();
+      }
+    }
+  };
+
   // Tab / Shift+Tab cycle the category tabs — the palette is a single-field
   // dialog, so Tab has no focus to move and can carry navigation instead.
   const cycleFilter = (delta: number): void => {
@@ -284,7 +298,13 @@ export function CommandPalette({
     } else if (e.key === "Enter") {
       e.preventDefault();
       const item = items[selectedIndex];
-      if (item) activate(item);
+      if (item) {
+        activate(item);
+      } else if (!query) {
+        // Tab cycles categories, so the footer CTA is out of keyboard reach. An
+        // empty tab with no query has nothing else Enter could mean: run the CTA.
+        runDestination();
+      }
     } else if (e.key === "Escape") {
       // Claim Escape for this layer so window-level shell shortcuts cannot
       // also collapse a pane after the palette handles the same key.
@@ -422,17 +442,7 @@ export function CommandPalette({
               type="button"
               className="btn-ghost command-palette-footer-cta"
               data-testid="command-palette-destination"
-              onClick={() => {
-                if (destination.href) {
-                  window.open(destination.href, "_blank", "noopener,noreferrer");
-                } else if (destination.actionId) {
-                  const verb = actions.find((action) => action.id === destination.actionId);
-                  if (verb) {
-                    verb.run();
-                    onClose();
-                  }
-                }
-              }}
+              onClick={runDestination}
             >
               {destination.label}
               <Icon name={destination.href ? "ExternalLink" : "ArrowRight"} size={14} />

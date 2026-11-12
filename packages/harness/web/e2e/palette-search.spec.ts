@@ -115,6 +115,37 @@ test("the Docs tab lists no retired pages and offers the docs site in the footer
   await expect(page.getByTestId("command-palette-destination")).toContainText("Open documentation");
 });
 
+test("Enter on the empty Docs tab opens the docs site, but not while a query finds nothing", async ({ page }) => {
+  await page.evaluate(() => {
+    const opened: string[] = [];
+    Object.assign(window, { __opened: opened });
+    window.open = ((url?: string | URL) => {
+      opened.push(String(url));
+      return null;
+    }) as typeof window.open;
+  });
+  const opened = () => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened);
+
+  await page.getByTestId("palette-trigger").click();
+  const input = page.getByTestId("command-palette-input");
+  await input.focus();
+  // Keyboard only: Tab cycles the categories until the Docs tab is selected.
+  const docsTab = page.getByTestId("command-palette-filter-docs");
+  for (let i = 0; i < 7 && (await docsTab.getAttribute("aria-selected")) !== "true"; i++) {
+    await input.press("Tab");
+  }
+  await expect(docsTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("command-palette-destination")).toContainText("Open documentation");
+
+  await input.fill("zzz");
+  await input.press("Enter");
+  expect(await opened()).toEqual([]);
+
+  await input.fill("");
+  await input.press("Enter");
+  expect(await opened()).toEqual(["https://docs.sapiom.ai/"]);
+});
+
 test("a scoped tab never leaks other kinds into the results", async ({ page }) => {
   await page.getByTestId("palette-trigger").click();
   await page.getByTestId("command-palette-filter-files").click();
