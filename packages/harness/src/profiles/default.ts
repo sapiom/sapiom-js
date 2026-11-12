@@ -70,7 +70,7 @@ local authoring server's primer lists (list receipts, replay a receipt or a fire
 Link receives webhooks only once \`webhooksEnabled\` is on (off by default):
 \`https://apps.sapiom.ai/{org}/{slug}/hook/<path>\` forwards the body byte-exact
 (third-party signatures verify inside the app) and holds a request up to 60 s
-while the app wakes. Details: https://docs.sapiom.ai/capabilities/app-links.
+while the app wakes.
 
 **Sapiom Postgres is permanent.** A database provisioned through
 \`ctx.sapiom.database\` lives until it is deleted and counts against the plan's

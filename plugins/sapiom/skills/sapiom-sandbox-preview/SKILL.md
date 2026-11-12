@@ -161,7 +161,3 @@ Steps can deploy previews through the typed client. Get a `Sandbox` instance fir
 `{ url, status: "deployed" | "unverified" | "failed", logs }` (failures return `status:
 "failed"` with logs, not a throw). `sandbox.createPublicUrl({ port })` is the low-level
 primitive — the port must have been declared when the sandbox was created.
-
-## Reference
-
-Full details: [Compute — Sandbox previews](https://docs.sapiom.ai/capabilities/compute#sandbox-previews).
