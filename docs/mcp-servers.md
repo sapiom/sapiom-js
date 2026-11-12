@@ -26,6 +26,31 @@ paid for via x402.
 Reach for it when you want an agent to **use** a capability right now — "scrape
 this page", "run this code in a sandbox", "search the web".
 
+## Hosted Pay MCP card selection
+
+The following describes the hosted-backend change in
+[Sapiom #6539](https://github.com/sapiom/Sapiom/pull/6539). It applies only
+after that change is deployed; deployment is not confirmed by this documentation
+update.
+
+Hosted Pay MCP uses `sapiom_set_default_payment_method` to choose the tenant
+default for new transactions. In `sapiom_request_transaction`, pass
+`paymentMethodId` or `setupLinkId`, never both; omit both to select that default.
+Created transactions keep their pinned card on retries with the same idempotency
+key, even after a default change. With neither an explicit card nor a default,
+`no_saved_card` means no active, setup-complete card exists in this environment;
+an active, setup-complete card in this payment environment without a default
+instead returns `card_unavailable` with `error.details.cardReason: missing`.
+Choose a ready card or set a default, then
+retry with the same key. Other unusable selected/default cards return
+`card_unavailable` with their `cardReason`, or `no_card_route` without a
+`cardReason`. These creation refusals retain
+`error.details.retryWithSameIdempotencyKey: true` and create no transaction.
+See [the payment README](../packages/browser-pay/README.md#hosted-mcp-card-selection)
+and [Sapiom documentation](https://docs.sapiom.ai) for the hosted reference.
+These hosted tools are separate from the local `@sapiom/mcp` developer package;
+this compatibility note adds no SDK method.
+
 ## Local `sapiom-dev` — the developer surface
 
 The local MCP is published as [`@sapiom/mcp`](../packages/mcp) and runs on your
