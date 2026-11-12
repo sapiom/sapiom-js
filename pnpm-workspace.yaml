@@ -21,5 +21,39 @@ onlyBuiltDependencies:
 # cross-platform rebuild HANG that the bare node-gyp override caused.
 overrides:
   "@electron/rebuild": ^3.7.0
+  # Security floors for transitive dependencies (SAP-4715). Each key is scoped
+  # to the major line a parent declares and floors it at the first release that
+  # closes that line's open advisories, so no parent gets a major it did not ask
+  # for. Some lines have no patched release in their own major and move up one:
+  # fast-xml-parser@4, langsmith@0.3 and uuid@9/10 sit in
+  # @sapiom/langchain-classic's dev-only @langchain/* 0.3 test graph, whose
+  # tests cover the jump. toml@4 moves to 5 under effect, which the desktop app
+  # ships; parse(input, options) remains available, but integers outside
+  # JavaScript's safe range require the bigint option and must fit TOML's
+  # signed 64-bit range. @hono/node-server@1 moves to 2.x, which
+  # @modelcontextprotocol/sdk 1.32's own range (^1.19.9 || ^2.0.5) allows; no
+  # 1.x release fixes its serveStatic double-decoding advisory.
+  "body-parser@1": ^1.20.9
+  "body-parser@2": ^2.4.0
+  "brace-expansion@1": ^1.1.21
+  "brace-expansion@2": ^2.1.7
+  "brace-expansion@5": ^5.0.12
+  "browserslist@4": ^4.28.7
+  "dompurify@3": ^3.4.17
+  "fast-uri@3": ^3.1.9
+  "fast-xml-parser@4": ^5.7.0
+  "handlebars@4": ^4.7.10
+  "hono@4": ^4.13.11
+  "@hono/node-server@1": ^2.1.3
+  "ip-address@10": ^10.7.4
+  "js-yaml@3": ^3.15.2
+  "js-yaml@4": ^4.3.2
+  "langsmith@0.3": ^0.6.0
+  "postcss@8": ^8.5.23
+  "proxy-addr@2": ^2.0.8
+  "qs@6": ^6.16.1
+  "toml@4": ^5.0.1
+  "uuid@9": ^11.1.1
+  "uuid@10": ^11.1.1
 patchedDependencies:
   "@assistant-ui/react-opencode@0.2.22": patches/@assistant-ui__react-opencode@0.2.22.patch

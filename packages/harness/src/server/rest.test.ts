@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 let tmpHome: string;
 
@@ -161,8 +161,8 @@ function historyAdapter(
 describe("createRestRouter", () => {
   let server: ReturnType<express.Express["listen"]>;
   let baseUrl: string;
-  let onTelemetryOptInChange: ReturnType<typeof vi.fn>;
-  let writeWorkspaceContext: ReturnType<typeof vi.fn>;
+  let onTelemetryOptInChange: Mock<(...args: any[]) => any>;
+  let writeWorkspaceContext: Mock<(...args: any[]) => any>;
 
   function start(overrides: Partial<RestRouterOptions> = {}) {
     onTelemetryOptInChange = vi.fn();
