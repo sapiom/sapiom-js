@@ -99,10 +99,17 @@ export interface FieldElement {
   options?: ArrayLike<{ value: string; text: string }>;
 }
 
+/** The parts of a Playwright `ElementHandle` for an `<iframe>` this helper uses. */
+export interface FrameElementLike {
+  evaluate<R>(fn: (el: { contentDocument: unknown }) => R): Promise<R>;
+  dispose?(): Promise<void>;
+}
+
 /** The parts of a Playwright `Frame` this helper uses. */
 export interface FrameLike {
   url(): string;
   parentFrame(): FrameLike | null;
+  frameElement(): Promise<FrameElementLike>;
   locator(selector: string): LocatorLike;
   evaluate<R>(expression: string): Promise<R>;
 }
@@ -197,11 +204,7 @@ const DESCRIBE_FIELDS = `(() => {
   });
   // Leave the frame where it was.
   window.scrollTo({ left: startX, top: startY, behavior: "instant" });
-  // The browser lets a frame read its parent's document only when they share an origin, so this
-  // cannot be spoofed by the frame's own script.
-  let parentAccessible = false;
-  try { parentAccessible = parent !== self && !!parent.document; } catch (e) { parentAccessible = false; }
-  return { title: (document.title || "").toLowerCase(), fields: out, parentAccessible };
+  return { title: (document.title || "").toLowerCase(), fields: out };
 })()`;
 
 const AUTOCOMPLETE: Record<string, CardField> = {
@@ -271,8 +274,9 @@ const onlyCardWords = (label: string) =>
 
 /**
  * Words in a field's `name` or `id` that make it part of an address or contact block. Such a field is
- * never a card field unless its `autocomplete` says it is: a billing "Number" input labelled only
- * "Number" passes the label check, but `billing_number` says what it is.
+ * a card field only when its `autocomplete` or its own name or id says so (`billing_card_number`): a
+ * billing "Number" input labelled only "Number" passes the label check, but `billing_number` says
+ * what it is.
  */
 const ADDRESS_WORDS = new Set([
   "billing",
@@ -307,14 +311,13 @@ const addressField = (ids: string) =>
   ids.split(/[^a-z]+/).some((w) => ADDRESS_WORDS.has(w));
 
 /**
- * A bare `number`/`name`/`expiry` field (Shopify's card vault, Stripe's Payment Element) counts only
- * in a card iframe on another origin. On the page's own origin it is a guess: the page holds address
- * and order fields with the same bare names.
+ * A bare `number` or `name` field (Shopify's card vault, Stripe's Payment Element) counts only in a
+ * card iframe on another origin. On the page's own origin it is a guess: the page holds address and
+ * order fields with the same bare names. (A field named `expiry` matches `PATTERNS` already.)
  */
 const BARE: Array<[CardField, RegExp]> = [
   ["number", /^number\b/],
   ["name", /^name\b/],
-  ["expiry", /^expiry\b/],
 ];
 
 /**
@@ -329,7 +332,10 @@ function classify(
   if (/\bissue[_ ](date|number)\b/.test(c.hints)) return null;
   const ac = AUTOCOMPLETE[c.autocomplete.split(/\s+/).pop() ?? ""];
   if (ac) return { field: ac, score: 3 };
-  if (addressField(c.ids)) return null;
+  // An address-named field counts only when its own name or id names a card field
+  // (`billing_card_number`), never on its label alone.
+  if (addressField(c.ids) && !PATTERNS.some(([, re]) => re.test(c.ids)))
+    return null;
   for (const [field, re] of PATTERNS)
     if (re.test(c.hints)) return { field, score: 2 };
   // A bare name is a card field only in a card iframe on another origin, and only when nothing a
@@ -389,6 +395,30 @@ function originOf(url: string): string {
   }
 }
 
+/**
+ * Whether the frame's parent can read the frame's document, which the browser allows only when they
+ * share an origin. It is asked from the parent's side: a frame's own script can replace its
+ * `parent` global, so a check run inside the frame could be spoofed by a sandboxed frame.
+ */
+async function parentReadsDocument(frame: FrameLike): Promise<boolean> {
+  try {
+    const el = await frame.frameElement();
+    try {
+      return await el.evaluate((e) => {
+        try {
+          return !!e.contentDocument;
+        } catch {
+          return false;
+        }
+      });
+    } finally {
+      await el.dispose?.().catch(() => undefined);
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** Every allowed card-field match in every frame; origins of disallowed card frames go to `untrusted`. */
 async function scan(
   page: PageLike,
@@ -401,26 +431,23 @@ async function scan(
   for (const frame of page.frames()) {
     let candidates: Candidate[];
     let title: string;
-    let parentAccessible: boolean;
     try {
       const described = await frame.evaluate<{
         title: string;
         fields: Candidate[];
-        parentAccessible: boolean;
       }>(DESCRIBE_FIELDS);
       candidates = described.fields;
       title = described.title;
-      parentAccessible = described.parentAccessible;
     } catch {
       continue; // detached or navigating frame
     }
     // An `about:srcdoc` or `about:blank` frame has no origin in its URL. It shares its parent's
-    // origin when the browser lets it read the parent's document; otherwise it is opaque.
+    // origin when the parent can read its document; otherwise (a sandboxed frame) it is opaque.
     let origin = originOf(frame.url());
     if (origin === "" || origin === "null") {
       const parentFrame = frame.parentFrame();
       origin =
-        parentAccessible && parentFrame
+        parentFrame && (await parentReadsDocument(frame))
           ? (effective.get(parentFrame) ?? originOf(parentFrame.url()))
           : "null";
     }
@@ -657,10 +684,17 @@ async function chooseOption(
     )
     .catch(() => [] as string[][]);
   const lower = (s: string) => s.toLowerCase();
-  for (const s of spellings) {
-    const hit = options.find(
-      ([value, text]) => lower(value) === lower(s) || lower(text) === lower(s),
-    );
+  // What a person reads (the option's text) before its value: a select whose values count months
+  // from zero labels March "March" but values it "2", and April's value is "3".
+  const tries = [
+    ...spellings.map((s) =>
+      options.find(([, text]) => lower(text) === lower(s)),
+    ),
+    ...spellings.map((s) =>
+      options.find(([value]) => lower(value) === lower(s)),
+    ),
+  ];
+  for (const hit of tries) {
     if (!hit) continue;
     try {
       const picked = await el.selectOption([{ value: hit[0] }], {
@@ -679,10 +713,10 @@ async function chooseOption(
   return null;
 }
 
-/** Spellings of the expiry month an `<option>` might use: 03, 3, March, Mar. */
+/** Spellings of the expiry month an `<option>` might use: March, Mar, 03, 3. */
 function monthOptions(month: number): string[] {
   const name = MONTHS[month - 1];
-  return [two(month), String(month), name, name.slice(0, 3)];
+  return [name, name.slice(0, 3), two(month), String(month)];
 }
 
 /**

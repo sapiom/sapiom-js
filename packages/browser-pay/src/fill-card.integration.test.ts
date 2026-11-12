@@ -281,6 +281,19 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <label>Kartennummer <input id="kn" name="kn" style="width:200px;height:30px"></label>
 <label>Expiry <input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
 <label>CVV <input autocomplete="cc-csc" style="width:60px;height:30px"></label>`,
+  "/billing-card-number": `<!doctype html><title>Checkout</title>
+<label>Card number <input id="billing_card_number" name="billing_card_number" style="width:200px;height:30px"></label>
+<label>Expiry <input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVV <input autocomplete="cc-csc" style="width:60px;height:30px"></label>`,
+  // A sandboxed frame replacing its own `parent` global to look same-origin.
+  "/sandboxed-spoof": `<!doctype html><title>Checkout</title>
+<iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<script>window.parent = { document: {} };</script><input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
+  // Month names over zero-based values: March is value 2, and April's value is 3.
+  "/zero-based-months": `<!doctype html><title>Checkout</title>
+<label>Card number <input id="ccnum" style="width:200px;height:30px"></label>
+<select id="m" autocomplete="cc-exp-month"><option value="">Month</option>${["January", "February", "March", "April"].map((n, i) => `<option value="${i}">${n}</option>`).join("")}</select>
+<select id="y" autocomplete="cc-exp-year"><option value="">Year</option><option>2029</option></select>
+<label>CVV <input id="cvv" style="width:60px;height:30px"></label>`,
   "/billing-id-frame": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/vault/billing-id" style="width:320px;height:80px"></iframe>`,
   "/billing-frame": `<!doctype html><title>Checkout</title>
@@ -725,6 +738,35 @@ function serve(
       expect(await valueIn(page, "/vault/billing-id", "#billing_number")).toBe(
         "",
       );
+      await page.close();
+    });
+
+    it("fills a card number whose billing-prefixed name says it is the card number", async () => {
+      const page = await open("/billing-card-number");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#billing_card_number").inputValue()).toBe(
+        CARD.number,
+      );
+      await page.close();
+    });
+
+    it("never trusts a sandboxed frame that replaces its own parent global", async () => {
+      const page = await open("/sandboxed-spoof");
+      const result = await fill(page, { timeoutMs: 1000 });
+      expect(result).toMatchObject({
+        ok: false,
+        filled: [],
+        untrusted: ["null"],
+      });
+      await page.close();
+    });
+
+    it("picks the month by its name when option values count from zero", async () => {
+      const page = await open("/zero-based-months");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#m").inputValue()).toBe("2");
       await page.close();
     });
 
