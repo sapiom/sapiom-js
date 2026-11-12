@@ -109,16 +109,16 @@ describe("buildPaletteItems display names", () => {
     expect(items.find((item) => item.kind === "past")?.label).toBe("Digest tuning");
   });
 
-  it("actions and docs become searchable rows with their own icons and metas", () => {
+  it("actions become searchable rows with their own icons and metas, and doc rows stay on the docs site", () => {
     const items = buildPaletteItems(
       sources({ actions: [action({ id: "toggle-theme", label: "Toggle theme", meta: "Light and dark", icon: "Sun" })] }),
     );
     const command = items.find((item) => item.kind === "command");
     expect(command).toMatchObject({ id: "command:toggle-theme", label: "Toggle theme", icon: "Sun" });
     expect(command?.run).toBeTypeOf("function");
+    // DOC_LINKS is empty while docs.sapiom.ai covers only Sapiom Pay; any row it gains must link there.
     const docs = items.filter((item) => item.kind === "doc");
-    expect(docs.length).toBeGreaterThan(0);
-    expect(docs[0].href).toMatch(/^https:\/\/docs\.sapiom\.ai\//);
+    expect(docs.every((doc) => /^https:\/\/docs\.sapiom\.ai\//.test(doc.href ?? ""))).toBe(true);
   });
 });
 
@@ -347,11 +347,10 @@ describe("rankPaletteItems filters", () => {
     expect(results.map((item) => item.kind)).toEqual(["agent"]);
   });
 
-  it("the Docs tab lists the doc links and matches within them", () => {
+  it("the Docs tab scopes to doc links, queried or not", () => {
     const unqueried = rank("", filterSources, "docs");
     expect(unqueried.every((item) => item.kind === "doc")).toBe(true);
     const queried = rank("models", filterSources, "docs");
-    expect(queried.length).toBeGreaterThan(0);
     expect(queried.every((item) => item.kind === "doc")).toBe(true);
   });
 

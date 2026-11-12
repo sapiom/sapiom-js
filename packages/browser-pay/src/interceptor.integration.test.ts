@@ -13,11 +13,6 @@ import {
 import type { PaymentRelay, RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
-import {
-  VerificationHttpError,
-  type VerificationAdapterFactory,
-  type VerificationState,
-} from "./verification";
 
 const nodeRequire = createRequire(__filename);
 
@@ -78,12 +73,7 @@ window.run = async (bodies) => {
   let card;
   try { card = await post("/sessions", bodies.card); }
   catch (error) { card = { error: error.name }; }
-  let checkout;
-  if (bodies.checkout) {
-    try { checkout = await post("/checkouts/internal/graphql/persisted", bodies.checkout); }
-    catch (error) { checkout = { error: error.name }; }
-  }
-  return { ping, unrelated, mismatch, card, ...(bodies.checkout ? { checkout } : {}) };
+  return { ping, unrelated, mismatch, card };
 };
 </script>`;
 
@@ -316,20 +306,12 @@ if (!chromeBin) {
 
     async function drive(
       relay: PaymentRelay,
-      bodies: {
-        ping: string;
-        other?: string;
-        mismatch?: string;
-        card: string;
-        checkout?: string;
-      },
+      bodies: { ping: string; other?: string; mismatch?: string; card: string },
       timeoutMs = 5_000,
-      verificationAdapter?: VerificationAdapterFactory,
     ) {
       const events: InterceptorEvent[] = [];
       const calls: RelayRequest[] = [];
       const wrapped: PaymentRelay = {
-        verification: relay.verification,
         relay: async (request, options) => {
           calls.push(request);
           return relay.relay(request, options);
@@ -340,7 +322,6 @@ if (!chromeBin) {
         placeholder: PLACEHOLDER,
         profileId: "shopify-card-vault",
         timeoutMs,
-        verificationAdapter,
       });
       handle.on((event) => events.push(event));
       const { chromium } = await import("playwright");
@@ -395,16 +376,9 @@ if (!chromeBin) {
             other: bodies.other ?? PING,
             mismatch: bodies.mismatch ?? bodies.card,
             card: bodies.card,
-            checkout: bodies.checkout,
           },
         );
-        return {
-          events,
-          calls,
-          result,
-          merchantOrigin,
-          verification: handle.verification,
-        };
+        return { events, calls, result, merchantOrigin };
       } finally {
         // Closing a connectOverCDP browser can terminate Chrome. Close the page
         // only; the interceptor's own connection is detached below.
@@ -413,473 +387,6 @@ if (!chromeBin) {
         void browser;
       }
     }
-
-    it.each([
-      {
-        reason: "timeout",
-        error: () => new DOMException("registration timed out", "TimeoutError"),
-      },
-      {
-        reason: "HTTP 409 observer mismatch",
-        error: () =>
-          new VerificationHttpError(409, "verification_observer_mismatch"),
-      },
-      {
-        reason: "HTTP 429 rate limit",
-        error: () => new VerificationHttpError(429, "rate_limited"),
-      },
-      {
-        reason: "HTTP 502 backend failure",
-        error: () => new VerificationHttpError(502, "verification_error"),
-      },
-    ])(
-      "preserves the native checkout when optional registration fails: $reason",
-      async ({ error }) => {
-        const register = jest.fn(async () => {
-          throw error();
-        });
-        const sync = jest.fn();
-        const report = jest.fn();
-        const { result, verification } = await drive(
-          {
-            ...stubPaymentRelay(async () => ({
-              outcome: "relayed",
-              response: {
-                status: 201,
-                headers: { "content-type": "application/json" },
-                body: '{"id":"same-card"}',
-              },
-            })),
-            verification: { register, sync, report },
-          },
-          {
-            ping: PING,
-            card: CARD,
-            checkout: JSON.stringify({
-              operationName: "SubmitForCompletion",
-              variables: {
-                input: {
-                  payment: {
-                    paymentLines: [
-                      {
-                        paymentMethod: {
-                          directPaymentMethod: { sessionId: "same-card" },
-                        },
-                      },
-                    ],
-                  },
-                },
-              },
-            }),
-          },
-        );
-        expect(result).toMatchObject({
-          ping: { status: 200 },
-          card: { status: 201 },
-          checkout: { status: 200 },
-        });
-        expect(
-          hits.filter(
-            (hit) => hit.path === "/checkouts/internal/graphql/persisted",
-          ),
-        ).toHaveLength(1);
-        expect(verification).toBeUndefined();
-        expect(register).toHaveBeenCalledTimes(1);
-        expect(sync).not.toHaveBeenCalled();
-        expect(report).not.toHaveBeenCalled();
-      },
-      60000,
-    );
-
-    it("captures a challenge on the same connection and fences subsequent card relays", async () => {
-      let state: VerificationState = {
-        id: "verification",
-        version: 1,
-        status: "preparing",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        merchantOrigin: "http://localhost",
-        total: { amount: "11.00", currency: "USD" },
-        challengeCaptured: false,
-        launchClaimed: false,
-        checkRequested: false,
-        continuationClaimed: false,
-      };
-      const reports: Record<string, unknown>[] = [];
-      const relay: PaymentRelay = {
-        ...stubPaymentRelay(async () => ({
-          outcome: "relayed",
-          response: {
-            status: 200,
-            headers: { "content-type": "application/json" },
-            body: '{"id":"same-session"}',
-          },
-        })),
-        verification: {
-          register: async () => state,
-          sync: async () => state,
-          report: async (_id, report) => {
-            reports.push(report);
-            state = {
-              ...state,
-              version: state.version + 1,
-              status: "requires_action",
-              challengeCaptured: true,
-            };
-            return state;
-          },
-        },
-      };
-      const { events, calls, result } = await drive(
-        relay,
-        { ping: PING, card: CARD },
-        5000,
-        () => ({
-          inspect: async (request) =>
-            request.url.endsWith("/collect")
-              ? { capture: { url: request.url, body: request.body } }
-              : "continue",
-          relayed: () => {},
-          reconcile: async () => null,
-        }),
-      );
-      expect(hits.filter((hit) => hit.path === "/collect")).toHaveLength(0);
-      expect(
-        reports.find((report) => report.kind === "challenge_observed"),
-      ).toMatchObject({ capture: { body: PING } });
-      expect(events.filter((event) => event.type === "relayed")).toHaveLength(
-        0,
-      );
-      expect(calls).toHaveLength(0);
-      expect(result).toMatchObject({
-        card: { error: "TypeError" },
-        mismatch: { error: "TypeError" },
-      });
-    }, 60000);
-
-    it("preserves ordinary traffic and fulfilled card responses when observer callbacks throw", async () => {
-      const state: VerificationState = {
-        id: "verification",
-        version: 1,
-        status: "preparing",
-        expiresAt: new Date(Date.now() + 60000).toISOString(),
-        merchantOrigin: "http://localhost",
-        total: { amount: "11.00", currency: "USD" },
-        challengeCaptured: false,
-        launchClaimed: false,
-        checkRequested: false,
-        continuationClaimed: false,
-      };
-      const { events, result } = await drive(
-        {
-          ...stubPaymentRelay(async () => ({
-            outcome: "relayed",
-            response: {
-              status: 201,
-              headers: { "content-type": "application/json" },
-              body: '{"id":"same-card"}',
-            },
-          })),
-          verification: {
-            register: async () => state,
-            sync: async () => state,
-            report: async () => state,
-          },
-        },
-        { ping: PING, card: CARD },
-        5000,
-        () => ({
-          inspect: async () => {
-            throw new Error("inspection failed");
-          },
-          relayed: () => {
-            throw new Error("observation failed");
-          },
-          reconcile: async () => null,
-        }),
-      );
-      expect(result).toMatchObject({
-        ping: { status: 200 },
-        unrelated: { status: 200 },
-        card: { status: 201, text: '{"id":"same-card"}' },
-      });
-      expect(events.some((event) => event.type === "failed")).toBe(false);
-      expect(events.filter((event) => event.type === "relayed")).toHaveLength(
-        2,
-      );
-    }, 60000);
-    it.each([
-      { nested: false, mismatch: false },
-      { nested: true, mismatch: false },
-      { nested: true, mismatch: true },
-    ])(
-      "validates native continuation (nested=$nested, changed payment=$mismatch)",
-      async ({ nested, mismatch }) => {
-        let ready = false;
-        let submissions = 0;
-        let cardRelays = 0;
-        let continuations = 0;
-        let middleOrigin = "";
-        let pollRequests = 0;
-        const pollPayment = mismatch ? "unrelated" : "existing";
-        let state: VerificationState;
-        const creq = Buffer.from(
-          JSON.stringify({
-            acsTransID: "11111111-1111-4111-8111-111111111111",
-            threeDSServerTransID: "22222222-2222-4222-8222-222222222222",
-            messageType: "CReq",
-            messageVersion: "2.2.0",
-            challengeWindowSize: "05",
-          }),
-        ).toString("base64url");
-        const server = http.createServer(async (req, res) => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of req) chunks.push(Buffer.from(chunk));
-          const body = Buffer.concat(chunks).toString();
-          if (req.url === "/") {
-            res.setHeader("content-type", "text/html");
-            res.end(`<!doctype html><title>checkout</title><script>
-            window.callbacks = 0;
-            window.addEventListener('message', event => {
-              if (event.origin === location.origin && event.data?.type === '3ds_completed') window.callbacks++;
-            });
-          </script>`);
-          } else if (req.url?.startsWith("/payments_api/redirect/poll")) {
-            pollRequests++;
-            res.statusCode = ready ? 200 : 202;
-            res.setHeader("content-type", "text/html");
-            res.end(
-              ready
-                ? '<script>window.top.postMessage({type:"3ds_completed"}, "*");</script>'
-                : "",
-            );
-          } else if (req.url?.startsWith("/payments_api/redirect/show")) {
-            res.setHeader("content-type", "text/html");
-            res.end(
-              ready
-                ? '<script>window.top.postMessage({type:"3ds_completed"}, "*");</script>'
-                : nested
-                  ? `<!doctype html><iframe id="iframe-3ds" data-authentication-poll-url="/payments_api/redirect/poll?origin=checkout&payment_id=${pollPayment}" src="${middleOrigin}/processor"></iframe>`
-                  : `<!doctype html><iframe id="iframe-3ds" data-authentication-poll-url="/payments_api/redirect/poll?origin=checkout&payment_id=${pollPayment}" name="acs"></iframe><form target="acs" method="POST" action="https://bank.example/challenge"><input name="creq" value="${creq}"></form><script>document.forms[0].submit()</script>`,
-            );
-          } else if (req.url === "/processor") {
-            res.setHeader("content-type", "text/html");
-            res.end(
-              `<!doctype html><iframe id="iframe-3ds" data-authentication-poll-url="/payments_api/redirect/poll?origin=checkout&payment_id=${pollPayment}" name="acs"></iframe><form target="acs" method="POST" action="https://bank.example/challenge"><input name="creq" value="${creq}"></form><script>document.forms[0].submit()</script>`,
-            );
-          } else {
-            const operation = JSON.parse(body || "{}").operationName;
-            if (operation === "SubmitForCompletion") submissions++;
-            if (
-              operation === "PollForReceipt" &&
-              body !==
-                JSON.stringify({
-                  id: "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
-                  operationName: "PollForReceipt",
-                  variables: { receiptId: "receipt", sessionToken: "private" },
-                })
-            ) {
-              res.statusCode = 400;
-              res.end("unsupported receipt query");
-              return;
-            }
-            res.setHeader("content-type", "application/json");
-            res.end(
-              JSON.stringify({
-                data: {
-                  receipt: ready
-                    ? {
-                        id: "receipt",
-                        __typename: "ProcessedReceipt",
-                        purchaseOrder: {
-                          payment: {
-                            paymentLines: [
-                              { paymentMethod: { sessionId: "same-card" } },
-                            ],
-                          },
-                        },
-                        paymentDetails: {
-                          paymentAmount: { amount: "11", currencyCode: "USD" },
-                        },
-                        orderCreationStatus: {
-                          __typename: "OrderCreationSucceeded",
-                        },
-                        orderIdentity: { id: "order" },
-                      }
-                    : null,
-                },
-              }),
-            );
-          }
-        });
-        let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
-        let page!: import("playwright").Page;
-        try {
-          await new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(0, "127.0.0.1", resolve);
-          });
-          const origin = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
-          middleOrigin = origin.replace("127.0.0.1", "localhost");
-          state = {
-            id: "verification",
-            version: 1,
-            status: "preparing",
-            expiresAt: new Date(Date.now() + 120000).toISOString(),
-            merchantOrigin: origin,
-            total: { amount: "11.00", currency: "USD" },
-            challengeCaptured: false,
-            launchClaimed: false,
-            checkRequested: false,
-            continuationClaimed: false,
-          };
-          handle = await attachInterceptor(cdpUrl, {
-            profileId: "shopify-card-vault",
-            placeholder: PLACEHOLDER,
-            relay: {
-              ...stubPaymentRelay(async () => {
-                cardRelays++;
-                return {
-                  outcome: "relayed",
-                  response: {
-                    status: 200,
-                    headers: { "content-type": "application/json" },
-                    body: '{"id":"same-card"}',
-                  },
-                };
-              }),
-              verification: {
-                register: async () => state,
-                sync: async () => state,
-                report: async (_id, report) => {
-                  state = { ...state, version: state.version + 1 };
-                  if (report.kind === "challenge_observed") {
-                    expect(report.capture).toEqual({
-                      url: "https://bank.example/challenge",
-                      body: "creq=" + creq,
-                    });
-                    state = {
-                      ...state,
-                      status: "requires_action",
-                      challengeCaptured: true,
-                    };
-                  }
-                  if (report.kind === "continuation_started") {
-                    continuations++;
-                    state.continuationClaimed = true;
-                  }
-                  if (report.kind === "checkout_observed")
-                    state = {
-                      ...state,
-                      status: "ended",
-                      observation: { outcome: "confirmed", source: "runner" },
-                    };
-                  return state;
-                },
-              },
-            },
-          });
-          const { chromium } = await import("playwright");
-          const browser = await chromium.connectOverCDP(cdpUrl);
-          page = await browser.contexts()[0].newPage();
-          await page.goto(origin);
-          await page.evaluate(
-            async ({ cardBody, submitBody }) => {
-              await fetch("/sessions", { method: "POST", body: cardBody });
-              await fetch("/checkouts/internal/graphql/persisted", {
-                method: "POST",
-                body: JSON.stringify(submitBody),
-              });
-              (globalThis as any).history.replaceState(
-                {},
-                "",
-                "/checkout/processing",
-              );
-              const iframe = (globalThis as any).document.createElement(
-                "iframe",
-              );
-              iframe.src =
-                "/payments_api/redirect/show?origin=checkout&payment_id=existing";
-              (globalThis as any).document.body.append(iframe);
-            },
-            {
-              cardBody: CARD,
-              submitBody: {
-                operationName: "SubmitForCompletion",
-                variables: {
-                  input: {
-                    payment: {
-                      paymentLines: [
-                        {
-                          paymentMethod: {
-                            directPaymentMethod: { sessionId: "same-card" },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              },
-            },
-          );
-          const until = async (test: () => boolean) => {
-            const deadline = Date.now() + 20000;
-            while (!test() && Date.now() < deadline)
-              await page.waitForTimeout(50);
-            expect(test()).toBe(true);
-          };
-          await until(() => state.challengeCaptured);
-          state = {
-            ...state,
-            version: state.version + 1,
-            launchClaimed: true,
-            checkRequested: true,
-          };
-          await page.waitForTimeout(2200);
-          expect(continuations).toBe(0);
-          expect(await page.evaluate(() => (globalThis as any).callbacks)).toBe(
-            0,
-          );
-          ready = true;
-          if (mismatch) {
-            await page.waitForTimeout(2500);
-            expect(pollRequests).toBe(0);
-            expect(continuations).toBe(0);
-            expect(state.continuationClaimed).toBe(false);
-            return;
-          }
-          await until(() => continuations === 1);
-          expect(pollRequests).toBeGreaterThan(0);
-          await page.waitForFunction(() => (globalThis as any).callbacks === 1);
-          expect(await page.evaluate(() => (globalThis as any).callbacks)).toBe(
-            1,
-          );
-          await page.evaluate(async () => {
-            await fetch(
-              "/checkouts/internal/graphql/persisted?operationName=PollForReceipt",
-              {
-                method: "POST",
-                body: JSON.stringify({
-                  id: "b99547c8e17e88f985ec0e11a844dd1305bf14cf70e41ca10954899050ffc567",
-                  operationName: "PollForReceipt",
-                  variables: { receiptId: "receipt", sessionToken: "private" },
-                }),
-              },
-            );
-          });
-          await until(() => state.status === "ended");
-          expect((await handle.verification!.wait()).observation?.source).toBe(
-            "runner",
-          );
-          expect([submissions, cardRelays, continuations]).toEqual([1, 1, 1]);
-        } finally {
-          await page?.close().catch(() => {});
-          await handle?.detach();
-          server.closeAllConnections();
-          await new Promise<void>((resolve) => server.close(() => resolve()));
-        }
-      },
-      60000,
-    );
 
     it("relays only the placeholder request while a second CDP client drives the page", async () => {
       const { events, calls, result, merchantOrigin } = await drive(
@@ -1102,6 +609,155 @@ if (!chromeBin) {
         await page.close().catch(() => {});
         await handle.detach();
         void browser;
+      }
+    }, 60_000);
+
+    it("relays a card POST with three 3 KB analytics cookies while preserving its session", async () => {
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const handle = await attachInterceptor(cdpUrl, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return {
+            outcome: "relayed",
+            response: {
+              status: 200,
+              headers: { "content-type": "application/json" },
+              body: '{"id":"relayed"}',
+            },
+          };
+        }),
+        placeholder: PLACEHOLDER,
+        timeoutMs: 5_000,
+      });
+      handle.on((event) => events.push(event));
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const origin = `http://127.0.0.1:${card.port}`;
+      try {
+        await context.addCookies([
+          ...["_ga", "_fbp", "_hj"].map((name) => ({
+            name,
+            value: "x".repeat(3000),
+            url: origin,
+          })),
+          { name: "session_id", value: "abc", url: origin },
+        ]);
+        await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+        const result = await page.evaluate(async (body) => {
+          const response = await fetch("/sessions", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          });
+          return { status: response.status, text: await response.text() };
+        }, CARD);
+        expect(calls).toHaveLength(1);
+        expect(result).toEqual({ status: 200, text: '{"id":"relayed"}' });
+        expect(calls[0].request.headers.cookie).toBe("session_id=abc");
+        expect(calls[0].request.headers.cookie).not.toMatch(/_ga|_fbp|_hj/);
+        expect(events.some((event) => event.type === "failed")).toBe(false);
+        expect(JSON.stringify(events)).not.toMatch(/session_id|_ga|_fbp|_hj/);
+        expect(hits.filter((hit) => hit.path === "/sessions")).toEqual([]);
+      } finally {
+        await page.close();
+        await context.close();
+        await handle.detach();
+      }
+    }, 60_000);
+
+    it("stores relayed Set-Cookie values and sends them on the next native and relayed request", async () => {
+      const nativeCookies: { path?: string; cookie?: string }[] = [];
+      const shop = await new Promise<{ server: http.Server; port: number }>(
+        (resolve) => {
+          const server = http.createServer((req, res) => {
+            if (req.url === "/") {
+              res.writeHead(200, { "content-type": "text/html" });
+              res.end("<!doctype html><title>shop</title>");
+              return;
+            }
+            nativeCookies.push({ path: req.url, cookie: req.headers.cookie });
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end("{}");
+          });
+          server.listen(0, "localhost", () => {
+            const address = server.address();
+            resolve({
+              server,
+              port: typeof address === "object" && address ? address.port : 0,
+            });
+          });
+        },
+      );
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const handle = await attachInterceptor(cdpUrl, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return {
+            outcome: "relayed",
+            response: {
+              status: 200,
+              headers: { "content-type": "application/json" },
+              ...(calls.length === 1
+                ? { setCookies: ["a=1; Path=/", "b=2; Path=/"] }
+                : {}),
+              body: '{"id":"relayed"}',
+            },
+          };
+        }),
+        placeholder: PLACEHOLDER,
+        timeoutMs: 5_000,
+      });
+      handle.on((event) => events.push(event));
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const context = browser.contexts()[0];
+      const page = await context.newPage();
+      const shopOrigin = `http://localhost:${shop.port}`;
+      try {
+        await page.goto(`${shopOrigin}/`, { waitUntil: "domcontentloaded" });
+        const texts = await page.evaluate(
+          async (bodies) => {
+            const post = (body: string) =>
+              fetch("/pay", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body,
+              }).then((response) => response.text());
+            const first = await post(bodies.first);
+            const native = await fetch("/next").then((response) =>
+              response.text(),
+            );
+            const second = await post(bodies.second);
+            return [first, native, second];
+          },
+          { first: CARD, second: MISMATCH },
+        );
+        expect(texts).toEqual(['{"id":"relayed"}', "{}", '{"id":"relayed"}']);
+        const jar = await context.cookies(shopOrigin);
+        expect(
+          jar
+            .map(({ name, value }) => `${name}=${value}`)
+            .sort((left, right) => left.localeCompare(right)),
+        ).toEqual(["a=1", "b=2"]);
+        expect(
+          nativeCookies.filter(({ path }) => path !== "/favicon.ico"),
+        ).toEqual([{ path: "/next", cookie: "a=1; b=2" }]);
+        expect(calls).toHaveLength(2);
+        expect(calls[0].request.headers).not.toHaveProperty("cookie");
+        expect(calls[1].request.headers.cookie).toBe("a=1; b=2");
+        expect(events.filter((event) => event.type === "relayed")).toHaveLength(
+          2,
+        );
+        expect(JSON.stringify(events)).not.toMatch(/a=1|b=2/);
+      } finally {
+        await page.close().catch(() => {});
+        await context.clearCookies();
+        await handle.detach();
+        await new Promise((resolve) => shop.server.close(resolve));
       }
     }, 60_000);
 

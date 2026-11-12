@@ -12,12 +12,6 @@ import {
 import { isRecord } from "./guards.js";
 import { silentLogger, type PayLogger } from "./logger.js";
 import {
-  VerificationSession,
-  type VerificationAdapterFactory,
-  type VerificationHandle,
-} from "./verification.js";
-import { ShopifyVerification } from "./shopify-verification.js";
-import {
   isRelayTimeout,
   isRetryableRelayError,
   RelayTimeoutError,
@@ -25,11 +19,6 @@ import {
 } from "./relay.js";
 
 export interface AttachOptions {
-  /**
-   * Optional integration adapter; standard profiles supply their adapter without another browser setup.
-   * @internal Not yet a supported option for other checkouts.
-   */
-  verificationAdapter?: VerificationAdapterFactory;
   relay: PaymentRelay;
   /** The one placeholder the agent was given for this checkout. */
   placeholder: HeldPlaceholder;
@@ -37,8 +26,10 @@ export interface AttachOptions {
    * Relay profile, for example `shopify-card-vault`. Omit it for any other
    * checkout: the relay sends the paused request to its own URL when that is
    * https to a public host, and finds the card fields by the placeholder's
-   * values. Without a profile every header is forwarded but the connection's,
-   * `cookie`, and the browser's `sec-fetch-*` and `sec-ch-*` hints.
+   * values. Without a profile headers including `cookie` are forwarded, except
+   * the connection's, `host`, `content-length`, and the browser's `sec-fetch-*`
+   * and `sec-ch-*` hints. Oversized cookies lose known analytics pairs first;
+   * cookies still exceeding the relay's value or header-count limit are omitted.
    */
   profileId?: string;
   /**
@@ -129,7 +120,6 @@ type PublicRefusal = Omit<
 >;
 
 export interface InterceptorHandle {
-  verification?: VerificationHandle;
   detach(): Promise<void>;
   /** Subscribe to outcomes. Returns an unsubscribe function. */
   on(listener: (event: InterceptorEvent) => void): () => void;
@@ -142,7 +132,7 @@ export interface InterceptorHandle {
  * `wsEndpoint()`. Playwright's `Browser` and `Page` have no `wsEndpoint()`
  * (only its `BrowserServer` does, and that URL speaks Playwright's own
  * protocol, not CDP), so with Playwright pass the CDP URL instead. A URL with
- * any other scheme is refused before a connection opens. The interceptor
+ * any other scheme is refused before a connection opens. Browser Pay
  * always opens its own connection.
  */
 export type InterceptorTarget =
@@ -302,7 +292,6 @@ interface Inflight {
 }
 
 interface PausedRequest {
-  frameId?: string;
   url: string;
   method: string;
   headers?: unknown;
@@ -324,7 +313,6 @@ type HeldRead =
   | { kind: "held"; body: string };
 
 type Decision =
-  | { action: "challenge" }
   | { action: "continue" }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
@@ -349,7 +337,6 @@ export async function attachInterceptor(
 }
 
 class PaymentInterceptor {
-  private verification: VerificationSession | null = null;
   private readonly sessions = new Map<string, Session>();
   private readonly byTarget = new Map<string, Session>();
   private readonly enabledSessions = new Set<string>();
@@ -381,46 +368,6 @@ class PaymentInterceptor {
   }
 
   async start(): Promise<InterceptorHandle> {
-    try {
-      return await this.startAttached();
-    } catch (error) {
-      await this.detach();
-      throw error;
-    }
-  }
-
-  private async startAttached(): Promise<InterceptorHandle> {
-    const factory =
-      this.options.verificationAdapter ??
-      (this.options.profileId === "shopify-card-vault"
-        ? (
-            connection: CdpConnection,
-            state: () =>
-              | import("./verification.js").VerificationState
-              | undefined,
-          ) =>
-            new ShopifyVerification(
-              connection,
-              state,
-              (sessionId, parentFrameId) =>
-                this.byTarget.get(parentFrameId ?? "")?.sessionId ??
-                this.sessions.get(sessionId)?.parentSessionId,
-            )
-        : undefined);
-    if (factory && this.options.relay.verification) {
-      const adapter = factory(this.connection, () =>
-        this.verification?.current(),
-      );
-      // Optional registration precedes this attachment's card relay; a failure leaves native checkout in charge.
-      this.verification = await VerificationSession.attach(
-        this.options.relay.verification,
-        adapter,
-        this.options.placeholder.injectionRef,
-      ).catch(() => null);
-    }
-    this.connection.onClose(() => {
-      void this.verification?.close();
-    });
     this.connection.onEvent((event) => this.dispatch(event));
     await this.connection.send("Target.setAutoAttach", {
       autoAttach: true,
@@ -435,7 +382,6 @@ class PaymentInterceptor {
     await Promise.all([...this.pendingArms]);
     this.buffering = false;
     return {
-      ...(this.verification && { verification: this.verification }),
       on: (listener) => this.subscribe(listener),
       detach: () => this.detach(),
     };
@@ -697,7 +643,6 @@ class PaymentInterceptor {
     };
     this.inflight.set(key, entry);
     if (
-      !this.verification &&
       canContinueWithoutReading(
         request.method,
         request.url,
@@ -728,25 +673,6 @@ class PaymentInterceptor {
     entry: Inflight,
     request: PausedRequest,
   ): Promise<Decision> {
-    if (this.verification) {
-      const body = await readBody(this.connection, entry.sessionId, request);
-      // Card-bearing requests belong only to the existing credential relay.
-      if (
-        !textHoldsPlaceholderNumber(request.url, this.number) &&
-        !textHoldsPlaceholderNumber(body ?? "", this.number)
-      ) {
-        const verificationRequest = {
-          url: request.url,
-          method: request.method,
-          body: body ?? "",
-          sessionId: entry.sessionId,
-          frameId: request.frameId,
-        };
-        const action = await this.verification.inspect(verificationRequest);
-        if (action === "block") return { action: "fail", reason: "unknown" };
-        if (action === "capture") return { action: "challenge" };
-      }
-    }
     const read = await this.readHeld(entry.sessionId, request);
     if (read.kind === "unreadable") {
       return { action: "fail", reason: "unreadable_body" };
@@ -784,8 +710,6 @@ class PaymentInterceptor {
       this.options.profileId ? profileHeader : genericHeader,
     );
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
-    if (this.verification?.submissionBlocked())
-      return { action: "fail", reason: "unknown" };
     return this.awaitRelay(
       request,
       headers,
@@ -956,16 +880,6 @@ class PaymentInterceptor {
     url: string,
     decision: Decision,
   ): Promise<void> {
-    if (decision.action === "challenge") {
-      await this.settle(entry, {
-        fulfill: {
-          status: 200,
-          headers: { "content-type": "text/html" },
-          body: "<!doctype html><title>Bank verification</title><p>Continue verification on the purchase page.</p>",
-        },
-      });
-      return;
-    }
     if (decision.action === "continue") {
       await this.settle(entry, "continue");
       return;
@@ -980,7 +894,6 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
-    this.verification?.relayed(decision.response, entry.sessionId);
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
     this.emit(
       fulfilled
@@ -1073,7 +986,6 @@ class PaymentInterceptor {
 
   private async detach(): Promise<void> {
     if (this.closed) return;
-    const verificationClosed = this.verification?.close();
     this.closed = true;
     this.buffering = false;
     this.backlog = null;
@@ -1095,7 +1007,6 @@ class PaymentInterceptor {
       })
       .catch(() => {});
     this.connection.close();
-    await verificationClosed;
   }
 
   private subscribe(listener: Listener): () => void {
@@ -1332,7 +1243,6 @@ const FORWARDED_HEADERS = new Set([
 const UNFORWARDED_HEADERS = new Set([
   "connection",
   "content-length",
-  "cookie",
   "host",
   "keep-alive",
   "proxy-authorization",
@@ -1348,6 +1258,30 @@ const MAX_FORWARDED_HEADERS = 32;
 const MAX_HEADER_NAME_LENGTH = 128;
 const MAX_HEADER_VALUE_LENGTH = 8192;
 
+const ANALYTICS_COOKIE_NAMES = [
+  "_ga",
+  "_gid",
+  "_gat",
+  "_fbp",
+  "_fbc",
+  "_ttp",
+  "_clck",
+  "_clsk",
+];
+const ANALYTICS_COOKIE_PREFIXES = [
+  "_ga_",
+  "_gat_",
+  "_gcl_",
+  "_hj",
+  "_uet",
+  "ajs_",
+  "amplitude",
+  "amp_",
+  "mp_",
+  "_tt_",
+  "_pin_",
+];
+
 const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
 const genericHeader = (key: string) =>
   !UNFORWARDED_HEADERS.has(key) &&
@@ -1357,8 +1291,8 @@ const genericHeader = (key: string) =>
 
 /**
  * The headers relayed with a paused request, or `undefined` when the relay
- * can't take every one that should go: past its limits, a header would be
- * dropped, and the merchant could refuse the changed request after the card
+ * can't take every non-cookie header that should go: past its limits, a header
+ * would be dropped, and the merchant could refuse the changed request after the card
  * was sent. Which header matters (a CSRF token, an authorization) can't be
  * told from its name, so none is chosen.
  */
@@ -1370,9 +1304,14 @@ function forwardedHeaders(
   // `constructor` counts toward the limit like any other.
   const out: Record<string, string> = Object.create(null);
   let unrelayable = false;
+  let cookie: string | undefined;
   const take = (name: string, value: string) => {
     const key = name.toLowerCase();
     if (!forwarded(key)) return;
+    if (key === "cookie") {
+      cookie = value;
+      return;
+    }
     if (
       key.length > MAX_HEADER_NAME_LENGTH ||
       value.length > MAX_HEADER_VALUE_LENGTH ||
@@ -1398,14 +1337,31 @@ function forwardedHeaders(
         take(entry.name, typeof entry.value === "string" ? entry.value : "");
       }
     }
-    return unrelayable ? undefined : out;
-  }
-  if (isRecord(raw)) {
+  } else if (isRecord(raw)) {
     for (const [key, value] of Object.entries(raw)) {
       if (typeof value === "string") take(key, value);
     }
   }
-  return unrelayable ? undefined : out;
+  if (unrelayable) return undefined;
+  if (cookie !== undefined && Object.keys(out).length < MAX_FORWARDED_HEADERS) {
+    if (cookie.length > MAX_HEADER_VALUE_LENGTH) {
+      cookie = cookie
+        .split(";")
+        .map((pair) => pair.trim())
+        .filter((pair) => {
+          if (!pair) return false;
+          const name = pair.split("=", 1)[0].trim();
+          return (
+            !ANALYTICS_COOKIE_NAMES.includes(name) &&
+            !ANALYTICS_COOKIE_PREFIXES.some((prefix) => name.startsWith(prefix))
+          );
+        })
+        .join("; ");
+      if (!cookie) return out;
+    }
+    if (cookie.length <= MAX_HEADER_VALUE_LENGTH) out.cookie = cookie;
+  }
+  return out;
 }
 
 function parseAttachedTarget(value: unknown):
@@ -1441,7 +1397,6 @@ function parsePaused(
   return {
     requestId: value.requestId,
     request: {
-      ...(typeof value.frameId === "string" ? { frameId: value.frameId } : {}),
       url: typeof request.url === "string" ? request.url : "",
       method: typeof request.method === "string" ? request.method : "GET",
       headers: request.headers,
@@ -1592,12 +1547,16 @@ async function fulfillRequest(
   requestId: string,
   response: RelayedHttpResponse,
 ): Promise<void> {
-  const responseHeaders = Object.entries(response.headers).flatMap(
-    ([name, value]) => {
+  const responseHeaders = [
+    ...Object.entries(response.headers).flatMap(([name, value]) => {
       if (RESPONSE_HOP.has(name.toLowerCase())) return [];
       return [{ name, value }];
-    },
-  );
+    }),
+    ...(response.setCookies ?? []).map((value) => ({
+      name: "Set-Cookie",
+      value,
+    })),
+  ];
   await connection.send(
     "Fetch.fulfillRequest",
     {

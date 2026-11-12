@@ -80,7 +80,7 @@ export interface TransactionCostResponse {
 }
 
 export interface TransactionResponse {
-  /** Changes with the actionable purchase/verification state; usable with a bounded get. */
+  /** Changes with the actionable purchase state; usable with a bounded get. */
   version?: string;
   nextAction?: {
     type: string;
@@ -88,32 +88,6 @@ export interface TransactionResponse {
     url?: string;
     expiresAt?: string;
     [field: string]: unknown;
-  };
-  verification?: {
-    id: string;
-    version?: number;
-    expiresAt?: string;
-    status: string;
-    /** Runner acknowledged native return; authentication and merchant order remain separate evidence. */
-    interactionReturned?: boolean;
-    authentication:
-      | "unknown"
-      | "successful"
-      | "attempted"
-      | "failed"
-      | "rejected"
-      | "unavailable"
-      | "informational";
-    challenge: {
-      path: "unknown" | "not_required" | "frictionless" | "challenge";
-      method?: string;
-      presentation?: string;
-    };
-    observation?: {
-      outcome: "confirmed" | "failed" | "unknown";
-      source: "runner";
-      confirmation?: string;
-    };
   };
   id: string;
   organizationId: string;

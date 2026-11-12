@@ -1,7 +1,7 @@
 {
   "name": "@sapiom/browser-pay",
-  "version": "0.5.0",
-  "description": "Browser-side payment interceptor. Pause a placeholder card request over CDP and relay it.",
+  "version": "0.6.1",
+  "description": "Browser Pay for Sapiom Pay. Pause a placeholder card request over CDP and relay it.",
   "keywords": [
     "sapiom",
     "sdk",

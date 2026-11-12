@@ -3,7 +3,6 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { CdpCommandError } from "./cdp";
-import type { VerificationState } from "./verification";
 import {
   attachInterceptor,
   type InterceptorEvent,
@@ -11,7 +10,7 @@ import {
 } from "./interceptor";
 import type { HeldPlaceholder, RelayRequest, RelayResponse } from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
-import type { RelayCallOptions } from "./relay";
+import { httpPaymentRelay, type RelayCallOptions } from "./relay";
 
 const HELD: HeldPlaceholder = {
   number: "4242424242424242",
@@ -315,7 +314,6 @@ function multipartPause(
 function attachPage(
   emit: (event: Record<string, unknown>) => void,
   sessionId = "page-1",
-  targetId = "target-page",
 ) {
   emit({
     method: "Target.attachedToTarget",
@@ -323,7 +321,7 @@ function attachPage(
       sessionId,
       waitingForDebugger: true,
       targetInfo: {
-        targetId,
+        targetId: "target-page",
         type: "page",
         url: "https://shop.example/checkout",
       },
@@ -338,317 +336,6 @@ const success = (): RelayResponse => ({
     headers: { "content-type": "application/json" },
     body: '{"id":"sess"}',
   },
-});
-
-it.each(["uncaptured", "captured", "launched", "uncertain"])(
-  "fences the credential relay only after registered capture (%s)",
-  async (stage) => {
-    const stub = await startStub();
-    const state: VerificationState = {
-      id: "verification",
-      version: 1,
-      status: "preparing",
-      expiresAt: new Date(Date.now() + 60000).toISOString(),
-      merchantOrigin: "https://shop.example",
-      total: { amount: "11.00", currency: "USD" },
-      challengeCaptured: stage === "captured",
-      launchClaimed: stage === "launched",
-      checkRequested: false,
-      continuationClaimed: false,
-    };
-    const relay = jest.fn(async () => success());
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let reporting = false;
-    const handle = await attachInterceptor(stub.url, {
-      placeholder: HELD,
-      verificationAdapter: () => ({
-        inspect: async (request) =>
-          request.body === "creq=held"
-            ? { capture: { url: request.url, body: request.body } }
-            : "continue",
-        relayed() {},
-        reconcile: async () => null,
-      }),
-      relay: {
-        relay,
-        verification: {
-          register: async () => state,
-          sync: async () => state,
-          report: async (_id, input) => {
-            if (input.kind === "challenge_observed") {
-              reporting = true;
-              await gate;
-            }
-            return {
-              ...state,
-              version: 2,
-              status: "ended",
-              challengeCaptured: true,
-            };
-          },
-        },
-      },
-    });
-    try {
-      attachPage(stub.emit);
-      await waitFor(
-        () => stub.commands.some((c) => c.method === "Fetch.enable"),
-        "page interception",
-      );
-      if (stage === "uncertain") {
-        stub.emit({
-          method: "Fetch.requestPaused",
-          sessionId: "page-1",
-          params: {
-            requestId: "bank-capture",
-            frameId: "bank",
-            request: {
-              method: "POST",
-              url: "https://bank.example/challenge",
-              postData: "creq=held",
-            },
-          },
-        });
-        await waitFor(() => reporting, "reserved capture report");
-      }
-      stub.emit({
-        method: "Fetch.requestPaused",
-        sessionId: "page-1",
-        params: {
-          requestId: "another-card",
-          frameId: "checkout",
-          request: {
-            method: "POST",
-            url: "https://payments.sandbox.braintree-api.com/graphql",
-            postData: CARD,
-          },
-        },
-      });
-      await waitFor(
-        () =>
-          stub.commands.some(
-            (c) =>
-              ["Fetch.fulfillRequest", "Fetch.failRequest"].includes(
-                c.method,
-              ) && c.params.requestId === "another-card",
-          ),
-        "card settlement",
-      );
-      expect(relay).toHaveBeenCalledTimes(stage === "uncaptured" ? 1 : 0);
-      expect(
-        stub.commands.find(
-          (c) =>
-            ["Fetch.fulfillRequest", "Fetch.failRequest"].includes(c.method) &&
-            c.params.requestId === "another-card",
-        )?.method,
-      ).toBe(
-        stage === "uncaptured" ? "Fetch.fulfillRequest" : "Fetch.failRequest",
-      );
-    } finally {
-      release();
-      await handle.detach();
-      await stub.close();
-    }
-  },
-);
-
-it("fences the bound injection's placeholder across pages and leaves other card values alone", async () => {
-  const stub = await startStub();
-  const state: VerificationState = {
-    id: "verification",
-    version: 1,
-    status: "requires_action",
-    expiresAt: new Date(Date.now() + 60000).toISOString(),
-    merchantOrigin: "https://shop.example",
-    total: { amount: "11.00", currency: "USD" },
-    challengeCaptured: true,
-    launchClaimed: false,
-    checkRequested: false,
-    continuationClaimed: false,
-  };
-  const relay = jest.fn(async () => success());
-  const handle = await attachInterceptor(stub.url, {
-    placeholder: HELD,
-    verificationAdapter: () => ({
-      inspect: async () => "continue",
-      relayed() {},
-      reconcile: async () => null,
-    }),
-    relay: {
-      relay,
-      verification: {
-        register: async () => state,
-        sync: async () => state,
-        report: async () => ({ ...state, version: 2, status: "ended" }),
-      },
-    },
-  });
-  try {
-    attachPage(stub.emit);
-    attachPage(stub.emit, "page-2", "other-page");
-    await waitFor(
-      () =>
-        stub.commands.filter((c) => c.method === "Fetch.enable").length === 2,
-      "both attached pages",
-    );
-    for (const [id, sessionId, body] of [
-      ["own", "page-1", CARD],
-      ["same-placeholder", "page-2", CARD],
-      ["other-card", "page-2", CARD.replace(HELD.number, "4111111111111111")],
-    ]) {
-      stub.emit({
-        method: "Fetch.requestPaused",
-        sessionId,
-        params: {
-          requestId: id,
-          frameId: id,
-          request: {
-            method: "POST",
-            url: "https://payments.sandbox.braintree-api.com/graphql",
-            postData: body,
-          },
-        },
-      });
-    }
-    const decision = (id: string) =>
-      stub.commands.find(
-        (c) =>
-          ["Fetch.failRequest", "Fetch.continueRequest"].includes(c.method) &&
-          c.params.requestId === id,
-      )?.method;
-    await waitFor(
-      () =>
-        Boolean(
-          decision("own") &&
-          decision("same-placeholder") &&
-          decision("other-card"),
-        ),
-      "all card decisions",
-    );
-    expect(decision("own")).toBe("Fetch.failRequest");
-    expect(decision("same-placeholder")).toBe("Fetch.failRequest");
-    expect(decision("other-card")).toBe("Fetch.continueRequest");
-    expect(relay).not.toHaveBeenCalled();
-  } finally {
-    await handle.detach();
-    await stub.close();
-  }
-});
-
-it("reconciles an already-started relay after capture using its original idempotency key", async () => {
-  const stub = await startStub();
-  let state: VerificationState = {
-    id: "verification",
-    version: 1,
-    status: "preparing",
-    expiresAt: new Date(Date.now() + 60000).toISOString(),
-    merchantOrigin: "https://shop.example",
-    total: { amount: "11.00", currency: "USD" },
-    challengeCaptured: false,
-    launchClaimed: false,
-    checkRequested: false,
-    continuationClaimed: false,
-  };
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const calls: RelayRequest[] = [];
-  const relay = jest.fn(
-    async (request: RelayRequest): Promise<RelayResponse> => {
-      calls.push(request);
-      if (calls.length === 1) {
-        await gate;
-        return { outcome: "refused", reason: "relay_in_progress" };
-      }
-      return success();
-    },
-  );
-  const handle = await attachInterceptor(stub.url, {
-    placeholder: HELD,
-    verificationAdapter: () => ({
-      inspect: async (request) =>
-        request.body === "creq=held"
-          ? { capture: { url: request.url, body: request.body } }
-          : "continue",
-      relayed() {},
-      reconcile: async () => null,
-    }),
-    relay: {
-      relay,
-      verification: {
-        register: async () => state,
-        sync: async () => state,
-        report: async (_id, input) => {
-          if (input.kind === "challenge_observed")
-            state = {
-              ...state,
-              version: 2,
-              status: "requires_action",
-              challengeCaptured: true,
-            };
-          return state;
-        },
-      },
-    },
-  });
-  try {
-    attachPage(stub.emit);
-    await waitFor(
-      () => stub.commands.some((c) => c.method === "Fetch.enable"),
-      "page interception",
-    );
-    stub.emit({
-      method: "Fetch.requestPaused",
-      sessionId: "page-1",
-      params: {
-        requestId: "started-card",
-        frameId: "checkout",
-        request: {
-          method: "POST",
-          url: "https://payments.sandbox.braintree-api.com/graphql",
-          postData: CARD,
-        },
-      },
-    });
-    await waitFor(() => calls.length === 1, "initial relay attempt");
-    stub.emit({
-      method: "Fetch.requestPaused",
-      sessionId: "page-1",
-      params: {
-        requestId: "bank-capture",
-        frameId: "bank",
-        request: {
-          method: "POST",
-          url: "https://bank.example/challenge",
-          postData: "creq=held",
-        },
-      },
-    });
-    await waitFor(() => state.challengeCaptured, "captured challenge");
-    release();
-    await waitFor(
-      () =>
-        stub.commands.some(
-          (c) =>
-            c.method === "Fetch.fulfillRequest" &&
-            c.params.requestId === "started-card",
-        ),
-      "original relay readback",
-    );
-    expect(calls).toHaveLength(2);
-    expect(new Set(calls.map((call) => call.idempotencyKey)).size).toBe(1);
-    expect(calls.every((call) => call.injectionRef === HELD.injectionRef)).toBe(
-      true,
-    );
-  } finally {
-    release();
-    await handle.detach();
-    await stub.close();
-  }
 });
 
 function header(
@@ -1299,17 +986,32 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("relays to any checkout without a profile, forwarding its headers but the connection's, cookies and fetch hints", async () => {
+  it("relays to any checkout without a profile, forwarding cookies but excluding connection headers and fetch hints", async () => {
     const stub = await startStub({ postData: CARD });
     const calls: RelayRequest[] = [];
     const events: InterceptorEvent[] = [];
+    const warnings: StepWarning[] = [];
     try {
       const handle = await attachInterceptor(stub.url, {
-        relay: stubPaymentRelay(async (request) => {
-          calls.push(request);
-          return success();
+        relay: httpPaymentRelay({
+          baseUrl: "https://api.sapiom.ai",
+          apiKey: "test-key",
+          transactionId: "tx_cookie_fixture",
+          fetchImpl: async (url, init) => {
+            expect(url).toBe(
+              "https://api.sapiom.ai/v1/transactions/tx_cookie_fixture/payment/relay",
+            );
+            expect(init?.method).toBe("POST");
+            expect(new Headers(init?.headers).has("cookie")).toBe(false);
+            calls.push(JSON.parse(String(init?.body)) as RelayRequest);
+            return new Response(JSON.stringify(success()), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          },
         }),
         placeholder: HELD,
+        logger: stepLogger(warnings),
       });
       handle.on((event) => events.push(event));
       attachPage(stub.emit);
@@ -1319,7 +1021,7 @@ describe("interceptor CDP decisions", () => {
         "Fetch.enable",
       );
       const many = Object.fromEntries(
-        Array.from({ length: 28 }, (_, i) => [`x-extra-${i}`, "1"]),
+        Array.from({ length: 27 }, (_, i) => [`x-extra-${i}`, "1"]),
       );
       stub.emit({
         method: "Fetch.requestPaused",
@@ -1358,7 +1060,8 @@ describe("interceptor CDP decisions", () => {
       const headers = calls[0].request.headers;
       expect(header(headers, "content-type")).toBe("application/json");
       expect(header(headers, "authorization")).toBe("Bearer pk_test_example");
-      for (const dropped of ["cookie", "host", "sec-fetch-site", "sec-ch-ua"]) {
+      expect(header(headers, "cookie")).toBe("session=secret");
+      for (const dropped of ["host", "sec-fetch-site", "sec-ch-ua"]) {
         expect(headers).not.toHaveProperty(dropped);
       }
       expect(Object.keys(headers)).toContain("__proto__");
@@ -1366,10 +1069,195 @@ describe("interceptor CDP decisions", () => {
       expect(header(headers, "constructor")).toBe("constructor-example");
       expect(Object.keys(headers)).toHaveLength(32);
       await handle.detach();
+      expect(
+        JSON.stringify({ events, warnings, commands: stub.commands }),
+      ).not.toContain("session=secret");
     } finally {
       await stub.close();
     }
   });
+
+  it.each([
+    {
+      name: "keeps an empty cookie unchanged",
+      cookie: "",
+      expected: "",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "keeps a fitting cookie unchanged",
+      cookie: "_ga=analytics;  session_id=abc; _fbp=tracking",
+      expected: "_ga=analytics;  session_id=abc; _fbp=tracking",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "keeps a cookie exactly at the value limit",
+      cookie: `session_id=${"x".repeat(8181)}`,
+      expected: `session_id=${"x".repeat(8181)}`,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "drops only explicit analytics names and prefixes from an oversized cookie",
+      cookie: [
+        "_ga",
+        "_gid",
+        "_gat",
+        "_ga_ABC123",
+        "_gat_UA-1",
+        "_gcl_fixture",
+        "_fbp",
+        "_fbc",
+        "_hjfixture",
+        "_clck",
+        "_clsk",
+        "_uetfixture",
+        "ajs_fixture",
+        "amplitudefixture",
+        "amp_fixture",
+        "mp_fixture",
+        "_tt_fixture",
+        "_ttp",
+        "_pin_fixture",
+      ]
+        .map((name) => `${name}=${"x".repeat(600)}`)
+        .concat(
+          "session_id=abc",
+          "custom=_ga",
+          "ga_session=keep",
+          "_gateway_session=keep",
+          "_gid_session=keep",
+          "_fbp_session=keep",
+        )
+        .join("; "),
+      expected:
+        "session_id=abc; custom=_ga; ga_session=keep; _gateway_session=keep; _gid_session=keep; _fbp_session=keep",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "drops empty pairs while trimming an oversized cookie",
+      cookie: ` ; _ga=${"x".repeat(8192)}; ; session_id=abc; ; `,
+      expected: "session_id=abc",
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits a trimmed cookie containing only empty pairs",
+      cookie: ` ; _ga=${"x".repeat(8192)}; ; `,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits a cookie still oversized after analytics removal",
+      cookie: `_ga=analytics; session_id=${"x".repeat(8192)}`,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits an oversized cookie without analytics",
+      cookie: `session_id=${"x".repeat(8192)}`,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    {
+      name: "omits a cookie when only analytics remain",
+      cookie: `_ga=${"x".repeat(8192)}`,
+      expected: undefined,
+      extraCount: 0,
+      cookieFirst: false,
+    },
+    ...[true, false].map((cookieFirst) => ({
+      name: `omits a cookie past the header cap (cookieFirst=${cookieFirst})`,
+      cookie: "session_id=abc",
+      expected: undefined,
+      extraCount: 30,
+      cookieFirst,
+    })),
+  ])(
+    "$name and still relays",
+    async ({ cookie, expected, extraCount, cookieFirst }) => {
+      const stub = await startStub({ postData: CARD });
+      const calls: RelayRequest[] = [];
+      const events: InterceptorEvent[] = [];
+      const warnings: StepWarning[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async (request) => {
+            calls.push(request);
+            return success();
+          }),
+          placeholder: HELD,
+          logger: stepLogger(warnings),
+        });
+        handle.on((event) => events.push(event));
+        attachPage(stub.emit);
+        await waitFor(
+          () =>
+            stub.commands.some((command) => command.method === "Fetch.enable"),
+          "Fetch.enable",
+        );
+        stub.emit({
+          method: "Fetch.requestPaused",
+          sessionId: "page-1",
+          params: {
+            requestId: "req-1",
+            networkId: "net-1",
+            request: {
+              url: "https://api.pay.example/v1/tokens",
+              method: "POST",
+              headers: {
+                ...(cookieFirst ? { Cookie: cookie } : {}),
+                "Content-Type": "application/json",
+                ...Object.fromEntries(
+                  Array.from({ length: extraCount }, (_, i) => [
+                    `x-extra-${i}`,
+                    "1",
+                  ]),
+                ),
+                "X-CSRF-Token": "csrf-example",
+                ...(!cookieFirst ? { Cookie: cookie } : {}),
+              },
+              hasPostData: true,
+              postDataEntries: [{}],
+            },
+            resourceType: "Fetch",
+          },
+        });
+        await waitFor(
+          () =>
+            events.some(
+              (event) => event.type === "relayed" || event.type === "failed",
+            ),
+          "terminal event",
+        );
+        expect(calls).toHaveLength(1);
+        const headers = calls[0].request.headers;
+        if (expected === undefined)
+          expect(headers).not.toHaveProperty("cookie");
+        else expect(headers.cookie).toBe(expected);
+        expect(headers["x-csrf-token"]).toBe("csrf-example");
+        expect(Object.keys(headers)).toHaveLength(
+          2 + extraCount + (expected === undefined ? 0 : 1),
+        );
+        expect(events.some((event) => event.type === "failed")).toBe(false);
+        expect(stub.commands).toContainEqual(
+          expect.objectContaining({ method: "Fetch.fulfillRequest" }),
+        );
+        await handle.detach();
+        expect(
+          JSON.stringify({ events, warnings, commands: stub.commands }),
+        ).not.toMatch(/session_id|_ga|_fbp|fixture/);
+      } finally {
+        await stub.close();
+      }
+    },
+  );
 
   it.each([
     [
@@ -2265,7 +2153,106 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
-  it("forwards only the headers David accepts", async () => {
+  it.each([
+    ["with a profile", "shopify-card-vault"],
+    ["without a profile", undefined],
+  ])(
+    "fulfills %s with one Set-Cookie header per relayed setCookies entry, never logging them",
+    async (_label, profileId) => {
+      const sentinel = "sid=SET_COOKIE_SENTINEL";
+      const setCookies = [`${sentinel}; Path=/; HttpOnly`, "b=2; Path=/"];
+      const outcomes: RelayResponse[] = [
+        success(),
+        {
+          outcome: "relayed",
+          response: {
+            status: 201,
+            headers: { "content-type": "application/json" },
+            setCookies,
+            body: '{"id":"sess"}',
+          },
+        },
+      ];
+      const stub = await startStub();
+      const events: InterceptorEvent[] = [];
+      const warnings: StepWarning[] = [];
+      try {
+        const handle = await attachInterceptor(stub.url, {
+          relay: stubPaymentRelay(async () => outcomes.shift()!),
+          placeholder: HELD,
+          profileId,
+          logger: stepLogger(warnings),
+        });
+        handle.on((event) => events.push(event));
+        attachPage(stub.emit);
+        await waitFor(
+          () =>
+            stub.commands.some((command) => command.method === "Fetch.enable"),
+          "Fetch.enable",
+        );
+        for (const [requestId, month] of [
+          ["req-plain", 11],
+          ["req-cookies", 12],
+        ] as const) {
+          stub.emit({
+            method: "Fetch.requestPaused",
+            sessionId: "page-1",
+            params: {
+              requestId,
+              request: {
+                url: "https://checkout.example/sessions",
+                method: "POST",
+                postData: JSON.stringify({
+                  credit_card: { number: HELD.number, month },
+                }),
+              },
+            },
+          });
+          await waitFor(
+            () =>
+              stub.commands.some(
+                (command) =>
+                  command.method === "Fetch.fulfillRequest" &&
+                  command.params.requestId === requestId,
+              ),
+            requestId,
+          );
+        }
+        const fulfilled = stub.commands
+          .filter((command) => command.method === "Fetch.fulfillRequest")
+          .map((command) => command.params);
+        const body = Buffer.from('{"id":"sess"}').toString("base64");
+        expect(fulfilled).toStrictEqual([
+          {
+            requestId: "req-plain",
+            responseCode: 201,
+            responseHeaders: [
+              { name: "content-type", value: "application/json" },
+            ],
+            body,
+          },
+          {
+            requestId: "req-cookies",
+            responseCode: 201,
+            responseHeaders: [
+              { name: "content-type", value: "application/json" },
+              { name: "Set-Cookie", value: setCookies[0] },
+              { name: "Set-Cookie", value: setCookies[1] },
+            ],
+            body,
+          },
+        ]);
+        await handle.detach();
+        expect(JSON.stringify({ events, warnings })).not.toContain(
+          "SET_COOKIE_SENTINEL",
+        );
+      } finally {
+        await stub.close();
+      }
+    },
+  );
+
+  it("forwards only Shopify profile headers, excluding cookies", async () => {
     const stub = await startStub();
     const calls: RelayRequest[] = [];
     const events: InterceptorEvent[] = [];
@@ -2309,6 +2296,7 @@ describe("interceptor CDP decisions", () => {
         () => events.some((event) => event.type === "relayed"),
         "relayed",
       );
+      expect(calls[0].request.headers).not.toHaveProperty("cookie");
       expect(calls[0].request.headers).toEqual({
         accept: "application/json",
         "content-type": "application/json",

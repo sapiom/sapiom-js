@@ -12,7 +12,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "2158c2c45db76fc9a35f20f41a888cbdaf58bc393c751bf37360d807fc55199c";
+  "4d17b137cbe8e90e62a3e8d12aa24f914bfda2254f4f23fc0e54461ab760bf3c";
 
 const legacy = readFileSync(
   new URL("./fixtures/legacy-system-prompt.md", import.meta.url),

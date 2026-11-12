@@ -308,9 +308,8 @@ reference instead.
 Steps call Sapiom's paid capabilities through the typed `ctx.sapiom.*` client. **Do not
 memorize the catalog: types are the source of truth.** The full surface is the `Sapiom`
 interface in `@sapiom/tools` — installed in your project's `node_modules`, so its types match
-the exact version you're on. `ctx.sapiom.` autocompletes what exists, `npm run typecheck`
-rejects what doesn't, and the catalog with pricing lives at
-[docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities). What the catalog spans, how
+the exact version you're on. `ctx.sapiom.` autocompletes what exists and `npm run typecheck`
+rejects what doesn't. What the catalog spans, how
 per-agent secrets and the read-only Vault reach a step, and why triggers are cloud objects
 rather than `ctx.sapiom` calls: served section
 [Capabilities from steps](https://api.sapiom.ai/v1/agents/authoring-rules#capability-catalog).
@@ -327,8 +326,7 @@ Fire-and-forget dispatch with `ctx.sapiom.agents.launch`: "Composing Deployed Ag
 [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
 Receipts and manual replay of inbound events: the local authoring server's served primer (in
 your context from the moment it connects) and its REST pointers. App Link `/hook/*` webhooks:
-[App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links) and
-[App Links](https://docs.sapiom.ai/capabilities/app-links#webhooks).
+[App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links).
 
 ### Coding Repository Errors
 
@@ -736,5 +734,4 @@ Write each step the way it should run in production — never weaken logic to sh
 | Resource                                                                     | What it covers                                                                                                 |
 | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.1 |
-| [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |
 | `AGENTS.md` in your scaffold                                                 | The quick in-project reference                                                                                 |
