@@ -120,6 +120,8 @@ interface Candidate {
   type: string;
   autocomplete: string;
   hints: string;
+  /** Its `name` and `id`, which an address field's markup names it by (`billing_number`, `street`). */
+  ids: string;
   /** What a person reads for it: placeholder, aria-label and label text (not name or id). */
   label: string;
   /** A person could click it: its centre is in the frame's viewport and nothing covers it. */
@@ -189,8 +191,9 @@ const DESCRIBE_FIELDS = `(() => {
       .filter(Boolean).join(" | ").toLowerCase();
     const label = [el.getAttribute("placeholder"), el.getAttribute("aria-label"), labels, named]
       .filter(Boolean).join(" ").toLowerCase();
+    const ids = [el.getAttribute("name"), el.id].filter(Boolean).join(" ").toLowerCase();
     out.push({ index, tag, type, autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase().trim(),
-      hints, label, hit, reachable, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
+      hints, ids, label, hit, reachable, maxLength: tag === "input" ? el.maxLength : -1, placeholder: (el.getAttribute("placeholder") || "").toLowerCase() });
   });
   // Leave the frame where it was.
   window.scrollTo({ left: startX, top: startY, behavior: "instant" });
@@ -266,27 +269,72 @@ const CARD_WORDS = new Set([
 const onlyCardWords = (label: string) =>
   label.split(/[^a-z]+/).every((w) => w === "" || CARD_WORDS.has(w));
 
-/** A bare `number`/`name` field (Shopify's card vault, Stripe's Payment Element) counts only in a card frame. */
+/**
+ * Words in a field's `name` or `id` that make it part of an address or contact block. Such a field is
+ * never a card field unless its `autocomplete` says it is: a billing "Number" input labelled only
+ * "Number" passes the label check, but `billing_number` says what it is.
+ */
+const ADDRESS_WORDS = new Set([
+  "billing",
+  "shipping",
+  "delivery",
+  "address",
+  "addr",
+  "street",
+  "house",
+  "apartment",
+  "apt",
+  "suite",
+  "building",
+  "postal",
+  "postcode",
+  "zip",
+  "city",
+  "town",
+  "state",
+  "province",
+  "region",
+  "country",
+  "phone",
+  "tel",
+  "telephone",
+  "mobile",
+  "company",
+]);
+
+/** Whether a field's `name` or `id` names it as part of an address. */
+const addressField = (ids: string) =>
+  ids.split(/[^a-z]+/).some((w) => ADDRESS_WORDS.has(w));
+
+/**
+ * A bare `number`/`name`/`expiry` field (Shopify's card vault, Stripe's Payment Element) counts only
+ * in a card iframe on another origin. On the page's own origin it is a guess: the page holds address
+ * and order fields with the same bare names.
+ */
 const BARE: Array<[CardField, RegExp]> = [
   ["number", /^number\b/],
   ["name", /^name\b/],
   ["expiry", /^expiry\b/],
 ];
 
-/** The card field a candidate is, and how sure: 3 by `autocomplete`, 2 by a card-specific name, 1 bare. */
+/**
+ * The card field a candidate is, and how sure: 3 by `autocomplete`, 2 by a card-specific name, 1 bare.
+ * `bareFrame`: a card iframe on another origin, the only place a bare name counts.
+ */
 function classify(
   c: Candidate,
-  cardFrame: boolean,
+  bareFrame: boolean,
 ): { field: CardField; score: number } | null {
   // Maestro's issue date and number look like an expiry and a card number; never type into them.
   if (/\bissue[_ ](date|number)\b/.test(c.hints)) return null;
   const ac = AUTOCOMPLETE[c.autocomplete.split(/\s+/).pop() ?? ""];
   if (ac) return { field: ac, score: 3 };
+  if (addressField(c.ids)) return null;
   for (const [field, re] of PATTERNS)
     if (re.test(c.hints)) return { field, score: 2 };
-  // A bare name is a card field only in a card frame, and only when nothing in its hints says
-  // it is something else.
-  if (cardFrame && onlyCardWords(c.label))
+  // A bare name is a card field only in a card iframe on another origin, and only when nothing a
+  // person reads for it says it is something else.
+  if (bareFrame && onlyCardWords(c.label))
     for (const [field, re] of BARE)
       if (re.test(c.hints)) return { field, score: 1 };
   return null;
@@ -390,8 +438,9 @@ async function scan(
         candidates.length > 0 &&
         (candidates.length <= 4 || CARD_TITLE.test(title)));
     const allowed = trusted(origin, top, extra);
+    const bareFrame = cardFrame && origin !== top;
     for (const candidate of candidates) {
-      const hit = classify(candidate, cardFrame);
+      const hit = classify(candidate, bareFrame);
       if (hit && !allowed) untrusted.add(origin);
       else if (hit)
         matches.push({

@@ -85,6 +85,11 @@ const FRAMES: Record<string, string> = {
 <input id="ccnum" autocomplete="cc-number" style="position:absolute;left:0;top:400px;width:200px;height:30px">
 <input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:20px">
 <input autocomplete="cc-csc" style="width:60px;height:20px">`,
+  // A card frame whose only number field is a billing number labelled just "Number".
+  "/vault/billing-id": `<!doctype html><title>Secure payment input frame</title>
+<label>Number <input id="billing_number" name="number" style="width:200px;height:30px"></label>
+<input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:20px">
+<input autocomplete="cc-csc" style="width:60px;height:20px">`,
   // The real input is a genuinely bare `number`; a cc-number copy sits below the fold before it.
   "/vault/bare-real": `<!doctype html><title>Field container for: Card number</title>
 <input id="copy" autocomplete="cc-number" style="position:absolute;left:0;top:400px;width:200px;height:30px">
@@ -269,6 +274,15 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
   "/strong-copy": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/vault/strong-copy" style="width:320px;height:60px"></iframe>
 ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
+  // QA's page (Baptiste, Nov 8): a billing "Number" before a card number labelled in another
+  // language with no autocomplete, on the page's own origin.
+  "/billing-number": `<!doctype html><title>Checkout</title>
+<label>Number <input id="billing_number" name="number" style="width:200px;height:30px"></label>
+<label>Kartennummer <input id="kn" name="kn" style="width:200px;height:30px"></label>
+<label>Expiry <input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVV <input autocomplete="cc-csc" style="width:60px;height:30px"></label>`,
+  "/billing-id-frame": `<!doctype html><title>Checkout</title>
+<iframe src="FRAME_ORIGIN/vault/billing-id" style="width:320px;height:80px"></iframe>`,
   "/billing-frame": `<!doctype html><title>Checkout</title>
 <iframe src="FRAME_ORIGIN/vault/billing" style="width:320px;height:80px"></iframe>`,
   "/bare-real": `<!doctype html><title>Checkout</title>
@@ -691,6 +705,26 @@ function serve(
       expect(result.ok).toBe(true);
       expect(await page.locator("#ccnum").inputValue()).toBe(CARD.number);
       expect(await page.locator("#house").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("reports the number missing instead of typing it into a billing Number on the page", async () => {
+      const page = await open("/billing-number");
+      const result = await fill(page, { timeoutMs: 1000 });
+      expect(result).toMatchObject({ ok: false, missing: ["number"] });
+      expect(result.filled).not.toContain("number");
+      expect(await page.locator("#billing_number").inputValue()).toBe("");
+      expect(await page.locator("#kn").inputValue()).toBe("");
+      await page.close();
+    });
+
+    it("never types the number into a field whose name or id says billing, even in a card frame", async () => {
+      const page = await open("/billing-id-frame");
+      const result = await fill(page, { timeoutMs: 1000 });
+      expect(result).toMatchObject({ ok: false, missing: ["number"] });
+      expect(await valueIn(page, "/vault/billing-id", "#billing_number")).toBe(
+        "",
+      );
       await page.close();
     });
 
