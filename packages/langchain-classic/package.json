@@ -58,7 +58,7 @@
   "devDependencies": {
     "@langchain/anthropic": "^0.3.30",
     "@langchain/core": "^0.3.78",
-    "@langchain/langgraph": "^0.2.74",
+    "@langchain/langgraph": "^0.3.12",
     "@langchain/openai": "~1.1.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",
