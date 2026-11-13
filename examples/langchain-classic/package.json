@@ -5,7 +5,8 @@
   "description": "Sapiom SDK example using LangChain with tool wrappers",
   "scripts": {
     "start": "npx tsx index.ts",
-    "dev": "npx tsx index.ts"
+    "dev": "npx tsx index.ts",
+    "test": "node --test node18.test.mjs"
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.0",
