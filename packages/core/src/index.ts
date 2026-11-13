@@ -52,6 +52,13 @@ export type {
 
 // Telemetry
 export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry.js";
+export {
+  REDACTED_FACT_VALUE,
+  isSensitiveHeaderName,
+  isSensitiveQueryParam,
+  sanitizeHeadersForFacts,
+  sanitizeUrlForFacts,
+} from "./utils/facts-sanitization.js";
 export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry.js";
 
 // Types

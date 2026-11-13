@@ -17,6 +17,8 @@ import {
   HttpClientResponseFacts,
   HttpClientErrorFacts,
   FailureMode,
+  sanitizeHeadersForFacts,
+  sanitizeUrlForFacts,
 } from "@sapiom/core";
 
 import type { TransactionPollingConfig } from "@sapiom/core";
@@ -394,38 +396,39 @@ export function addAuthorizationInterceptor(
           protocol: parsed.protocol,
           hostname: parsed.hostname,
           pathname: parsed.pathname,
-          search: parsed.search,
+          search: sanitizeUrlForFacts(parsed.search),
           port: parsed.port ? parseInt(parsed.port) : null,
         };
       } catch {
+        // A relative endpoint with no baseURL: keep the query out of the pathname.
+        const queryAt = endpoint.search(/[?#]/);
+        const pathname = queryAt === -1 ? endpoint : endpoint.slice(0, queryAt);
+        const query =
+          queryAt === -1 ? "" : endpoint.slice(queryAt).split("#")[0];
         urlParsed = {
           protocol: "",
           hostname: "",
-          pathname: endpoint,
-          search: "",
+          pathname,
+          search: query.startsWith("?") ? sanitizeUrlForFacts(query) : "",
           port: null,
         };
       }
 
-      const sanitizedHeaders: Record<string, string> = {};
-      if (axiosConfig.headers) {
-        Object.entries(axiosConfig.headers as Record<string, any>).forEach(
-          ([key, value]) => {
-            const lowerKey = key.toLowerCase();
-            if (
-              !lowerKey.includes("auth") &&
-              !lowerKey.includes("key") &&
-              !lowerKey.includes("token")
-            ) {
-              sanitizedHeaders[key] = String(value);
-            }
-          },
-        );
-      }
+      // Shared list, plus this integration's broader substring rule (kept so no
+      // header it left out before is reported now).
+      const sanitizedHeaders = sanitizeHeadersForFacts(
+        axiosConfig.headers
+          ? Object.entries(axiosConfig.headers as Record<string, unknown>)
+          : undefined,
+        (lowerKey) =>
+          lowerKey.includes("auth") ||
+          lowerKey.includes("key") ||
+          lowerKey.includes("token"),
+      );
 
       const requestFacts: HttpClientRequestFacts = {
         method,
-        url: fullUrl,
+        url: sanitizeUrlForFacts(fullUrl),
         urlParsed,
         headers: sanitizedHeaders,
         hasBody: !!axiosConfig.data,
@@ -789,21 +792,11 @@ export function addCompletionInterceptor(
         const startTime = (axiosConfig as any).__sapiomStartTime || Date.now();
         const durationMs = Date.now() - startTime;
 
-        const sanitizedHeaders: Record<string, string> = {};
-        const sensitiveHeaders = new Set([
-          "set-cookie",
-          "authorization",
-          "x-api-key",
-        ]);
-        if (response.headers) {
-          Object.entries(response.headers as Record<string, any>).forEach(
-            ([key, value]) => {
-              if (!sensitiveHeaders.has(key.toLowerCase())) {
-                sanitizedHeaders[key] = String(value);
-              }
-            },
-          );
-        }
+        const sanitizedHeaders = sanitizeHeadersForFacts(
+          response.headers
+            ? Object.entries(response.headers as Record<string, unknown>)
+            : undefined,
+        );
 
         const facts: HttpClientResponseFacts = {
           status: response.status,

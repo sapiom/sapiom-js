@@ -231,6 +231,15 @@ All HTTP integrations accept a config object:
 }
 ```
 
+### What request facts contain
+
+The HTTP integrations report each call's method, URL, headers and status as transaction facts. They never report the credentials the call was made with:
+
+- Headers left out: `Authorization`, `Proxy-Authorization`, cookies, `Sapiom-Identity`, payment signatures (`payment-signature`, `x-payment`), any name containing `api-key`, `apikey`, `token`, `secret`, `password`, `credential`, `signature` or `auth`, any `*-key`, every `bt-*`, and `x-sapiom-*` key, token and signature headers.
+- URL (`url` and `urlParsed.search`): values of credential query parameters (`key`, `api_key`, `apikey`, `token`, `access_token`, `secret`, `signature`, `sig`, `password`, `X-Amz-Signature`, …) and any `user:pass@` are reported as `[REDACTED]`. The rest of the URL is reported as it is.
+
+Only the facts change; the request goes out with its real URL and headers. The same rules are exported for custom integrations: `isSensitiveHeaderName`, `isSensitiveQueryParam`, `sanitizeHeadersForFacts` and `sanitizeUrlForFacts`.
+
 ### Environment Variables
 
 All integrations automatically read from environment:
