@@ -13,6 +13,42 @@ Browser Pay for Sapiom Pay. The agent types a governance placeholder into checko
 
 An agent that gives up before paying cancels the purchase, which revokes the placeholder: a UCP checkout with `POST /v1/transactions/{transactionId}/ucp/checkout/cancel`, a browser-checkout purchase with `POST /v1/transactions/{transactionId}/cancel`. The browser-checkout cancel answers 409 `card_relayed` once the card was relayed; the payment is spent, and the agent completes the transaction instead.
 
+## Filling the card form
+
+`fillCard(page, card)` types the placeholder into the checkout's card form, so the agent does not have to find and type into card fields itself. `page` is a Playwright page connected to the same browser with `chromium.connectOverCDP(cdpUrl)`; `card` is the placeholder's `number`, `expMonth`, `expYear` and `cvc`, plus an optional cardholder `name`.
+
+```typescript
+import {
+  attachInterceptor,
+  fillCard,
+  httpPaymentRelay,
+} from "@sapiom/browser-pay";
+
+const handle = await attachInterceptor(cdpUrl, {
+  relay,
+  placeholder: { number, injectionRef },
+});
+// … the agent reaches the payment step …
+const filled = await fillCard(page, { number, expMonth, expYear, cvc });
+if (filled.ok) {
+  await page
+    .getByRole("button", { name: /pay now|place order|complete order/i })
+    .click();
+} else {
+  // `filled.missing` names the fields it could not fill. Read the purchase before retrying or cancelling.
+}
+```
+
+It looks in every frame, including one cross-origin iframe per field (Shopify's card vault, Braintree hosted fields, Adyen secured fields) and one iframe for all fields (Stripe Elements), and classifies inputs and selects by `autocomplete` (`cc-number`, `cc-exp`, `cc-exp-month`, `cc-exp-year`, `cc-csc`, `cc-name`), name, id, placeholder, label and provider attributes. Without `autocomplete`, a field whose name or id names an address or contact part (`street`, `cardholder_phone`) is never a card field; one that names only a form section (`billing_number`) is a card field only when its name or id also names a card field (`billing_card_number`); and a field named only `number` or `name` counts only inside a card iframe on another origin; on the page itself such a field is reported missing rather than guessed at. A card vault puts a copy of every card input in each field's iframe for autofill; `fillCard` types only into the copy a person could click (its centre is in the frame's viewport and nothing covers it). For a combined expiry it tries `MM/YY` and `MM/YYYY` (four digits first when the placeholder spells YYYY), then `MMYY`, and keeps the first one the field reads back without marking itself invalid (constraint validation, including the field's `pattern`, or `aria-invalid` after blur). It fills split month and year inputs or selects (numbers or month names) only when both exist, and reads a select back after its change handlers run. It waits up to `timeoutMs` (default 15 seconds) for card iframes that load after the page, types with a short delay so input masks keep up, and reads each field back.
+
+It types only into frames on the page's own origin (including a `srcdoc` or `about:blank` frame the browser lets read its parent's document), on a built-in card-vault host over https (Shopify, Stripe, Braintree, Adyen, PayPal, Square, Checkout.com, Recurly, Chargebee, Spreedly, Authorize.net), or on an origin listed in `frameOrigins`. A frame on any other origin that holds card fields is not typed into and is named in `untrusted`, so an unrelated embedded iframe advertising card fields never receives the placeholder.
+
+The result is `{ ok, filled, missing, unconfirmed, origins, untrusted }`. `ok` is true when the number, the security code and the expiry were each typed and read back. `missing` lists `number`, `expiry` or `cvc` when one was not found or did not read back; `unconfirmed` lists fields found whose read-back differed; `origins` names the frame origin each field was filled in. The result never contains a card value, and `fillCard` never logs one.
+
+`fillCard` does not press Pay; the caller keeps that step. A checkout's own field scripts can still send card data while it types, so `ok: false` does not prove nothing was sent: read the purchase (`payment_submitted` means the card may have reached the merchant) before retrying the fill or cancelling the purchase.
+
+It throws a `TypeError`, whose message carries no card values, before touching any field when the number, security code or expiry is not usable. Before typing into a frame it checks the frame is still on the origin it was found on, and after the last field it reads every field back once more, so a field a later handler reset is reported in `unconfirmed`. A field whose click is blocked (covered or detached) passes to the next matching field.
+
 ## Relay contract
 
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
@@ -140,7 +176,7 @@ Call `handle.on` after `attachInterceptor` resolves. Events emitted while attach
 
 An optional `logger` receives `browser step failed` when arming `Fetch.enable` fails, and when a nested auto-attach, resume, `Target.getTargets`, existing-frame attach, or close fails.
 
-A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. The backend's `checkPlaceholderUse` decides whether the number is valid. A paused request that does not hold the placeholder is continued.
+A request is relayed when the held placeholder number appears in the URL or body. An exact match counts, and so do digits split by spaces or dashes, including the URL-encoded and JSON-escaped forms of those separators. `placeholder` is `{ number, injectionRef }`. `injectionRef` is a UUID. Sapiom decides whether the number is valid when the relay receives it. A paused request that does not hold the placeholder is continued.
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 

@@ -9,6 +9,17 @@ export type {
   RefusalReason,
 } from "./interceptor.js";
 
+export { fillCard } from "./fill-card.js";
+export type {
+  CardField,
+  CardToFill,
+  FillCardOptions,
+  FillCardResult,
+  FrameLike,
+  LocatorLike,
+  PageLike,
+} from "./fill-card.js";
+
 export { httpPaymentRelay } from "./relay.js";
 export type {
   HttpRelayOptions,
