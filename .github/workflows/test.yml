@@ -52,6 +52,12 @@ jobs:
       - name: Verify installed MCP host contract
         run: pnpm --filter @sapiom/mcp test:package
 
+      # Type-checks the packed @sapiom/agent declarations (skipLibCheck off) and
+      # imports it, on each lower bound of its zod peer range and on the
+      # workspace's zod.
+      - name: Verify installed Agent package on each supported zod
+        run: pnpm --filter @sapiom/agent test:package
+
       - name: Type check
         run: pnpm typecheck
 

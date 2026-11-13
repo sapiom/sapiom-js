@@ -42,6 +42,7 @@
     "dev": "tsc --watch --project tsconfig.cjs.json",
     "test": "jest",
     "test:coverage": "jest --coverage",
+    "test:package": "pnpm --filter \"@sapiom/agent...\" build && node scripts/check-package.mjs",
     "test:watch": "jest --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
