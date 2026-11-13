@@ -1,3 +1,4 @@
+import { SapiomApiError } from "../errors/SapiomApiError.js";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -19,6 +20,8 @@ export interface HttpRequestConfig {
   headers?: Record<string, string>;
   /** Optional budget for this request only, including bounded server waits. */
   timeoutMs?: number;
+  /** Disable automatic replay when a failed merchant mutation may already have acted. */
+  retry?: false;
 }
 
 /**
@@ -139,8 +142,9 @@ export class HttpClient {
 
     const configWithHeaders = { ...config, headers };
 
+    const maxAttempts = config.retry === false ? 1 : this.retry.maxAttempts;
     let lastError: unknown;
-    for (let attempt = 0; attempt < this.retry.maxAttempts; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         return await this.executeRequest<T>(configWithHeaders);
       } catch (error) {
@@ -148,7 +152,7 @@ export class HttpClient {
         if (!this.isRetryable(error)) {
           throw error;
         }
-        if (attempt < this.retry.maxAttempts - 1) {
+        if (attempt < maxAttempts - 1) {
           const base = this.retry.baseDelayMs * Math.pow(2, attempt);
           const delay = Math.random() * base; // full jitter: spreads retries across [0, base]
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -232,8 +236,10 @@ export class HttpClient {
 
       if (!response.ok) {
         const errorData = await this.parseResponse(response);
-        throw new Error(
-          `Request failed with status ${response.status}: ${JSON.stringify(errorData)}`,
+        throw new SapiomApiError(
+          response.status,
+          errorData,
+          response.headers.get("x-request-id") ?? undefined,
         );
       }
 
