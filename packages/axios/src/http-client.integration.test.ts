@@ -979,3 +979,49 @@ describe("Axios HTTP Client Integration Tests", () => {
     });
   });
 });
+
+describe("Facts sanitization", () => {
+  it("leaves credential headers out of facts and masks credential query values, without changing the request", async () => {
+    const axiosInstance = axios.create({ baseURL: "https://api.example.com" });
+    const mockAxios = new MockAdapter(axiosInstance);
+    const { client: sapiomClient, mocks } = createMockSapiomClient();
+    mocks.create.mockResolvedValue({
+      id: "tx-facts",
+      status: TransactionStatus.AUTHORIZED,
+    } as any);
+    mocks.complete.mockResolvedValue({
+      transaction: { id: "tx-facts", status: "completed" },
+    } as any);
+    mockAxios
+      .onGet(/\/geocode/)
+      .reply(
+        200,
+        { ok: true },
+        { "set-cookie": "sid=FAKE", "x-request-id": "r-1" },
+      );
+
+    const client = withSapiom(axiosInstance, { sapiomClient });
+    await client.get("/geocode?key=FAKEKEY&address=Paris", {
+      headers: { "bt-api-key": "FAKEBT", accept: "application/json" },
+    });
+    await flushPromises();
+
+    const request = mocks.create.mock.calls[0][0].requestFacts!.request as any;
+    expect(request.url).toBe(
+      "https://api.example.com/geocode?key=[REDACTED]&address=Paris",
+    );
+    expect(request.urlParsed.search).toBe("?key=[REDACTED]&address=Paris");
+    // axios merges the header into its default `Accept`.
+    expect(request.headers).toEqual({ Accept: "application/json" });
+    const response = (mocks.complete.mock.calls[0][1].responseFacts as any)
+      .facts;
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(response.headers["x-request-id"]).toBe("r-1");
+
+    // The request itself still carries the real URL and headers.
+    const sent = mockAxios.history.get[0];
+    expect(sent.url).toBe("/geocode?key=FAKEKEY&address=Paris");
+    expect(sent.headers?.["bt-api-key"]).toBe("FAKEBT");
+    mockAxios.restore();
+  });
+});

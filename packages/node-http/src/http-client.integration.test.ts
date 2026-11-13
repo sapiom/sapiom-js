@@ -640,3 +640,55 @@ describe("Node-HTTP Client Integration Tests", () => {
     });
   });
 });
+
+describe("Facts sanitization", () => {
+  afterEach(() => {
+    nock.cleanAll();
+  });
+
+  it("leaves credential headers out of facts and masks credential query values, without changing the request", async () => {
+    const { client: sapiomClient, mocks } = createMockSapiomClient();
+    mocks.create.mockResolvedValue({
+      id: "tx-facts",
+      status: TransactionStatus.AUTHORIZED,
+    } as any);
+    mocks.complete.mockResolvedValue({
+      transaction: { id: "tx-facts", status: "completed" },
+    } as any);
+    const scope = nock("https://api.example.com", {
+      reqheaders: { "bt-api-key": "FAKEBT" },
+    })
+      .get("/geocode")
+      .query({ key: "FAKEKEY", address: "Paris" })
+      .reply(
+        200,
+        { ok: true },
+        { "set-cookie": "sid=FAKE", "x-request-id": "r-1" },
+      );
+
+    const client = createClient({ sapiomClient });
+    await client.request({
+      method: "GET",
+      url: "https://api.example.com/geocode?key=FAKEKEY&address=Paris",
+      headers: {
+        "bt-api-key": "FAKEBT",
+        "api-key": "FAKEAPI",
+        accept: "application/json",
+      },
+    });
+    await flushPromises();
+
+    // nock matched the real key and header: the request itself is unchanged.
+    expect(scope.isDone()).toBe(true);
+    const request = mocks.create.mock.calls[0][0].requestFacts!.request as any;
+    expect(request.url).toBe(
+      "https://api.example.com/geocode?key=[REDACTED]&address=Paris",
+    );
+    expect(request.urlParsed.search).toBe("?key=[REDACTED]&address=Paris");
+    expect(request.headers).toEqual({ accept: "application/json" });
+    const response = (mocks.complete.mock.calls[0][1].responseFacts as any)
+      .facts;
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(response.headers["x-request-id"]).toBe("r-1");
+  });
+});

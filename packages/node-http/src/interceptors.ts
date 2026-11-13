@@ -12,6 +12,8 @@ import {
   HttpClientResponseFacts,
   HttpClientErrorFacts,
   FailureMode,
+  sanitizeHeadersForFacts,
+  sanitizeUrlForFacts,
 } from "@sapiom/core";
 
 import type { TransactionPollingConfig } from "@sapiom/core";
@@ -196,27 +198,17 @@ export async function handleAuthorization(
     protocol: parsedUrl.protocol.replace(":", ""),
     hostname: parsedUrl.hostname,
     pathname: parsedUrl.pathname,
-    search: parsedUrl.search,
+    search: sanitizeUrlForFacts(parsedUrl.search),
     port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
   };
 
-  const sanitizedHeaders: Record<string, string> = {};
-  const sensitiveHeaders = new Set([
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-  ]);
-
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (!sensitiveHeaders.has(key.toLowerCase())) {
-      sanitizedHeaders[key] = value;
-    }
-  }
+  const sanitizedHeaders = sanitizeHeadersForFacts(
+    Object.entries(request.headers),
+  );
 
   const requestFacts: HttpClientRequestFacts = {
     method,
-    url,
+    url: sanitizeUrlForFacts(url),
     urlParsed,
     headers: sanitizedHeaders,
     hasBody: !!request.body,
@@ -459,19 +451,9 @@ export function handleCompletion<T>(
   const isSuccess =
     response !== null && response.status >= 200 && response.status < 300;
 
-  const sanitizedHeaders: Record<string, string> = {};
-  if (response?.headers) {
-    const sensitiveHeaders = new Set([
-      "set-cookie",
-      "authorization",
-      "x-api-key",
-    ]);
-    Object.entries(response.headers).forEach(([key, value]) => {
-      if (!sensitiveHeaders.has(key.toLowerCase())) {
-        sanitizedHeaders[key] = String(value);
-      }
-    });
-  }
+  const sanitizedHeaders = sanitizeHeadersForFacts(
+    response?.headers ? Object.entries(response.headers) : undefined,
+  );
 
   let responseFacts:
     | { source: string; version: string; facts: Record<string, any> }
