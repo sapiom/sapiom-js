@@ -30,6 +30,7 @@ describe("facts sanitization", () => {
       "x-sapiom-service-key",
       "x-sapiom-signature",
       "x-sapiom-workflow-token",
+      "Sapiom-Identity",
     ])("leaves out %s", (name) => {
       expect(isSensitiveHeaderName(name)).toBe(true);
     });
@@ -87,6 +88,15 @@ describe("facts sanitization", () => {
       expect(
         sanitizeUrlForFacts("https://alice:hunter2@api.example.com/x"),
       ).toBe(`https://${REDACTED_FACT_VALUE}@api.example.com/x`);
+    });
+
+    it("masks a password that itself contains @, and not an @ in the query", () => {
+      expect(
+        sanitizeUrlForFacts("https://alice:p@ss@api.example.com/x?q=a@b"),
+      ).toBe(`https://${REDACTED_FACT_VALUE}@api.example.com/x?q=a@b`);
+      expect(sanitizeUrlForFacts("https://api.example.com/x?q=a@b")).toBe(
+        "https://api.example.com/x?q=a@b",
+      );
     });
 
     it("works on a bare search string", () => {

@@ -21,6 +21,7 @@ const SENSITIVE_HEADER_EXACT = new Set([
   "payment-signature",
   "x-payment",
   "x-payment-response",
+  "sapiom-identity",
 ]);
 
 /** A name that names a credential: `x-api-key`, `bt-api-key`, `client_secret`, … */
@@ -37,13 +38,14 @@ const SENSITIVE_HEADER_PREFIX =
 /** Query parameters whose value is a credential (matched case-insensitively). */
 const SENSITIVE_QUERY_EXACT = new Set(["key", "sig", "auth", "pwd", "pass"]);
 
-const USERINFO = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@\s]+)@/i;
+// Greedy up to the last `@` before the path, query or fragment: a password may itself contain `@`.
+const USERINFO = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#\s]*)@/i;
 
 /**
  * Whether a header must be left out of facts: `Authorization`, cookies,
  * API-key, token, secret and password headers (`x-api-key`, `bt-api-key`,
- * `api-key`, `x-auth-token`, …), payment signatures, and `x-sapiom-*`
- * credential headers. Case-insensitive.
+ * `api-key`, `x-auth-token`, …), payment signatures, the `Sapiom-Identity`
+ * token, and `x-sapiom-*` credential headers. Case-insensitive.
  */
 export function isSensitiveHeaderName(name: string): boolean {
   const lower = name.trim().toLowerCase();

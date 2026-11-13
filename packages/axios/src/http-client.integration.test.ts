@@ -981,6 +981,33 @@ describe("Axios HTTP Client Integration Tests", () => {
 });
 
 describe("Facts sanitization", () => {
+  it("keeps a relative URL's query out of urlParsed.pathname when there is no baseURL", async () => {
+    const axiosInstance = axios.create();
+    const mockAxios = new MockAdapter(axiosInstance);
+    const { client: sapiomClient, mocks } = createMockSapiomClient();
+    mocks.create.mockResolvedValue({
+      id: "tx-rel",
+      status: TransactionStatus.AUTHORIZED,
+    } as any);
+    mocks.complete.mockResolvedValue({
+      transaction: { id: "tx-rel", status: "completed" },
+    } as any);
+    mockAxios.onGet(/\/geocode/).reply(200, { ok: true });
+
+    const client = withSapiom(axiosInstance, { sapiomClient });
+    await client.get("/geocode?key=FAKEKEY&address=Paris#top");
+    await flushPromises();
+
+    const request = mocks.create.mock.calls[0][0].requestFacts!.request as any;
+    expect(request.urlParsed.pathname).toBe("/geocode");
+    expect(request.urlParsed.search).toBe("?key=[REDACTED]&address=Paris");
+    expect(JSON.stringify(request)).not.toContain("FAKEKEY");
+    expect(mockAxios.history.get[0].url).toBe(
+      "/geocode?key=FAKEKEY&address=Paris#top",
+    );
+    mockAxios.restore();
+  });
+
   it("leaves credential headers out of facts and masks credential query values, without changing the request", async () => {
     const axiosInstance = axios.create({ baseURL: "https://api.example.com" });
     const mockAxios = new MockAdapter(axiosInstance);

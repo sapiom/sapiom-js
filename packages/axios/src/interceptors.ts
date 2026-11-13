@@ -400,11 +400,16 @@ export function addAuthorizationInterceptor(
           port: parsed.port ? parseInt(parsed.port) : null,
         };
       } catch {
+        // A relative endpoint with no baseURL: keep the query out of the pathname.
+        const queryAt = endpoint.search(/[?#]/);
+        const pathname = queryAt === -1 ? endpoint : endpoint.slice(0, queryAt);
+        const query =
+          queryAt === -1 ? "" : endpoint.slice(queryAt).split("#")[0];
         urlParsed = {
           protocol: "",
           hostname: "",
-          pathname: endpoint,
-          search: "",
+          pathname,
+          search: query.startsWith("?") ? sanitizeUrlForFacts(query) : "",
           port: null,
         };
       }
