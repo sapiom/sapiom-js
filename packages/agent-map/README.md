@@ -19,4 +19,6 @@ Studio owns discovery and calls the catalog's `reconcile` with the complete root
 
 Exports under `/node/*` provide the catalog, file locks, state paths and hashing for trusted host code. All other exports are browser-safe contracts and pure helpers.
 
+`@sapiom/agent-map/host-protocol` exports zod 4 schemas. Compose them with zod 4 (`import { z } from "zod"`). On zod 3.25, import `z` from `"zod/v4"`, because the bare `zod` entry there is zod 3.
+
 Run `pnpm --filter @sapiom/agent-map test:package` after installing dependencies. It packs and installs the library outside the workspace, verifies every export and declaration, bundles all browser exports without tree shaking, and exercises the catalog without Studio or MCP installed. The check rejects Studio/MCP anywhere in the installed dependency graph.

@@ -83,5 +83,11 @@ describe("host protocol", () => {
         projectId: context.projectId,
       }).success,
     ).toBe(false);
+    expect(
+      StudioHostBootstrapSchema.safeParse({
+        ...bootstrap,
+        contextUrl: "not a url",
+      }).success,
+    ).toBe(false);
   });
 });

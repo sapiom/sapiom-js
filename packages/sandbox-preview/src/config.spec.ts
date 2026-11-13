@@ -120,6 +120,28 @@ describe('config — writeSandbox / configureSandbox', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('stores an env map of strings and rejects a non-string value by its key', () => {
+    const dir = tmpProject();
+    try {
+      const env = { API_URL: 'https://x' };
+      configureSandbox(dir, 'web', { source: { kind: 'upload' }, start: 'node server.js', port: 3000, env });
+      expect(getSandbox(dir, 'web').env).toEqual(env);
+
+      let caught: unknown;
+      try {
+        // @ts-expect-error: deliberately invalid env value to exercise record validation
+        configureSandbox(dir, 'api', { source: { kind: 'upload' }, start: 'node server.js', port: 3000, env: { PORT: 1 } });
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(PreviewOperationError);
+      expect((caught as PreviewOperationError).code).toBe('INVALID_SANDBOX');
+      expect((caught as PreviewOperationError).hint).toContain('env.PORT');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('config — validation on read', () => {

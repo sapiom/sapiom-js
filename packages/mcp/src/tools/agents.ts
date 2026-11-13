@@ -685,12 +685,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       // other object arg in this module gets. `asEventPayload` re-imposes the
       // object rule after decoding, so nothing is loosened.
       //
-      // `z.unknown()` also advertises as NOT required in `tools/list`, which is
-      // why an omitted payload defaults to `{}` below rather than failing: the
-      // schema an agent reads has to be the schema the handler honors, and an
-      // event carrying no data is legitimate. Same `?? {}` as the run tool.
+      // `.optional()` keeps payload out of `required` in `tools/list`: the advertised
+      // schema must match the handler's `{}` default for an omitted payload, since an
+      // event may carry no data. Explicit `null` still fails the object rule.
       payload: z
         .unknown()
+        .optional()
         .describe(
           "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict). Keys the target agent's entry step does not declare are NOT dropped for agents built with @sapiom/agent (buildManifest strips the marker the engine's filter keys off), so they reach the run input and the author's own parse decides: a z.object() entry ignores them, a z.strictObject() entry rejects them and the step fails. Match the entry schema when you can. Omit it for an event that carries no data.",
         ),
