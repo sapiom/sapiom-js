@@ -285,6 +285,14 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <label>Card number <input id="billing_card_number" name="billing_card_number" style="width:200px;height:30px"></label>
 <label>Expiry <input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
 <label>CVV <input autocomplete="cc-csc" style="width:60px;height:30px"></label>`,
+  // The cardholder's address before the cardholder's name, neither with autocomplete.
+  "/cardholder-address": `<!doctype html><title>Checkout</title>
+<label>Card number <input id="ccnum" style="width:200px;height:30px"></label>
+<label>Expiry <input autocomplete="cc-exp" placeholder="MM / YY" style="width:80px;height:30px"></label>
+<label>CVV <input autocomplete="cc-csc" style="width:60px;height:30px"></label>
+<label>Address <input id="billing_cardholder_address" name="billing_cardholder_address" style="width:200px;height:30px"></label>
+<label>Phone <input id="cardholder_phone" name="cardholder_phone" style="width:200px;height:30px"></label>
+<label>Name on card <input id="cardholder_name" name="cardholder_name" style="width:200px;height:30px"></label>`,
   // A sandboxed frame replacing its own `parent` global to look same-origin.
   "/sandboxed-spoof": `<!doctype html><title>Checkout</title>
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<script>window.parent = { document: {} };</script><input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
@@ -770,6 +778,20 @@ function serve(
       expect(await page.locator("#billing_card_number").inputValue()).toBe(
         CARD.number,
       );
+      await page.close();
+    });
+
+    it("types the name into the name field, never a cardholder address or phone field", async () => {
+      const page = await open("/cardholder-address");
+      const result = await fill(page);
+      expect(result.ok).toBe(true);
+      expect(await page.locator("#cardholder_name").inputValue()).toBe(
+        CARD.name,
+      );
+      expect(
+        await page.locator("#billing_cardholder_address").inputValue(),
+      ).toBe("");
+      expect(await page.locator("#cardholder_phone").inputValue()).toBe("");
       await page.close();
     });
 

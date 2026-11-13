@@ -273,15 +273,18 @@ const onlyCardWords = (label: string) =>
   label.split(/[^a-z]+/).every((w) => w === "" || CARD_WORDS.has(w));
 
 /**
- * Words in a field's `name` or `id` that make it part of an address or contact block. Such a field is
- * a card field only when its `autocomplete` or its own name or id says so (`billing_card_number`): a
- * billing "Number" input labelled only "Number" passes the label check, but `billing_number` says
- * what it is.
+ * Words in a field's `name` or `id` that name the form section it sits in. A field in one is a card
+ * field only when its own name or id says so (`billing_card_number`): a billing "Number" input
+ * labelled only "Number" passes the label check, but `billing_number` says what it is.
+ */
+const SECTION_WORDS = new Set(["billing", "shipping", "delivery"]);
+
+/**
+ * Words in a field's `name` or `id` that name it as part of an address or contact. Such a field is
+ * never a card field unless its `autocomplete` says so, even when its id also names the cardholder
+ * (`billing_cardholder_address`, `cardholder_phone`).
  */
 const ADDRESS_WORDS = new Set([
-  "billing",
-  "shipping",
-  "delivery",
   "address",
   "addr",
   "street",
@@ -306,9 +309,18 @@ const ADDRESS_WORDS = new Set([
   "company",
 ]);
 
-/** Whether a field's `name` or `id` names it as part of an address. */
-const addressField = (ids: string) =>
-  ids.split(/[^a-z]+/).some((w) => ADDRESS_WORDS.has(w));
+/**
+ * Whether a field's `name` or `id` rules it out as a card field: it names an address or contact
+ * part, or it names a form section and nothing in it names a card field.
+ */
+const notCardByIds = (ids: string) => {
+  const words = ids.split(/[^a-z]+/);
+  if (words.some((w) => ADDRESS_WORDS.has(w))) return true;
+  return (
+    words.some((w) => SECTION_WORDS.has(w)) &&
+    !PATTERNS.some(([, re]) => re.test(ids))
+  );
+};
 
 /**
  * A bare `number` or `name` field (Shopify's card vault, Stripe's Payment Element) counts only in a
@@ -334,8 +346,7 @@ function classify(
   if (ac) return { field: ac, score: 3 };
   // An address-named field counts only when its own name or id names a card field
   // (`billing_card_number`), never on its label alone.
-  if (addressField(c.ids) && !PATTERNS.some(([, re]) => re.test(c.ids)))
-    return null;
+  if (notCardByIds(c.ids)) return null;
   for (const [field, re] of PATTERNS)
     if (re.test(c.hints)) return { field, score: 2 };
   // A bare name is a card field only in a card iframe on another origin, and only when nothing a
