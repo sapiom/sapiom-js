@@ -9,6 +9,8 @@
  *
  * Run: npm start
  */
+import "./node18-crypto";
+
 import { SapiomClient } from "@sapiom/langchain-classic";
 import dotenv from "dotenv";
 
