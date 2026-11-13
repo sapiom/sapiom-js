@@ -350,6 +350,9 @@ function serve(
 (chromiumPath ? describe : describe.skip)(
   "fillCard (Chromium, cross-origin card iframes)",
   () => {
+    // A test types into real frames; on a shared CI runner the first one after launch can take >5s.
+    jest.setTimeout(30_000);
+
     let browser: Browser;
     let top: http.Server;
     let frames: http.Server;
