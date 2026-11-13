@@ -83,12 +83,17 @@ export interface AgentManifest {
 // Zod schema — used by the engine to validate manifests it receives
 // ---------------------------------------------------------------------------
 
-const manifestTransitionSchema = z.discriminatedUnion('kind', [
+const manifestTransitionUnion = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('continue'), target: z.string().min(1) }),
   z.object({ kind: z.literal('terminate') }),
   z.object({ kind: z.literal('fail') }),
   z.object({ kind: z.literal('pause'), signal: z.string().min(1), resumeStep: z.string().min(1) }),
 ]);
+
+// Typed as a `ZodUnion` so the declaration file compiles on every zod the peer
+// range allows: zod 4.6 gives `ZodDiscriminatedUnion` a second type argument,
+// which the `zod/v4` types of zod 3.25 and zod 4.0 reject.
+const manifestTransitionSchema: z.ZodUnion<typeof manifestTransitionUnion.options> = manifestTransitionUnion;
 
 const workflowStepManifestSchema = z.object({
   timeoutMs: z.union([z.number().int().positive(), z.null()]),
