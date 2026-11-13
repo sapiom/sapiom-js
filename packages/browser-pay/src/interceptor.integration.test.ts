@@ -757,6 +757,9 @@ if (!chromeBin) {
         await page.close().catch(() => {});
         await context.clearCookies();
         await handle.detach();
+        // Chrome can hold a preconnected socket that never sends a request; close() would wait
+        // for Node's 60s headers timeout on it.
+        shop.server.closeAllConnections();
         await new Promise((resolve) => shop.server.close(resolve));
       }
     }, 60_000);
