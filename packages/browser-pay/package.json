@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/browser-pay",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Browser Pay for Sapiom Pay. Pause a placeholder card request over CDP and relay it.",
   "keywords": [
     "sapiom",

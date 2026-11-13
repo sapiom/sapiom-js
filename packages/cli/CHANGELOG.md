@@ -1,5 +1,15 @@
 # @sapiom/cli
 
+## 22.0.0
+
+### Patch Changes
+
+- Updated dependencies [862d04b]
+- Updated dependencies [a81fcda]
+  - @sapiom/agent-core@0.16.2
+  - @sapiom/harness@0.23.0
+  - @sapiom/analytics-core@0.4.0
+
 ## 21.0.2
 
 ### Patch Changes
