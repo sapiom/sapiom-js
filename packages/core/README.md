@@ -326,3 +326,16 @@ MIT © [Sapiom](../../LICENSE)
 - [GitHub](https://github.com/sapiom/sapiom-js)
 - [NPM](https://www.npmjs.com/package/@sapiom/core)
 - [Issues](https://github.com/sapiom/sapiom-js/issues)
+
+### Saved payment methods and spending limits
+
+Use a buyer key to discover methods. `kind` describes the method; funding is resolved by the server.
+
+```typescript
+const page = await client.paymentMethods.list({ limit: 20 });
+for (const method of page.data) console.log(method.kind, method.label, method.readiness);
+```
+
+Limit management uses a separate credential with `org.payment_method_spending_limits.read` or an explicit `org.payment_method_spending_limits.write` grant. A platform credential acting for a buyer sets `headers: { "sapiom-tenant": buyerId }` in `SapiomClient`. Read `getSpendingLimits(id)` before `setSpendingLimits(id, settings)` and send the returned version with all three nullable slots. Changed cumulative slots start a fresh allowance; unchanged saves preserve usage. Unavailable usage is `null`, not zero.
+
+The `paymentCards` client retains `getSpendingLimits` and `setSpendingLimits` with `org.card_spending_limits.*` grants. It also provides `list`, `get`, `createSetupLink`, `getSetupLink`, `setDefault` and `remove`. A setup URL is returned once for the buyer; it must not be logged or created again automatically after a lost response.

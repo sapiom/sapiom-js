@@ -128,3 +128,28 @@ export type {
 export { SapiomClient as default } from "./client/SapiomClient.js";
 
 export { SapiomApiError } from "./errors/SapiomApiError.js";
+
+export { PaymentCardsAPI } from "./client/PaymentCardsAPI.js";
+export { PaymentMethodsAPI } from "./client/PaymentMethodsAPI.js";
+export type {
+  PaymentMethodView,
+  PaymentMethodPage,
+  PaymentMethodListOptions,
+  PaymentMethodMoneyLimit,
+  PaymentMethodRecurringLimit,
+  PaymentMethodCustomLimit,
+  PaymentMethodSpendingLimitsSettings,
+  PaymentMethodSpendingLimitsSummary,
+  PaymentMethodAllowanceUsage,
+  PaymentLimitSummary,
+} from "./types/payment-method.js";
+export type {
+  PaymentCardView,
+  CardSetupLinkView,
+  CardMoneyLimit,
+  CardRecurringLimit,
+  CardCustomLimit,
+  CardSpendingLimitsSettings,
+  CardSpendingLimitsSummary,
+  CardAllowanceUsage,
+} from "./types/payment-card.js";
