@@ -360,10 +360,7 @@ export async function handlePayment(
   // If no transaction ID exists (authorization was skipped/failed in failureMode:open),
   // create one on-demand so we can still handle the 402 payment flow.
   if (!existingTransactionId) {
-    const requestMetadata = {
-      ...defaultMetadata,
-      ...((request as any).__sapiom || {}),
-    };
+    const requestMetadata = { ...defaultMetadata, ...((request as any).__sapiom || {}) };
     const callSite = captureUserCallSite();
     const parsedUrl = new URL(request.url);
 
@@ -415,11 +412,7 @@ export async function handlePayment(
       // Write the transaction ID back to the original request so
       // handleCompletion (which reads X-Sapiom-Transaction-Id from
       // request headers) can complete this on-demand transaction.
-      setHeader(
-        request.headers,
-        "X-Sapiom-Transaction-Id",
-        existingTransactionId,
-      );
+      setHeader(request.headers, "X-Sapiom-Transaction-Id", existingTransactionId);
     } catch (error) {
       if (config.failureMode === "closed") throw error;
       console.error(
