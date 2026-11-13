@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/axios",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Axios integration for Sapiom SDK",
   "keywords": [
     "sapiom",

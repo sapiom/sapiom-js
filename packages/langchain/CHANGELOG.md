@@ -1,5 +1,13 @@
 # @sapiom/langchain
 
+## 0.5.6
+
+### Patch Changes
+
+- Updated dependencies [a81fcda]
+  - @sapiom/analytics-core@0.4.0
+  - @sapiom/core@0.9.1
+
 ## 0.5.5
 
 ### Patch Changes
