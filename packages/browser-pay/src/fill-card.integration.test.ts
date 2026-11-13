@@ -307,14 +307,31 @@ ${frame("/shopify/expiry")}${frame("/shopify/cvc")}`,
 <iframe sandbox="allow-scripts" style="width:600px;height:80px" srcdoc='<input autocomplete="cc-number" style="width:200px;height:30px"><input autocomplete="cc-exp" style="width:80px;height:30px"><input autocomplete="cc-csc" style="width:60px;height:30px">'></iframe>`,
 };
 
-function findChromium(): boolean {
+/** The same lookup as the interceptor tests: CI has system Chrome, not Playwright's bundled build. */
+function findChromium(): string | undefined {
+  const candidates = [
+    process.env.CHROME_PATH,
+    "/usr/local/bin/google-chrome",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found) return found;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const path = require("playwright").chromium.executablePath() as string;
-    return Boolean(path && existsSync(path));
+    return path && existsSync(path) ? path : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+const chromiumPath = findChromium();
+if (!chromiumPath) {
+  process.stderr.write(
+    "browser-pay: skipping fillCard integration tests. Install Google Chrome or Chromium, or set CHROME_PATH.\n",
+  );
 }
 
 function serve(
@@ -330,7 +347,7 @@ function serve(
   });
 }
 
-(findChromium() ? describe : describe.skip)(
+(chromiumPath ? describe : describe.skip)(
   "fillCard (Chromium, cross-origin card iframes)",
   () => {
     let browser: Browser;
@@ -370,15 +387,17 @@ function serve(
       );
       topUrl = `http://127.0.0.1:${(top.address() as AddressInfo).port}`;
       const { chromium } = await import("playwright");
-      browser = await chromium.launch();
+      browser = await chromium.launch({ executablePath: chromiumPath });
     }, 60_000);
 
     afterAll(async () => {
       await browser?.close();
-      top?.close();
-      frames?.close();
-      other?.close();
-    });
+      // Keep-alive sockets from the frames hold the servers (and Jest) open after close().
+      for (const server of [top, frames, other]) {
+        server?.closeAllConnections();
+        server?.close();
+      }
+    }, 30_000);
 
     async function open(path: string): Promise<Page> {
       const page = await browser.newPage();
