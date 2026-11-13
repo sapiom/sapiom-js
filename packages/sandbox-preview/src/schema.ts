@@ -29,6 +29,9 @@ const sourceSchema = z.discriminatedUnion('kind', [
 /**
  * The sandbox resource body (without the `name`, which is the map key). This is
  * also the shape the MCP `configure` tool accepts as typed args.
+ *
+ * A zod 4 schema: compose it with zod 4's `z`, or with `import { z } from "zod/v4"`
+ * on zod 3.25, whose bare `zod` entry is zod 3.
  */
 export const sandboxConfigBodySchema = z.object({
   source: sourceSchema,
@@ -42,5 +45,8 @@ export const sandboxConfigBodySchema = z.object({
 
 export type SandboxConfigBody = z.infer<typeof sandboxConfigBodySchema>;
 
-/** The stored on-disk sandbox entry (adds the `type` discriminant). */
+/**
+ * The stored on-disk sandbox entry (adds the `type` discriminant). A zod 4
+ * schema, composed like `sandboxConfigBodySchema`.
+ */
 export const storedSandboxSchema = sandboxConfigBodySchema.extend({ type: z.literal('sandbox') });
