@@ -1,5 +1,11 @@
 # @sapiom/axios
 
+## 0.5.6
+
+### Patch Changes
+
+- @sapiom/core@0.9.1
+
 ## 0.5.5
 
 ### Patch Changes

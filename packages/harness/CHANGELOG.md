@@ -1,5 +1,22 @@
 # @sapiom/harness
 
+## 0.23.0
+
+### Minor Changes
+
+- a81fcda: Agent Studio now sends the tenant API key through the shared credential policy: plain http to a non-loopback Sapiom host is refused (Agents and core panels, the Assistant bridge, and the MCP config written for Claude Code and Codex), and the key is dropped on a redirect to another origin. `https://` and `localhost` are unchanged. For a trusted private network, opt in with `SAPIOM_ALLOW_INSECURE_HTTP=1`.
+
+  `@sapiom/analytics-core/credential` adds an `"authorization"` credential header (for Bearer APIs) and `credentialHeaders()`, which checks a URL before a credential is handed to another process.
+
+### Patch Changes
+
+- 862d04b: Remove links to retired docs.sapiom.ai capability pages, which now redirect to the Sapiom Pay docs home. The agent-authoring and sandbox-preview skills (and their scaffold template copies) no longer point at the capability catalog or App Links pages. Agent Studio's bundled system prompt drops its App Links link, and its command palette Docs tab no longer lists the retired AI models page. The footer still opens the docs site, and Enter on an empty palette tab with no query now runs that tab's footer action (Open documentation, Browse templates), so it stays reachable from the keyboard. A `liveViewUrl` doc comment in `@sapiom/tools` drops its `@see` link.
+- Updated dependencies [862d04b]
+- Updated dependencies [a81fcda]
+  - @sapiom/agent-core@0.16.2
+  - @sapiom/analytics-core@0.4.0
+  - @sapiom/mcp@0.20.5
+
 ## 0.22.1
 
 ### Patch Changes

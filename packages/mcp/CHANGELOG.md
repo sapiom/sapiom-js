@@ -1,5 +1,14 @@
 # @sapiom/mcp
 
+## 0.20.5
+
+### Patch Changes
+
+- Updated dependencies [862d04b]
+- Updated dependencies [a81fcda]
+  - @sapiom/agent-core@0.16.2
+  - @sapiom/analytics-core@0.4.0
+
 ## 0.20.4
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @sapiom/core
 
+## 0.9.1
+
+### Patch Changes
+
+- Updated dependencies [a81fcda]
+  - @sapiom/analytics-core@0.4.0
+
 ## 0.9.0
 
 ### Minor Changes

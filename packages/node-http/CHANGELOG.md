@@ -1,5 +1,11 @@
 # @sapiom/node-http
 
+## 0.4.6
+
+### Patch Changes
+
+- @sapiom/core@0.9.1
+
 ## 0.4.5
 
 ### Patch Changes
