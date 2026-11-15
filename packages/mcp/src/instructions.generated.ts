@@ -30,8 +30,8 @@ Its runtime \`tools/list\` response is authoritative; use \`tool_discover\` to f
 \`sapiom_*\` capability tool.
 If the hosted \`sapiom_check_transaction_compatibility\` tool is in your tools, call it with the
 merchant's domain before buying, and use UCP checkout only when \`status\` is \`supported\`.
-Otherwise use browser checkout only with Sapiom's browser SDK integration, ready for the merchant's
-payment flow. If the integration is unavailable or the payment flow is unsupported, stop.
+Otherwise use browser checkout only with Browser Pay, ready for the merchant's
+payment flow. If Browser Pay is unavailable or the payment flow is unsupported, stop.
 If the hosted capability server lists a transactions guide resource, it is an optional guide to
 the full transaction flow; tool descriptions and results stay authoritative.
 The endpoint may also advertise implemented cloud tools for
@@ -39,6 +39,11 @@ deployed agents and governance tools, but the supported public authoring route i
 MCP or Agent Studio.
 Rule of thumb: author an agent for anything multi-step, scheduled, or deployable; use the
 hosted capability server or the TypeScript SDK for a single action.
+A capability call that fails, for any reason, costs nothing: its usage and charge are reversed.
+A paid browser session from \`sapiom_browser_session_create\` holds its payment until you close it
+with \`sapiom_browser_session_terminate\`. Only the account that opened it can close it, and closing
+it again returns the same receipt. A session you never close is settled within about three minutes
+after its maximum duration ends (the hold is kept two minutes past it, then a sweep settles it).
 
 ## Lifecycle (in order)
 
@@ -127,28 +132,69 @@ Payment cards, card spending limits and transactions run on the hosted capabilit
 (\`sapiom_list_payment_methods\`, \`sapiom_add_payment_method\`, \`sapiom_delete_payment_method\`,
 \`sapiom_get_card_spending_limits\`, \`sapiom_set_card_spending_limits\`, \`sapiom_request_transaction\`,
 \`sapiom_get_transaction\`, \`sapiom_update_transaction\` and \`sapiom_cancel_transaction\`). Follow that
-server's instructions. Follow each result's \`nextAction\` or \`nextStep\`. When its actor is \`human\`,
-stop: a person or trusted integrator must reconcile through the existing REST/merchant recovery;
+server's instructions. Follow each result's \`nextAction\` or \`nextStep\`. Every next action you must
+act on, and every transaction that ended without completing, carries an \`instruction\` (a \`note\` on
+older actions) that says what to do now; follow it. When its actor is \`human\`,
+stop: a person or trusted platform must reconcile through the existing REST/merchant recovery;
 do not act on it yourself. The update and cancel tools change only unfinished checkouts and never
-place or refund an order. A \`payment_ready\` next action is not an order confirmation, and no tool
-returns card details: finish paying at \`continueUrl\` with Sapiom's browser SDK integration, which
-supplies the card. If it is unavailable or the merchant's payment flow is unsupported, cancel the
-transaction, then stop.
-A \`payment_submitted\` next action means the card went to the merchant's
-payment provider, which ends Sapiom's part: stop polling, and never pay or buy again for it.
+place or refund an order. A \`payment_ready\` next action is not an order confirmation. Its result
+carries \`payment.placeholder\`, a stand-in card for this purchase only and not the user's card:
+finish paying at \`continueUrl\` with Browser Pay, which swaps it for the user's
+card on the way to the merchant. Attach Browser Pay to the browser first, with the placeholder's
+\`number\` and \`injectionRef\`. Then type the placeholder's number, expiry and \`cvc\` into the card
+form, and the country and postal code in \`payment.billing\` where the form asks for them. Never type
+the placeholder while Browser Pay is not attached, never use it anywhere else, and do not show
+it to the user. If Browser Pay is unavailable or the merchant's payment flow is unsupported,
+cancel the transaction, then stop.
+A \`wait\` reason of \`governing\` means Sapiom is preparing the payment; follow the
+returned poll hint. A usable placeholder means \`payment_ready\`, not that payment
+is being sent. Placeholder issuance and authorization commit atomically inside
+Sapiom; there is no separate public issuance state. A \`wait\` reason of \`paying\`
+requires current, attributable durable \`sending\` evidence with a live lease
+less than 60 seconds old. It is an unresolved send attempt, not proof that the
+provider call remains active or that the merchant confirmed an order.
+A \`payment_submitted\` next action, or \`none\` on a card purchase whose payment reads \`completed\`,
+means Sapiom handed the card to the merchant's payment provider, which ends Sapiom's part. Whether
+the merchant placed the order is up to the merchant and changes nothing on Sapiom's side. Stop
+polling, tell the user what the merchant's page showed, and never pay or buy again for it.
+A card payment that reads \`blocked\` with reason \`payment_ended\` ended before the card was sent, so
+nothing was charged (most often its approval expired, about an hour after the user confirmed the purchase).
+Cancel it, then start a new transaction under a new idempotency key if the user still wants it.
+Approve close to the moment you pay. This does not apply to \`payment_submitted\`, to a completed
+checkout whose order the merchant has not confirmed, or to any result that says the outcome is
+unconfirmed: never buy again for those.
+\`continueUrl\` comes from the merchant and can be on another host than the merchant origin (a
+Shopify store's \`myshopify.com\` link redirects to the store's own domain): open it, and don't
+compare it with the merchant origin. The card is accepted only from a page on the merchant origin.
 An \`update_checkout\` next action is a normal checkout step, not a failure: the merchant needs more
 (often a shipping address or delivery option), which you send with \`sapiom_update_transaction\`.
 
-\`sapiom_request_transaction\` takes an optional \`shipping\`: \`shipping.address\` is where the order
-ships (with no fulfillment in the checkout, it becomes a shipping method for every line item), and
-\`shipping.contact\` is how the merchant reaches the buyer. Send each only when it applies. Sapiom adds
-them to the checkout create and every update.
+\`sapiom_request_transaction\` takes what you buy as \`purchase\`. For a UCP merchant, send \`purchase\` of
+type \`ucp_checkout\` with the merchant's origin and its checkout request. \`merchantOrigin\` with
+\`checkout\` is an older form, still accepted; use \`purchase\`.
+
+A checkout with no usable UCP is a browser purchase: once the page you drive shows the final total,
+call \`sapiom_request_transaction\` with \`purchase\` of type \`browser_checkout\`, stating the merchant
+origin, that total and the items as the page shows them. The total is in the page's own currency (an
+ISO 4217 code such as \`USD\`, \`EUR\` or \`JPY\`); one that can't be paid is refused at create. When
+\`nextAction.type\` is \`payment_ready\`, pay on that page with Browser Pay, typing \`payment.placeholder\` as above. A browser purchase can't be
+updated: cancel it and state a new one under a new idempotency key. After you pay on that page, a
+cancel can be refused with \`card_relayed\`:
+the purchase can no longer be canceled here, so never pay or buy again for it. Its cancel contacts no
+merchant. If it times out or may not have been saved, call \`sapiom_get_transaction\`;
+if the purchase is not closed, retry the same cancellation with the same \`idempotencyKey\`.
+
+\`sapiom_request_transaction\` takes an optional \`shipping\` for a UCP checkout: \`shipping.address\` is
+where the order ships (with no fulfillment in the checkout, it becomes a shipping method for every
+line item), and \`shipping.contact\` is how the merchant reaches the user. Send each only when it
+applies. Sapiom adds them to the checkout create and every update. A browser purchase takes none:
+enter delivery details on the page.
 
 \`nextAction.type: wait\` with \`reason: complete_in_progress\` means the merchant is completing the
 order: poll \`sapiom_get_transaction\` with \`since\` (each poll also asks the merchant whether it
 finished) and do not retry, change, cancel or buy again. An update or cancel refused with
 \`completion_in_progress\` was not sent and is not retryable; wait on the transaction the same way. If
-the checkout reopens instead of completing and the buyer still wants it, make it as a new change
+the checkout reopens instead of completing and the user still wants it, make it as a new change
 under a new idempotency key. \`operation_in_flight\` means another call held the checkout; that change
 was not sent and can be retried with the same idempotency key. \`internal_error\` whose message says
 Sapiom failed sent nothing to the merchant: stop and report its \`requestId\` to support@sapiom.ai.
@@ -158,28 +204,69 @@ or may still be opening is resumed only by sending the same request with the sam
 never under a new key.
 
 When a transaction returns \`nextAction.type: closed\` with \`reason: buyer_canceled\` or
-\`confirmation_expired\`, tell the buyer the reason and stop. Do not revise or retry that transaction.
-Start a new transaction with a new idempotency key only if the buyer still wants to buy. Merchant
+\`confirmation_expired\`, tell the user the reason and stop. Do not revise or retry that transaction.
+Start a new transaction with a new idempotency key only if the user still wants to buy. Merchant
 checkout cancellation runs separately; its retries never reopen the closed transaction.
 
 \`nextAction.type: closed\` with \`reason: sapiom_error\` means the transaction failed on Sapiom's side. Tell
-the buyer, stop, and report the \`requestId\` to support@sapiom.ai. Do not
+the user, stop, and report the \`requestId\` to support@sapiom.ai. Do not
 revise or retry that transaction. A \`revise\` action's \`reasons\` list \`{ruleId, code, message}\` per rule
-that denied the cart; tell the buyer, then change the cart with \`sapiom_update_transaction\` if they
+that denied the cart; tell the user, then change the cart with \`sapiom_update_transaction\` if they
 want to, or stop.
 
 \`nextAction.type: closed\` with \`reason: payments_paused\` means Sapiom has paused card payments and
-closed the transaction. Tell the buyer and stop. Do not revise or retry it: a new
+closed the transaction. Tell the user and stop. Do not revise or retry it: a new
 card transaction ends the same way until Sapiom resumes card payments.
 
+Every other \`closed\` reason also means the transaction has ended; follow its \`instruction\` and never revise or update that transaction:
+
+- \`confirmation_void\`: the transaction, its evidence, or your organization's rules changed after the user's
+  confirmation was made. Start a new transaction if the user still wants it.
+- \`approval_denied\`: an approver rejected the transaction. Tell the user; do not retry it.
+- \`approval_expired\`: the approval expired or was withdrawn. Start a new transaction if the user still
+  wants it.
+- \`payment_ended\`: the card cannot pay for this transaction. Send the user a setup link, then
+  start a new transaction.
+- \`payment_expired\`: the approved payment expired before the card was sent, so nothing was charged.
+  Start a new transaction if the user still wants it.
+- \`checkout_unverifiable\`: Sapiom could not verify the merchant's checkout. Tell the user, stop, and
+  report the \`requestId\` to support@sapiom.ai.
+- \`payment_declined\`: the card network declined the payment, so the card wasn't used. Tell the user;
+  a new transaction on the same budget may be declined the same way.
+- \`merchant_refused\`: the merchant refused to open the checkout. Its \`messages\` say what it rejected:
+  each \`path\` names the request field (for example \`$.line_items[0].item.id\`) and \`content\` says why.
+  Correct the checkout request and start a new transaction with a new idempotency key. Item ids must
+  be in the merchant's own format; a Shopify store expects \`gid://shopify/ProductVariant/<id>\`, not a
+  bare number.
+
+\`revise\` is returned only when your organization's rules denied this cart and a different cart can pass.
+
 A card that can't pay says why in its \`readinessCodes\`: \`card_removed\`, \`card_failed\`,
-\`brand_not_supported\` and \`wrong_environment\` need a new card setup link; \`enrollment_pending\`
-needs the same setup link submitted again; \`setup_pending\` needs the cardholder to finish adding the
-card. \`agentic_route_off\` is informational: the card pays with its card number.
+\`brand_not_supported\` and \`wrong_environment\` need a new setup link; \`enrollment_pending\`
+needs the same setup link submitted again; \`setup_pending\` needs the user to finish adding the
+card. \`agentic_token_unsupported\` is informational: the card pays with its card number.
 
 When \`sapiom_add_payment_method\` returns \`setup_unavailable\`, card setup is broken on Sapiom's
 side: do not retry. Tell the user and give them the \`requestId\` from the error's \`details\` to
 report to Sapiom support. Only \`provider_unavailable\` is worth retrying, after a minute.
+
+\`sapiom_add_payment_method\` takes an optional \`budget\` (\`{ amount: { value, currency: 'USD' } }\`).
+Once the card is added, the setup page shows that amount for the user to confirm as the card's
+budget for 30 days, verified with the card network when the card supports it; without it, the
+user enters the amount or skips. The link's \`returnUrl\` gets a \`budget\` parameter saying how
+that step ended: \`verified\`, \`card_number\`, \`failed\` or \`skipped\`.
+
+A card transaction refused with reason \`budget_insufficient\` (error \`payment_method_not_ready\`)
+created nothing: the card's budget can't cover the total. The error's \`details.budget\` says what is
+left (\`available\`) and until when (\`expiresAt\`). Buy within it, or tell the user: only the
+user can set a new budget, on a budget link the platform sends
+(\`POST /v1/payment-cards/{cardId}/budget-links\`). Then start a new transaction under a new
+idempotency key.
+
+A transaction its budget refused later, once its final total was known, reads the same way on
+every merchant: \`payment.denial\` says why (\`budget_insufficient\`, \`budget_expired\`,
+\`budget_cancelled\` or \`merchant_mismatch\`) and \`payment.budget\` carries the same \`available\` and
+\`expiresAt\`. Nothing was charged; follow its \`nextAction\` instruction.
 
 ## Triggers (run a deployed agent without a human)
 
@@ -236,6 +323,10 @@ Listen with an \`event\` trigger; the events API refuses it.
   models.coding, fileStorage, search, database, email, domains, memory, and more) —
   don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are
   a top-level \`@sapiom/tools\` import, not under \`ctx.sapiom\`.
+- A web search bills one search per call at the tier you ask for: \`depth: "deep"\` is the premium
+  deep-search tier, priced well above a standard search, so leave depth at standard unless you need
+  the more thorough answer. A links-only search (\`sapiom_deep_search\`, despite its name) is always
+  standard.
 - A Sapiom Postgres (\`ctx.sapiom.database.create\`) is permanent: it lives until you delete
   it, holds one slot of your plan's database limit while held, and never expires — there is
   no lifetime to pick and no \`duration\` to pass.
@@ -243,6 +334,11 @@ Listen with an \`event\` trigger; the events API refuses it.
   64 Unicode code points; pass the namespace they were written under.
 - \`ctx.sapiom.fileStorage.upload(…)\` returns \`uploadUrl\`, \`requiredHeaders\` and \`expiresAt\`: PUT
   the file bytes to \`uploadUrl\` yourself, with exactly those headers, before \`expiresAt\`.
+- \`ctx.sapiom.domains.register\` refuses most country-code TLDs (e.g. \`.be\`, \`.fr\`, \`.eu\`) before
+  any charge: their registries can require a local holder or an identity check before activating
+  a domain. Generic TLDs (\`.com\`, \`.app\`, \`.dev\`, …) and open country codes such as \`.io\`, \`.co\`,
+  \`.me\` and \`.mx\` work; availability checks mark refused names as not supported. \`.ai\` is refused
+  too: Name.com only sells it for two years or more, and Sapiom registers domains for one year.
 
 ## Secrets, inbound events, receipts
 
@@ -302,8 +398,8 @@ Full reference: the \`AGENTS.md\` and \`sapiom-agent-authoring\` skill inside yo
 project.`;
 
 /** `X-Sapiom-Content-Release` of the response this snapshot was taken from. */
-export const AUTHORING_INSTRUCTIONS_RELEASE = "2026-10-27.7";
+export const AUTHORING_INSTRUCTIONS_RELEASE = "2026-11-13";
 
 /** Full sha-256 hex of {@link AUTHORING_INSTRUCTIONS}; the served header carries its first 12 characters. */
 export const AUTHORING_INSTRUCTIONS_DIGEST =
-  "09951c71847789d4b5616a101eccd4568ba73c11cdd35af140f47f9aab2c71ed";
+  "2538f3bad529176ad6520ab873003344cce2af6e14456128946703e9e6596537";
