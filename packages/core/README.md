@@ -32,22 +32,22 @@ yarn add @sapiom/core
 ### Direct API Client
 
 ```typescript
-import { SapiomClient } from '@sapiom/core';
+import { SapiomClient } from "@sapiom/core";
 
 const client = new SapiomClient({
   apiKey: process.env.SAPIOM_API_KEY,
-  baseURL: 'https://api.sapiom.ai' // optional
+  baseURL: "https://api.sapiom.ai", // optional
 });
 
 // Create a transaction
 const transaction = await client.transactions.create({
-  service: 'api',
-  action: 'call',
-  resource: 'completion',
+  service: "api",
+  action: "call",
+  resource: "completion",
   qualifiers: {
-    model: 'gpt-4',
-    tokens: 1000
-  }
+    model: "gpt-4",
+    tokens: 1000,
+  },
 });
 
 // Check transaction status
@@ -63,17 +63,20 @@ npm install @sapiom/axios axios
 ```
 
 ```typescript
-import axios from 'axios';
-import { withSapiom } from '@sapiom/axios';
+import axios from "axios";
+import { withSapiom } from "@sapiom/axios";
 
-const client = withSapiom(axios.create({
-  baseURL: 'https://api.example.com'
-}), {
-  apiKey: process.env.SAPIOM_API_KEY
-});
+const client = withSapiom(
+  axios.create({
+    baseURL: "https://api.example.com",
+  }),
+  {
+    apiKey: process.env.SAPIOM_API_KEY,
+  },
+);
 
 // Automatically handles 402 payment flows
-const response = await client.get('/premium-endpoint');
+const response = await client.get("/premium-endpoint");
 ```
 
 See [@sapiom/axios](../axios/README.md) for complete documentation.
@@ -87,14 +90,14 @@ npm install @sapiom/fetch
 ```
 
 ```typescript
-import { createFetch } from '@sapiom/fetch';
+import { createFetch } from "@sapiom/fetch";
 
 const safeFetch = createFetch({
-  apiKey: process.env.SAPIOM_API_KEY
+  apiKey: process.env.SAPIOM_API_KEY,
 });
 
 // Drop-in replacement for native fetch
-const response = await safeFetch('https://api.example.com/data');
+const response = await safeFetch("https://api.example.com/data");
 ```
 
 See [@sapiom/fetch](../fetch/README.md) for complete documentation.
@@ -108,15 +111,15 @@ npm install @sapiom/node-http
 ```
 
 ```typescript
-import { createClient } from '@sapiom/node-http';
+import { createClient } from "@sapiom/node-http";
 
 const client = createClient({
-  apiKey: process.env.SAPIOM_API_KEY
+  apiKey: process.env.SAPIOM_API_KEY,
 });
 
 const response = await client.request({
-  method: 'GET',
-  url: 'https://api.example.com/data'
+  method: "GET",
+  url: "https://api.example.com/data",
 });
 ```
 
@@ -133,6 +136,7 @@ new SapiomClient(config: SapiomClientConfig)
 ```
 
 **Config options:**
+
 - `apiKey: string` - Required: Your Sapiom API key
 - `baseURL?: string` - Optional: API base URL (default: https://api.sapiom.ai)
 - `servicesDomain?: string` - Optional: Services domain for gateway clients (default: services.sapiom.ai)
@@ -173,6 +177,43 @@ wait, pass the previous purchase `version` as `since` to wait for a change. The
 request timeout includes five seconds beyond the server wait and preserves a
 larger configured client timeout. The deadline covers reading the response body.
 
+##### transactions.update()
+
+A browser purchase can be revised on the same transaction ID while it needs a
+revision, is waiting for approval, or is authorized but unused. Change the actual
+cart first. Sapiom records your replacement statement and evaluates fresh payment
+authority; it does not operate or verify the browser.
+
+```typescript
+const current = await client.transactions.get(transactionId);
+const body = {
+  version: current.version!,
+  purchase: {
+    type: "browser_checkout" as const,
+    merchant: { origin: "https://store.example" }, // preserve the entire merchant
+    total: { amount: "0.40", currency: "USD" },
+    claimedLineItems: [{ title: "Single pen", quantity: 1 }],
+  },
+};
+const options = { idempotencyKey: crypto.randomUUID() };
+const updated = await client.transactions.update(transactionId, body, options);
+// Follow updated.nextAction: acceptance does not mean payment is authorized.
+```
+
+Send a full replacement `purchase`, preserving the merchant, currency and funding.
+The read view's `purchase.lineItems` maps to `purchase.claimedLineItems` on update.
+Use a new key for new terms. If a browser update response is lost, read the purchase
+or retry the **identical body, version and key**. A stale version requires a fresh
+read and a new key. UCP uses `{ version, checkout }` on the same method; an uncertain
+merchant update requires reconciliation, not an automatic retry.
+
+`needs_revision` / `nextAction.type: "revise"` includes the refusing rules in
+`nextAction.reasons`. The poller returns this decision immediately. The authorizer
+throws `TransactionRevisionRequiredError`, carrying the transaction and reasons
+(or returns the decision with `throwOnDenied: false`). Fetch, Axios and Node HTTP
+integrations also throw this error in both fail-open and fail-closed modes, before
+sending the protected request. They never edit or resubmit a purchase themselves.
+
 ##### Helper Methods
 
 ```typescript
@@ -186,21 +227,21 @@ client.transactions.getPaymentDetails(transaction): PaymentDetails | null
 
 ```typescript
 // Store one secret under an external ref
-await client.vault.set('agent-123', 'OPENAI_API_KEY', {
-  value: 'sk-...'
+await client.vault.set("agent-123", "OPENAI_API_KEY", {
+  value: "sk-...",
 });
 
 // Read one secret. Missing keys return null.
-const openaiKey = await client.vault.get('agent-123', 'OPENAI_API_KEY');
+const openaiKey = await client.vault.get("agent-123", "OPENAI_API_KEY");
 
 // Read a subset of secrets from the same ref
-const secrets = await client.vault.getMany('agent-123', [
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY'
+const secrets = await client.vault.getMany("agent-123", [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
 ]);
 
 // Remove one key
-await client.vault.deleteKey('agent-123', 'OPENAI_API_KEY');
+await client.vault.deleteKey("agent-123", "OPENAI_API_KEY");
 ```
 
 ## HTTP Integrations
@@ -261,7 +302,11 @@ try {
 ### Custom HTTP Adapter
 
 ```typescript
-import type { HttpClientAdapter, HttpRequest, HttpResponse } from '@sapiom/core';
+import type {
+  HttpClientAdapter,
+  HttpRequest,
+  HttpResponse,
+} from "@sapiom/core";
 
 class MyCustomAdapter implements HttpClientAdapter {
   async request(config: HttpRequest): Promise<HttpResponse> {
@@ -273,11 +318,11 @@ class MyCustomAdapter implements HttpClientAdapter {
 ### Payment Error Detection
 
 ```typescript
-import { isPaymentRequiredError, extractX402Response } from '@sapiom/core';
+import { isPaymentRequiredError, extractX402Response } from "@sapiom/core";
 
 if (isPaymentRequiredError(error)) {
   const x402Response = extractX402Response(error);
-  console.log('Payment required:', x402Response);
+  console.log("Payment required:", x402Response);
 }
 ```
 
@@ -292,7 +337,7 @@ import type {
   HttpResponse,
   X402Response,
   X402PaymentRequirement,
-} from '@sapiom/core';
+} from "@sapiom/core";
 ```
 
 ## License

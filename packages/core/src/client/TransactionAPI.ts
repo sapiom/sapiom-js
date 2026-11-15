@@ -7,6 +7,7 @@ import {
   TransactionStatus,
   TransactionCostInput,
   TransactionCostResponse,
+  UpdatePurchaseRequest,
 } from "../types/transaction.js";
 import type { HttpClient } from "./HttpClient.js";
 
@@ -19,10 +20,34 @@ export class TransactionAPI {
    * @returns The created transaction response
    */
   async create(data: CreateTransactionRequest): Promise<TransactionResponse> {
+    const { idempotencyKey, ...body } = data;
     return await this.httpClient.request<TransactionResponse>({
       method: "POST",
       url: "/transactions",
+      body,
+      ...(idempotencyKey && { headers: { "Idempotency-Key": idempotencyKey } }),
+    });
+  }
+
+  /**
+   * Replace an unfinished purchase. A browser timeout is safe to retry only with the identical
+   * body, version and key. Acceptance starts fresh governance; always follow nextAction.
+   */
+  async update(
+    transactionId: string,
+    data: UpdatePurchaseRequest,
+    options: { idempotencyKey: string },
+  ): Promise<TransactionResponse> {
+    if (
+      !options.idempotencyKey.trim() ||
+      options.idempotencyKey.trim().length > 255
+    )
+      throw new Error("idempotencyKey must contain 1 to 255 characters");
+    return this.httpClient.request<TransactionResponse>({
+      method: "POST",
+      url: `/transactions/${transactionId}/update`,
       body: data,
+      headers: { "Idempotency-Key": options.idempotencyKey },
     });
   }
 

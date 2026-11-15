@@ -5,7 +5,11 @@
 import axios, { AxiosInstance } from "axios";
 import MockAdapter from "axios-mock-adapter";
 import { withSapiom } from "./axios";
-import { SapiomClient, TransactionAPI } from "@sapiom/core";
+import {
+  SapiomClient,
+  TransactionAPI,
+  TransactionRevisionRequiredError,
+} from "@sapiom/core";
 
 describe("Axios failureMode", () => {
   let axiosInstance: AxiosInstance;
@@ -36,6 +40,40 @@ describe("Axios failureMode", () => {
   afterEach(() => {
     mockAxios.restore();
   });
+
+  it.each(["open", "closed"] as const)(
+    "blocks revision decisions in failureMode %s",
+    async (failureMode) => {
+      for (const mode of ["create", "existing", "poll"] as const) {
+        const transaction = {
+          id: "tx-revise",
+          status: "needs_revision",
+          nextAction: { type: "revise", actor: "agent", reasons: [] },
+        };
+        mockTransactionAPI.create.mockResolvedValue(
+          mode === "poll"
+            ? ({ id: "tx-revise", status: "pending" } as any)
+            : (transaction as any),
+        );
+        mockTransactionAPI.get.mockResolvedValue(transaction as any);
+        mockAxios.onGet("/test").reply(200);
+        const client = withSapiom(axiosInstance, {
+          sapiomClient: mockSapiomClient,
+          failureMode,
+          polling: { pollInterval: 1 },
+        });
+        await expect(
+          client.get("/test", {
+            headers:
+              mode === "existing"
+                ? { "X-Sapiom-Transaction-Id": "tx-revise" }
+                : {},
+          }),
+        ).rejects.toBeInstanceOf(TransactionRevisionRequiredError);
+        expect(mockAxios.history.get).toHaveLength(0);
+      }
+    },
+  );
 
   describe('failureMode: "open" (default)', () => {
     it("should allow request when Sapiom API returns 500", async () => {

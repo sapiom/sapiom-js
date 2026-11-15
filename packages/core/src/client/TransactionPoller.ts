@@ -8,6 +8,7 @@ import { SapiomClient } from "./SapiomClient.js";
 export type TransactionPollResult =
   | { status: "authorized"; transaction: TransactionResponse }
   | { status: "denied"; transaction: TransactionResponse }
+  | { status: "needs_revision"; transaction: TransactionResponse }
   | { status: "timeout" };
 
 /**
@@ -107,6 +108,13 @@ export class TransactionPoller {
     while (Date.now() - startTime < timeout) {
       const transaction =
         await this.sapiomClient.transactions.get(transactionId);
+
+      if (
+        transaction.status === TransactionStatus.NEEDS_REVISION ||
+        transaction.nextAction?.type === "revise"
+      ) {
+        return { status: "needs_revision", transaction };
+      }
 
       if (transaction.status === TransactionStatus.AUTHORIZED) {
         return { status: "authorized", transaction };

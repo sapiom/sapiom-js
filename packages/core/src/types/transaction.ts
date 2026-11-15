@@ -1,6 +1,8 @@
 export enum TransactionStatus {
   PENDING = "pending",
   PREPARING = "preparing",
+  WAITING_APPROVAL = "waiting_approval",
+  NEEDS_REVISION = "needs_revision",
   AUTHORIZED = "authorized",
   COMPLETED = "completed",
   DENIED = "denied",
@@ -19,7 +21,69 @@ export interface TransactionCostInput {
   costDetails?: Record<string, any>;
 }
 
+export interface BrowserPurchase {
+  type: "browser_checkout";
+  merchant: { origin: string; name?: string; countryCode?: string };
+  total: { amount: string; currency: string };
+  description?: string;
+  claimedLineItems?: Array<{
+    title: string;
+    quantity: number;
+    unitAmount?: string;
+  }>;
+  pageUrl?: string;
+}
+
+export interface UcpPurchase {
+  type: "ucp_checkout";
+  merchant: { origin: string; name?: string; countryCode?: string };
+  checkout: Record<string, unknown>;
+}
+
+export type PurchaseFunding =
+  | {
+      paymentMethodId: string;
+      credentialRoute?: "real_card_number" | "network_agentic_token";
+    }
+  | {
+      source: "external_card";
+      paymentCardId?: string;
+      credentialRoute?: "real_card_number" | "network_agentic_token";
+    };
+
+/** Full replacement of one purchase source, under the latest version. Funding is fixed. */
+export type UpdatePurchaseRequest = { version: string } & (
+  | { purchase: BrowserPurchase; checkout?: never }
+  | { checkout: Record<string, unknown>; purchase?: never }
+);
+
+export interface PurchaseView {
+  type: "browser_checkout" | "ucp_checkout";
+  assertedBy: "agent" | "merchant";
+  merchant: { origin: string; name?: string; countryCode?: string };
+  total: { amount: string; currency: string } | null;
+  lineItems?: Array<{
+    title?: string;
+    itemId?: string;
+    quantity: number;
+    unitAmount?: string;
+  }>;
+  revision?: number;
+  description?: string;
+  pageUrl?: string;
+}
+
+export interface PurchaseGovernanceReason {
+  ruleId: string;
+  code: string;
+  message: string;
+}
+
 export interface CreateTransactionRequest {
+  purchase?: BrowserPurchase | UcpPurchase;
+  funding?: PurchaseFunding;
+  /** Forwarded as Idempotency-Key, never as part of the body. */
+  idempotencyKey?: string;
   requestFacts?: {
     source: string;
     version: string;
@@ -80,6 +144,7 @@ export interface TransactionCostResponse {
 }
 
 export interface TransactionResponse {
+  purchase?: PurchaseView;
   /** Changes with the actionable purchase state; usable with a bounded get. */
   version?: string;
   nextAction?: {
@@ -87,6 +152,7 @@ export interface TransactionResponse {
     actor: string;
     url?: string;
     expiresAt?: string;
+    reasons?: PurchaseGovernanceReason[];
     [field: string]: unknown;
   };
   id: string;

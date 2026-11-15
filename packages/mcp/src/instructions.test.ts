@@ -44,6 +44,18 @@ describe("server instructions", () => {
     expect(sha256).toBe(AUTHORING_INSTRUCTIONS_DIGEST);
   });
 
+  it("distinguishes a browser revision from an uncertain merchant update", () => {
+    expect(AUTHORING_INSTRUCTIONS).toContain("same transactionId");
+    expect(AUTHORING_INSTRUCTIONS).toContain("purchase.claimedLineItems");
+    expect(AUTHORING_INSTRUCTIONS).toContain("identical body, version and key");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "neither edits nor verifies the browser cart",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "uncertain merchant updates still require reconciliation",
+    );
+  });
+
   it("primer covers the lifecycle, canonical rules, and points to the docs", () => {
     // Lifecycle tools an agent must drive
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_authenticate");

@@ -1,3 +1,4 @@
+export { TransactionRevisionRequiredError } from "./utils/TransactionRevisionRequiredError.js";
 /**
  * @sapiom/core - Core SDK for Sapiom API
  *
@@ -73,6 +74,12 @@ export type {
   CompleteTransactionRequest,
   CompleteTransactionResult,
   CreateTransactionRequest,
+  BrowserPurchase,
+  UcpPurchase,
+  PurchaseFunding,
+  UpdatePurchaseRequest,
+  PurchaseView,
+  PurchaseGovernanceReason,
   TransactionResponse,
   PaymentTransactionResponse,
   PaymentProtocolData,

@@ -2,6 +2,7 @@ import {
   SapiomClient,
   TransactionPoller,
   TransactionStatus,
+  TransactionRevisionRequiredError,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -141,10 +142,13 @@ export async function handleAuthorization(
     const endpoint = request.url;
 
     switch (transaction.status) {
+      case TransactionStatus.NEEDS_REVISION:
+        throw new TransactionRevisionRequiredError(transaction);
       case TransactionStatus.AUTHORIZED:
         return request;
 
       case TransactionStatus.PENDING:
+      case TransactionStatus.WAITING_APPROVAL:
       case TransactionStatus.PREPARING: {
         let authResult;
         try {
@@ -157,6 +161,9 @@ export async function handleAuthorization(
           );
           return request;
         }
+
+        if (authResult.status === "needs_revision")
+          throw new TransactionRevisionRequiredError(authResult.transaction);
 
         if (authResult.status === "authorized") {
           return request;
@@ -268,6 +275,9 @@ export async function handleAuthorization(
     throw new AuthorizationDeniedError(transaction.id, endpoint);
   }
 
+  if (transaction.status === TransactionStatus.NEEDS_REVISION)
+    throw new TransactionRevisionRequiredError(transaction);
+
   if (transaction.status === TransactionStatus.AUTHORIZED) {
     const modifiedRequest = { ...request };
     modifiedRequest.headers = { ...request.headers };
@@ -291,6 +301,9 @@ export async function handleAuthorization(
     );
     return request;
   }
+
+  if (result.status === "needs_revision")
+    throw new TransactionRevisionRequiredError(result.transaction);
 
   if (result.status === "authorized") {
     const modifiedRequest = { ...request };
@@ -382,6 +395,9 @@ export async function handlePayment(
     throw error;
   }
 
+  if (transaction.status === TransactionStatus.NEEDS_REVISION)
+    throw new TransactionRevisionRequiredError(transaction);
+
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
     const polling = { ...DEFAULT_POLLING, ...config.polling };
     let authResult;
@@ -396,6 +412,9 @@ export async function handlePayment(
       );
       throw error;
     }
+
+    if (authResult.status === "needs_revision")
+      throw new TransactionRevisionRequiredError(authResult.transaction);
 
     if (authResult.status !== "authorized") {
       throw error;
