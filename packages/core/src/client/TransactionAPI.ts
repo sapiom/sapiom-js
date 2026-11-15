@@ -47,6 +47,7 @@ export class TransactionAPI {
       method: "POST",
       url: `/transactions/${transactionId}/update`,
       body: data,
+      retry: false,
       headers: { "Idempotency-Key": options.idempotencyKey },
     });
   }

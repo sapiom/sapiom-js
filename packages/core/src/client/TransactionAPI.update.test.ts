@@ -1,5 +1,5 @@
 import { TransactionAPI } from "./TransactionAPI.js";
-import type { HttpClient } from "./HttpClient.js";
+import { HttpClient } from "./HttpClient.js";
 import type {
   BrowserPurchase,
   UpdatePurchaseRequest,
@@ -34,6 +34,7 @@ describe("purchase updates", () => {
           method: "POST",
           url: "/transactions/tx/update",
           body: input,
+          retry: false,
           headers: { "Idempotency-Key": "change-1" },
         },
       ]),
@@ -54,6 +55,35 @@ describe("purchase updates", () => {
       ),
     ).rejects.toBe(failure);
   });
+
+  it.each(["browser", "ucp"])(
+    "never automatically replays an uncertain %s update",
+    async (source) => {
+      const fetch = jest
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response("{}", { status: 500 }));
+      const real = new TransactionAPI(
+        new HttpClient({
+          baseURL: "https://api.example.com",
+          timeout: 1000,
+          headers: {},
+          retry: { maxAttempts: 3, baseDelayMs: 0 },
+        }),
+      );
+      const body: UpdatePurchaseRequest =
+        source === "browser"
+          ? { version: "v1", purchase }
+          : { version: "v1", checkout: { line_items: [] } };
+      try {
+        await expect(
+          real.update("tx", body, { idempotencyKey: "change" }),
+        ).rejects.toThrow();
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
 
   it("forwards purchase creation's key in a header", async () => {
     await api.create({

@@ -25,6 +25,7 @@ describe("Axios failureMode", () => {
       create: jest.fn(),
       get: jest.fn(),
       reauthorizeWithPayment: jest.fn(),
+      complete: jest.fn().mockResolvedValue({}),
       list: jest.fn(),
       isAuthorized: jest.fn(),
       isCompleted: jest.fn(),
@@ -40,6 +41,65 @@ describe("Axios failureMode", () => {
   afterEach(() => {
     mockAxios.restore();
   });
+
+  it.each([
+    ["open", false],
+    ["open", true],
+    ["closed", false],
+    ["closed", true],
+  ] as const)(
+    "leaves a payment revision open (%s, polled: %s)",
+    async (failureMode, pending) => {
+      const revision = {
+        id: "tx-revise",
+        status: "needs_revision",
+        nextAction: { type: "revise", actor: "agent", reasons: [] },
+      };
+      mockTransactionAPI.create.mockResolvedValue({
+        id: "tx-revise",
+        status: "authorized",
+      } as any);
+      mockTransactionAPI.reauthorizeWithPayment.mockResolvedValue(
+        pending
+          ? ({ id: "tx-revise", status: "pending" } as any)
+          : (revision as any),
+      );
+      mockTransactionAPI.get
+        .mockResolvedValueOnce({
+          id: "tx-revise",
+          status: "authorized",
+          requiresPayment: false,
+        } as any)
+        .mockResolvedValue(revision as any);
+      const paymentRequired = {
+        x402Version: 1,
+        accepts: [
+          {
+            scheme: "exact",
+            network: "base",
+            maxAmountRequired: "1000000",
+            resource: "https://api.example.com/test",
+            payTo: "0x123",
+            asset: "0xUSDC",
+          },
+        ],
+      };
+      mockAxios.onGet("/test").reply(402, paymentRequired);
+      const client = withSapiom(axiosInstance, {
+        sapiomClient: mockSapiomClient,
+        failureMode,
+        polling: { pollInterval: 1 },
+      });
+      await expect(client.get("/test")).rejects.toBeInstanceOf(
+        TransactionRevisionRequiredError,
+      );
+      expect(mockAxios.history.get).toHaveLength(1);
+      expect(mockTransactionAPI.reauthorizeWithPayment).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(mockTransactionAPI.complete).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["open", "closed"] as const)(
     "blocks revision decisions in failureMode %s",

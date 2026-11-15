@@ -19,6 +19,8 @@ export interface HttpRequestConfig {
   headers?: Record<string, string>;
   /** Optional budget for this request only, including bounded server waits. */
   timeoutMs?: number;
+  /** Disable automatic replay when an operation can have an uncertain remote outcome. */
+  retry?: false;
 }
 
 /**
@@ -140,7 +142,8 @@ export class HttpClient {
     const configWithHeaders = { ...config, headers };
 
     let lastError: unknown;
-    for (let attempt = 0; attempt < this.retry.maxAttempts; attempt++) {
+    const maxAttempts = config.retry === false ? 1 : this.retry.maxAttempts;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         return await this.executeRequest<T>(configWithHeaders);
       } catch (error) {
@@ -148,7 +151,7 @@ export class HttpClient {
         if (!this.isRetryable(error)) {
           throw error;
         }
-        if (attempt < this.retry.maxAttempts - 1) {
+        if (attempt < maxAttempts - 1) {
           const base = this.retry.baseDelayMs * Math.pow(2, attempt);
           const delay = Math.random() * base; // full jitter: spreads retries across [0, base]
           await new Promise((resolve) => setTimeout(resolve, delay));

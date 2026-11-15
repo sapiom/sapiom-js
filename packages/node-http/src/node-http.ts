@@ -6,6 +6,7 @@ import {
   HttpRequest,
   HttpResponse,
   HttpError,
+  TransactionRevisionRequiredError,
 } from "@sapiom/core";
 import {
   BaseSapiomIntegrationConfig,
@@ -127,8 +128,16 @@ export function createClient(
 
   const failureMode = config?.failureMode ?? "open";
 
-  const authConfig: AuthorizationConfig = { sapiomClient, failureMode, polling: config?.polling };
-  const paymentConfig: PaymentConfig = { sapiomClient, failureMode, polling: config?.polling };
+  const authConfig: AuthorizationConfig = {
+    sapiomClient,
+    failureMode,
+    polling: config?.polling,
+  };
+  const paymentConfig: PaymentConfig = {
+    sapiomClient,
+    failureMode,
+    polling: config?.polling,
+  };
   const completionConfig: CompletionConfig = { sapiomClient };
 
   async function makeRequest<T = any>(
@@ -262,26 +271,32 @@ export function createClient(
       } catch (err) {
         error = err as Error | HttpError;
         if ((error as HttpError).response?.status === 402) {
-          response = await handlePayment(
-            modifiedRequest,
-            error as HttpError,
-            paymentConfig,
-            makeRequest,
-            defaultMetadata,
-          );
-          error = null; // Clear error since payment succeeded
-          return response;
+          try {
+            response = await handlePayment(
+              modifiedRequest,
+              error as HttpError,
+              paymentConfig,
+              makeRequest,
+              defaultMetadata,
+            );
+            error = null; // Clear error since payment succeeded
+            return response;
+          } catch (paymentError) {
+            error = paymentError as Error;
+            throw paymentError;
+          }
         }
         throw err;
       } finally {
         // Fire-and-forget: complete the transaction
-        handleCompletion(
-          modifiedRequest,
-          response,
-          error,
-          completionConfig,
-          startTime,
-        );
+        if (!(error instanceof TransactionRevisionRequiredError))
+          handleCompletion(
+            modifiedRequest,
+            response,
+            error,
+            completionConfig,
+            startTime,
+          );
       }
     },
 
