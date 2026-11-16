@@ -43,18 +43,78 @@ describe("Fetch failureMode", () => {
     fetchMock.unmockGlobal();
   });
 
+  it.each(["needs_revision", "authorized"])(
+    "leaves an on-demand revision open with status %s",
+    async (status) => {
+      const revision = {
+        id: "tx-on-demand",
+        status,
+        ...(status === "authorized" && {
+          nextAction: { type: "revise", actor: "agent", reasons: [] },
+        }),
+      };
+      mockTransactionAPI.create
+        .mockRejectedValueOnce(
+          new Error("Preemptive authorization unavailable"),
+        )
+        .mockResolvedValueOnce(revision as any);
+      mockTransactionAPI.reauthorizeWithPayment.mockResolvedValue({
+        id: revision.id,
+        status: "authorized",
+        payment: { authorizationPayload: { x402Version: 1 } },
+      } as any);
+      fetchMock.get("https://api.example.com/test", {
+        status: 402,
+        body: {
+          x402Version: 1,
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "1000000",
+              resource: "https://api.example.com/test",
+              payTo: "0x123",
+              asset: "0xUSDC",
+            },
+          ],
+        },
+      });
+      const client = createFetch({
+        sapiomClient: mockSapiomClient,
+        failureMode: "open",
+      });
+
+      await expect(
+        client("https://api.example.com/test"),
+      ).rejects.toMatchObject({
+        name: "TransactionRevisionRequiredError",
+        transaction: revision,
+      });
+      expect(mockTransactionAPI.create).toHaveBeenCalledTimes(2);
+      expect(fetchMock.callHistory.calls()).toHaveLength(1);
+      expect(mockTransactionAPI.reauthorizeWithPayment).not.toHaveBeenCalled();
+      expect(mockTransactionAPI.complete).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
-    ["open", false],
-    ["open", true],
-    ["closed", false],
-    ["closed", true],
+    ["open", false, "needs_revision"],
+    ["open", true, "needs_revision"],
+    ["closed", false, "needs_revision"],
+    ["closed", true, "needs_revision"],
+    ["open", false, "authorized"],
+    ["open", true, "authorized"],
+    ["closed", false, "authorized"],
+    ["closed", true, "authorized"],
   ] as const)(
-    "leaves a payment revision open (%s, polled: %s)",
-    async (failureMode, pending) => {
+    "leaves a payment revision open (%s, polled: %s, status: %s)",
+    async (failureMode, pending, status) => {
       const revision = {
         id: "tx-revise",
-        status: "needs_revision",
-        nextAction: { type: "revise", actor: "agent", reasons: [] },
+        status,
+        ...(status === "authorized" && {
+          nextAction: { type: "revise", actor: "agent", reasons: [] },
+        }),
       };
       mockTransactionAPI.create.mockResolvedValue({
         id: "tx-revise",
@@ -99,14 +159,21 @@ describe("Fetch failureMode", () => {
     },
   );
 
-  it.each(["open", "closed"] as const)(
-    "blocks revision decisions in failureMode %s",
-    async (failureMode) => {
+  it.each([
+    ["open", "needs_revision"],
+    ["closed", "needs_revision"],
+    ["open", "authorized"],
+    ["closed", "authorized"],
+  ] as const)(
+    "blocks revision decisions in failureMode %s with status %s",
+    async (failureMode, status) => {
       for (const mode of ["create", "existing", "poll"] as const) {
         const transaction = {
           id: "tx-revise",
-          status: "needs_revision",
-          nextAction: { type: "revise", actor: "agent", reasons: [] },
+          status,
+          ...(status === "authorized" && {
+            nextAction: { type: "revise", actor: "agent", reasons: [] },
+          }),
         };
         mockTransactionAPI.create.mockResolvedValue(
           mode === "poll"

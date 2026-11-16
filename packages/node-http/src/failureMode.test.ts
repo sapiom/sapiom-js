@@ -37,17 +37,23 @@ describe("Node-HTTP failureMode", () => {
   });
 
   it.each([
-    ["open", false],
-    ["open", true],
-    ["closed", false],
-    ["closed", true],
+    ["open", false, "needs_revision"],
+    ["open", true, "needs_revision"],
+    ["closed", false, "needs_revision"],
+    ["closed", true, "needs_revision"],
+    ["open", false, "authorized"],
+    ["open", true, "authorized"],
+    ["closed", false, "authorized"],
+    ["closed", true, "authorized"],
   ] as const)(
-    "leaves a payment revision open (%s, polled: %s)",
-    async (failureMode, pending) => {
+    "leaves a payment revision open (%s, polled: %s, status: %s)",
+    async (failureMode, pending, status) => {
       const revision = {
         id: "tx-revise",
-        status: "needs_revision",
-        nextAction: { type: "revise", actor: "agent", reasons: [] },
+        status,
+        ...(status === "authorized" && {
+          nextAction: { type: "revise", actor: "agent", reasons: [] },
+        }),
       };
       mockTransactionAPI.create.mockResolvedValue({
         id: "tx-revise",
@@ -95,14 +101,21 @@ describe("Node-HTTP failureMode", () => {
     },
   );
 
-  it.each(["open", "closed"] as const)(
-    "blocks revision decisions in failureMode %s",
-    async (failureMode) => {
+  it.each([
+    ["open", "needs_revision"],
+    ["closed", "needs_revision"],
+    ["open", "authorized"],
+    ["closed", "authorized"],
+  ] as const)(
+    "blocks revision decisions in failureMode %s with status %s",
+    async (failureMode, status) => {
       for (const mode of ["create", "existing", "poll"] as const) {
         const transaction = {
           id: "tx-revise",
-          status: "needs_revision",
-          nextAction: { type: "revise", actor: "agent", reasons: [] },
+          status,
+          ...(status === "authorized" && {
+            nextAction: { type: "revise", actor: "agent", reasons: [] },
+          }),
         };
         mockTransactionAPI.create.mockResolvedValue(
           mode === "poll"

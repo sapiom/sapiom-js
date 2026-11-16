@@ -141,9 +141,13 @@ export async function handleAuthorization(
 
     const endpoint = request.url;
 
+    if (
+      transaction.status === TransactionStatus.NEEDS_REVISION ||
+      transaction.nextAction?.type === "revise"
+    )
+      throw new TransactionRevisionRequiredError(transaction);
+
     switch (transaction.status) {
-      case TransactionStatus.NEEDS_REVISION:
-        throw new TransactionRevisionRequiredError(transaction);
       case TransactionStatus.AUTHORIZED:
         return request;
 
@@ -269,14 +273,17 @@ export async function handleAuthorization(
   }
 
   if (
+    transaction.status === TransactionStatus.NEEDS_REVISION ||
+    transaction.nextAction?.type === "revise"
+  )
+    throw new TransactionRevisionRequiredError(transaction);
+
+  if (
     transaction.status === TransactionStatus.DENIED ||
     transaction.status === TransactionStatus.CANCELLED
   ) {
     throw new AuthorizationDeniedError(transaction.id, endpoint);
   }
-
-  if (transaction.status === TransactionStatus.NEEDS_REVISION)
-    throw new TransactionRevisionRequiredError(transaction);
 
   if (transaction.status === TransactionStatus.AUTHORIZED) {
     const modifiedRequest = { ...request };
@@ -389,14 +396,17 @@ export async function handlePayment(
   }
 
   if (
+    transaction.status === TransactionStatus.NEEDS_REVISION ||
+    transaction.nextAction?.type === "revise"
+  )
+    throw new TransactionRevisionRequiredError(transaction);
+
+  if (
     transaction.status === TransactionStatus.DENIED ||
     transaction.status === TransactionStatus.CANCELLED
   ) {
     throw error;
   }
-
-  if (transaction.status === TransactionStatus.NEEDS_REVISION)
-    throw new TransactionRevisionRequiredError(transaction);
 
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
     const polling = { ...DEFAULT_POLLING, ...config.polling };

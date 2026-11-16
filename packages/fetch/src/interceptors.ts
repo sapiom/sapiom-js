@@ -136,9 +136,13 @@ export async function handleAuthorization(
 
     const endpoint = request.url;
 
+    if (
+      transaction.status === TransactionStatus.NEEDS_REVISION ||
+      transaction.nextAction?.type === "revise"
+    )
+      throw new TransactionRevisionRequiredError(transaction);
+
     switch (transaction.status) {
-      case TransactionStatus.NEEDS_REVISION:
-        throw new TransactionRevisionRequiredError(transaction);
       case TransactionStatus.AUTHORIZED:
         return request;
 
@@ -266,9 +270,13 @@ export async function handleAuthorization(
     return request;
   }
 
+  if (
+    transaction.status === TransactionStatus.NEEDS_REVISION ||
+    transaction.nextAction?.type === "revise"
+  )
+    throw new TransactionRevisionRequiredError(transaction);
+
   switch (transaction.status) {
-    case TransactionStatus.NEEDS_REVISION:
-      throw new TransactionRevisionRequiredError(transaction);
     case TransactionStatus.AUTHORIZED:
       break;
 
@@ -390,8 +398,9 @@ export async function handlePayment(
     const callSite = captureUserCallSite();
     const parsedUrl = new URL(request.url);
 
+    let newTransaction;
     try {
-      const newTransaction = await config.sapiomClient.transactions.create({
+      newTransaction = await config.sapiomClient.transactions.create({
         requestFacts: {
           source: "http-client",
           version: "v1",
@@ -434,15 +443,6 @@ export async function handlePayment(
           onDemandPayment: true,
         },
       });
-      existingTransactionId = newTransaction.id;
-      // Write the transaction ID back to the original request so
-      // handleCompletion (which reads X-Sapiom-Transaction-Id from
-      // request headers) can complete this on-demand transaction.
-      setHeader(
-        request.headers,
-        "X-Sapiom-Transaction-Id",
-        existingTransactionId,
-      );
     } catch (error) {
       if (config.failureMode === "closed") throw error;
       console.error(
@@ -451,6 +451,22 @@ export async function handlePayment(
       );
       return response;
     }
+
+    if (
+      newTransaction.status === TransactionStatus.NEEDS_REVISION ||
+      newTransaction.nextAction?.type === "revise"
+    )
+      throw new TransactionRevisionRequiredError(newTransaction);
+
+    existingTransactionId = newTransaction.id;
+    // Write the transaction ID back to the original request so
+    // handleCompletion (which reads X-Sapiom-Transaction-Id from
+    // request headers) can complete this on-demand transaction.
+    setHeader(
+      request.headers,
+      "X-Sapiom-Transaction-Id",
+      existingTransactionId,
+    );
   }
 
   let transaction;
@@ -480,7 +496,10 @@ export async function handlePayment(
   }
 
   // Poll for authorization if not already authorized
-  if (transaction.status === TransactionStatus.NEEDS_REVISION)
+  if (
+    transaction.status === TransactionStatus.NEEDS_REVISION ||
+    transaction.nextAction?.type === "revise"
+  )
     throw new TransactionRevisionRequiredError(transaction);
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
     const poller = new TransactionPoller(config.sapiomClient, polling);

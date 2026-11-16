@@ -207,12 +207,15 @@ or retry the **identical body, version and key**. A stale version requires a fre
 read and a new key. UCP uses `{ version, checkout }` on the same method; an uncertain
 merchant update requires reconciliation, not an automatic retry.
 
-`needs_revision` / `nextAction.type: "revise"` includes the refusing rules in
-`nextAction.reasons`. The poller returns this decision immediately. The authorizer
+A response with `status: "needs_revision"` or `nextAction.type: "revise"` requires
+revised terms, with refusing rules in `nextAction.reasons`. The poller returns
+this decision immediately. The authorizer
 throws `TransactionRevisionRequiredError`, carrying the transaction and reasons
 (or returns the decision with `throwOnDenied: false`). Fetch, Axios and Node HTTP
 integrations also throw this error in both fail-open and fail-closed modes, before
 sending the protected request. They never edit or resubmit a purchase themselves.
+The same check applies when Fetch creates a transaction after an HTTP 402: it
+stops before reauthorizing or retrying that payment and keeps the purchase open.
 
 ##### Helper Methods
 
