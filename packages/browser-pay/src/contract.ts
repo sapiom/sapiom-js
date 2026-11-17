@@ -133,7 +133,8 @@ export interface AdyenEncryptRequest {
 
 /**
  * The backend's typed answer when Adyen card encryption is switched off for
- * this deployment. It arrives as `code` (an error body) or `reason`.
+ * this deployment. It arrives as `code` (an error body) or `reason`, in any
+ * case: the backend sends `ADYEN_ENCRYPTION_NOT_ENABLED`.
  */
 export const ADYEN_ENCRYPTION_NOT_ENABLED = "adyen_encryption_not_enabled";
 
@@ -144,8 +145,14 @@ export type AdyenEncryptResult =
 export function isAdyenNotEnabled(value: unknown): boolean {
   return (
     isRecord(value) &&
-    (value.code === ADYEN_ENCRYPTION_NOT_ENABLED ||
-      value.reason === ADYEN_ENCRYPTION_NOT_ENABLED)
+    (isNotEnabledCode(value.code) || isNotEnabledCode(value.reason))
+  );
+}
+
+function isNotEnabledCode(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    value.toLowerCase() === ADYEN_ENCRYPTION_NOT_ENABLED
   );
 }
 

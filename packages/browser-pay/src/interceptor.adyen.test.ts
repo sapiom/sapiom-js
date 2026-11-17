@@ -584,6 +584,75 @@ describe("Adyen encryption gate", () => {
     assertNothingSecret(harness);
   });
 
+  it("a later not-enabled answer drops fields an earlier prepareAdyen fetched", async () => {
+    const answers = [ENCRYPTED, NOT_ENABLED, NOT_ENABLED];
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      encrypt: async () => answers.shift()!,
+    });
+    const input = { clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN };
+    await expect(harness.prepare(input)).resolves.toStrictEqual({
+      enabled: true,
+    });
+    await expect(harness.prepare(input)).resolves.toStrictEqual({
+      enabled: false,
+      reason: "adyen_not_enabled",
+    });
+    pause(harness.stub, "req-denied", ADVANCED);
+    await expectClosed("req-denied", "adyen_not_enabled");
+    expect(harness.encryptCalls).toHaveLength(3);
+  });
+
+  it("an older prepareAdyen finishing last does not restore fields a newer one cleared", async () => {
+    let releaseFirst: (result: AdyenEncryptResult) => void = () => {};
+    const answers: Array<Promise<AdyenEncryptResult>> = [
+      new Promise((resolve) => (releaseFirst = resolve)),
+      Promise.resolve(NOT_ENABLED),
+      Promise.resolve(NOT_ENABLED),
+    ];
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      encrypt: () => answers.shift()!,
+    });
+    const input = { clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN };
+    const older = harness.prepare(input);
+    await expect(harness.prepare(input)).resolves.toMatchObject({
+      enabled: false,
+    });
+    releaseFirst(ENCRYPTED);
+    await older;
+    pause(harness.stub, "req-race", ADVANCED);
+    await expectClosed("req-race", "adyen_not_enabled");
+    expect(harness.encryptCalls).toHaveLength(3);
+  });
+
+  it("prepareAdyen after detach says not enabled without asking the backend", async () => {
+    harness = await arm({});
+    await harness.detach();
+    await expect(
+      harness.prepare({ clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN }),
+    ).resolves.toStrictEqual({ enabled: false, reason: "adyen_not_enabled" });
+    expect(harness.encryptCalls).toHaveLength(0);
+  });
+
+  it("prepareAdyen says not enabled when detach lands while the backend answers", async () => {
+    let release: (result: AdyenEncryptResult) => void = () => {};
+    harness = await arm({
+      encrypt: () => new Promise((resolve) => (release = resolve)),
+    });
+    const pending = harness.prepare({
+      clientKey: CLIENT_KEY,
+      pageOrigin: PAGE_ORIGIN,
+    });
+    await waitFor(() => harness!.encryptCalls.length === 1, "encrypt call");
+    await harness.detach();
+    release(ENCRYPTED);
+    await expect(pending).resolves.toStrictEqual({
+      enabled: false,
+      reason: "adyen_not_enabled",
+    });
+  });
+
   it("prepareAdyen reports a backend failure without throwing or logging values", async () => {
     harness = await arm({
       encrypt: async () => {

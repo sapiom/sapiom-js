@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import { ADYEN_DOM_CLIENT_KEY_EXPRESSION } from "./detect";
 import {
   fillCard,
@@ -6,13 +10,20 @@ import {
   type LocatorLike,
   type PageLike,
 } from "./fill-card";
-import type { AdyenGate, AdyenReadiness } from "./interceptor";
+import {
+  attachInterceptor,
+  type AdyenGate,
+  type AdyenReadiness,
+} from "./interceptor";
+import { httpPaymentRelay } from "./relay";
+import { startCdpStub } from "../test/cdp-stub";
 
 const CARD: CardToFill = {
-  number: "4000000000000002",
+  number: "4778901234561927",
   expMonth: 3,
   expYear: 2029,
   cvc: "321",
+  brand: "visa",
 };
 
 const PAGE = "https://shop.example/checkout";
@@ -44,6 +55,8 @@ interface FakePage {
   page: PageLike;
   /** Every click, fill or keystroke sequence sent to any field. */
   touched: string[];
+  /** The last value typed or filled into each field, by hint. */
+  typed: Record<string, string>;
 }
 
 function fakePage(
@@ -51,6 +64,7 @@ function fakePage(
   domKey: string | null = null,
 ): FakePage {
   const touched: string[] = [];
+  const typed: Record<string, string> = {};
   const built: FrameLike[] = [];
   const main: FrameLike = makeFrame(PAGE, undefined);
   built.push(main);
@@ -66,10 +80,12 @@ function fakePage(
       fill: async (text) => {
         if (text) touched.push(`fill ${hint}`);
         value = text;
+        typed[hint ?? ""] = text;
       },
       pressSequentially: async (text) => {
         touched.push(`type ${hint}`);
         value = text;
+        typed[hint ?? ""] = text;
       },
       press: async () => {},
       inputValue: async () => value,
@@ -105,6 +121,7 @@ function fakePage(
   return {
     page: { frames: () => built, waitForTimeout: async () => {} },
     touched,
+    typed,
   };
 }
 
@@ -169,6 +186,42 @@ describe("fillCard on Adyen secured fields", () => {
       { clientKey: KEY, pageOrigin: "https://shop.example" },
     ]);
     expect(touched).toStrictEqual([]);
+  });
+
+  it.each([
+    ["visa", "4111111111111111"],
+    ["mastercard", "5555444433331111"],
+    ["american-express", "370000000000002"],
+  ])(
+    "types Adyen's plain %s test card, not the placeholder number",
+    async (brand, standIn) => {
+      const { page, typed } = fakePage(ADYEN_FIELDS(KEY));
+      const result = await fillCard(
+        page,
+        { ...CARD, brand },
+        { timeoutMs: 50, keyDelayMs: 0, adyen: gate({ enabled: true }) },
+      );
+      expect(result.ok).toBe(true);
+      expect(typed.encryptedcardnumber).toBe(standIn);
+    },
+  );
+
+  it("types nothing, without asking the backend, when the card's brand has no stand-in", async () => {
+    for (const brand of [undefined, "discover", "unknown", "toString"]) {
+      const { page, touched } = fakePage(ADYEN_FIELDS(KEY));
+      const adyen = gate({ enabled: true });
+      const result = await fillCard(
+        page,
+        { ...CARD, brand },
+        { timeoutMs: 50, adyen },
+      );
+      expect(result).toStrictEqual({
+        ...NOT_TYPED,
+        blocked: "adyen_card_brand",
+      });
+      expect(adyen.calls).toHaveLength(0);
+      expect(touched).toStrictEqual([]);
+    }
   });
 
   it("types the stand-in when the backend will re-encrypt the card", async () => {
@@ -243,4 +296,53 @@ describe("fillCard on Adyen secured fields", () => {
     expect(result.blocked).toBeUndefined();
     expect(adyen.calls).toHaveLength(0);
   });
+});
+
+describe("fillCard against the backend's not-enabled answer, through the real relay", () => {
+  /** The backend's body, verbatim: `adyen-encrypt.controller.ts` upper-cases the code. */
+  const BACKEND_BODY = readFileSync(
+    join(__dirname, "../test/fixtures/adyen-encrypt-not-enabled.409.json"),
+    "utf8",
+  );
+
+  it.each([
+    ["the backend's 409 body", 409, BACKEND_BODY],
+    ["a lowercase code", 409, '{"code":"adyen_encryption_not_enabled"}'],
+  ])(
+    "blocks with adyen_not_enabled and types nothing on %s",
+    async (_name, status, body) => {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(body);
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const stub = await startCdpStub();
+      const handle = await attachInterceptor(stub.url, {
+        relay: httpPaymentRelay({
+          baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          apiKey: "test-key",
+          transactionId: "tx_adyen",
+        }),
+        placeholder: { number: CARD.number, injectionRef: "inj_adyen" },
+      });
+      try {
+        const { page, touched } = fakePage(ADYEN_FIELDS(KEY));
+        const result = await fillCard(page, CARD, {
+          timeoutMs: 50,
+          adyen: handle,
+        });
+        expect(result).toStrictEqual({
+          ...NOT_TYPED,
+          blocked: "adyen_not_enabled",
+        });
+        expect(touched).toStrictEqual([]);
+      } finally {
+        await handle.detach();
+        await stub.close();
+        server.close();
+      }
+    },
+  );
 });

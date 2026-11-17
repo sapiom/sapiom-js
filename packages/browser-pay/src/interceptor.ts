@@ -396,6 +396,8 @@ class PaymentInterceptor {
     string,
     { fields: AdyenEncryptedFields; at: number }
   >();
+  /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
+  private adyenPrepareCalls = 0;
   private readonly timeoutMs: number;
   private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
@@ -848,7 +850,11 @@ class PaymentInterceptor {
     clientKey: string;
     pageOrigin: string;
   }): Promise<AdyenReadiness> {
-    if (!this.adyenAllowed()) {
+    // Any new answer replaces fields an earlier call prepared, so a later "off" is never bypassed.
+    const key = preparedKey(input.clientKey, input.pageOrigin);
+    this.preparedAdyen.delete(key);
+    const call = ++this.adyenPrepareCalls;
+    if (this.closed || !this.adyenAllowed()) {
       return { enabled: false, reason: "adyen_not_enabled" };
     }
     if (!isAdyenClientKey(input.clientKey)) {
@@ -861,13 +867,13 @@ class PaymentInterceptor {
       this.logAdyenFailure(error);
       return { enabled: false, reason: "adyen_encrypt" };
     }
-    if (result.outcome === "not_enabled") {
+    if (this.closed || result.outcome === "not_enabled") {
       return { enabled: false, reason: "adyen_not_enabled" };
     }
-    this.preparedAdyen.set(preparedKey(input.clientKey, input.pageOrigin), {
-      fields: result.fields,
-      at: Date.now(),
-    });
+    // A slower, older call must not restore fields a newer call cleared.
+    if (call === this.adyenPrepareCalls) {
+      this.preparedAdyen.set(key, { fields: result.fields, at: Date.now() });
+    }
     return { enabled: true };
   }
 
