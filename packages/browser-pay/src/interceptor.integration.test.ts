@@ -837,9 +837,10 @@ if (!chromeBin) {
       } finally {
         await page?.close().catch(() => {});
         await handle.detach();
+        shop.server.closeAllConnections();
         await new Promise((resolve) => shop.server.close(resolve));
       }
-    });
+    }, 60_000);
 
     it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
       const { chromium } = await import("playwright");
