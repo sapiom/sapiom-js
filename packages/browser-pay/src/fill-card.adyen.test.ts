@@ -280,6 +280,22 @@ describe("fillCard on Adyen secured fields", () => {
     expect(touched).toStrictEqual([]);
   });
 
+  it("types the card's own number into a number field outside Adyen's frames", async () => {
+    const { page, typed } = fakePage([
+      { url: securedField(KEY, "encryptedCardNumber") },
+      { url: "https://js.stripe.com/v3/elements", hint: "cardnumber" },
+      { url: "https://js.stripe.com/v3/exp", hint: "exp-date" },
+      { url: "https://js.stripe.com/v3/cvc", hint: "cvc" },
+    ]);
+    const result = await fillCard(page, CARD, {
+      timeoutMs: 50,
+      keyDelayMs: 0,
+      adyen: gate({ enabled: true }),
+    });
+    expect(result.ok).toBe(true);
+    expect(typed.cardnumber).toBe(CARD.number);
+  });
+
   it("never asks the gate on a page without Adyen secured fields", async () => {
     const { page } = fakePage([
       { url: "https://js.stripe.com/v3/elements", hint: "cardnumber" },

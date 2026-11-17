@@ -821,7 +821,17 @@ export async function fillCard(
   const split = ranked.has("expMonth") && ranked.has("expYear");
   const mm = two(card.expMonth);
   const plan: Array<[CardField, (m: Match) => Promise<string | null>]> = [
-    ["number", (m) => typeFirst(m, [typing.number], true, false, delay)],
+    [
+      "number",
+      (m) =>
+        typeFirst(
+          m,
+          [isAdyenSecuredFieldsFrameUrl(m.url) ? typing.number : card.number],
+          true,
+          false,
+          delay,
+        ),
+    ],
     ...(split
       ? ([
           [
@@ -914,9 +924,9 @@ export async function fillCard(
 }
 
 /**
- * The number to type, or why typing must not start. A page with Adyen secured-field iframes gets
- * the card brand's stand-in, once the gate says the payment will be re-encrypted; any other page
- * gets the card's own number. The client key comes from the iframe URLs; a page config is read
+ * The number to type into Adyen secured fields, or why typing must not start. A page with Adyen
+ * secured-field iframes gets the card brand's stand-in for them, once the gate says the payment
+ * will be re-encrypted; a number field outside them, and any other page, gets the card's own number. The client key comes from the iframe URLs; a page config is read
  * only when they carry none.
  */
 async function adyenTyping(
