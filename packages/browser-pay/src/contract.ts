@@ -111,3 +111,56 @@ export function parseRelayResponse(value: unknown): RelayResponse {
     },
   };
 }
+
+/** The four fields Adyen secured fields put on `paymentMethod`, each one encrypted blob. */
+export const ADYEN_ENCRYPTED_FIELDS = [
+  "encryptedCardNumber",
+  "encryptedExpiryMonth",
+  "encryptedExpiryYear",
+  "encryptedSecurityCode",
+] as const;
+
+export type AdyenEncryptedField = (typeof ADYEN_ENCRYPTED_FIELDS)[number];
+
+export type AdyenEncryptedFields = Record<AdyenEncryptedField, string>;
+
+export interface AdyenEncryptRequest {
+  injectionRef: string;
+  /** The merchant's Adyen client key, read from the page. The backend fetches the public key from Adyen itself. */
+  clientKey: string;
+  pageOrigin: string;
+}
+
+/**
+ * The backend's typed answer when Adyen card encryption is switched off for
+ * this deployment. It arrives as `code` (an error body) or `reason`.
+ */
+export const ADYEN_ENCRYPTION_NOT_ENABLED = "adyen_encryption_not_enabled";
+
+export type AdyenEncryptResult =
+  | { outcome: "encrypted"; fields: AdyenEncryptedFields }
+  | { outcome: "not_enabled" };
+
+export function isAdyenNotEnabled(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.code === ADYEN_ENCRYPTION_NOT_ENABLED ||
+      value.reason === ADYEN_ENCRYPTION_NOT_ENABLED)
+  );
+}
+
+export function parseAdyenEncryptResponse(value: unknown): AdyenEncryptResult {
+  if (isAdyenNotEnabled(value)) return { outcome: "not_enabled" };
+  if (!isRecord(value)) {
+    throw new Error("Adyen re-encryption returned an unreadable response");
+  }
+  const fields = {} as AdyenEncryptedFields;
+  for (const field of ADYEN_ENCRYPTED_FIELDS) {
+    const blob = value[field];
+    if (typeof blob !== "string" || blob.length === 0) {
+      throw new Error("Adyen re-encryption returned an unreadable response");
+    }
+    fields[field] = blob;
+  }
+  return { outcome: "encrypted", fields };
+}

@@ -49,6 +49,16 @@ The result is `{ ok, filled, missing, unconfirmed, origins, untrusted }`. `ok` i
 
 It throws a `TypeError`, whose message carries no card values, before touching any field when the number, security code or expiry is not usable. Before typing into a frame it checks the frame is still on the origin it was found on, and after the last field it reads every field back once more, so a field a later handler reset is reported in `unconfirmed`. A field whose click is blocked (covered or detached) passes to the next matching field.
 
+## Adyen secured fields
+
+Adyen secured fields encrypt the typed card inside Adyen's iframes, so the placeholder never shows in the payment request. When the backend has Adyen encryption switched on, the interceptor holds any request whose JSON body has a string `paymentMethod.encryptedCardNumber` (the merchant's own `/payments` call, or Adyen's `/sessions/{id}/payments`), asks `POST /v1/transactions/{transactionId}/payment/adyen/encrypt` with `x-api-key` and `{ "injectionRef", "clientKey", "pageOrigin" }` for the authorized card's own `encryptedCardNumber`, `encryptedExpiryMonth`, `encryptedExpiryYear` and `encryptedSecurityCode`, replaces those four fields and sends the request on. Every other key is kept. The event is `reencrypted`.
+
+The client key comes from the secured-field iframe URL (`…/securedfields/{clientKey}/{version}/securedFields.html`), else from the page (`#clientKey`, `data-client-key`, or a `clientKey: "test_…"` literal in an inline script). Two different keys on one page give none.
+
+It is off unless the backend says otherwise. A payment fails closed, and the placeholder's ciphertext is never sent, with `adyen_not_enabled` when the backend answers `adyen_encryption_not_enabled` (as `code` or `reason`), when the relay has no `adyenEncrypt`, or when `AttachOptions.disableAdyenEncryption` is `true`; with `adyen_client_key` when no single key is found; and with `adyen_encrypt` when the call fails or outlasts `attemptTimeoutMs`. No option turns it on past the backend.
+
+Pass the interceptor handle to `fillCard` so it asks before typing: `fillCard(page, card, { adyen: handle })`. On a page with Adyen secured-field iframes it types nothing, and returns `ok: false` with `blocked` (`adyen_not_enabled`, `adyen_client_key`, or `adyen_encrypt`), unless the backend returned fields; those fields are then used once for the payment, within 10 minutes. Without `adyen` it never types into Adyen secured fields. The placeholder typed into the iframes must be the authorized card's brand, since Adyen reads the brand from what was typed.
+
 ## Relay contract
 
 `POST /v1/transactions/{transactionId}/payment/relay` with `x-api-key`. `transactionId` is only in the path. The JSON body is:
@@ -168,7 +178,7 @@ const handle = await attachInterceptor(cdpUrl, {
 });
 ```
 
-The relay records every request it is asked to send (host, path, header names, the body's shape and where the card fields were, never a value). It refuses `destination_not_allowed` for a URL that isn't https to a public host or a method other than POST, and `card_fields_invalid` when the placeholder's number isn't in the body exactly once, a card field can't be told apart from another holding the same value, or a card number shows up in the URL or headers. A form that encrypts card fields in the page (Adyen client-side encryption and similar) never shows the placeholder, so it can't be paid this way. A provider may decline a card sent from the card vault's servers rather than the user's browser.
+The relay records every request it is asked to send (host, path, header names, the body's shape and where the card fields were, never a value). It refuses `destination_not_allowed` for a URL that isn't https to a public host or a method other than POST, and `card_fields_invalid` when the placeholder's number isn't in the body exactly once, a card field can't be told apart from another holding the same value, or a card number shows up in the URL or headers. A form that encrypts card fields in the page never shows the placeholder, so it can't be relayed; Adyen secured fields are paid by re-encryption instead (see below). A provider may decline a card sent from the card vault's servers rather than the user's browser.
 
 `baseUrl` must be https, or plain http to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` URL makes `httpPaymentRelay` throw a `CredentialChannelError` before a request is sent. On a trusted private network, set `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects from the relay are always refused.
 
@@ -186,6 +196,6 @@ Captcha widgets, extension pages, and workers are not paused. A blank iframe, in
 
 Child iframes are auto-attached with `waitForDebuggerOnStart`. `Fetch.enable` runs on each child session before it is resumed. An iframe that already exists is attached before `attachInterceptor` resolves. A paused request whose CDP session was never attached is failed.
 
-`detach()` fails in-flight paused requests before it disables Fetch. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames, client-side-encrypted card payloads, and worklet targets are not visible to this check.
+`detach()` fails in-flight paused requests before it disables Fetch. A process crash or a dropped CDP socket can still let Chrome continue those requests. WebSocket frames, client-side-encrypted card payloads other than Adyen's, and worklet targets are not visible to this check.
 
 `examples/attach.ts` is the agent-side script. It is not published.

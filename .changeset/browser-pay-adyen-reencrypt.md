@@ -1,0 +1,5 @@
+---
+"@sapiom/browser-pay": minor
+---
+
+Pay Adyen secured-fields checkouts by re-encrypting the card in the card vault (SAP-5180). The interceptor holds an outgoing Adyen payment (`paymentMethod.encryptedCardNumber`, on the merchant's `/payments` call or Adyen's `/sessions/{id}/payments`), asks `POST /v1/transactions/{id}/payment/adyen/encrypt` for the card's own encrypted fields, swaps the four `encrypted*` fields and sends the request on. It runs only when the backend answers with fields: its `adyen_encryption_not_enabled` answer, a relay without `adyenEncrypt`, or `disableAdyenEncryption: true` fail the payment closed (`adyen_not_enabled`). `fillCard(page, card, { adyen: handle })` asks first and types nothing on Adyen secured fields unless the payment will be re-encrypted (`blocked`).

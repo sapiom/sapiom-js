@@ -412,3 +412,132 @@ function stalledBody(
   });
   return Promise.resolve(new Response(stream, { status: 200 }));
 }
+
+describe("httpPaymentRelay adyenEncrypt", () => {
+  const ENCRYPT = {
+    injectionRef: "inj_fixture_adyen",
+    clientKey: "test_FIXTUREKEY123",
+    pageOrigin: "https://shop.example",
+  };
+  const BLOBS = {
+    encryptedCardNumber: "eyJ.real-number",
+    encryptedExpiryMonth: "eyJ.real-month",
+    encryptedExpiryYear: "eyJ.real-year",
+    encryptedSecurityCode: "eyJ.real-cvc",
+  };
+
+  it("POSTs the injection, client key and page origin to the encrypt path with the api key", async () => {
+    const seen: {
+      method?: string;
+      url?: string;
+      headers?: http.IncomingHttpHeaders;
+      body?: string;
+    } = {};
+    const server = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        seen.method = req.method;
+        seen.url = req.url;
+        seen.headers = req.headers;
+        seen.body = Buffer.concat(chunks).toString("utf8");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ...BLOBS, extra: "ignored" }));
+      });
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_adyen",
+      });
+      await expect(relay.adyenEncrypt!(ENCRYPT)).resolves.toStrictEqual({
+        outcome: "encrypted",
+        fields: BLOBS,
+      });
+      expect(seen.method).toBe("POST");
+      expect(seen.url).toBe("/v1/transactions/tx_adyen/payment/adyen/encrypt");
+      expect(seen.headers?.["x-api-key"]).toBe("test-key");
+      expect(seen.headers?.["content-type"]).toBe("application/json");
+      expect(JSON.parse(seen.body ?? "")).toStrictEqual(ENCRYPT);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("throws without the response text on an error status or an unreadable body", async () => {
+    const replies: [number, string][] = [
+      [403, '{"secret":"eyJ.leaked"}'],
+      [200, '{"encryptedCardNumber":"eyJ.leaked"}'],
+      [200, "eyJ.leaked not json"],
+    ];
+    for (const [status, body] of replies) {
+      const server = await listen((_req, res) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(body);
+      });
+      try {
+        const relay = httpPaymentRelay({
+          baseUrl: origin(server),
+          apiKey: "test-key",
+          transactionId: "tx_adyen",
+        });
+        const error = await relay.adyenEncrypt!(ENCRYPT).catch(
+          (caught: unknown) => caught as Error,
+        );
+        expect(error).toBeInstanceOf(Error);
+        if (status !== 200) expect(error).toBeInstanceOf(RelayHttpError);
+        expect(
+          JSON.stringify(error, Object.getOwnPropertyNames(error)),
+        ).not.toContain("leaked");
+      } finally {
+        server.close();
+      }
+    }
+  });
+
+  it("reads the backend's typed not-enabled answer as off, on an error status or a 200", async () => {
+    const replies: [number, string][] = [
+      [403, '{"code":"adyen_encryption_not_enabled","message":"off"}'],
+      [503, '{"code":"adyen_encryption_not_enabled"}'],
+      [200, '{"reason":"adyen_encryption_not_enabled"}'],
+    ];
+    for (const [status, body] of replies) {
+      const server = await listen((_req, res) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(body);
+      });
+      try {
+        const relay = httpPaymentRelay({
+          baseUrl: origin(server),
+          apiKey: "test-key",
+          transactionId: "tx_adyen",
+        });
+        await expect(relay.adyenEncrypt!(ENCRYPT)).resolves.toStrictEqual({
+          outcome: "not_enabled",
+        });
+      } finally {
+        server.close();
+      }
+    }
+  });
+
+  it("does not read another error code as not enabled", async () => {
+    const server = await listen((_req, res) => {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end('{"code":"merchant_mismatch"}');
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_adyen",
+      });
+      await expect(relay.adyenEncrypt!(ENCRYPT)).rejects.toBeInstanceOf(
+        RelayHttpError,
+      );
+    } finally {
+      server.close();
+    }
+  });
+});

@@ -764,6 +764,83 @@ if (!chromeBin) {
       }
     }, 60_000);
 
+    it("sends an Adyen payment on with the backend's encrypted fields, body otherwise intact", async () => {
+      const standIn = {
+        encryptedCardNumber: "eyJ.stand-in-number",
+        encryptedExpiryMonth: "eyJ.stand-in-month",
+        encryptedExpiryYear: "eyJ.stand-in-year",
+        encryptedSecurityCode: "eyJ.stand-in-cvc",
+      };
+      const real = {
+        encryptedCardNumber: `eyJ.${"n".repeat(700)}`,
+        encryptedExpiryMonth: `eyJ.${"m".repeat(500)}`,
+        encryptedExpiryYear: `eyJ.${"y".repeat(500)}`,
+        encryptedSecurityCode: `eyJ.${"c".repeat(500)}`,
+      };
+      const order = {
+        amount: { currency: "EUR", value: 1000 },
+        reference: "order-ü-1",
+        paymentMethod: { type: "scheme", holderName: "J. Smith", ...standIn },
+      };
+      const shop = await startServer(
+        hits,
+        `<!doctype html><title>adyen shop</title><pre id="clientKey">test_INTEGRATIONKEY1</pre>`,
+        "localhost",
+      );
+      const encryptCalls: unknown[] = [];
+      const handle = await attachInterceptor(cdpUrl, {
+        relay: {
+          relay: async () => ({ outcome: "unknown" }),
+          adyenEncrypt: async (request) => {
+            encryptCalls.push(request);
+            return { outcome: "encrypted", fields: real };
+          },
+        },
+        placeholder: PLACEHOLDER,
+      });
+      const events: InterceptorEvent[] = [];
+      handle.on((event) => events.push(event));
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      let page: import("playwright").Page | undefined;
+      try {
+        const context = browser.contexts()[0];
+        page = await context.newPage();
+        const origin = `http://localhost:${shop.port}`;
+        await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+        const status = await page.evaluate(async (body) => {
+          const res = await fetch("/api/payments", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          });
+          return res.status;
+        }, JSON.stringify(order));
+
+        expect(status).toBe(200);
+        const hit = hits.find((item) => item.path === "/api/payments");
+        expect(JSON.parse(hit?.body ?? "null")).toStrictEqual({
+          ...order,
+          paymentMethod: { ...order.paymentMethod, ...real },
+        });
+        expect(encryptCalls).toStrictEqual([
+          {
+            injectionRef: PLACEHOLDER.injectionRef,
+            clientKey: "test_INTEGRATIONKEY1",
+            pageOrigin: origin,
+          },
+        ]);
+        expect(events.map((event) => event.type)).toEqual([
+          "paused",
+          "reencrypted",
+        ]);
+      } finally {
+        await page?.close().catch(() => {});
+        await handle.detach();
+        await new Promise((resolve) => shop.server.close(resolve));
+      }
+    });
+
     it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
       const { chromium } = await import("playwright");
       const browser = await chromium.connectOverCDP(cdpUrl);
