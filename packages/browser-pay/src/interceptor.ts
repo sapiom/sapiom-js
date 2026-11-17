@@ -398,6 +398,8 @@ class PaymentInterceptor {
   >();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
   private adyenPrepareCalls = 0;
+  /** Counts not-enabled answers, so a success begun before one is never used. */
+  private adyenDenials = 0;
   private readonly timeoutMs: number;
   private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
@@ -830,6 +832,7 @@ class PaymentInterceptor {
     }
     if (this.closed) return { action: "fail", reason: "detached" };
     if (result.outcome === "not_enabled") {
+      this.denyAdyen();
       return { action: "fail", reason: "adyen_not_enabled" };
     }
     return {
@@ -854,6 +857,7 @@ class PaymentInterceptor {
     const key = preparedKey(input.clientKey, input.pageOrigin);
     this.preparedAdyen.delete(key);
     const call = ++this.adyenPrepareCalls;
+    const denials = this.adyenDenials;
     if (this.closed || !this.adyenAllowed()) {
       return { enabled: false, reason: "adyen_not_enabled" };
     }
@@ -867,7 +871,12 @@ class PaymentInterceptor {
       this.logAdyenFailure(error);
       return { enabled: false, reason: "adyen_encrypt" };
     }
-    if (this.closed || result.outcome === "not_enabled") {
+    if (result.outcome === "not_enabled") {
+      this.denyAdyen();
+      return { enabled: false, reason: "adyen_not_enabled" };
+    }
+    // A success that lands after any not-enabled answer is stale: the backend has since said off.
+    if (this.closed || denials !== this.adyenDenials) {
       return { enabled: false, reason: "adyen_not_enabled" };
     }
     // A slower, older call must not restore fields a newer call cleared.
@@ -875,6 +884,12 @@ class PaymentInterceptor {
       this.preparedAdyen.set(key, { fields: result.fields, at: Date.now() });
     }
     return { enabled: true };
+  }
+
+  /** The backend's "off" covers every key and origin, so no prepared fields survive it. */
+  private denyAdyen(): void {
+    this.adyenDenials += 1;
+    this.preparedAdyen.clear();
   }
 
   /** Prepared fields are used once, and only while fresh. */

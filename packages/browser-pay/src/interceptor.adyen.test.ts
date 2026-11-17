@@ -626,6 +626,51 @@ describe("Adyen encryption gate", () => {
     expect(harness.encryptCalls).toHaveLength(3);
   });
 
+  it("a not-enabled answer for one key drops fields prepared for every other key", async () => {
+    const answers = [ENCRYPTED, NOT_ENABLED, ENCRYPTED];
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      encrypt: async () => answers.shift()!,
+    });
+    await expect(
+      harness.prepare({ clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN }),
+    ).resolves.toStrictEqual({ enabled: true });
+    await expect(
+      harness.prepare({
+        clientKey: CLIENT_KEY,
+        pageOrigin: "https://other-shop.example",
+      }),
+    ).resolves.toStrictEqual({ enabled: false, reason: "adyen_not_enabled" });
+    pause(harness.stub, "req-cross", ADVANCED);
+    await settle(harness.stub, "req-cross");
+    // The payment asked the backend again instead of spending the cached fields.
+    expect(harness.encryptCalls).toHaveLength(3);
+  });
+
+  it("an older prepareAdyen succeeding after a newer denial answers not enabled", async () => {
+    let releaseFirst: (result: AdyenEncryptResult) => void = () => {};
+    const answers: Array<Promise<AdyenEncryptResult>> = [
+      new Promise((resolve) => (releaseFirst = resolve)),
+      Promise.resolve(NOT_ENABLED),
+    ];
+    harness = await arm({ encrypt: () => answers.shift()! });
+    const older = harness.prepare({
+      clientKey: CLIENT_KEY,
+      pageOrigin: PAGE_ORIGIN,
+    });
+    await expect(
+      harness.prepare({
+        clientKey: CLIENT_KEY,
+        pageOrigin: "https://other-shop.example",
+      }),
+    ).resolves.toStrictEqual({ enabled: false, reason: "adyen_not_enabled" });
+    releaseFirst(ENCRYPTED);
+    await expect(older).resolves.toStrictEqual({
+      enabled: false,
+      reason: "adyen_not_enabled",
+    });
+  });
+
   it("prepareAdyen after detach says not enabled without asking the backend", async () => {
     harness = await arm({});
     await harness.detach();

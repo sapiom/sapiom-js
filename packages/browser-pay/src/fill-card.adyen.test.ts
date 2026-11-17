@@ -15,6 +15,7 @@ import {
   type AdyenGate,
   type AdyenReadiness,
 } from "./interceptor";
+import type { AdyenEncryptResult } from "./contract";
 import { httpPaymentRelay } from "./relay";
 import { startCdpStub } from "../test/cdp-stub";
 
@@ -311,6 +312,60 @@ describe("fillCard on Adyen secured fields", () => {
     expect(result.ok).toBe(true);
     expect(result.blocked).toBeUndefined();
     expect(adyen.calls).toHaveLength(0);
+  });
+});
+
+describe("fillCard racing a newer not-enabled answer, through the real interceptor", () => {
+  it("types nothing when its own prepare succeeds after a newer one was denied", async () => {
+    let releaseFirst: (result: AdyenEncryptResult) => void = () => {};
+    const answers: Array<Promise<AdyenEncryptResult>> = [
+      new Promise((resolve) => (releaseFirst = resolve)),
+      Promise.resolve({ outcome: "not_enabled" }),
+    ];
+    let encryptCalls = 0;
+    const stub = await startCdpStub();
+    const handle = await attachInterceptor(stub.url, {
+      relay: {
+        relay: async () => ({ outcome: "unknown" }),
+        adyenEncrypt: () => {
+          encryptCalls += 1;
+          return answers.shift()!;
+        },
+      },
+      placeholder: { number: CARD.number, injectionRef: "inj_adyen" },
+    });
+    try {
+      const { page, touched } = fakePage(ADYEN_FIELDS(KEY));
+      const filling = fillCard(page, CARD, {
+        timeoutMs: 50,
+        keyDelayMs: 0,
+        adyen: handle,
+      });
+      while (encryptCalls === 0) await new Promise((r) => setTimeout(r, 1));
+      await expect(
+        handle.prepareAdyen({
+          clientKey: KEY,
+          pageOrigin: "https://shop.example",
+        }),
+      ).resolves.toStrictEqual({ enabled: false, reason: "adyen_not_enabled" });
+      releaseFirst({
+        outcome: "encrypted",
+        fields: {
+          encryptedCardNumber: "eyJ.N",
+          encryptedExpiryMonth: "eyJ.M",
+          encryptedExpiryYear: "eyJ.Y",
+          encryptedSecurityCode: "eyJ.C",
+        },
+      });
+      await expect(filling).resolves.toStrictEqual({
+        ...NOT_TYPED,
+        blocked: "adyen_not_enabled",
+      });
+      expect(touched).toStrictEqual([]);
+    } finally {
+      await handle.detach();
+      await stub.close();
+    }
   });
 });
 
