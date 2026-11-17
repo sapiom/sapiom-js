@@ -116,11 +116,11 @@ export function redactHeld(value: string, number: string): string {
   return maskHeldSpans(value, digits);
 }
 
-const ADYEN_CLIENT_KEY = /^(test|live)_[A-Z0-9]+$/;
+const ADYEN_CLIENT_KEY = /^(test|live)_[A-Za-z0-9]+$/;
 const ADYEN_SECURED_FIELDS_PATH =
   /\/securedfields\/([^/]+)\/[^/]+\/securedFields\.html$/;
 
-/** An Adyen client key: `test_` or `live_` and upper-case letters and digits. */
+/** An Adyen client key: `test_` or `live_` and letters and digits. */
 export function isAdyenClientKey(value: unknown): value is string {
   return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
 }
@@ -169,34 +169,37 @@ function safeDecode(value: string): string | undefined {
 
 /**
  * Evaluated in the checkout page when no secured-field iframe was seen as a
- * target: the key in a secured-field iframe `src` in the DOM, then adyen-web
- * config the page renders (`#clientKey`, `data-client-key`, or a
- * `clientKey: "test_…"` literal in an inline script). Returns a string or
- * `null`; the caller validates it.
+ * target: the keys in secured-field iframe `src`s in the DOM and in the
+ * adyen-web config the page renders (`#clientKey`, `data-client-key`, or
+ * `clientKey: "test_…"` literals in inline scripts). Returns the key when
+ * they all name one, else `null`; the caller validates it.
  */
 export const ADYEN_DOM_CLIENT_KEY_EXPRESSION = `(() => {
   const shape = ${ADYEN_CLIENT_KEY.toString()};
-  const ok = (value) => {
+  const keys = new Set();
+  const add = (value) => {
     const text = typeof value === "string" ? value.trim() : "";
-    return shape.test(text) ? text : null;
+    if (shape.test(text)) keys.add(text);
   };
   for (const frame of document.querySelectorAll("iframe[src*='securedfields']")) {
-    const match = ${ADYEN_SECURED_FIELDS_PATH.toString()}.exec(new URL(frame.src, location.href).pathname);
-    const key = match && ok(decodeURIComponent(match[1]));
-    if (key) return key;
+    try {
+      const match = ${ADYEN_SECURED_FIELDS_PATH.toString()}.exec(new URL(frame.src, location.href).pathname);
+      if (match) add(decodeURIComponent(match[1]));
+    } catch {
+      // An unparseable src or key names nothing; the other sources still can.
+    }
   }
   const element = document.getElementById("clientKey");
-  const fromElement = element && ok(element.value || element.textContent);
-  if (fromElement) return fromElement;
+  if (element) add(element.value || element.textContent);
   for (const node of document.querySelectorAll("[data-client-key],[data-clientkey]")) {
-    const key = ok(node.getAttribute("data-client-key") || node.getAttribute("data-clientkey"));
-    if (key) return key;
+    add(node.getAttribute("data-client-key") || node.getAttribute("data-clientkey"));
   }
   for (const script of document.querySelectorAll("script:not([src])")) {
-    const match = /clientKey["']?\\s*[:=]\\s*["']((?:test|live)_[A-Z0-9]+)["']/.exec(script.textContent || "");
-    if (match) return match[1];
+    for (const match of (script.textContent || "").matchAll(/clientKey["']?\\s*[:=]\\s*["']((?:test|live)_[A-Za-z0-9]+)["']/g)) {
+      add(match[1]);
+    }
   }
-  return null;
+  return keys.size === 1 ? [...keys][0] : null;
 })()`;
 
 /**

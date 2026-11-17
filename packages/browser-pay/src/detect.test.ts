@@ -57,6 +57,11 @@ describe("adyenClientKeyFromFrameUrl", () => {
         "https://checkoutshopper-live-us.adyen.com/checkoutshopper/securedfields/live_Q1W2E3/5.0.0/securedFields.html",
       ),
     ).toBe("live_Q1W2E3");
+    expect(
+      adyenClientKeyFromFrameUrl(
+        "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_870be2854add4f56b86778353010f36c/6.4.1/securedFields.html",
+      ),
+    ).toBe("test_870be2854add4f56b86778353010f36c");
   });
 
   it("ignores other hosts, plain http, other paths and malformed keys", () => {
@@ -65,7 +70,7 @@ describe("adyenClientKeyFromFrameUrl", () => {
       "https://evil-adyen.com/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
       "http://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
       "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
-      "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_abc/6.4.1/securedFields.html",
+      "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_ab-c/6.4.1/securedFields.html",
       "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/pub.v2.ABC/6.4.1/securedFields.html",
       "not a url",
       "",
