@@ -451,6 +451,11 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(settled.method).toBe("Fetch.failRequest");
     expect(harness.encryptCalls).toHaveLength(0);
     await waitFor(() => harness!.events.length === 2, "two events");
+    expect(harness.warnings).toStrictEqual([
+      JSON.stringify({
+        message: "adyen client key not seen in adyen requests",
+      }),
+    ]);
     expect(harness.events[1]).toStrictEqual({
       type: "failed",
       url: PAGE_ORIGIN,
@@ -477,6 +482,11 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.encryptCalls).toHaveLength(0);
     await waitFor(() => harness!.events.length === 2, "two events");
     expect(harness.events[1]).toMatchObject({ reason: "adyen_client_key" });
+    expect(harness.warnings).toStrictEqual([
+      JSON.stringify({
+        message: "two different adyen client keys seen in adyen requests",
+      }),
+    ]);
   });
 
   it("does not guess when Adyen's requests name a key other than the frame's", async () => {

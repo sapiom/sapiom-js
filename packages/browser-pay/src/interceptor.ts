@@ -819,7 +819,11 @@ class PaymentInterceptor {
     }
     const clientKey = this.adyenClientKey();
     if (!clientKey) {
-      this.logger.warn("adyen client key not seen in adyen requests");
+      this.logger.warn(
+        this.adyenClientKeys.size > 1
+          ? "two different adyen client keys seen in adyen requests"
+          : "adyen client key not seen in adyen requests",
+      );
       return { action: "fail", reason: "adyen_client_key" };
     }
     const prepared = this.takePreparedAdyen(clientKey, pageOrigin);
