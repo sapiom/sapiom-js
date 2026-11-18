@@ -341,7 +341,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       `https://checkoutshopper-live-us.adyen.com/checkoutshopper/v1/clientKeys/${CLIENT_KEY}`,
       `https://checkoutanalytics-test.adyen.com/checkoutanalytics/v3/analytics?clientKey=${CLIENT_KEY}`,
       `${ADYEN_TEST}/v1/clientKeys/live_FRAMEKEY123`,
-      `${ADYEN_TEST}/v1/clientKeys/test_framekey123`,
+      `${ADYEN_TEST}/v1/clientKeys/test_frame-key`,
       `${PAGE_ORIGIN}/checkout?clientKey=${CLIENT_KEY}`,
     ];
     urls.forEach((url, i) =>
@@ -493,6 +493,59 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
 
     expect(settled.method).toBe("Fetch.failRequest");
     expect(harness.encryptCalls).toHaveLength(0);
+  });
+
+  it("re-encrypts with a lowercase client key from the secured-field frame", async () => {
+    const lowercase = "test_870be2854add4f56b86778353010f36c";
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(lowercase) }],
+    });
+    pause(harness.stub, "req-lower", ADVANCED);
+    const settled = await settle(harness.stub, "req-lower");
+
+    expect(sentBody(settled)).toMatchObject({ paymentMethod: REAL });
+    expect(harness.encryptCalls[0]?.clientKey).toBe(lowercase);
+  });
+
+  it("does not release a paused payment when a second key appears during encryption", async () => {
+    let resolveEncrypt!: (result: AdyenEncryptResult) => void;
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      encrypt: () =>
+        new Promise((resolve) => {
+          resolveEncrypt = resolve;
+        }),
+    });
+    pause(harness.stub, "req-race", ADVANCED);
+    await waitFor(() => harness!.encryptCalls.length === 1, "encrypt call");
+    harness.stub.emit({
+      method: "Network.requestWillBeSent",
+      sessionId: "page-1",
+      params: {
+        requestId: "net-late",
+        request: {
+          url: `${ADYEN_TEST}/v1/clientKeys/test_OTHERKEY789`,
+          method: "GET",
+          headers: {},
+        },
+      },
+    });
+    // Same socket, so the marker settling means the late key was recorded.
+    pause(harness.stub, "req-marker", {
+      url: `${PAGE_ORIGIN}/x`,
+      method: "GET",
+    });
+    await settle(harness.stub, "req-marker");
+    resolveEncrypt(ENCRYPTED);
+    const settled = await settle(harness.stub, "req-race");
+
+    expect(settled.method).toBe("Fetch.failRequest");
+    await waitFor(() => harness!.events.length === 2, "two events");
+    expect(harness.events[1]).toMatchObject({
+      type: "failed",
+      reason: "adyen_client_key",
+    });
+    assertNothingSecret(harness);
   });
 
   it("relays a body holding the placeholder digits as before, not through Adyen", async () => {

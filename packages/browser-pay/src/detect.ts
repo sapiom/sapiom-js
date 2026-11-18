@@ -116,7 +116,7 @@ export function redactHeld(value: string, number: string): string {
   return maskHeldSpans(value, digits);
 }
 
-const ADYEN_CLIENT_KEY = /^(test|live)_[A-Z0-9]{1,64}$/;
+const ADYEN_CLIENT_KEY = /^(test|live)_[A-Za-z0-9]{1,64}$/;
 const ADYEN_KEY_HOST_ENV = new Map([
   ["checkoutshopper-test.adyen.com", "test"],
   ...["live", "live-us", "live-au", "live-apse", "live-in"].map(
@@ -124,7 +124,7 @@ const ADYEN_KEY_HOST_ENV = new Map([
   ),
 ]);
 
-/** An Adyen client key: `test_` or `live_` and up to 64 capitals and digits. */
+/** An Adyen client key: `test_` or `live_` and up to 64 letters and digits. */
 export function isAdyenClientKey(value: unknown): value is string {
   return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
 }

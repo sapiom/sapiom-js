@@ -840,6 +840,11 @@ class PaymentInterceptor {
       this.denyAdyen();
       return { action: "fail", reason: "adyen_not_enabled" };
     }
+    // A second key seen while encrypting makes the first choice a guess.
+    if (this.adyenClientKey() !== clientKey) {
+      this.logger.warn("adyen client key changed during re-encryption");
+      return { action: "fail", reason: "adyen_client_key" };
+    }
     return {
       action: "reencrypted",
       body: withAdyenEncryptedFields(body, result.fields),

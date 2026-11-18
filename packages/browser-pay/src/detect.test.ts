@@ -94,7 +94,6 @@ describe("adyenClientKeysInRequest", () => {
       `${TEST}/v1/clientKeys/live_ABC`,
       "https://checkoutshopper-live.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
       `${TEST}/v1/clientKeys/test_ab-c`,
-      `${TEST}/v1/clientKeys/test_870be2854add4f56b86778353010f36c`,
       `${TEST}/v1/clientKeys/test_${"A".repeat(65)}`,
       `${TEST}/securedfields/pub.v2.ABC/6.4.1/securedFields.html`,
       "not a url",
@@ -104,6 +103,31 @@ describe("adyenClientKeysInRequest", () => {
         url.startsWith(TEST) ? ["test_ABC"] : [],
       );
     }
+  });
+
+  it("accepts lowercase key bodies from the query, path, header and frame URL", () => {
+    const KEY = "test_870be2854add4f56b86778353010f36c";
+    expect(
+      adyenClientKeysInRequest(
+        `${TEST}/v1/sessions/CS1/payments?clientKey=${KEY}`,
+      ),
+    ).toStrictEqual([KEY]);
+    expect(
+      adyenClientKeysInRequest(`${TEST}/v1/clientKeys/${KEY}`),
+    ).toStrictEqual([KEY]);
+    expect(adyenClientKeysInRequest(`${TEST}/v3/analytics`, KEY)).toStrictEqual(
+      [KEY],
+    );
+    expect(
+      adyenClientKeyFromFrameUrl(
+        `${TEST}/securedfields/${KEY}/6.4.1/securedFields.html?type=card`,
+      ),
+    ).toBe(KEY);
+    expect(
+      adyenClientKeysInRequest(
+        "https://checkoutshopper-live.adyen.com/checkoutshopper/v1/clientKeys/live_q1w2e3",
+      ),
+    ).toStrictEqual(["live_q1w2e3"]);
   });
 
   it("names a frame's key only when its URL holds exactly one", () => {
