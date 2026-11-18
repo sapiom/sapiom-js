@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { ADYEN_DOM_CLIENT_KEY_EXPRESSION } from "./detect";
 import {
   fillCard,
   type CardToFill,
@@ -29,7 +28,6 @@ const CARD: CardToFill = {
 
 const PAGE = "https://shop.example/checkout";
 const KEY = "test_FRAMEKEY123";
-const DOM_KEY = "test_DOMKEY456";
 const securedField = (key: string | null, field: string) =>
   `https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/${
     key ?? "x"
@@ -60,10 +58,7 @@ interface FakePage {
   typed: Record<string, string>;
 }
 
-function fakePage(
-  frames: { url: string; hint?: string }[],
-  domKey: string | null = null,
-): FakePage {
+function fakePage(frames: { url: string; hint?: string }[]): FakePage {
   const touched: string[] = [];
   const typed: Record<string, string> = {};
   const built: FrameLike[] = [];
@@ -105,9 +100,6 @@ function fakePage(
       frameElement: async () => ({ evaluate: async () => false as never }),
       locator: () => locator,
       evaluate: async <R>(expression: string): Promise<R> => {
-        if (expression === ADYEN_DOM_CLIENT_KEY_EXPRESSION) {
-          return (url === PAGE ? domKey : null) as R;
-        }
         if (expression.includes("innerWidth") && !expression.includes("=>")) {
           return { w: 1000, h: 800 } as R;
         }
@@ -242,15 +234,6 @@ describe("fillCard on Adyen secured fields", () => {
     expect(adyen.calls).toHaveLength(1);
   });
 
-  it("reads the key from the page's config when the frame URLs carry none", async () => {
-    const { page } = fakePage(ADYEN_FIELDS(null), DOM_KEY);
-    const adyen = gate({ enabled: false, reason: "adyen_not_enabled" });
-    await fillCard(page, CARD, { timeoutMs: 50, adyen });
-    expect(adyen.calls).toStrictEqual([
-      { clientKey: DOM_KEY, pageOrigin: "https://shop.example" },
-    ]);
-  });
-
   it("stops on two different keys, or none, without asking the backend", async () => {
     for (const frames of [
       [
@@ -261,6 +244,10 @@ describe("fillCard on Adyen secured fields", () => {
         },
       ],
       ADYEN_FIELDS(null),
+      ADYEN_FIELDS(KEY).map((frame) => ({
+        ...frame,
+        url: frame.url.replace("checkoutshopper-test", "checkoutshopper-live"),
+      })),
     ]) {
       const { page, touched } = fakePage(frames);
       const adyen = gate({ enabled: true });

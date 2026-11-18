@@ -116,26 +116,54 @@ export function redactHeld(value: string, number: string): string {
   return maskHeldSpans(value, digits);
 }
 
-const ADYEN_CLIENT_KEY = /^(test|live)_[A-Za-z0-9]+$/;
-const ADYEN_SECURED_FIELDS_PATH =
-  /\/securedfields\/([^/]+)\/[^/]+\/securedFields\.html$/;
+const ADYEN_CLIENT_KEY = /^(test|live)_[A-Z0-9]{1,64}$/;
+const ADYEN_KEY_HOST_ENV = new Map([
+  ["checkoutshopper-test.adyen.com", "test"],
+  ...["live", "live-us", "live-au", "live-apse", "live-in"].map(
+    (region) => [`checkoutshopper-${region}.adyen.com`, "live"] as const,
+  ),
+]);
 
-/** An Adyen client key: `test_` or `live_` and letters and digits. */
+/** An Adyen client key: `test_` or `live_` and up to 64 capitals and digits. */
 export function isAdyenClientKey(value: unknown): value is string {
   return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
 }
 
 /**
- * The client key in an Adyen secured-field iframe URL
- * (`https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/{clientKey}/{version}/securedFields.html`),
- * or `undefined` for any other URL.
+ * The client keys a request to Adyen's own checkoutshopper host names: its
+ * `clientKey` query, a `/securedfields/{key}/` or `/clientKeys/{key}` path,
+ * or its `x-client-key` header. Only https to exactly
+ * `checkoutshopper-test.adyen.com` or a live host
+ * (`checkoutshopper-live[-us|-au|-apse|-in].adyen.com`) counts: `test_`
+ * keys only from the test host, `live_` keys only from a live one.
  */
+export function adyenClientKeysInRequest(
+  url: string,
+  clientKeyHeader = "",
+): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  const env = ADYEN_KEY_HOST_ENV.get(parsed.host);
+  if (parsed.protocol !== "https:" || !env) return [];
+  const candidates = [
+    ...parsed.searchParams.getAll("clientKey"),
+    /\/securedfields\/([^/]+)\//.exec(parsed.pathname)?.[1],
+    /\/clientKeys\/([^/]+)/.exec(parsed.pathname)?.[1],
+    clientKeyHeader,
+  ];
+  return candidates.filter(
+    (key): key is string => isAdyenClientKey(key) && key.startsWith(`${env}_`),
+  );
+}
+
+/** The one client key an Adyen secured-field iframe URL names, else `undefined`. */
 export function adyenClientKeyFromFrameUrl(url: string): string | undefined {
-  const parsed = adyenSecuredFieldsUrl(url);
-  if (!parsed) return undefined;
-  const match = ADYEN_SECURED_FIELDS_PATH.exec(parsed.pathname);
-  const key = match ? safeDecode(match[1]) : undefined;
-  return isAdyenClientKey(key) ? key : undefined;
+  const keys = new Set(adyenClientKeysInRequest(url));
+  return keys.size === 1 ? [...keys][0] : undefined;
 }
 
 /**
@@ -158,49 +186,6 @@ function adyenSecuredFieldsUrl(url: string): URL | undefined {
   if (host !== "adyen.com" && !host.endsWith(".adyen.com")) return undefined;
   return parsed.pathname.includes("/securedfields/") ? parsed : undefined;
 }
-
-function safeDecode(value: string): string | undefined {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Evaluated in the checkout page when no secured-field iframe was seen as a
- * target: the keys in secured-field iframe `src`s in the DOM and in the
- * adyen-web config the page renders (`#clientKey`, `data-client-key`, or
- * `clientKey: "test_…"` literals in inline scripts). Returns the key when
- * they all name one, else `null`; the caller validates it.
- */
-export const ADYEN_DOM_CLIENT_KEY_EXPRESSION = `(() => {
-  const shape = ${ADYEN_CLIENT_KEY.toString()};
-  const keys = new Set();
-  const add = (value) => {
-    const text = typeof value === "string" ? value.trim() : "";
-    if (shape.test(text)) keys.add(text);
-  };
-  for (const frame of document.querySelectorAll("iframe[src*='securedfields']")) {
-    try {
-      const match = ${ADYEN_SECURED_FIELDS_PATH.toString()}.exec(new URL(frame.src, location.href).pathname);
-      if (match) add(decodeURIComponent(match[1]));
-    } catch {
-      // An unparseable src or key names nothing; the other sources still can.
-    }
-  }
-  const element = document.getElementById("clientKey");
-  if (element) add(element.value || element.textContent);
-  for (const node of document.querySelectorAll("[data-client-key],[data-clientkey]")) {
-    add(node.getAttribute("data-client-key") || node.getAttribute("data-clientkey"));
-  }
-  for (const script of document.querySelectorAll("script:not([src])")) {
-    for (const match of (script.textContent || "").matchAll(/clientKey["']?\\s*[:=]\\s*["']((?:test|live)_[A-Za-z0-9]+)["']/g)) {
-      add(match[1]);
-    }
-  }
-  return keys.size === 1 ? [...keys][0] : null;
-})()`;
 
 /**
  * True when the body is JSON whose top-level `paymentMethod.encryptedCardNumber`

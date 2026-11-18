@@ -2,7 +2,6 @@ import http from "node:http";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type { Browser, Page } from "playwright";
-import { ADYEN_DOM_CLIENT_KEY_EXPRESSION } from "./detect";
 import { fillCard, type CardToFill, type PageLike } from "./fill-card";
 
 const CARD: CardToFill = {
@@ -877,46 +876,5 @@ function serve(
       expect(JSON.stringify(result)).not.toContain(CARD.number);
       await page.close();
     });
-
-    it.each([
-      [
-        "one key named by every source",
-        `<pre id="clientKey">test_ONEKEY1</pre><div data-client-key="test_ONEKEY1"></div>
-<script>const config = { clientKey: "test_ONEKEY1" };</script>`,
-        "test_ONEKEY1",
-      ],
-      [
-        "a lower-case key",
-        `<pre id="clientKey">test_870be2854add4f56b86778353010f36c</pre>`,
-        "test_870be2854add4f56b86778353010f36c",
-      ],
-      [
-        "an undecodable iframe key before a readable config",
-        `<iframe src="https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_%ZZ/6.4.1/securedFields.html"></iframe>
-<pre id="clientKey">test_ONEKEY1</pre>`,
-        "test_ONEKEY1",
-      ],
-      [
-        "#clientKey and a different data-client-key",
-        `<pre id="clientKey">test_OLD123</pre><div data-client-key="test_NEW456"></div>`,
-        null,
-      ],
-      [
-        "two different keys in one inline script",
-        `<script>const old = { clientKey: "test_OLD123" }; const now = { clientKey: "test_NEW456" };</script>`,
-        null,
-      ],
-    ])(
-      "reads the page's Adyen client key: %s",
-      async (_name, body, expected) => {
-        const page = await browser.newPage();
-        await page.route("https://*.adyen.com/**", (route) => route.abort());
-        await page.setContent(`<!doctype html><title>Checkout</title>${body}`);
-        expect(await page.evaluate(ADYEN_DOM_CLIENT_KEY_EXPRESSION)).toBe(
-          expected,
-        );
-        await page.close();
-      },
-    );
   },
 );

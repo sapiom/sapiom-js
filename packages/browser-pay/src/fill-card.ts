@@ -13,9 +13,7 @@
  */
 
 import {
-  ADYEN_DOM_CLIENT_KEY_EXPRESSION,
   adyenClientKeyFromFrameUrl,
-  isAdyenClientKey,
   isAdyenSecuredFieldsFrameUrl,
 } from "./detect.js";
 import type { AdyenGate, AdyenReadiness } from "./interceptor.js";
@@ -926,8 +924,8 @@ export async function fillCard(
 /**
  * The number to type into Adyen secured fields, or why typing must not start. A page with Adyen
  * secured-field iframes gets the card brand's stand-in for them, once the gate says the payment
- * will be re-encrypted; a number field outside them, and any other page, gets the card's own number. The client key comes from the iframe URLs; a page config is read
- * only when they carry none.
+ * will be re-encrypted; a number field outside them, and any other page, gets the card's own number.
+ * The client key comes from the iframe URLs Adyen's own host serves.
  */
 async function adyenTyping(
   page: PageLike,
@@ -947,15 +945,8 @@ async function adyenTyping(
     const key = adyenClientKeyFromFrameUrl(frame.url());
     if (key) keys.add(key);
   }
-  let clientKey: string | undefined;
-  if (keys.size === 1) clientKey = [...keys][0];
-  else if (keys.size === 0) {
-    const fromDom = await frames[0]
-      ?.evaluate<unknown>(ADYEN_DOM_CLIENT_KEY_EXPRESSION)
-      .catch(() => null);
-    if (isAdyenClientKey(fromDom)) clientKey = fromDom;
-  }
   // Two different keys on one page: never encrypt the card to a guess.
+  const clientKey = keys.size === 1 ? [...keys][0] : undefined;
   if (!clientKey) return { blocked: "adyen_client_key" };
   const pageOrigin = originOf(frames[0]?.url() ?? "");
   if (!/^https?:\/\//.test(pageOrigin)) return { blocked: "adyen_client_key" };

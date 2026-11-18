@@ -3,10 +3,7 @@ import type {
   AdyenEncryptRequest,
   AdyenEncryptResult,
 } from "./contract";
-import {
-  ADYEN_DOM_CLIENT_KEY_EXPRESSION,
-  type HeldPlaceholder,
-} from "./detect";
+import type { HeldPlaceholder } from "./detect";
 import {
   attachInterceptor,
   type InterceptorEvent,
@@ -31,7 +28,7 @@ const HELD: HeldPlaceholder = {
 };
 const PAGE_ORIGIN = "https://shop.example";
 const CLIENT_KEY = "test_FRAMEKEY123";
-const DOM_KEY = "test_DOMKEY456";
+const ADYEN_TEST = "https://checkoutshopper-test.adyen.com/checkoutshopper";
 const frameUrl = (key: string, field = "encryptedCardNumber") =>
   `https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/${key}/6.4.1/securedFields.html?type=card&d=${field}`;
 
@@ -86,7 +83,6 @@ interface Harness {
 
 async function arm(options: {
   frames?: { sessionId: string; url: string }[];
-  domKey?: string | null;
   encrypt?:
     | ((
         request: AdyenEncryptRequest,
@@ -96,14 +92,10 @@ async function arm(options: {
   attemptTimeoutMs?: number;
   disableAdyenEncryption?: boolean;
 }): Promise<Harness> {
-  const domKey = options.domKey === undefined ? null : options.domKey;
   const stub = await startCdpStub((command) => {
     if (command.method !== "Runtime.evaluate") return undefined;
     if (command.params.expression === "location.origin") {
       return { result: { type: "string", value: PAGE_ORIGIN } };
-    }
-    if (command.params.expression === ADYEN_DOM_CLIENT_KEY_EXPRESSION) {
-      return { result: { value: domKey } };
     }
     return undefined;
   });
@@ -192,7 +184,12 @@ function count(commands: CdpCommand[], method: string): number {
 function pause(
   stub: CdpStub,
   requestId: string,
-  request: { url: string; body?: unknown; method?: string },
+  request: {
+    url: string;
+    body?: unknown;
+    method?: string;
+    headers?: Record<string, string>;
+  },
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
@@ -202,7 +199,7 @@ function pause(
       request: {
         url: request.url,
         method: request.method ?? "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...request.headers },
         ...(request.body !== undefined
           ? { postData: JSON.stringify(request.body), hasPostData: true }
           : {}),
@@ -236,15 +233,7 @@ function sentBody(command: CdpCommand): unknown {
   );
 }
 
-const SECRETS = [
-  CLIENT_KEY,
-  DOM_KEY,
-  "FRAMEKEY",
-  "DOMKEY",
-  "STANDIN_",
-  "REAL_",
-  "eyJ",
-];
+const SECRETS = [CLIENT_KEY, "FRAMEKEY", "STANDIN_", "REAL_", "eyJ"];
 
 function assertNothingSecret(harness: Harness): void {
   const text = JSON.stringify(harness.events) + harness.warnings.join("\n");
@@ -269,7 +258,6 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
           url: frameUrl(CLIENT_KEY, "encryptedSecurityCode"),
         },
       ],
-      domKey: DOM_KEY,
     });
     pause(harness.stub, "req-advanced", ADVANCED);
     const settled = await settle(harness.stub, "req-advanced");
@@ -287,13 +275,6 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       },
     ]);
     expect(harness.relayCalls).toBe(0);
-    // The frame key wins: the DOM is not consulted.
-    expect(
-      harness.stub.commands.some(
-        (command) =>
-          command.params.expression === ADYEN_DOM_CLIENT_KEY_EXPRESSION,
-      ),
-    ).toBe(false);
     await waitFor(() => harness!.events.length === 2, "two events");
     expect(harness.events).toStrictEqual([
       {
@@ -327,19 +308,51 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     assertNothingSecret(harness);
   });
 
-  it("falls back to the page's adyen-web config when no secured-field frame is a target", async () => {
-    harness = await arm({ domKey: DOM_KEY });
-    pause(harness.stub, "req-dom", ADVANCED);
-    const settled = await settle(harness.stub, "req-dom");
+  it.each([
+    ["a clientKeys path", { url: `${ADYEN_TEST}/v1/clientKeys/${CLIENT_KEY}` }],
+    [
+      "an x-client-key header",
+      {
+        url: `${ADYEN_TEST}/v3/analytics`,
+        headers: { "X-Client-Key": CLIENT_KEY },
+      },
+    ],
+  ])(
+    "takes the key from Adyen's own request (%s) when no secured-field frame is a target",
+    async (_label, request) => {
+      harness = await arm({});
+      pause(harness.stub, "req-key", { ...request, method: "GET" });
+      await settle(harness.stub, "req-key");
+      pause(harness.stub, "req-pay", ADVANCED);
+      const settled = await settle(harness.stub, "req-pay");
 
-    expect(sentBody(settled)).toMatchObject({ paymentMethod: REAL });
-    expect(harness.encryptCalls[0]?.clientKey).toBe(DOM_KEY);
-    const evaluated = harness.stub.commands.find(
-      (command) =>
-        command.params.expression === ADYEN_DOM_CLIENT_KEY_EXPRESSION,
+      expect(sentBody(settled)).toMatchObject({ paymentMethod: REAL });
+      expect(harness.encryptCalls[0]?.clientKey).toBe(CLIENT_KEY);
+      assertNothingSecret(harness);
+    },
+  );
+
+  it("ignores keys from lookalike hosts, plain http, a wrong environment or a bad shape", async () => {
+    harness = await arm({});
+    const urls = [
+      `https://checkoutshopper-test.adyen.com.evil.example/checkoutshopper/v1/clientKeys/${CLIENT_KEY}`,
+      `http://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/${CLIENT_KEY}`,
+      `https://checkoutshopper-live-us.adyen.com.evil.example/checkoutshopper/v1/clientKeys/live_FRAMEKEY123`,
+      `https://checkoutshopper-live-us.adyen.com/checkoutshopper/v1/clientKeys/${CLIENT_KEY}`,
+      `https://checkoutanalytics-test.adyen.com/checkoutanalytics/v3/analytics?clientKey=${CLIENT_KEY}`,
+      `${ADYEN_TEST}/v1/clientKeys/live_FRAMEKEY123`,
+      `${ADYEN_TEST}/v1/clientKeys/test_framekey123`,
+      `${PAGE_ORIGIN}/checkout?clientKey=${CLIENT_KEY}`,
+    ];
+    urls.forEach((url, i) =>
+      pause(harness!.stub, `req-${i}`, { url, method: "GET" }),
     );
-    expect(evaluated?.sessionId).toBe("page-1");
-    assertNothingSecret(harness);
+    for (const [i] of urls.entries()) await settle(harness.stub, `req-${i}`);
+    pause(harness.stub, "req-pay", ADVANCED);
+    const settled = await settle(harness.stub, "req-pay");
+
+    expect(settled.method).toBe("Fetch.failRequest");
+    expect(harness.encryptCalls).toHaveLength(0);
   });
 
   it("continues requests that are not Adyen payments untouched", async () => {
@@ -430,8 +443,8 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.warnings[0]).toContain('"timedOut":true');
   });
 
-  it("fails the request closed when no client key is on the page", async () => {
-    harness = await arm({ domKey: null });
+  it("fails the request closed when no Adyen request named a client key", async () => {
+    harness = await arm({});
     pause(harness.stub, "req-nokey", ADVANCED);
     const settled = await settle(harness.stub, "req-nokey");
 
@@ -443,6 +456,11 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       url: PAGE_ORIGIN,
       reason: "adyen_client_key",
     });
+    expect(
+      harness.stub.commands
+        .filter((command) => command.method === "Runtime.evaluate")
+        .map((command) => command.params.expression),
+    ).toStrictEqual(["location.origin"]);
   });
 
   it("does not guess between two different client keys on one page", async () => {
@@ -451,7 +469,6 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
         { sessionId: "frame-a", url: frameUrl(CLIENT_KEY) },
         { sessionId: "frame-b", url: frameUrl("test_OTHERKEY789") },
       ],
-      domKey: DOM_KEY,
     });
     pause(harness.stub, "req-ambiguous", ADVANCED);
     const settled = await settle(harness.stub, "req-ambiguous");
@@ -462,10 +479,17 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.events[1]).toMatchObject({ reason: "adyen_client_key" });
   });
 
-  it("rejects a malformed key from the page's config", async () => {
-    harness = await arm({ domKey: "pub.v2.8115650120946270.aHR0cA" });
-    pause(harness.stub, "req-badkey", ADVANCED);
-    const settled = await settle(harness.stub, "req-badkey");
+  it("does not guess when Adyen's requests name a key other than the frame's", async () => {
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+    });
+    pause(harness.stub, "req-other-key", {
+      url: `${ADYEN_TEST}/v1/clientKeys/test_OTHERKEY789`,
+      method: "GET",
+    });
+    await settle(harness.stub, "req-other-key");
+    pause(harness.stub, "req-ambiguous", ADVANCED);
+    const settled = await settle(harness.stub, "req-ambiguous");
 
     expect(settled.method).toBe("Fetch.failRequest");
     expect(harness.encryptCalls).toHaveLength(0);

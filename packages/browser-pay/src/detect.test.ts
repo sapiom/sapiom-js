@@ -1,5 +1,6 @@
 import {
   adyenClientKeyFromFrameUrl,
+  adyenClientKeysInRequest,
   isAdyenSecuredFieldsFrameUrl,
   isAdyenSecuredFieldsPayment,
   redactHeld,
@@ -45,39 +46,79 @@ describe("redactHeld", () => {
   });
 });
 
-describe("adyenClientKeyFromFrameUrl", () => {
-  it("reads the key from a secured-field iframe on an adyen.com host", () => {
+describe("adyenClientKeysInRequest", () => {
+  const TEST = "https://checkoutshopper-test.adyen.com/checkoutshopper";
+
+  it("reads the key from each place Adyen's own requests carry it", () => {
     expect(
-      adyenClientKeyFromFrameUrl(
-        "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_ABC123XYZ/6.4.1/securedFields.html?type=card&d=aHR0cA",
+      adyenClientKeysInRequest(
+        `${TEST}/securedfields/test_ABC123XYZ/6.4.1/securedFields.html?type=card`,
       ),
-    ).toBe("test_ABC123XYZ");
+    ).toStrictEqual(["test_ABC123XYZ"]);
     expect(
-      adyenClientKeyFromFrameUrl(
-        "https://checkoutshopper-live-us.adyen.com/checkoutshopper/securedfields/live_Q1W2E3/5.0.0/securedFields.html",
-      ),
-    ).toBe("live_Q1W2E3");
+      adyenClientKeysInRequest(`${TEST}/v1/clientKeys/test_ABC123XYZ`),
+    ).toStrictEqual(["test_ABC123XYZ"]);
     expect(
-      adyenClientKeyFromFrameUrl(
-        "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_870be2854add4f56b86778353010f36c/6.4.1/securedFields.html",
+      adyenClientKeysInRequest(
+        `${TEST}/v1/sessions/CS1/payments?clientKey=test_ABC123XYZ`,
       ),
-    ).toBe("test_870be2854add4f56b86778353010f36c");
+    ).toStrictEqual(["test_ABC123XYZ"]);
+    expect(
+      adyenClientKeysInRequest(`${TEST}/v3/analytics`, "test_ABC123XYZ"),
+    ).toStrictEqual(["test_ABC123XYZ"]);
+    expect(
+      adyenClientKeysInRequest(
+        "https://checkoutshopper-live.adyen.com/checkoutshopper/v1/clientKeys/live_Q1W2E3",
+      ),
+    ).toStrictEqual(["live_Q1W2E3"]);
+    for (const region of ["live-us", "live-au", "live-apse", "live-in"]) {
+      expect(
+        adyenClientKeysInRequest(
+          `https://checkoutshopper-${region}.adyen.com/checkoutshopper/securedfields/live_Q1W2E3/5.0.0/securedFields.html`,
+        ),
+      ).toStrictEqual(["live_Q1W2E3"]);
+    }
   });
 
-  it("ignores other hosts, plain http, other paths and malformed keys", () => {
+  it("ignores lookalike and other hosts, plain http, a wrong environment and malformed keys", () => {
     for (const url of [
-      "https://adyen.com.evil.example/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
-      "https://evil-adyen.com/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
-      "http://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
-      "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
-      "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_ab-c/6.4.1/securedFields.html",
-      "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/pub.v2.ABC/6.4.1/securedFields.html",
+      "https://checkoutshopper-test.adyen.com.evil.example/checkoutshopper/v1/clientKeys/test_ABC",
+      "https://evil-checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
+      "https://checkoutshopper-live-us.adyen.com.evil.example/checkoutshopper/v1/clientKeys/live_ABC",
+      "https://checkoutshopper-live-eu.adyen.com/checkoutshopper/v1/clientKeys/live_ABC",
+      "https://checkoutshopper-live-us.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
+      "https://checkoutanalytics-test.adyen.com/checkoutanalytics/v3/analytics?clientKey=test_ABC",
+      "https://checkoutshopper-test.adyen.com:8443/checkoutshopper/v1/clientKeys/test_ABC",
+      "http://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
+      "https://shop.example/checkout?clientKey=test_ABC",
+      `${TEST}/v1/clientKeys/live_ABC`,
+      "https://checkoutshopper-live.adyen.com/checkoutshopper/v1/clientKeys/test_ABC",
+      `${TEST}/v1/clientKeys/test_ab-c`,
+      `${TEST}/v1/clientKeys/test_870be2854add4f56b86778353010f36c`,
+      `${TEST}/v1/clientKeys/test_${"A".repeat(65)}`,
+      `${TEST}/securedfields/pub.v2.ABC/6.4.1/securedFields.html`,
       "not a url",
       "",
     ]) {
-      expect(adyenClientKeyFromFrameUrl(url)).toBeUndefined();
+      expect(adyenClientKeysInRequest(url, "test_ABC")).toStrictEqual(
+        url.startsWith(TEST) ? ["test_ABC"] : [],
+      );
     }
   });
+
+  it("names a frame's key only when its URL holds exactly one", () => {
+    expect(
+      adyenClientKeyFromFrameUrl(
+        `${TEST}/securedfields/test_ABC/6.4.1/securedFields.html?clientKey=test_ABC`,
+      ),
+    ).toBe("test_ABC");
+    expect(
+      adyenClientKeyFromFrameUrl(
+        `${TEST}/securedfields/test_ABC/6.4.1/securedFields.html?clientKey=test_XYZ`,
+      ),
+    ).toBeUndefined();
+  });
+
   it("tells a secured-field iframe apart from other frames even without a readable key", () => {
     expect(
       isAdyenSecuredFieldsFrameUrl(

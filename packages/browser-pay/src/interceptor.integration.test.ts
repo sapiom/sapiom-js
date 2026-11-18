@@ -764,7 +764,7 @@ if (!chromeBin) {
       }
     }, 60_000);
 
-    it("sends an Adyen payment on with the backend's encrypted fields, body otherwise intact", async () => {
+    it("sends an Adyen payment on with the backend's encrypted fields, keyed by Adyen's own request, not the DOM", async () => {
       const standIn = {
         encryptedCardNumber: "eyJ.stand-in-number",
         encryptedExpiryMonth: "eyJ.stand-in-month",
@@ -784,7 +784,7 @@ if (!chromeBin) {
       };
       const shop = await startServer(
         hits,
-        `<!doctype html><title>adyen shop</title><pre id="clientKey">test_INTEGRATIONKEY1</pre>`,
+        `<!doctype html><title>adyen shop</title><pre id="clientKey">test_PLANTEDKEY9</pre><div data-client-key="test_PLANTEDKEY9"></div>`,
         "localhost",
       );
       const encryptCalls: unknown[] = [];
@@ -806,8 +806,23 @@ if (!chromeBin) {
       try {
         const context = browser.contexts()[0];
         page = await context.newPage();
+        await page.route("https://checkoutshopper-test.adyen.com/**", (route) =>
+          route.fulfill({
+            status: 200,
+            headers: { "access-control-allow-origin": "*" },
+            body: "{}",
+          }),
+        );
         const origin = `http://localhost:${shop.port}`;
         await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+        expect(
+          await page.evaluate(async () => {
+            const res = await fetch(
+              "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_INTEGRATIONKEY1",
+            );
+            return res.status;
+          }),
+        ).toBe(200);
         const status = await page.evaluate(async (body) => {
           const res = await fetch("/api/payments", {
             method: "POST",
@@ -834,6 +849,7 @@ if (!chromeBin) {
           "paused",
           "reencrypted",
         ]);
+        expect(JSON.stringify(encryptCalls)).not.toContain("PLANTEDKEY");
       } finally {
         await page?.close().catch(() => {});
         await handle.detach();

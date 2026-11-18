@@ -7,8 +7,7 @@ import {
   type RelayResponse,
 } from "./contract.js";
 import {
-  ADYEN_DOM_CLIENT_KEY_EXPRESSION,
-  adyenClientKeyFromFrameUrl,
+  adyenClientKeysInRequest,
   isAdyenClientKey,
   isAdyenSecuredFieldsPayment,
   redactHeld,
@@ -396,6 +395,8 @@ class PaymentInterceptor {
     string,
     { fields: AdyenEncryptedFields; at: number }
   >();
+  /** Every client key Adyen's own requests named: frame URLs and paused requests. */
+  private readonly adyenClientKeys = new Set<string>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
   private adyenPrepareCalls = 0;
   /** Counts not-enabled answers, so a success begun before one is never used. */
@@ -453,6 +454,8 @@ class PaymentInterceptor {
       this.onDetached(event);
     else if (event.method === "Target.targetInfoChanged") {
       this.onTargetInfoChanged(event);
+    } else if (event.method === "Network.requestWillBeSent") {
+      this.onRequestWillBeSent(event);
     }
   }
 
@@ -509,6 +512,7 @@ class PaymentInterceptor {
     const session = this.byTarget.get(info.targetId);
     if (!session) return;
     session.url = info.url;
+    this.noteAdyenClientKeys(info.url);
     if (!shouldArm(session)) {
       this.disarm(session);
       return;
@@ -669,6 +673,7 @@ class PaymentInterceptor {
   }
 
   private trackSession(session: Session): Session {
+    this.noteAdyenClientKeys(session.url);
     this.sessions.set(session.sessionId, session);
     this.byTarget.set(session.targetId, session);
     return session;
@@ -688,6 +693,7 @@ class PaymentInterceptor {
       });
       return;
     }
+    this.noteAdyenRequest(request);
     const key = inflightKey(sessionId, requestId);
     if (this.inflight.has(key)) return;
     const entry: Inflight = {
@@ -811,10 +817,9 @@ class PaymentInterceptor {
     if (!this.adyenAllowed()) {
       return { action: "fail", reason: "adyen_not_enabled" };
     }
-    const clientKey = await this.adyenClientKey(entry.sessionId);
-    if (this.closed) return { action: "fail", reason: "detached" };
+    const clientKey = this.adyenClientKey();
     if (!clientKey) {
-      this.logger.warn("adyen client key not found on the page");
+      this.logger.warn("adyen client key not seen in adyen requests");
       return { action: "fail", reason: "adyen_client_key" };
     }
     const prepared = this.takePreparedAdyen(clientKey, pageOrigin);
@@ -943,33 +948,30 @@ class PaymentInterceptor {
     }
   }
 
-  /**
-   * The key in the secured-field iframes under the paused request's page,
-   * else the one adyen-web config on that page names. Two different keys on
-   * one page give none: the card must not be encrypted to a guess.
-   */
-  private async adyenClientKey(sessionId: string): Promise<string | undefined> {
-    const page = topPageSession(this.sessions, sessionId);
-    const keys = new Set<string>();
-    for (const session of this.sessions.values()) {
-      const key = adyenClientKeyFromFrameUrl(session.url);
-      if (!key) continue;
-      if (page && topPageSession(this.sessions, session.sessionId) !== page) {
-        continue;
-      }
-      keys.add(key);
+  /** Another CDP client can fulfill a request before it pauses here; Network still sees it. */
+  private onRequestWillBeSent(event: CdpEvent): void {
+    const parsed = parsePaused(event.params);
+    if (!parsed || !this.sessions.has(event.sessionId ?? "")) return;
+    this.noteAdyenRequest(parsed.request);
+  }
+
+  private noteAdyenRequest(request: PausedRequest): void {
+    this.noteAdyenClientKeys(
+      request.url,
+      headerValue(request.headers, "x-client-key"),
+    );
+  }
+
+  private noteAdyenClientKeys(url: string, clientKeyHeader?: string): void {
+    for (const key of adyenClientKeysInRequest(url, clientKeyHeader)) {
+      this.adyenClientKeys.add(key);
     }
-    if (keys.size > 1) return undefined;
-    if (keys.size === 1) return [...keys][0];
-    const evaluated = await this.connection
-      .send(
-        "Runtime.evaluate",
-        { expression: ADYEN_DOM_CLIENT_KEY_EXPRESSION, returnByValue: true },
-        page ?? sessionId,
-      )
-      .catch(() => null);
-    const key = evaluatedString(evaluated);
-    return isAdyenClientKey(key) ? key : undefined;
+  }
+
+  /** Two different keys give none: the card must not be encrypted to a guess. */
+  private adyenClientKey(): string | undefined {
+    const keys = this.adyenClientKeys;
+    return keys.size === 1 ? [...keys][0] : undefined;
   }
 
   private async awaitRelay(
