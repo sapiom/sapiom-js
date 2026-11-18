@@ -13,7 +13,7 @@
  */
 
 import {
-  adyenClientKeyFromFrameUrl,
+  adyenClientKeysInRequest,
   isAdyenSecuredFieldsFrameUrl,
 } from "./detect.js";
 import type { AdyenGate, AdyenReadiness } from "./interceptor.js";
@@ -942,10 +942,9 @@ async function adyenTyping(
   if (!standIn) return { blocked: "adyen_card_brand" };
   const keys = new Set<string>();
   for (const frame of adyenFrames) {
-    const key = adyenClientKeyFromFrameUrl(frame.url());
-    if (key) keys.add(key);
+    for (const key of adyenClientKeysInRequest(frame.url())) keys.add(key);
   }
-  // Two different keys on one page: never encrypt the card to a guess.
+  // Two different keys on one page, even within one frame: never encrypt the card to a guess.
   const clientKey = keys.size === 1 ? [...keys][0] : undefined;
   if (!clientKey) return { blocked: "adyen_client_key" };
   const pageOrigin = originOf(frames[0]?.url() ?? "");

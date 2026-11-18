@@ -1,5 +1,4 @@
 import {
-  adyenClientKeyFromFrameUrl,
   adyenClientKeysInRequest,
   isAdyenSecuredFieldsFrameUrl,
   isAdyenSecuredFieldsPayment,
@@ -119,10 +118,10 @@ describe("adyenClientKeysInRequest", () => {
       [KEY],
     );
     expect(
-      adyenClientKeyFromFrameUrl(
+      adyenClientKeysInRequest(
         `${TEST}/securedfields/${KEY}/6.4.1/securedFields.html?type=card`,
       ),
-    ).toBe(KEY);
+    ).toStrictEqual([KEY]);
     expect(
       adyenClientKeysInRequest(
         "https://checkoutshopper-live.adyen.com/checkoutshopper/v1/clientKeys/live_q1w2e3",
@@ -130,17 +129,12 @@ describe("adyenClientKeysInRequest", () => {
     ).toStrictEqual(["live_q1w2e3"]);
   });
 
-  it("names a frame's key only when its URL holds exactly one", () => {
+  it("reports every key a frame URL names, so a conflict stays visible", () => {
     expect(
-      adyenClientKeyFromFrameUrl(
-        `${TEST}/securedfields/test_ABC/6.4.1/securedFields.html?clientKey=test_ABC`,
-      ),
-    ).toBe("test_ABC");
-    expect(
-      adyenClientKeyFromFrameUrl(
+      adyenClientKeysInRequest(
         `${TEST}/securedfields/test_ABC/6.4.1/securedFields.html?clientKey=test_XYZ`,
       ),
-    ).toBeUndefined();
+    ).toStrictEqual(["test_XYZ", "test_ABC"]);
   });
 
   it("tells a secured-field iframe apart from other frames even without a readable key", () => {

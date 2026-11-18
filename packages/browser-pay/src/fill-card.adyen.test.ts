@@ -244,6 +244,12 @@ describe("fillCard on Adyen secured fields", () => {
         },
       ],
       ADYEN_FIELDS(null),
+      // One frame naming two keys is a conflict the other frames cannot settle.
+      ADYEN_FIELDS(KEY).map((frame, i) =>
+        i === 0
+          ? { ...frame, url: `${frame.url}&clientKey=test_OTHERKEY789` }
+          : frame,
+      ),
       ADYEN_FIELDS(KEY).map((frame) => ({
         ...frame,
         url: frame.url.replace("checkoutshopper-test", "checkoutshopper-live"),

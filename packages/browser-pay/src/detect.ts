@@ -160,12 +160,6 @@ export function adyenClientKeysInRequest(
   );
 }
 
-/** The one client key an Adyen secured-field iframe URL names, else `undefined`. */
-export function adyenClientKeyFromFrameUrl(url: string): string | undefined {
-  const keys = new Set(adyenClientKeysInRequest(url));
-  return keys.size === 1 ? [...keys][0] : undefined;
-}
-
 /**
  * True for an Adyen secured-field iframe URL (https, an `adyen.com` host, a
  * `/securedfields/` path), whether or not its client key can be read.
