@@ -308,6 +308,46 @@ describe("fillCard on Adyen secured fields", () => {
   });
 });
 
+describe("fillCard with a lowercase client key, through the real interceptor", () => {
+  it("prepares with the lowercase key and types the stand-in", async () => {
+    const lowercase = "test_870be2854add4f56b86778353010f36c";
+    const asked: string[] = [];
+    const stub = await startCdpStub();
+    const handle = await attachInterceptor(stub.url, {
+      relay: {
+        relay: async () => ({ outcome: "unknown" }),
+        adyenEncrypt: async (input) => {
+          asked.push(input.clientKey);
+          return {
+            outcome: "encrypted",
+            fields: {
+              encryptedCardNumber: "eyJ.N",
+              encryptedExpiryMonth: "eyJ.M",
+              encryptedExpiryYear: "eyJ.Y",
+              encryptedSecurityCode: "eyJ.C",
+            },
+          };
+        },
+      },
+      placeholder: { number: CARD.number, injectionRef: "inj_adyen" },
+    });
+    try {
+      const { page, typed } = fakePage(ADYEN_FIELDS(lowercase));
+      const result = await fillCard(page, CARD, {
+        timeoutMs: 50,
+        keyDelayMs: 0,
+        adyen: handle,
+      });
+      expect(result.blocked).toBeUndefined();
+      expect(asked).toStrictEqual([lowercase]);
+      expect(typed.encryptedcardnumber).not.toBe(CARD.number);
+    } finally {
+      await handle.detach();
+      await stub.close();
+    }
+  });
+});
+
 describe("fillCard racing a newer not-enabled answer, through the real interceptor", () => {
   it("types nothing when its own prepare succeeds after a newer one was denied", async () => {
     let releaseFirst: (result: AdyenEncryptResult) => void = () => {};
