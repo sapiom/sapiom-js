@@ -157,9 +157,27 @@ function clip(value: string | null, maxChars: number): string | null {
   if (value === null) return null;
   const marker = PAYLOAD_TRUNCATION_MARKER.exec(value);
   const body = marker ? value.slice(0, value.length - marker[0].length) : value;
+  const alreadyOmitted = marker ? Number(marker[1]) : 0;
   if (body.length <= maxChars) return value;
-  const omitted = body.length - maxChars + (marker ? Number(marker[1]) : 0);
-  return `${body.slice(0, maxChars)}…[truncated ${omitted} chars]`;
+  // Same converging-slice fix as truncateForPayload, plus the unwrap step
+  // above: the omitted count folds in whatever a prior pass already cut, and
+  // idempotency holds because the fixed point always lands the body at
+  // exactly `maxChars - newMarker.length`, which a second pass's unwrap step
+  // reproduces exactly (see truncateForPayload's doc comment for why this
+  // needs a loop instead of a single subtraction).
+  let sliceLen = maxChars;
+  for (let i = 0; i < 5; i++) {
+    const omitted = body.length - sliceLen + alreadyOmitted;
+    const newMarker = `…[truncated ${omitted} chars]`;
+    const nextSliceLen = Math.max(0, maxChars - newMarker.length);
+    if (nextSliceLen === sliceLen) {
+      return `${body.slice(0, sliceLen)}${newMarker}`.slice(0, maxChars);
+    }
+    sliceLen = nextSliceLen;
+  }
+  const omitted = body.length - sliceLen + alreadyOmitted;
+  const newMarker = `…[truncated ${omitted} chars]`;
+  return `${body.slice(0, sliceLen)}${newMarker}`.slice(0, maxChars);
 }
 
 export interface CompactionOptions {

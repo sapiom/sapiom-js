@@ -79,7 +79,10 @@ describe("compactSessionRecord", () => {
     const call = compacted.turns[0].toolCalls[0];
     expect(call.input).toMatch(/…\[truncated \d+ chars\]$/);
     expect(call.input?.length).toBeLessThan(200);
-    expect(call.responseSummary).toBe(`${"y".repeat(100)}…[truncated 3900 chars]`);
+    // Bounded to maxToolResponseChars total (content + marker), not content
+    // alone -- 100 chars minus the marker's own length leaves 77 y's here.
+    expect(call.responseSummary).toBe(`${"y".repeat(77)}…[truncated 3923 chars]`);
+    expect(call.responseSummary?.length).toBe(100);
     // A result this pass shortened is truncated, whoever shortened it.
     expect(call.responseTruncated).toBe(true);
     // The conversation itself is untouched — that's the part worth archiving.
@@ -111,10 +114,13 @@ describe("compactSessionRecord", () => {
       { maxToolResponseChars: 100 },
     );
 
-    // 300 - 100 taken here, plus the 1000 the collector had already dropped.
+    // 300 z's clipped to 77 (100-char budget minus the marker's own length),
+    // plus the 1000 the collector had already dropped: 223 newly dropped
+    // here + 1000 folded in = 1223.
     expect(compacted.turns[0].toolCalls[0].responseSummary).toBe(
-      `${"z".repeat(100)}…[truncated 1200 chars]`,
+      `${"z".repeat(77)}…[truncated 1223 chars]`,
     );
+    expect(compacted.turns[0].toolCalls[0].responseSummary?.length).toBe(100);
   });
 
   it("claims no compaction when nothing was actually clipped", () => {
