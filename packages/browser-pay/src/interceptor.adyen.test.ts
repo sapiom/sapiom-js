@@ -748,6 +748,25 @@ describe("Adyen encryption gate", () => {
     });
   });
 
+  it("a payment whose encryption succeeds after a newer denial fails closed", async () => {
+    let releasePayment: (result: AdyenEncryptResult) => void = () => {};
+    const answers: Array<Promise<AdyenEncryptResult>> = [
+      new Promise((resolve) => (releasePayment = resolve)),
+      Promise.resolve(NOT_ENABLED),
+    ];
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      encrypt: () => answers.shift()!,
+    });
+    pause(harness.stub, "req-pending", ADVANCED);
+    await waitFor(() => harness!.encryptCalls.length === 1, "encrypt call");
+    await expect(
+      harness.prepare({ clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN }),
+    ).resolves.toStrictEqual({ enabled: false, reason: "adyen_not_enabled" });
+    releasePayment(ENCRYPTED);
+    await expectClosed("req-pending", "adyen_not_enabled");
+  });
+
   it("prepareAdyen after detach says not enabled without asking the backend", async () => {
     harness = await arm({});
     await harness.detach();

@@ -823,6 +823,7 @@ class PaymentInterceptor {
       return { action: "fail", reason: "adyen_client_key" };
     }
     const prepared = this.takePreparedAdyen(clientKey, pageOrigin);
+    const denials = this.adyenDenials;
     let result: AdyenEncryptResult;
     if (prepared) {
       result = { outcome: "encrypted", fields: prepared };
@@ -838,6 +839,10 @@ class PaymentInterceptor {
     if (this.closed) return { action: "fail", reason: "detached" };
     if (result.outcome === "not_enabled") {
       this.denyAdyen();
+      return { action: "fail", reason: "adyen_not_enabled" };
+    }
+    // A success that lands after any not-enabled answer is stale: the backend has since said off.
+    if (denials !== this.adyenDenials) {
       return { action: "fail", reason: "adyen_not_enabled" };
     }
     // A second key seen while encrypting makes the first choice a guess.
