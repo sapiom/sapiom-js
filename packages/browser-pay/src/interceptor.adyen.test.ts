@@ -1202,4 +1202,125 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       reported: false,
     });
   });
+
+  describe("after a 3-D Secure code", () => {
+    const DETAILS = {
+      url: `${PAGE_ORIGIN}/api/payments/details`,
+      body: { details: { threeDSResult: "opaque" } },
+    };
+
+    async function challenged(): Promise<Harness> {
+      const armed = await payAndAnswer(
+        { result: recorded },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+      );
+      await resultEvent(armed);
+      return armed;
+    }
+
+    function resultCodes(armed: Harness): string[] {
+      return armed.resultCalls.map((call) => call.resultCode);
+    }
+
+    it("reports the final code from the details answer once", async () => {
+      harness = await challenged();
+      harness.responseBodies.set(
+        "req-details",
+        JSON.stringify({ resultCode: "Authorised", pspReference: "PSP456" }),
+      );
+      pause(harness.stub, "req-details", DETAILS);
+      const continued = await settle(harness.stub, "req-details");
+      // The page's own details body goes on unchanged; only its answer is read.
+      expect(continued.params).toStrictEqual({
+        requestId: "req-details",
+        interceptResponse: true,
+      });
+      respond(harness.stub, "req-details", 200);
+      await waitFor(
+        () => harness!.resultCalls.length === 2,
+        "final result reported",
+      );
+      respond(harness.stub, "req-details", 200);
+
+      expect(harness.resultCalls.at(-1)).toStrictEqual({
+        injectionRef: HELD.injectionRef,
+        resultCode: "Authorised",
+        pspReference: "PSP456",
+      });
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+      ]);
+      expect(
+        harness.events
+          .filter((event) => event.type === "adyen_result")
+          .map((event) => "resultCode" in event && event.resultCode),
+      ).toStrictEqual(["ChallengeShopper", "Authorised"]);
+    });
+
+    it("keeps watching through a second 3-D Secure code", async () => {
+      harness = await challenged();
+      harness.responseBodies.set(
+        "req-details",
+        JSON.stringify({ resultCode: "IdentifyShopper", action: {} }),
+      );
+      harness.responseBodies.set(
+        "req-details-2",
+        JSON.stringify({ resultCode: "Refused" }),
+      );
+      pause(harness.stub, "req-details", DETAILS);
+      await settle(harness.stub, "req-details");
+      respond(harness.stub, "req-details", 200);
+      await waitFor(() => harness!.resultCalls.length === 2, "second code");
+      pause(harness.stub, "req-details-2", DETAILS);
+      expect(
+        (await settle(harness.stub, "req-details-2")).params.interceptResponse,
+      ).toBe(true);
+      respond(harness.stub, "req-details-2", 200);
+      await waitFor(() => harness!.resultCalls.length === 3, "final code");
+
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "IdentifyShopper",
+        "Refused",
+      ]);
+    });
+
+    it("reports no final result when no details answer comes", async () => {
+      harness = await challenged();
+
+      expect(resultCodes(harness)).toStrictEqual(["ChallengeShopper"]);
+    });
+
+    it("does not watch details on another origin", async () => {
+      harness = await challenged();
+      pause(harness.stub, "req-elsewhere", {
+        ...DETAILS,
+        url: "https://other.example/api/payments/details",
+      });
+
+      expect(
+        (await settle(harness.stub, "req-elsewhere")).params,
+      ).toStrictEqual({ requestId: "req-elsewhere" });
+    });
+
+    it.each(["Authorised", "Refused"])(
+      "does not watch details after a final %s on /payments",
+      async (resultCode) => {
+        harness = await payAndAnswer(
+          { result: recorded },
+          { body: JSON.stringify({ resultCode }) },
+        );
+        await resultEvent(harness);
+        pause(harness.stub, "req-details", DETAILS);
+
+        expect(
+          (await settle(harness.stub, "req-details")).params,
+        ).toStrictEqual({ requestId: "req-details" });
+        expect(resultCodes(harness)).toStrictEqual([resultCode]);
+      },
+    );
+  });
 });

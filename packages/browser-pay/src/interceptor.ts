@@ -1,5 +1,6 @@
 import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
+  isAdyenActionResult,
   paymentIdempotencyKey,
   type AdyenEncryptedFields,
   type AdyenEncryptResult,
@@ -10,6 +11,7 @@ import {
 } from "./contract.js";
 import {
   adyenClientKeysInRequest,
+  adyenDetailsOrigin,
   adyenPaymentResult,
   isAdyenClientKey,
   isAdyenSecuredFieldsPayment,
@@ -379,12 +381,14 @@ type HeldRead =
 type Decision =
   | { action: "continue" }
   | { action: "reencrypted"; body: string }
+  | { action: "awaitAdyenResult" }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
   | { action: "relayed"; response: RelayedHttpResponse };
 
 type SettleAction =
   | "continue"
+  | "continueForAnswer"
   | "fail"
   | { fulfill: RelayedHttpResponse }
   | { continueWith: string };
@@ -427,6 +431,11 @@ class PaymentInterceptor {
     string,
     { url: string; sessionId: string; networkId?: string }
   >();
+  /**
+   * Origins whose Adyen payment answered a 3-D Secure code. The agent completes
+   * 3-D Secure; the page's next details call there carries the final code.
+   */
+  private readonly adyenAwaiting3ds = new Set<string>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
   private adyenPrepareCalls = 0;
   /** Counts not-enabled answers, so a success begun before one is never used. */
@@ -781,8 +790,13 @@ class PaymentInterceptor {
       return { action: "fail", reason: "unreadable_body" };
     }
     if (read.kind === "miss") {
-      return isAdyenSecuredFieldsPayment(read.body)
-        ? this.reencryptAdyen(entry, request, read.body)
+      if (isAdyenSecuredFieldsPayment(read.body)) {
+        return this.reencryptAdyen(entry, request, read.body);
+      }
+      const detailsOrigin = adyenDetailsOrigin(request.method, request.url);
+      return detailsOrigin !== undefined &&
+        this.adyenAwaiting3ds.has(detailsOrigin)
+        ? { action: "awaitAdyenResult" }
         : { action: "continue" };
     }
     if (this.closed) return { action: "fail", reason: "detached" };
@@ -926,7 +940,9 @@ class PaymentInterceptor {
       return { enabled: false, reason: "adyen_encrypt" };
     }
     if (this.adyenClientKeys.size > 1) {
-      this.logger.warn("two different adyen client keys seen in adyen requests");
+      this.logger.warn(
+        "two different adyen client keys seen in adyen requests",
+      );
       return { enabled: false, reason: "adyen_client_key" };
     }
     let result: AdyenEncryptResult;
@@ -1037,6 +1053,12 @@ class PaymentInterceptor {
     // A request that failed before any answer has no result to report.
     if (url === undefined || status === undefined) return;
     const result = adyenPaymentResult(body ?? "");
+    const origin = new URL(url).origin;
+    if (isAdyenActionResult(result.resultCode)) {
+      this.adyenAwaiting3ds.add(origin);
+    } else {
+      this.adyenAwaiting3ds.delete(origin);
+    }
     const reported = await this.reportAdyenResult(result);
     this.emit({
       type: "adyen_result",
@@ -1303,6 +1325,16 @@ class PaymentInterceptor {
       );
       return;
     }
+    if (decision.action === "awaitAdyenResult") {
+      this.adyenResults.set(entry.key, {
+        url,
+        sessionId: entry.sessionId,
+        ...(entry.networkId ? { networkId: entry.networkId } : {}),
+      });
+      const continued = await this.settle(entry, "continueForAnswer");
+      if (!continued) this.adyenResults.delete(entry.key);
+      return;
+    }
     if (decision.action === "fail") {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url, reason: decision.reason });
@@ -1332,6 +1364,7 @@ class PaymentInterceptor {
     if (entry.phase.status !== "open") return false;
     if (
       action === "continue" ||
+      action === "continueForAnswer" ||
       (typeof action === "object" && "continueWith" in action)
     ) {
       let continued = true;
@@ -1341,7 +1374,9 @@ class PaymentInterceptor {
         entry.requestId,
         action === "continue"
           ? undefined
-          : { postData: action.continueWith, interceptResponse: true },
+          : action === "continueForAnswer"
+            ? { interceptResponse: true }
+            : { postData: action.continueWith, interceptResponse: true },
       )
         .then((ok) => {
           continued = ok;
@@ -1421,6 +1456,7 @@ class PaymentInterceptor {
     this.backlog = null;
     this.preparedAdyen.clear();
     this.adyenResults.clear();
+    this.adyenAwaiting3ds.clear();
     for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {
@@ -1979,21 +2015,21 @@ async function continueRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  override?: { postData: string; interceptResponse: boolean },
+  override?: { postData?: string; interceptResponse: boolean },
 ): Promise<boolean> {
   try {
     await connection.send(
       "Fetch.continueRequest",
       {
         requestId,
-        ...(override
+        ...(override?.postData !== undefined
           ? {
               postData: Buffer.from(override.postData, "utf8").toString(
                 "base64",
               ),
-              interceptResponse: override.interceptResponse,
             }
           : {}),
+        ...(override ? { interceptResponse: override.interceptResponse } : {}),
       },
       sessionId,
     );

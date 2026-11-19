@@ -213,6 +213,28 @@ export function withAdyenEncryptedFields(
   });
 }
 
+/**
+ * The origin of a POST that submits 3-D Secure details: the merchant's own
+ * `/payments/details` or Adyen's `/sessions/{id}/paymentDetails`.
+ */
+export function adyenDetailsOrigin(
+  method: string,
+  url: string,
+): string | undefined {
+  if (method.toUpperCase() !== "POST") return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  return /\/payments\/details$|\/sessions\/[^/]+\/paymentDetails$/.test(
+    parsed.pathname,
+  )
+    ? parsed.origin
+    : undefined;
+}
+
 const PSP_REFERENCE_SHAPE = /^[A-Za-z0-9]{1,64}$/;
 
 /**

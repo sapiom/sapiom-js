@@ -187,6 +187,18 @@ export const ADYEN_RESULT_CODES = [
 
 export type AdyenResultCode = (typeof ADYEN_RESULT_CODES)[number] | "unknown";
 
+/**
+ * Codes asking the shopper for 3-D Secure. The page's agent completes it; the
+ * final code comes in the answer to the page's `/payments/details` call.
+ */
+export function isAdyenActionResult(code: AdyenResultCode): boolean {
+  return (
+    code === "RedirectShopper" ||
+    code === "IdentifyShopper" ||
+    code === "ChallengeShopper"
+  );
+}
+
 export interface AdyenResultRequest {
   injectionRef: string;
   resultCode: AdyenResultCode;
