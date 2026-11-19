@@ -1038,8 +1038,9 @@ class PaymentInterceptor {
         ? await readResponseBody(this.connection, sessionId, requestId)
         : undefined;
     await continueRequest(this.connection, sessionId, requestId);
-    // A request that failed before any answer has no result to report.
-    if (url === undefined || status === undefined) return;
+    // A request that failed before any answer has no result to report, and
+    // after detach() a read cut short would be reported as `unknown`.
+    if (url === undefined || status === undefined || this.closed) return;
     const result = adyenPaymentResult(body ?? "");
     const reported = await this.reportAdyenResult(result);
     this.emit({

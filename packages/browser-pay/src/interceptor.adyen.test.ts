@@ -1223,6 +1223,26 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     },
   );
 
+  it("reports nothing when detach() runs while the answer is read", async () => {
+    let detaching: Promise<void> | undefined;
+    harness = await payAndAnswer(
+      {
+        result: recorded,
+        onResponseBody: () => {
+          detaching = harness!.detach();
+        },
+      },
+      { body: JSON.stringify({ resultCode: "Authorised" }) },
+    );
+    await waitFor(() => detaching !== undefined, "detach started");
+    await detaching;
+
+    expect(harness.resultCalls).toHaveLength(0);
+    expect(harness.events.some((event) => event.type === "adyen_result")).toBe(
+      false,
+    );
+  });
+
   it("emits reported false when the relay cannot report", async () => {
     harness = await payAndAnswer(
       {},
