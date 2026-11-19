@@ -1257,6 +1257,77 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     },
   );
 
+  describe("while the report is still with the backend", () => {
+    let answerReport: () => void = () => {};
+
+    async function payWithPendingReport(): Promise<Harness> {
+      const reportHeld = new Promise<void>((resolve) => {
+        answerReport = resolve;
+      });
+      const armed = await payAndAnswer(
+        {
+          result: async (request) => {
+            await reportHeld;
+            return recorded(request);
+          },
+        },
+        { body: JSON.stringify({ resultCode: "Authorised" }) },
+      );
+      await waitFor(() => armed.resultCalls.length === 1, "report sent");
+      return armed;
+    }
+
+    afterEach(() => answerReport());
+
+    it("holds every detach() call until the report settles", async () => {
+      harness = await payWithPendingReport();
+      let detached = 0;
+      const detaches = [harness.detach(), harness.detach()].map((call) =>
+        call.then(() => {
+          detached += 1;
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(detached).toBe(0);
+
+      answerReport();
+      await Promise.all(detaches);
+
+      expect(
+        harness.events.find((event) => event.type === "adyen_result"),
+      ).toMatchObject({ resultCode: "Authorised", reported: true });
+    });
+
+    it("lets a tab opened during detach() run without waiting for it", async () => {
+      harness = await payWithPendingReport();
+      const detaching = harness.detach();
+      harness.stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-2",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-page-2",
+            type: "page",
+            url: `${PAGE_ORIGIN}/other`,
+          },
+        },
+      });
+
+      await waitFor(
+        () =>
+          harness!.stub.commands.some(
+            (command) =>
+              command.method === "Runtime.runIfWaitingForDebugger" &&
+              command.sessionId === "page-2",
+          ),
+        "new tab resumed",
+      );
+      answerReport();
+      await detaching;
+    });
+  });
+
   it("emits reported false when the relay cannot report", async () => {
     harness = await payAndAnswer(
       {},
