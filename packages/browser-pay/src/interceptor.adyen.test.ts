@@ -1775,10 +1775,78 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ).toBe(true);
       respond(harness.stub, "req-details", 200);
       await waitFor(() => harness!.resultCalls.length === 3, "final reported");
+      harness.responseBodies.set(
+        "req-details-2",
+        JSON.stringify({ resultCode: "Refused" }),
+      );
+      pause(harness.stub, "req-details-2", {
+        url: checkout("CS456", "paymentDetails"),
+        body: { sessionData: "Ab02b4c0!session", details: {} },
+      });
+      expect(
+        (await settle(harness.stub, "req-details-2")).params.interceptResponse,
+      ).toBe(true);
+      respond(harness.stub, "req-details-2", 200);
+      await waitFor(() => harness!.resultCalls.length === 4, "both final");
 
       expect(resultCodes(harness)).toStrictEqual([
         "ChallengeShopper",
         "ChallengeShopper",
+        "Authorised",
+        "Refused",
+      ]);
+    });
+
+    it("keeps a challenge watch a concurrent final answer started before", async () => {
+      // Merchant routes on one origin share one checkout key.
+      const route = (cart: string) =>
+        `${PAGE_ORIGIN}/api/sessions/${cart}/payments`;
+      let reads = 0;
+      harness = await arm({
+        frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+        result: recorded,
+        onResponseBody: () => {
+          reads += 1;
+          // B's final answer starts its read before A's challenge adds the
+          // watch, and finishes it after.
+          if (reads === 1) respond(harness!.stub, "req-pay-2", 200);
+        },
+      });
+      harness.responseBodies.set(
+        "req-pay",
+        JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+      );
+      harness.responseBodies.set(
+        "req-pay-2",
+        JSON.stringify({ resultCode: "Refused" }),
+      );
+      pause(harness.stub, "req-pay", { ...ADVANCED, url: route("cart-a") });
+      pause(harness.stub, "req-pay-2", { ...ADVANCED, url: route("cart-b") });
+      await waitFor(
+        () =>
+          harness!.events.filter((event) => event.type === "reencrypted")
+            .length === 2,
+        "both payments reencrypted",
+      );
+      respond(harness.stub, "req-pay", 200);
+      await waitFor(() => harness!.resultCalls.length === 2, "both reported");
+      harness.responseBodies.set(
+        "req-details",
+        JSON.stringify({ resultCode: "Authorised" }),
+      );
+      pause(harness.stub, "req-details", {
+        ...DETAILS,
+        url: `${route("cart-a")}/details`,
+      });
+      expect(
+        (await settle(harness.stub, "req-details")).params.interceptResponse,
+      ).toBe(true);
+      respond(harness.stub, "req-details", 200);
+      await waitFor(() => harness!.resultCalls.length === 3, "final reported");
+
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Refused",
         "Authorised",
       ]);
     });

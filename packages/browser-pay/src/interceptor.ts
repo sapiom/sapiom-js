@@ -1110,7 +1110,9 @@ class PaymentInterceptor {
         this.adyenAwaiting3ds.set(page, (live ?? new Set()).add(checkout));
       }
     } else if (result.resultCode !== "unknown") {
-      live?.delete(checkout);
+      // Only a watch this read saw: one added by another answer read
+      // meanwhile (another payment on a shared checkout key) stays.
+      awaiting?.delete(checkout);
     }
     await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
