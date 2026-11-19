@@ -97,10 +97,14 @@ async function arm(options: {
   result?: (request: AdyenResultRequest) => Promise<AdyenResultResponse>;
   attemptTimeoutMs?: number;
   disableAdyenEncryption?: boolean;
+  logger?: PayLogger;
+  /** Runs while `Fetch.getResponseBody` is being answered. */
+  onResponseBody?: () => void;
 }): Promise<Harness> {
   const responseBodies = new Map<string, string>();
   const stub = await startCdpStub((command) => {
     if (command.method === "Fetch.getResponseBody") {
+      options.onResponseBody?.();
       const body = responseBodies.get(String(command.params.requestId)) ?? "";
       return {
         body: Buffer.from(body, "utf8").toString("base64"),
@@ -149,7 +153,7 @@ async function arm(options: {
       return result(request);
     };
   }
-  const logger: PayLogger = {
+  const logger: PayLogger = options.logger ?? {
     warn(message, fields) {
       warnings.push(JSON.stringify({ message, fields }));
     },
@@ -1190,6 +1194,34 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       "pii-marker",
     );
   });
+
+  it.each([
+    [
+      "throws",
+      (): void => {
+        throw new Error("sink closed");
+      },
+    ],
+    ["rejects", (): Promise<void> => Promise.reject(new Error("sink closed"))],
+  ] as const)(
+    "emits reported false when the logger %s",
+    async (_label, warn) => {
+      harness = await payAndAnswer(
+        {
+          result: async () => {
+            throw new RelayHttpError(500);
+          },
+          logger: { warn },
+        },
+        { body: JSON.stringify({ resultCode: "Authorised" }) },
+      );
+
+      expect(await resultEvent(harness)).toMatchObject({
+        resultCode: "Authorised",
+        reported: false,
+      });
+    },
+  );
 
   it("emits reported false when the relay cannot report", async () => {
     harness = await payAndAnswer(

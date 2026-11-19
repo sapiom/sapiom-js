@@ -619,16 +619,18 @@ class PaymentInterceptor {
         ? target.type
         : undefined;
     const code = failed?.code;
+    this.warn("browser step failed", {
+      method,
+      ...(code !== undefined ? { code } : {}),
+      timedOut: failed?.timedOut ?? false,
+      ...(targetType ? { targetType } : {}),
+      ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+    });
+  }
+
+  private warn(...args: Parameters<PayLogger["warn"]>): void {
     try {
-      void Promise.resolve(
-        this.logger.warn("browser step failed", {
-          method,
-          ...(code !== undefined ? { code } : {}),
-          timedOut: failed?.timedOut ?? false,
-          ...(targetType ? { targetType } : {}),
-          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
-        }),
-      ).catch(() => {});
+      void Promise.resolve(this.logger.warn(...args)).catch(() => {});
     } catch {
       // A logger must not change control flow.
     }
@@ -926,7 +928,9 @@ class PaymentInterceptor {
       return { enabled: false, reason: "adyen_encrypt" };
     }
     if (this.adyenClientKeys.size > 1) {
-      this.logger.warn("two different adyen client keys seen in adyen requests");
+      this.logger.warn(
+        "two different adyen client keys seen in adyen requests",
+      );
       return { enabled: false, reason: "adyen_client_key" };
     }
     let result: AdyenEncryptResult;
@@ -1064,7 +1068,7 @@ class PaymentInterceptor {
         ),
       );
     } catch (error) {
-      this.logger.warn("adyen result report failed", {
+      this.warn("adyen result report failed", {
         resultCode: result.resultCode,
         ...(error instanceof RelayHttpError ? { status: error.status } : {}),
         timedOut: isRelayTimeout(error),
@@ -1072,7 +1076,7 @@ class PaymentInterceptor {
       return false;
     }
     if (answer.outcome !== "refused") return true;
-    this.logger.warn("adyen result report refused", {
+    this.warn("adyen result report refused", {
       resultCode: result.resultCode,
       status: answer.status,
       code: publicCode(answer.code),
