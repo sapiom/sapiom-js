@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,8 +28,8 @@ async function scaffoldWorkflow(root: string, name: string): Promise<string> {
 
 let cwd: string;
 let manager: WorkspaceWatcherManager;
-let onChange: ReturnType<typeof vi.fn>;
-let onWatcherStarted: ReturnType<typeof vi.fn>;
+let onChange: Mock<(...args: any[]) => any>;
+let onWatcherStarted: Mock<(...args: any[]) => any>;
 
 describe("WorkspaceWatcherManager", () => {
   beforeEach(async () => {

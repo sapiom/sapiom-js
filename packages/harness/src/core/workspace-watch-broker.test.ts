@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import {
   SharedWorkspaceWatchBroker,
@@ -13,7 +13,7 @@ import {
 
 let root: string;
 let listener: Parameters<WorkspaceWatchFactory>[1];
-let close: ReturnType<typeof vi.fn>;
+let close: Mock<(...args: any[]) => any>;
 let watchFactory: ReturnType<typeof vi.fn<WorkspaceWatchFactory>>;
 let aliasPath: string | null;
 

@@ -6,7 +6,7 @@
  * polling delay. See codex-session-lifecycle.test.ts for the real-files,
  * no-mocking end-to-end proof.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ import { startServer, type HarnessServer } from "./index.js";
 import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 
-type FakeTailerHandle = { stop: ReturnType<typeof vi.fn>; emitSessionEnd: ReturnType<typeof vi.fn> };
+type FakeTailerHandle = { stop: Mock<(...args: any[]) => any>; emitSessionEnd: Mock<(...args: any[]) => any> };
 
 /**
  * `vi.waitFor`'s own default (1000ms timeout / 50ms interval — tuned for
