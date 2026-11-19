@@ -100,6 +100,8 @@ async function arm(options: {
   logger?: PayLogger;
   /** Runs while `Fetch.getResponseBody` is being answered. */
   onResponseBody?: () => void;
+  /** Runs while the answer's own `Fetch.continueRequest` is being answered. */
+  onAnswerContinue?: () => void;
 }): Promise<Harness> {
   const responseBodies = new Map<string, string>();
   const stub = await startCdpStub((command) => {
@@ -110,6 +112,12 @@ async function arm(options: {
         body: Buffer.from(body, "utf8").toString("base64"),
         base64Encoded: true,
       };
+    }
+    if (
+      command.method === "Fetch.continueRequest" &&
+      command.params.postData === undefined
+    ) {
+      options.onAnswerContinue?.();
     }
     if (command.method !== "Runtime.evaluate") return undefined;
     if (command.params.expression === "location.origin") {
@@ -1223,25 +1231,30 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     },
   );
 
-  it("reports nothing when detach() runs while the answer is read", async () => {
-    let detaching: Promise<void> | undefined;
-    harness = await payAndAnswer(
-      {
-        result: recorded,
-        onResponseBody: () => {
-          detaching = harness!.detach();
+  it.each(["onResponseBody", "onAnswerContinue"] as const)(
+    "reports the answer before detach() returns when detach() starts in %s",
+    async (hook) => {
+      let detaching: Promise<void> | undefined;
+      harness = await payAndAnswer(
+        {
+          result: recorded,
+          [hook]: () => {
+            detaching ??= harness!.detach();
+          },
         },
-      },
-      { body: JSON.stringify({ resultCode: "Authorised" }) },
-    );
-    await waitFor(() => detaching !== undefined, "detach started");
-    await detaching;
+        { body: JSON.stringify({ resultCode: "Authorised" }) },
+      );
+      await waitFor(() => detaching !== undefined, "detach started");
+      await detaching;
 
-    expect(harness.resultCalls).toHaveLength(0);
-    expect(harness.events.some((event) => event.type === "adyen_result")).toBe(
-      false,
-    );
-  });
+      expect(harness.resultCalls).toStrictEqual([
+        { injectionRef: HELD.injectionRef, resultCode: "Authorised" },
+      ]);
+      expect(
+        harness.events.find((event) => event.type === "adyen_result"),
+      ).toMatchObject({ resultCode: "Authorised", reported: true });
+    },
+  );
 
   it("emits reported false when the relay cannot report", async () => {
     harness = await payAndAnswer(
