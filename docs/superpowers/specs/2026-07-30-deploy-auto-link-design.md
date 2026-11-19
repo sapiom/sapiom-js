@@ -172,7 +172,7 @@ real tenant before calling the feature done.
 
 ### Desktop host
 
-No new packaging hazard (`packages/harness/CLAUDE.md`): `link` is a plain network
+No new packaging hazard (`packages/harness/AGENTS.md`): `link` is a plain network
 call, and the only subprocess involved is the existing `runManifestCheck`, which
 already translates asar paths and sets `ELECTRON_RUN_AS_NODE`. Nothing new needs
 `asarUnpack`, and `smoke.ts` needs no new check.

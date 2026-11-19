@@ -30,7 +30,7 @@ const ADS = `${POLSIA}/backend/src/agents/ads`;
 describe("projectRootForAgent: a session boots at the project root", () => {
   it("returns the root that contains the agent, not the agent's folder", () => {
     // The rule the whole change exists for: rooted in the agent's folder, the
-    // booting agent never sees the project's CLAUDE.md, .claude/ or skills.
+    // booting agent never sees the project's AGENTS.md, .claude/ or skills.
     expect(projectRootForAgent(ADS, [POLSIA])).toBe(POLSIA);
   });
 

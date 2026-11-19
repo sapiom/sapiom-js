@@ -1,6 +1,6 @@
 # Agent Studio desktop
 
-The Electron host for `@sapiom/harness`. See [CLAUDE.md](CLAUDE.md) for packaging.
+The Electron host for `@sapiom/harness`. See [AGENTS.md](AGENTS.md) for packaging.
 
 ## Project map release verification
 

@@ -10,7 +10,7 @@ import { activeSessionId, openAgentModal } from "./mock-navigation";
  * through the browser: a prompt asked from an agent's board in its modal
  * (flow-map-chat-overlay.md 4.4b, "Ask ... a new project-root session") boots
  * at the project that owns the agent, so the coding agent sees the project's
- * CLAUDE.md, .claude/ and skills, and the new session is named for the
+ * AGENTS.md, .claude/ and skills, and the new session is named for the
  * project rather than the agent. It is never bound to the agent (I2).
  *
  * Mock fixtures this leans on (web/src/lib/mock-data.ts):

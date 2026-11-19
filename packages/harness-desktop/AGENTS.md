@@ -4,7 +4,7 @@ Electron host for `@sapiom/harness`: `src/main/boot.ts` is a native mirror of th
 `bin.ts` (doctor → agent install → auth → consent → workspace → `startServer` → window). It ships as
 installers, not to npm.
 
-**Harness-side rules — what a *feature* must do to work here — live in `../harness/CLAUDE.md`.**
+**Harness-side rules — what a *feature* must do to work here — live in `../harness/AGENTS.md`.**
 This file is the other half: the OS, packaging, and toolchain differences you have to respect when
 touching this package, and how to tell whether a change actually works on the OSes we ship.
 

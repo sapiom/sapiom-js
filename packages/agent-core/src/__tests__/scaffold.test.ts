@@ -26,7 +26,12 @@ import {
   renderAuthoringRulesStamp,
 } from "../authoring-rules";
 import { AgentOperationError } from "../errors";
-import { registryFor, resolveVersions, scaffold } from "../scaffold";
+import {
+  listTemplates,
+  registryFor,
+  resolveVersions,
+  scaffold,
+} from "../scaffold";
 
 // Point template resolution at the bundled templates dir (two levels up from
 // src/), bypassing the dist/ path that TEMPLATES_DIR normally expects.
@@ -300,6 +305,39 @@ describe("scaffold", () => {
           JSON.parse(readFileSync(path.join(targetDir, "sapiom.json"), "utf8"))
             .starterId,
         ).toBe(template);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(listTemplates(FIXTURE_TEMPLATES))(
+    "scaffolds the %s template with AGENTS.md and no CLAUDE.md",
+    async (template) => {
+      const base = makeTmp();
+      const targetDir = path.join(base, `instructions-${template}`);
+      try {
+        await scaffold({
+          targetDir,
+          template,
+          versions: { agent: "1.0.0", tools: "1.0.0", zod: "3.0.0" },
+        });
+
+        const found: string[] = [];
+        const visit = (current: string): void => {
+          for (const entry of readdirSync(current)) {
+            if (entry === ".git") continue;
+            const full = path.join(current, entry);
+            if (statSync(full).isDirectory()) visit(full);
+            else if (/^CLAUDE(\.local)?\.md$/i.test(entry)) {
+              found.push(path.relative(targetDir, full));
+            }
+          }
+        };
+        visit(targetDir);
+
+        expect(existsSync(path.join(targetDir, "AGENTS.md"))).toBe(true);
+        expect(found).toEqual([]);
       } finally {
         rmSync(base, { recursive: true, force: true });
       }
