@@ -1727,6 +1727,62 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ]);
     });
 
+    it("keeps both watches when two challenges are read at once", async () => {
+      const checkout = (id: string, kind: string) =>
+        `https://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/${id}/${kind}?clientKey=${CLIENT_KEY}`;
+      let reads = 0;
+      harness = await arm({
+        frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+        result: recorded,
+        onResponseBody: () => {
+          reads += 1;
+          // The second answer arrives while the first is still being read.
+          if (reads === 1) respond(harness!.stub, "req-pay-2", 200);
+        },
+      });
+      const challenge = JSON.stringify({
+        resultCode: "ChallengeShopper",
+        action: {},
+      });
+      for (const [id, session] of [
+        ["req-pay", "CS123"],
+        ["req-pay-2", "CS456"],
+      ]) {
+        harness.responseBodies.set(id, challenge);
+        pause(harness.stub, id, {
+          ...SESSIONS,
+          url: checkout(session, "payments"),
+        });
+      }
+      await waitFor(
+        () =>
+          harness!.events.filter((event) => event.type === "reencrypted")
+            .length === 2,
+        "both payments reencrypted",
+      );
+      respond(harness.stub, "req-pay", 200);
+      await waitFor(() => harness!.resultCalls.length === 2, "both reported");
+      harness.responseBodies.set(
+        "req-details",
+        JSON.stringify({ resultCode: "Authorised" }),
+      );
+      pause(harness.stub, "req-details", {
+        url: checkout("CS123", "paymentDetails"),
+        body: { sessionData: "Ab02b4c0!session", details: {} },
+      });
+      expect(
+        (await settle(harness.stub, "req-details")).params.interceptResponse,
+      ).toBe(true);
+      respond(harness.stub, "req-details", 200);
+      await waitFor(() => harness!.resultCalls.length === 3, "final reported");
+
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "ChallengeShopper",
+        "Authorised",
+      ]);
+    });
+
     it.each(["Authorised", "Refused"])(
       "does not watch details after a final %s on /payments",
       async (resultCode) => {

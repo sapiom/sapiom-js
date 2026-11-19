@@ -1103,12 +1103,14 @@ class PaymentInterceptor {
     // non-JSON body) keeps the watch: it is not final, and the page's retried
     // details call may be. Nothing new is watched once detach() starts or the
     // page has closed.
+    // Another answer read meanwhile may have started this tab's watches.
+    const live = this.adyenAwaiting3ds.get(page) ?? awaiting;
     if (isAdyenActionResult(result.resultCode)) {
       if (!this.closed && this.sessions.has(page)) {
-        this.adyenAwaiting3ds.set(page, (awaiting ?? new Set()).add(checkout));
+        this.adyenAwaiting3ds.set(page, (live ?? new Set()).add(checkout));
       }
     } else if (result.resultCode !== "unknown") {
-      awaiting?.delete(checkout);
+      live?.delete(checkout);
     }
     await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
