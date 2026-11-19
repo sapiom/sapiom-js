@@ -135,8 +135,9 @@ export function classifyStepKind(input: {
 }
 
 /** Builds every edge a step declares — one per `continue` target plus its
- *  `pause` edge, if any. Node kind (above) only decides border styling; every
- *  declared transition with a target still gets its own edge. */
+ *  `pause` edge and, when the pause declares one, its `timeoutStep` edge. Node
+ *  kind (above) only decides border styling; every declared transition with a
+ *  target still gets its own edge. */
 function edgesForStep(name: string, step: AgentStepManifest): CanvasEdge[] {
   const continueTargets = step.transitions.filter((t) => t.kind === "continue");
   const edges: CanvasEdge[] = continueTargets.map((t) => ({
@@ -147,6 +148,9 @@ function edgesForStep(name: string, step: AgentStepManifest): CanvasEdge[] {
   const pause = step.transitions.find((t) => t.kind === "pause");
   if (pause) {
     edges.push({ from: name, to: pause.resumeStep, kind: "cross", label: pause.signal });
+    if (pause.timeoutStep) {
+      edges.push({ from: name, to: pause.timeoutStep, kind: "cross", label: `${pause.signal} · timeout` });
+    }
   }
   return edges;
 }
