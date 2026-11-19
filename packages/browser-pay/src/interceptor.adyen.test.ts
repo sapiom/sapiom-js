@@ -896,13 +896,14 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     options: Parameters<typeof arm>[0],
     /** `status: null` is a request that failed before any answer. */
     answer: { body: string; status?: number | null },
+    payment: { url: string; body: unknown } = ADVANCED,
   ): Promise<Harness> {
     const armed = await arm({
       frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
       ...options,
     });
     armed.responseBodies.set("req-pay", answer.body);
-    pause(armed.stub, "req-pay", ADVANCED);
+    pause(armed.stub, "req-pay", payment);
     await waitFor(
       () => armed.events.some((event) => event.type === "reencrypted"),
       "reencrypted",
@@ -1426,6 +1427,69 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       expect(
         (await settle(harness.stub, "req-elsewhere")).params,
       ).toStrictEqual({ requestId: "req-elsewhere" });
+    });
+
+    it("does not watch details from another tab on the same origin", async () => {
+      harness = await challenged();
+      harness.stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-2",
+          waitingForDebugger: false,
+          targetInfo: {
+            targetId: "target-page-2",
+            type: "page",
+            url: `${PAGE_ORIGIN}/checkout`,
+          },
+        },
+      });
+      await waitFor(
+        () => count(harness!.stub.commands, "Fetch.enable") === 3,
+        "Fetch.enable on the second tab",
+      );
+      harness.stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-2",
+        params: {
+          requestId: "req-other-tab",
+          request: {
+            url: DETAILS.url,
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            postData: JSON.stringify(DETAILS.body),
+            hasPostData: true,
+          },
+        },
+      });
+
+      expect(
+        (await settle(harness.stub, "req-other-tab")).params,
+      ).toStrictEqual({ requestId: "req-other-tab" });
+    });
+
+    it("watches only its own Adyen session's details", async () => {
+      harness = await payAndAnswer(
+        { result: recorded },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+        SESSIONS,
+      );
+      await resultEvent(harness);
+      const details = (id: string) => ({
+        url: `https://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/${id}/paymentDetails?clientKey=${CLIENT_KEY}`,
+        body: { sessionData: "Ab02b4c0!session", details: {} },
+      });
+      pause(harness.stub, "req-other-session", details("CS999"));
+      pause(harness.stub, "req-own-session", details("CS123"));
+
+      expect(
+        (await settle(harness.stub, "req-other-session")).params,
+      ).toStrictEqual({ requestId: "req-other-session" });
+      expect(
+        (await settle(harness.stub, "req-own-session")).params
+          .interceptResponse,
+      ).toBe(true);
     });
 
     it.each(["Authorised", "Refused"])(

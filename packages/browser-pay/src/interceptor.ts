@@ -11,7 +11,8 @@ import {
 } from "./contract.js";
 import {
   adyenClientKeysInRequest,
-  adyenDetailsOrigin,
+  adyenCheckout,
+  adyenDetailsCheckout,
   adyenPaymentResult,
   isAdyenClientKey,
   isAdyenSecuredFieldsPayment,
@@ -433,8 +434,9 @@ class PaymentInterceptor {
     { url: string; sessionId: string; networkId?: string }
   >();
   /**
-   * Origins whose Adyen payment answered a 3-D Secure code. The agent completes
-   * 3-D Secure; the page's next details call there carries the final code.
+   * Checkouts, by page, whose Adyen payment answered a 3-D Secure code. The
+   * agent completes 3-D Secure; the page's next details call there carries the
+   * final code.
    */
   private readonly adyenAwaiting3ds = new Set<string>();
   /** Answers being read, handed to the page and reported; detach() waits for them. */
@@ -804,9 +806,11 @@ class PaymentInterceptor {
       if (isAdyenSecuredFieldsPayment(read.body)) {
         return this.reencryptAdyen(entry, request, read.body);
       }
-      const detailsOrigin = adyenDetailsOrigin(request.method, request.url);
-      return detailsOrigin !== undefined &&
-        this.adyenAwaiting3ds.has(detailsOrigin)
+      const checkout = adyenDetailsCheckout(request.method, request.url);
+      return checkout !== undefined &&
+        this.adyenAwaiting3ds.has(
+          this.checkoutOnPage(entry.sessionId, checkout),
+        )
         ? { action: "awaitAdyenResult" }
         : { action: "continue" };
     }
@@ -1064,15 +1068,18 @@ class PaymentInterceptor {
     const result = adyenPaymentResult(
       (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
     );
-    const origin = new URL(url).origin;
+    const checkout = this.checkoutOnPage(
+      sessionId,
+      adyenCheckout(new URL(url)),
+    );
     // Watched before the page gets the answer: its details call can pause
     // before the continue returns. An `unknown` answer (an Adyen error or a
     // non-JSON body) keeps the watch: it is not final, and the page's retried
     // details call may be.
     if (isAdyenActionResult(result.resultCode)) {
-      this.adyenAwaiting3ds.add(origin);
+      this.adyenAwaiting3ds.add(checkout);
     } else if (result.resultCode !== "unknown") {
-      this.adyenAwaiting3ds.delete(origin);
+      this.adyenAwaiting3ds.delete(checkout);
     }
     await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
@@ -1083,6 +1090,17 @@ class PaymentInterceptor {
       status,
       reported,
     });
+  }
+
+  /** A checkout in one tab: its frames share it, other tabs do not. */
+  private checkoutOnPage(sessionId: string, checkout: string): string {
+    let page = sessionId;
+    for (;;) {
+      const parent = this.sessions.get(page)?.parentSessionId;
+      if (parent === undefined || !this.sessions.has(parent)) break;
+      page = parent;
+    }
+    return `${page} ${checkout}`;
   }
 
   /** False when the backend did not take the result. Never throws. */

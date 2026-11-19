@@ -214,10 +214,22 @@ export function withAdyenEncryptedFields(
 }
 
 /**
- * The origin of a POST that submits 3-D Secure details: the merchant's own
+ * The checkout an Adyen payment or details call belongs to: its origin, and
+ * for Adyen's `/sessions/{id}/...` the session too, since every merchant's
+ * sessions share Adyen's host.
+ */
+export function adyenCheckout(url: URL): string {
+  const session = /^(.*\/sessions\/[^/]+)\/(?:payments|paymentDetails)$/.exec(
+    url.pathname,
+  );
+  return session ? `${url.origin}${session[1]}` : url.origin;
+}
+
+/**
+ * The checkout of a POST that submits 3-D Secure details: the merchant's own
  * `/payments/details` or Adyen's `/sessions/{id}/paymentDetails`.
  */
-export function adyenDetailsOrigin(
+export function adyenDetailsCheckout(
   method: string,
   url: string,
 ): string | undefined {
@@ -231,7 +243,7 @@ export function adyenDetailsOrigin(
   return /\/payments\/details$|\/sessions\/[^/]+\/paymentDetails$/.test(
     parsed.pathname,
   )
-    ? parsed.origin
+    ? adyenCheckout(parsed)
     : undefined;
 }
 
