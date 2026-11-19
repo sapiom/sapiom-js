@@ -431,14 +431,20 @@ class PaymentInterceptor {
   /** Re-encrypted payments whose answer is still to come, by inflight key. */
   private readonly adyenResults = new Map<
     string,
-    { url: string; sessionId: string; networkId?: string }
+    {
+      url: string;
+      sessionId: string;
+      networkId?: string;
+      /** A 3-D Secure details call, reported only while its checkout waits. */
+      details?: true;
+    }
   >();
   /**
-   * Checkouts, by page, whose Adyen payment answered a 3-D Secure code. The
-   * agent completes 3-D Secure; the page's next details call there carries the
-   * final code.
+   * Checkouts, by page session, whose Adyen payment answered a 3-D Secure
+   * code. The agent completes 3-D Secure; the page's next details call there
+   * carries the final code.
    */
-  private readonly adyenAwaiting3ds = new Set<string>();
+  private readonly adyenAwaiting3ds = new Map<string, Set<string>>();
   /** Answers being read, handed to the page and reported; detach() waits for them. */
   private readonly answers = new Set<Promise<void>>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
@@ -568,6 +574,7 @@ class PaymentInterceptor {
     for (const [key, watch] of this.adyenResults) {
       if (watch.sessionId === sessionId) this.adyenResults.delete(key);
     }
+    this.adyenAwaiting3ds.delete(sessionId);
   }
 
   private onTargetInfoChanged(event: CdpEvent): void {
@@ -822,9 +829,8 @@ class PaymentInterceptor {
       }
       const checkout = adyenDetailsCheckout(request.method, request.url);
       return checkout !== undefined &&
-        this.adyenAwaiting3ds.has(
-          this.checkoutOnPage(entry.sessionId, checkout),
-        )
+        !this.closed &&
+        this.adyenAwaiting3ds.get(this.pageOf(entry.sessionId))?.has(checkout)
         ? { action: "awaitAdyenResult" }
         : { action: "continue" };
     }
@@ -1071,29 +1077,37 @@ class PaymentInterceptor {
     status: number | undefined,
   ): Promise<void> {
     const key = inflightKey(sessionId, requestId);
-    const url = this.adyenResults.get(key)?.url;
+    const watch = this.adyenResults.get(key);
     // Deleting first makes a second answer for the same request pass untouched.
     this.adyenResults.delete(key);
     // A request that failed before any answer has no result to report.
-    if (url === undefined || status === undefined) {
+    if (watch === undefined || status === undefined) {
       await continueRequest(this.connection, sessionId, requestId);
       return;
     }
+    const { url } = watch;
     const result = adyenPaymentResult(
       (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
     );
-    const checkout = this.checkoutOnPage(
-      sessionId,
-      adyenCheckout(new URL(url)),
-    );
+    const page = this.pageOf(sessionId);
+    const checkout = adyenCheckout(new URL(url));
+    const awaiting = this.adyenAwaiting3ds.get(page);
+    // Another details answer for this checkout was already final.
+    if (watch.details && !awaiting?.has(checkout)) {
+      await continueRequest(this.connection, sessionId, requestId);
+      return;
+    }
     // Watched before the page gets the answer: its details call can pause
     // before the continue returns. An `unknown` answer (an Adyen error or a
     // non-JSON body) keeps the watch: it is not final, and the page's retried
-    // details call may be.
+    // details call may be. Nothing new is watched once detach() starts or the
+    // page has closed.
     if (isAdyenActionResult(result.resultCode)) {
-      this.adyenAwaiting3ds.add(checkout);
+      if (!this.closed && this.sessions.has(page)) {
+        this.adyenAwaiting3ds.set(page, (awaiting ?? new Set()).add(checkout));
+      }
     } else if (result.resultCode !== "unknown") {
-      this.adyenAwaiting3ds.delete(checkout);
+      awaiting?.delete(checkout);
     }
     await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
@@ -1106,15 +1120,15 @@ class PaymentInterceptor {
     });
   }
 
-  /** A checkout in one tab: its frames share it, other tabs do not. */
-  private checkoutOnPage(sessionId: string, checkout: string): string {
+  /** The tab a session belongs to: its frames share it, other tabs do not. */
+  private pageOf(sessionId: string): string {
     let page = sessionId;
     for (;;) {
       const parent = this.sessions.get(page)?.parentSessionId;
       if (parent === undefined || !this.sessions.has(parent)) break;
       page = parent;
     }
-    return `${page} ${checkout}`;
+    return page;
   }
 
   /** False when the backend did not take the result. Never throws. */
@@ -1378,6 +1392,7 @@ class PaymentInterceptor {
         url,
         sessionId: entry.sessionId,
         ...(entry.networkId ? { networkId: entry.networkId } : {}),
+        details: true,
       });
       const continued = await this.settle(entry, "continueForAnswer");
       if (!continued) this.adyenResults.delete(entry.key);
@@ -1509,7 +1524,6 @@ class PaymentInterceptor {
     this.backlog = null;
     this.preparedAdyen.clear();
     this.adyenResults.clear();
-    this.adyenAwaiting3ds.clear();
     for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {

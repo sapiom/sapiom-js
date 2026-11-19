@@ -1563,6 +1563,135 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ).toBe(true);
     });
 
+    it("watches a merchant's details under its own /sessions/{id}/ route", async () => {
+      const route = `${PAGE_ORIGIN}/api/sessions/cart-123/payments`;
+      harness = await payAndAnswer(
+        { result: recorded },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+        { ...ADVANCED, url: route },
+      );
+      await resultEvent(harness);
+      pause(harness.stub, "req-details", {
+        ...DETAILS,
+        url: `${route}/details`,
+      });
+
+      expect(
+        (await settle(harness.stub, "req-details")).params.interceptResponse,
+      ).toBe(true);
+    });
+
+    it("reports one final code when two details answers are outstanding", async () => {
+      harness = await challenged();
+      for (const id of ["req-details", "req-details-2"]) {
+        harness.responseBodies.set(
+          id,
+          JSON.stringify({ resultCode: "Authorised" }),
+        );
+        pause(harness.stub, id, DETAILS);
+        await settle(harness.stub, id);
+      }
+      for (const id of ["req-details", "req-details-2"]) {
+        respond(harness.stub, id, 200);
+      }
+      await waitFor(
+        () =>
+          ["req-details", "req-details-2"].every(
+            (id) => responseCommands(harness!.stub, id).length === 2,
+          ),
+        "both answers handed to the page",
+      );
+      // detach() waits for every answer already paused to be reported.
+      await harness.detach();
+
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+      ]);
+    });
+
+    it("does not watch details that start after detach()", async () => {
+      let answerReport: () => void = () => {};
+      const reportHeld = new Promise<void>((resolve) => {
+        answerReport = resolve;
+      });
+      let detaching: Promise<void> | undefined;
+      harness = await payAndAnswer(
+        {
+          result: async (request) => {
+            await reportHeld;
+            return recorded(request);
+          },
+          onResponseBody: () => {
+            detaching ??= harness!.detach();
+          },
+        },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+      );
+      await waitFor(() => harness!.resultCalls.length === 1, "report sent");
+      pause(harness.stub, "req-details", DETAILS);
+      const continued = (await settle(harness.stub, "req-details")).params;
+      answerReport();
+      await detaching;
+
+      expect(continued).toStrictEqual({ requestId: "req-details" });
+      expect(resultCodes(harness)).toStrictEqual(["ChallengeShopper"]);
+    });
+
+    it.each([
+      ["after the 3-D Secure answer", false],
+      ["while the 3-D Secure answer is read", true],
+    ])("forgets a tab closed %s", async (_label, duringRead) => {
+      const close = (): void => {
+        harness!.stub.emit({
+          method: "Target.detachedFromTarget",
+          params: { sessionId: "page-1" },
+        });
+      };
+      let closed = false;
+      harness = await payAndAnswer(
+        {
+          result: recorded,
+          onResponseBody: () => {
+            if (!duringRead || closed) return;
+            closed = true;
+            close();
+          },
+        },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+      );
+      await resultEvent(harness);
+      if (!duringRead) close();
+      // A later tab given the same session id must start with no watch.
+      harness.stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-1",
+          waitingForDebugger: false,
+          targetInfo: {
+            targetId: "target-page-3",
+            type: "page",
+            url: `${PAGE_ORIGIN}/checkout`,
+          },
+        },
+      });
+      await waitFor(
+        () => count(harness!.stub.commands, "Fetch.enable") === 3,
+        "Fetch.enable on the new tab",
+      );
+      pause(harness.stub, "req-details", DETAILS);
+
+      expect((await settle(harness.stub, "req-details")).params).toStrictEqual({
+        requestId: "req-details",
+      });
+    });
+
     it.each(["Authorised", "Refused"])(
       "does not watch details after a final %s on /payments",
       async (resultCode) => {

@@ -179,10 +179,17 @@ function adyenSecuredFieldsUrl(url: string): URL | undefined {
   } catch {
     return undefined;
   }
-  const host = parsed.hostname.toLowerCase();
-  if (parsed.protocol !== "https:") return undefined;
-  if (host !== "adyen.com" && !host.endsWith(".adyen.com")) return undefined;
-  return parsed.pathname.includes("/securedfields/") ? parsed : undefined;
+  return isAdyenHttps(parsed) && parsed.pathname.includes("/securedfields/")
+    ? parsed
+    : undefined;
+}
+
+function isAdyenHttps(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return (
+    url.protocol === "https:" &&
+    (host === "adyen.com" || host.endsWith(".adyen.com"))
+  );
 }
 
 /**
@@ -216,12 +223,13 @@ export function withAdyenEncryptedFields(
 /**
  * The checkout an Adyen payment or details call belongs to: its origin, and
  * for Adyen's `/sessions/{id}/...` the session too, since every merchant's
- * sessions share Adyen's host.
+ * sessions share Adyen's host. A merchant's own `/sessions/{id}/` route is
+ * only its origin, like the `/payments/details` call that follows it.
  */
 export function adyenCheckout(url: URL): string {
-  const session = /^(.*\/sessions\/[^/]+)\/(?:payments|paymentDetails)$/.exec(
-    url.pathname,
-  );
+  const session = isAdyenHttps(url)
+    ? /^(.*\/sessions\/[^/]+)\/(?:payments|paymentDetails)$/.exec(url.pathname)
+    : null;
   return session ? `${url.origin}${session[1]}` : url.origin;
 }
 
