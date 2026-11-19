@@ -214,12 +214,14 @@ function pause(
     method?: string;
     headers?: Record<string, string>;
   },
+  networkId?: string,
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
     sessionId: "page-1",
     params: {
       requestId,
+      ...(networkId ? { networkId } : {}),
       request: {
         url: request.url,
         method: request.method ?? "POST",
@@ -1049,6 +1051,71 @@ describe("Adyen's answer to a re-encrypted payment", () => {
 
     expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
     expect(harness.resultCalls).toHaveLength(0);
+  });
+
+  async function payWithoutAnswer(): Promise<Harness> {
+    const armed = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      result: recorded,
+    });
+    armed.responseBodies.set(
+      "req-pay",
+      JSON.stringify({ resultCode: "Authorised" }),
+    );
+    pause(armed.stub, "req-pay", ADVANCED, "net-pay");
+    await waitFor(
+      () => armed.events.some((event) => event.type === "reencrypted"),
+      "reencrypted",
+    );
+    return armed;
+  }
+
+  async function answerUnwatched(armed: Harness): Promise<void> {
+    respond(armed.stub, "req-pay", 200);
+    await waitFor(
+      () => responseCommands(armed.stub, "req-pay").length >= 1,
+      "answer continued",
+    );
+    expect(count(armed.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    expect(armed.resultCalls).toHaveLength(0);
+    expect(armed.events.some((event) => event.type === "adyen_result")).toBe(
+      false,
+    );
+  }
+
+  it("forgets a payment whose loading failed without an answer", async () => {
+    harness = await payWithoutAnswer();
+    harness.stub.emit({
+      method: "Network.loadingFailed",
+      sessionId: "page-1",
+      params: { requestId: "net-pay", errorText: "net::ERR_FAILED" },
+    });
+
+    await answerUnwatched(harness);
+  });
+
+  it("keeps watching when another request's loading failed", async () => {
+    harness = await payWithoutAnswer();
+    harness.stub.emit({
+      method: "Network.loadingFailed",
+      sessionId: "page-1",
+      params: { requestId: "net-other", errorText: "net::ERR_FAILED" },
+    });
+    respond(harness.stub, "req-pay", 200);
+
+    expect(await resultEvent(harness)).toMatchObject({
+      resultCode: "Authorised",
+    });
+  });
+
+  it("forgets a payment whose page detached before its answer", async () => {
+    harness = await payWithoutAnswer();
+    harness.stub.emit({
+      method: "Target.detachedFromTarget",
+      params: { sessionId: "page-1", targetId: "target-page" },
+    });
+
+    await answerUnwatched(harness);
   });
 
   it.each([

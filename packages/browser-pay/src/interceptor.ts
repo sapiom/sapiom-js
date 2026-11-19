@@ -351,6 +351,7 @@ interface Inflight {
   key: string;
   sessionId: string;
   requestId: string;
+  networkId?: string;
   phase: InflightPhase;
 }
 
@@ -421,8 +422,11 @@ class PaymentInterceptor {
   >();
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
-  /** Re-encrypted payments whose answer is still to come, by inflight key, with their URL. */
-  private readonly adyenResults = new Map<string, string>();
+  /** Re-encrypted payments whose answer is still to come, by inflight key. */
+  private readonly adyenResults = new Map<
+    string,
+    { url: string; sessionId: string; networkId?: string }
+  >();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
   private adyenPrepareCalls = 0;
   /** Counts not-enabled answers, so a success begun before one is never used. */
@@ -482,6 +486,8 @@ class PaymentInterceptor {
       this.onTargetInfoChanged(event);
     } else if (event.method === "Network.requestWillBeSent") {
       this.onRequestWillBeSent(event);
+    } else if (event.method === "Network.loadingFailed") {
+      this.onLoadingFailed(event);
     }
   }
 
@@ -529,6 +535,10 @@ class PaymentInterceptor {
     this.enabledSessions.delete(sessionId);
     if (this.byTarget.get(session.targetId) === session) {
       this.byTarget.delete(session.targetId);
+    }
+    // A closed page's payments never reach the answer stage.
+    for (const [key, watch] of this.adyenResults) {
+      if (watch.sessionId === sessionId) this.adyenResults.delete(key);
     }
   }
 
@@ -731,6 +741,7 @@ class PaymentInterceptor {
       key,
       sessionId,
       requestId,
+      ...(request.networkId ? { networkId: request.networkId } : {}),
       phase: { status: "open" },
     };
     this.inflight.set(key, entry);
@@ -1015,7 +1026,7 @@ class PaymentInterceptor {
     status: number | undefined,
   ): Promise<void> {
     const key = inflightKey(sessionId, requestId);
-    const url = this.adyenResults.get(key);
+    const url = this.adyenResults.get(key)?.url;
     // Deleting first makes a second answer for the same request pass untouched.
     this.adyenResults.delete(key);
     const body =
@@ -1070,6 +1081,20 @@ class PaymentInterceptor {
   }
 
   /** Another CDP client can fulfill a request before it pauses here; Network still sees it. */
+  /** A payment that failed without pausing at the answer stage has no result. */
+  private onLoadingFailed(event: CdpEvent): void {
+    const networkId = readStringField(event.params, "requestId");
+    if (!networkId) return;
+    for (const [key, watch] of this.adyenResults) {
+      if (
+        watch.sessionId === event.sessionId &&
+        watch.networkId === networkId
+      ) {
+        this.adyenResults.delete(key);
+      }
+    }
+  }
+
   private onRequestWillBeSent(event: CdpEvent): void {
     const parsed = parsePaused(event.params);
     if (!parsed || !this.sessions.has(event.sessionId ?? "")) return;
@@ -1262,7 +1287,11 @@ class PaymentInterceptor {
     }
     if (decision.action === "reencrypted") {
       // Watched before continuing: the answer can pause before the continue returns.
-      this.adyenResults.set(entry.key, url);
+      this.adyenResults.set(entry.key, {
+        url,
+        sessionId: entry.sessionId,
+        ...(entry.networkId ? { networkId: entry.networkId } : {}),
+      });
       const continued = await this.settle(entry, {
         continueWith: decision.body,
       });
@@ -1391,6 +1420,7 @@ class PaymentInterceptor {
     this.buffering = false;
     this.backlog = null;
     this.preparedAdyen.clear();
+    this.adyenResults.clear();
     for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {
