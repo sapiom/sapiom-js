@@ -75,7 +75,10 @@ export type AdyenReadiness =
   | { enabled: true }
   | {
       enabled: false;
-      reason: Extract<FailureReason, "adyen_not_enabled" | "adyen_encrypt">;
+      reason: Extract<
+        FailureReason,
+        "adyen_not_enabled" | "adyen_client_key" | "adyen_encrypt"
+      >;
     };
 
 /**
@@ -910,6 +913,10 @@ class PaymentInterceptor {
     }
     if (!isAdyenClientKey(input.clientKey)) {
       return { enabled: false, reason: "adyen_encrypt" };
+    }
+    if (this.adyenClientKeys.size > 1) {
+      this.logger.warn("two different adyen client keys seen in adyen requests");
+      return { enabled: false, reason: "adyen_client_key" };
     }
     let result: AdyenEncryptResult;
     try {
