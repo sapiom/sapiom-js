@@ -16,7 +16,7 @@
 - The already-linked path must stay byte-identical on the wire: `building` → `ready`/`error`, with no `link` call. Every existing test in `src/server/actions.test.ts` except the two named in Task 1 and Task 2 must pass untouched.
 - `actions.ts` must not import from `core/canvas-*` or the workflow registry. It stays decoupled via injected deps and seams (this mirrors the existing `resolveWorkflow` / `coreDeps` / `runLocalSpawn` seams).
 - Terminal stream lines stay exactly one per stream: `ready` or `error`. `linking` is non-terminal.
-- Run every command **from the repo root** — never `cd` (see `packages/harness/CLAUDE.md`).
+- Run every command **from the repo root** — never `cd` (see `packages/harness/AGENTS.md`).
 - No new desktop-packaging hazard is permitted or expected: `link` is a plain network call, and the only subprocess involved is the existing `runManifestCheck`, which already translates asar paths and sets `ELECTRON_RUN_AS_NODE`. Do not add a new `asarUnpack` entry or a `smoke.ts` check — if you find yourself needing one, stop and re-read the spec.
 - Test command shape: `pnpm --filter @sapiom/harness exec vitest run <path> -t "<name>"`.
 - Baseline for this worktree: 102 files / 1578 tests, all passing. Any other failure you see is yours.

@@ -14,7 +14,7 @@ deliberately thin — it encodes where the Studio's design lives and the ask-def
 
 The Studio's design source is **`@sapiom/design-system`**, resolved through the harness build seam
 (the branded package when installed, else the committed `ds-neutral` token mirror — see
-`web/vite.config.ts`). Its hygiene rule already exists: **harness `CLAUDE.md` #6 — never redefine a
+`web/vite.config.ts`). Its hygiene rule already exists: **harness `AGENTS.md` #6 — never redefine a
 design-system token; read values with `var()`.** A local snapshot of token values is drift the moment
 the source moves.
 
@@ -30,18 +30,18 @@ the source moves.
 
 **3. Verdict — and the ask-rule:**
 
-- **Found a clear design or an existing surface to match** → proceed; **conform per harness `CLAUDE.md` #6** (tokens via `var()`, no local redefinition). Surface only the one real judgment call, after.
+- **Found a clear design or an existing surface to match** → proceed; **conform per harness `AGENTS.md` #6** (tokens via `var()`, no local redefinition). Surface only the one real judgment call, after.
 - **Design work, and after searching no clear design or intent** → **stop and ask 1–2 targeted questions before building.** Not proceed-on-a-default-and-notify. If the ask is a genuinely *new, unspecified* design, capture it as a written design doc first (so it isn't consumed verbally). On an **unattended/automated run** (no human to answer), post the question on the ticket/PR and **stop** — asking is not permission to build; if something must ship, build the smallest precedent-anchored version and label it as needing design sign-off.
 - **Hotfix or experiment with minor ambiguity** → proceed with a precedent-anchored default; flag what you assumed.
 
-**4. Conform.** There is no separate design-hygiene skill in this repo — the **seam + `CLAUDE.md` #6 are the gate.** Read tokens via `var()`, reuse an existing component over a new one, and match an existing Studio surface.
+**4. Conform.** There is no separate design-hygiene skill in this repo — the **seam + `AGENTS.md` #6 are the gate.** Read tokens via `var()`, reuse an existing component over a new one, and match an existing Studio surface.
 
 ## Rationalizations
 
 | Excuse | Reality |
 |--------|---------|
 | "I'll pick a sensible default; they can redirect later." | On design work with no design, that's proceed-and-notify. A 2-line question beats a wrong build. |
-| "I'll hardcode the colour/size to match." | That redefines/snapshots a token — the exact drift `CLAUDE.md` #6 and the seam exist to prevent. Read it via `var()`. |
+| "I'll hardcode the colour/size to match." | That redefines/snapshots a token — the exact drift `AGENTS.md` #6 and the seam exist to prevent. Read it via `var()`. |
 | "There's no design, so I'll invent one." | Search `packages/harness/web/src` first. If it's genuinely new, ask — don't invent. |
 | "Asking is slower." | Asking *before* searching is. Asking *after* an honest search, with options, saves the rebuild. |
 

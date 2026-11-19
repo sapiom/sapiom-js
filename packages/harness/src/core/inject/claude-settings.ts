@@ -296,7 +296,7 @@ export async function generateClaudeSettings(
             // (the exact "exited before establishing a session id" failure).
             // Double quotes group the path on both sh and cmd.exe and are
             // stripped before `node` sees the argument. This is the harness
-            // CLAUDE.md's "paths contain spaces — never hand a shell an
+            // AGENTS.md's "paths contain spaces — never hand a shell an
             // unquoted path" rule. The event name is a fixed identifier from
             // HOOK_EVENTS, so it needs no quoting.
             command: `${HOOK_NODE} "${emitScriptPath}" ${event}`,

@@ -16,7 +16,7 @@
  * Pure so the three refusals are pinned by tests, because each one is a bug we
  * would otherwise ship: installing when the user already has their own copy
  * (hijacking it), installing during `--smoke` (making CI depend on the network,
- * which `harness-desktop/CLAUDE.md` forbids), and installing on every launch
+ * which `harness-desktop/AGENTS.md` forbids), and installing on every launch
  * (a network round-trip in the boot path).
  */
 
@@ -42,7 +42,7 @@ export const SAPIOM_MCP_PACKAGE = "@sapiom/mcp@latest";
  * got 0.28.1"), the whole install exits 1, and npm's half-finished cleanup
  * leaves a torn tree. Measured on a user machine installing @sapiom/mcp; the
  * harness strips the same pin from every session/task child for the same
- * reason (harness CLAUDE.md).
+ * reason (harness AGENTS.md).
  */
 export function npmInstallEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, ELECTRON_RUN_AS_NODE: "1" };

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const PACKAGE_ROOT = path.resolve(__dirname, "..", "..");
@@ -17,8 +17,13 @@ describe("published authoring assets", () => {
     expect(packageJson.files).toContain("templates");
   });
 
+  it("ships AGENTS.md as the only agent-instruction file", () => {
+    expect(existsSync(path.join(TEMPLATE_ROOT, "AGENTS.md"))).toBe(true);
+    expect(existsSync(path.join(TEMPLATE_ROOT, "CLAUDE.md"))).toBe(false);
+  });
+
   it("uses Agent and Agent run terminology in legacy template prose", () => {
-    const prose = ["AGENTS.md", "CLAUDE.md", "README.md", "index.ts"]
+    const prose = ["AGENTS.md", "README.md", "index.ts"]
       .map((file) => readFileSync(path.join(TEMPLATE_ROOT, file), "utf8"))
       .join("\n");
 

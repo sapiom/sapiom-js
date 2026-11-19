@@ -3,7 +3,7 @@
  *
  * One rule lives here, and it was a bug before it was a rule: a session boots
  * at its PROJECT ROOT, never at the agent's own folder. Rooting in an agent
- * subdirectory is why Claude Code came up without the project's `CLAUDE.md`,
+ * subdirectory is why Claude Code came up without the project's `AGENTS.md`,
  * `.claude/` or skills — the whole benefit of an embedded agent, lost to a
  * path (SAP-2927; design.md § Sessions, focus, canvas, verbs, criterion 18).
  *

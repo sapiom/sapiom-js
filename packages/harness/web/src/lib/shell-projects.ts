@@ -95,7 +95,7 @@ export const shellProjects = (
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927):
    * the root of the project that owns it, never the agent's own folder, so the
-   * coding agent comes up with the project's CLAUDE.md, .claude/ and skills.
+   * coding agent comes up with the project's AGENTS.md, .claude/ and skills.
    * The paths that create a session for a BRAND-NEW project folder (scaffold,
    * templates, the composer, a deep-link clone) deliberately do not come
    * through here: that folder is the new project's root by construction.
