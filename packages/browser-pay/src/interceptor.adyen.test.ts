@@ -1340,6 +1340,42 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ]);
     });
 
+    it.each([
+      [
+        "an error",
+        422,
+        JSON.stringify({ status: 422, errorCode: "14_0", message: "x" }),
+      ],
+      ["a non-JSON", 502, "<html>Bad gateway</html>"],
+    ])(
+      "keeps watching after %s details answer, so a retry is reported",
+      async (_label, status, body) => {
+        harness = await challenged();
+        harness.responseBodies.set("req-details", body);
+        harness.responseBodies.set(
+          "req-details-2",
+          JSON.stringify({ resultCode: "Authorised" }),
+        );
+        pause(harness.stub, "req-details", DETAILS);
+        await settle(harness.stub, "req-details");
+        respond(harness.stub, "req-details", status);
+        await waitFor(() => harness!.resultCalls.length === 2, "unknown code");
+        pause(harness.stub, "req-details-2", DETAILS);
+        expect(
+          (await settle(harness.stub, "req-details-2")).params
+            .interceptResponse,
+        ).toBe(true);
+        respond(harness.stub, "req-details-2", 200);
+        await waitFor(() => harness!.resultCalls.length === 3, "final code");
+
+        expect(resultCodes(harness)).toStrictEqual([
+          "ChallengeShopper",
+          "unknown",
+          "Authorised",
+        ]);
+      },
+    );
+
     it("reports no final result when no details answer comes", async () => {
       harness = await challenged();
 

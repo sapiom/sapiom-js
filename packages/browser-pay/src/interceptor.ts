@@ -1058,9 +1058,11 @@ class PaymentInterceptor {
     if (url === undefined || status === undefined || this.closed) return;
     const result = adyenPaymentResult(body ?? "");
     const origin = new URL(url).origin;
+    // An `unknown` answer (an Adyen error or a non-JSON body) keeps the watch:
+    // the backend refuses it, and the page's retried details call may be final.
     if (isAdyenActionResult(result.resultCode)) {
       this.adyenAwaiting3ds.add(origin);
-    } else {
+    } else if (result.resultCode !== "unknown") {
       this.adyenAwaiting3ds.delete(origin);
     }
     const reported = await this.reportAdyenResult(result);
