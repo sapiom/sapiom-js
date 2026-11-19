@@ -199,13 +199,19 @@ export interface AdyenResultRequest {
  * for example `RESULT_CONFLICT` when another result was already recorded.
  */
 export type AdyenResultResponse =
-  | { outcome: "completed" | "failed" | "pending"; resultCode: string }
+  | { outcome: AdyenResultOutcome; resultCode: string }
   | { outcome: "refused"; status: number; code: string; retryable?: boolean };
 
-function isAdyenResultOutcome(
-  value: unknown,
-): value is "completed" | "failed" | "pending" {
-  return value === "completed" || value === "failed" || value === "pending";
+/** `recorded`: the backend stored the result but completion is off or dry-run. */
+type AdyenResultOutcome = "completed" | "failed" | "pending" | "recorded";
+
+function isAdyenResultOutcome(value: unknown): value is AdyenResultOutcome {
+  return (
+    value === "completed" ||
+    value === "failed" ||
+    value === "pending" ||
+    value === "recorded"
+  );
 }
 
 export function parseAdyenResultResponse(

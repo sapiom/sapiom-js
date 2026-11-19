@@ -645,6 +645,28 @@ describe("httpPaymentRelay adyenResult", () => {
     }
   });
 
+  it("accepts the recorded outcome", async () => {
+    const server = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"resultCode":"Authorised","outcome":"recorded"}');
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_adyen",
+      });
+      await expect(
+        relay.adyenResult!({ injectionRef: "inj_x", resultCode: "Authorised" }),
+      ).resolves.toStrictEqual({
+        outcome: "recorded",
+        resultCode: "Authorised",
+      });
+    } finally {
+      server.close();
+    }
+  });
+
   it("returns a refusal's code and retryable from the error body", async () => {
     await answering(
       409,
