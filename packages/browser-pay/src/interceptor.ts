@@ -1086,12 +1086,13 @@ class PaymentInterceptor {
       return;
     }
     const { url } = watch;
+    // Taken before the read: a tab closed meanwhile must not drop its answer.
+    const page = this.pageOf(sessionId);
+    const awaiting = this.adyenAwaiting3ds.get(page);
     const result = adyenPaymentResult(
       (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
     );
-    const page = this.pageOf(sessionId);
     const checkout = adyenCheckout(new URL(url));
-    const awaiting = this.adyenAwaiting3ds.get(page);
     // Another details answer for this checkout was already final.
     if (watch.details && !awaiting?.has(checkout)) {
       await continueRequest(this.connection, sessionId, requestId);

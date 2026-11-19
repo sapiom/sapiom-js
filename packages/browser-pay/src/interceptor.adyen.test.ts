@@ -1692,6 +1692,41 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       });
     });
 
+    it("reports a details answer read while its tab closes", async () => {
+      let reads = 0;
+      harness = await payAndAnswer(
+        {
+          result: recorded,
+          onResponseBody: () => {
+            reads += 1;
+            if (reads !== 2) return;
+            harness!.stub.emit({
+              method: "Target.detachedFromTarget",
+              params: { sessionId: "page-1" },
+            });
+          },
+        },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+      );
+      await resultEvent(harness);
+      harness.responseBodies.set(
+        "req-details",
+        JSON.stringify({ resultCode: "Authorised" }),
+      );
+      pause(harness.stub, "req-details", DETAILS);
+      await settle(harness.stub, "req-details");
+      respond(harness.stub, "req-details", 200);
+      await waitFor(() => reads === 2, "details answer read");
+      await harness.detach();
+
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+      ]);
+    });
+
     it.each(["Authorised", "Refused"])(
       "does not watch details after a final %s on /payments",
       async (resultCode) => {
