@@ -1,3 +1,5 @@
+import { PaymentCardsAPI } from "./PaymentCardsAPI.js";
+import { PaymentMethodsAPI } from "./PaymentMethodsAPI.js";
 import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
@@ -97,6 +99,8 @@ export class SapiomClient {
   public readonly apiKeys: ApiKeyAPI;
   public readonly identity: IdentityManager;
   public readonly transactions: TransactionAPI;
+  public readonly paymentCards: PaymentCardsAPI;
+  public readonly paymentMethods: PaymentMethodsAPI;
   public readonly vault: VaultAPI;
 
   constructor(config: SapiomClientConfig) {
@@ -135,6 +139,8 @@ export class SapiomClient {
       backgroundRefresh: config.backgroundRefresh,
     });
     this.transactions = new TransactionAPI(this.httpClient);
+    this.paymentCards = new PaymentCardsAPI(this.httpClient);
+    this.paymentMethods = new PaymentMethodsAPI(this.httpClient);
     this.vault = new VaultAPI(this.vaultHttpClient);
   }
 
