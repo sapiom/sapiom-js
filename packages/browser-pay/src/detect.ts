@@ -1,4 +1,8 @@
-import type { AdyenEncryptedFields } from "./contract.js";
+import {
+  ADYEN_RESULT_CODES,
+  type AdyenEncryptedFields,
+  type AdyenResultCode,
+} from "./contract.js";
 import { isRecord } from "./guards.js";
 
 export interface HeldPlaceholder {
@@ -207,6 +211,28 @@ export function withAdyenEncryptedFields(
     ...parsed,
     paymentMethod: { ...method, ...fields },
   });
+}
+
+const PSP_REFERENCE_SHAPE = /^[A-Za-z0-9]{1,64}$/;
+
+/**
+ * The top-level `resultCode` (and `pspReference`) of the answer to an Adyen
+ * payment, from the merchant's `/payments` or Adyen's
+ * `/sessions/{id}/payments`. Anything unreadable is `unknown`.
+ */
+export function adyenPaymentResult(body: string): {
+  resultCode: AdyenResultCode;
+  pspReference?: string;
+} {
+  const parsed = parseJson(body);
+  if (!isRecord(parsed)) return { resultCode: "unknown" };
+  const code = parsed.resultCode;
+  const resultCode =
+    ADYEN_RESULT_CODES.find((known) => known === code) ?? "unknown";
+  const psp = parsed.pspReference;
+  return typeof psp === "string" && PSP_REFERENCE_SHAPE.test(psp)
+    ? { resultCode, pspReference: psp }
+    : { resultCode };
 }
 
 function parseJson(body: string): unknown {

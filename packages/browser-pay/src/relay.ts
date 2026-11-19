@@ -6,11 +6,15 @@ import {
 } from "@sapiom/analytics-core/credential";
 
 import {
+  adyenResultRefusal,
   isAdyenNotEnabled,
   parseAdyenEncryptResponse,
+  parseAdyenResultResponse,
   parseRelayResponse,
   type AdyenEncryptRequest,
   type AdyenEncryptResult,
+  type AdyenResultRequest,
+  type AdyenResultResponse,
   type RelayRequest,
   type RelayResponse,
 } from "./contract.js";
@@ -34,6 +38,15 @@ export interface PaymentRelay {
     request: AdyenEncryptRequest,
     options?: RelayCallOptions,
   ): Promise<AdyenEncryptResult>;
+  /**
+   * Tells the backend what Adyen answered the payment the interceptor
+   * re-encrypted. Reported once per payment; a relay without this method
+   * reports nothing.
+   */
+  adyenResult?(
+    request: AdyenResultRequest,
+    options?: RelayCallOptions,
+  ): Promise<AdyenResultResponse>;
 }
 
 export interface HttpRelayOptions {
@@ -248,6 +261,33 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
         throw new RelayHttpError(status);
       }
       return parseAdyenEncryptResponse(parsed);
+    },
+    async adyenResult(request, call) {
+      const { status, text } = await postPayment(
+        config,
+        "adyen/result",
+        {
+          injectionRef: request.injectionRef,
+          resultCode: request.resultCode,
+          ...(request.pspReference !== undefined
+            ? { pspReference: request.pspReference }
+            : {}),
+        },
+        call?.signal,
+        true,
+      );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // The thrown error must not include the response text.
+      }
+      if (status < 200 || status >= 300) {
+        const refusal = adyenResultRefusal(status, parsed);
+        if (refusal) return refusal;
+        throw new RelayHttpError(status);
+      }
+      return parseAdyenResultResponse(parsed);
     },
   };
 }

@@ -2,6 +2,8 @@ import type {
   AdyenEncryptedFields,
   AdyenEncryptRequest,
   AdyenEncryptResult,
+  AdyenResultRequest,
+  AdyenResultResponse,
 } from "./contract";
 import type { HeldPlaceholder } from "./detect";
 import {
@@ -76,6 +78,9 @@ interface Harness {
   events: InterceptorEvent[];
   warnings: string[];
   encryptCalls: AdyenEncryptRequest[];
+  resultCalls: AdyenResultRequest[];
+  /** What `Fetch.getResponseBody` answers, by request id. */
+  responseBodies: Map<string, string>;
   relayCalls: number;
   detach(): Promise<void>;
   prepare: InterceptorHandle["prepareAdyen"];
@@ -89,10 +94,19 @@ async function arm(options: {
         call?: RelayCallOptions,
       ) => Promise<AdyenEncryptResult>)
     | null;
+  result?: (request: AdyenResultRequest) => Promise<AdyenResultResponse>;
   attemptTimeoutMs?: number;
   disableAdyenEncryption?: boolean;
 }): Promise<Harness> {
+  const responseBodies = new Map<string, string>();
   const stub = await startCdpStub((command) => {
+    if (command.method === "Fetch.getResponseBody") {
+      const body = responseBodies.get(String(command.params.requestId)) ?? "";
+      return {
+        body: Buffer.from(body, "utf8").toString("base64"),
+        base64Encoded: true,
+      };
+    }
     if (command.method !== "Runtime.evaluate") return undefined;
     if (command.params.expression === "location.origin") {
       return { result: { type: "string", value: PAGE_ORIGIN } };
@@ -102,11 +116,14 @@ async function arm(options: {
   const events: InterceptorEvent[] = [];
   const warnings: string[] = [];
   const encryptCalls: AdyenEncryptRequest[] = [];
+  const resultCalls: AdyenResultRequest[] = [];
   const harness: Harness = {
     stub,
     events,
     warnings,
     encryptCalls,
+    resultCalls,
+    responseBodies,
     relayCalls: 0,
     detach: async () => {},
     prepare: async () => ({ enabled: false, reason: "adyen_not_enabled" }),
@@ -123,6 +140,13 @@ async function arm(options: {
     relay.adyenEncrypt = (request, call) => {
       encryptCalls.push(request);
       return encrypt(request, call);
+    };
+  }
+  const result = options.result;
+  if (result) {
+    relay.adyenResult = (request) => {
+      resultCalls.push(request);
+      return result(request);
     };
   }
   const logger: PayLogger = {
@@ -818,5 +842,281 @@ describe("Adyen encryption gate", () => {
     ).resolves.toStrictEqual({ enabled: false, reason: "adyen_encrypt" });
     expect(harness.encryptCalls).toHaveLength(1);
     assertNothingSecret(harness);
+  });
+});
+
+describe("Adyen's answer to a re-encrypted payment", () => {
+  let harness: Harness | undefined;
+
+  afterEach(async () => {
+    await harness?.detach();
+    await harness?.stub.close();
+    harness = undefined;
+  });
+
+  const PII = "pii-marker@example.com";
+  const recorded = async (
+    request: AdyenResultRequest,
+  ): Promise<AdyenResultResponse> => ({
+    outcome: "pending",
+    resultCode: request.resultCode,
+  });
+
+  async function payAndAnswer(
+    options: Parameters<typeof arm>[0],
+    /** `status: null` is a request that failed before any answer. */
+    answer: { body: string; status?: number | null },
+  ): Promise<Harness> {
+    const armed = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      ...options,
+    });
+    armed.responseBodies.set("req-pay", answer.body);
+    pause(armed.stub, "req-pay", ADVANCED);
+    await waitFor(
+      () => armed.events.some((event) => event.type === "reencrypted"),
+      "reencrypted",
+    );
+    respond(
+      armed.stub,
+      "req-pay",
+      answer.status === null ? undefined : (answer.status ?? 200),
+    );
+    return armed;
+  }
+
+  function respond(stub: CdpStub, requestId: string, status?: number): void {
+    stub.emit({
+      method: "Fetch.requestPaused",
+      sessionId: "page-1",
+      params: {
+        requestId,
+        request: { url: ADVANCED.url, method: "POST", headers: {} },
+        ...(status !== undefined
+          ? {
+              responseStatusCode: status,
+              responseHeaders: [
+                { name: "content-type", value: "application/json" },
+              ],
+            }
+          : { responseErrorReason: "Failed" }),
+      },
+    });
+  }
+
+  function responseCommands(stub: CdpStub, requestId: string): CdpCommand[] {
+    const continued = stub.commands.filter(
+      (command) =>
+        command.params.requestId === requestId &&
+        command.method === "Fetch.continueRequest",
+    );
+    // The first continue is the re-encrypted request itself.
+    return [
+      ...stub.commands.filter(
+        (command) =>
+          command.params.requestId === requestId &&
+          command.method !== "Fetch.continueRequest",
+      ),
+      ...continued.slice(1),
+    ];
+  }
+
+  async function resultEvent(
+    armed: Harness,
+  ): Promise<InterceptorEvent | undefined> {
+    await waitFor(
+      () => armed.events.some((event) => event.type === "adyen_result"),
+      "adyen_result",
+    );
+    return armed.events.find((event) => event.type === "adyen_result");
+  }
+
+  it("asks for the answer of that one request only", async () => {
+    harness = await payAndAnswer({ result: recorded }, { body: "{}" });
+    const continued = await settle(harness.stub, "req-pay");
+    expect(continued.params.interceptResponse).toBe(true);
+    const enable = harness.stub.commands.find(
+      (command) => command.method === "Fetch.enable",
+    );
+    expect(enable?.params).toStrictEqual({
+      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+    });
+  });
+
+  it.each([
+    [{ resultCode: "Authorised", pspReference: "PSP123" }, "Authorised"],
+    [{ resultCode: "Refused", refusalReason: "Refused" }, "Refused"],
+    [{ resultCode: "RedirectShopper", action: {} }, "RedirectShopper"],
+    [{ pspReference: "PSP123" }, "unknown"],
+    [{ resultCode: "authorised" }, "unknown"],
+    ["<html>Bad gateway</html>", "unknown"],
+  ] as const)("reports %j as %s", async (answer, resultCode) => {
+    const body = typeof answer === "string" ? answer : JSON.stringify(answer);
+    harness = await payAndAnswer({ result: recorded }, { body });
+
+    expect(await resultEvent(harness)).toStrictEqual({
+      type: "adyen_result",
+      url: PAGE_ORIGIN,
+      resultCode,
+      status: 200,
+      reported: true,
+    });
+    expect(harness.resultCalls).toStrictEqual([
+      {
+        injectionRef: HELD.injectionRef,
+        resultCode,
+        ...(typeof answer === "object" && "pspReference" in answer
+          ? { pspReference: answer.pspReference }
+          : {}),
+      },
+    ]);
+  });
+
+  it("passes the answer to the page unchanged", async () => {
+    harness = await payAndAnswer(
+      { result: recorded },
+      { body: JSON.stringify({ resultCode: "Refused" }), status: 422 },
+    );
+    await resultEvent(harness);
+
+    expect(
+      responseCommands(harness.stub, "req-pay").map((command) => ({
+        method: command.method,
+        params: command.params,
+      })),
+    ).toStrictEqual([
+      { method: "Fetch.getResponseBody", params: { requestId: "req-pay" } },
+      { method: "Fetch.continueRequest", params: { requestId: "req-pay" } },
+    ]);
+    expect(harness.events.at(-1)).toMatchObject({ status: 422 });
+  });
+
+  it("reports once when the same request's answer pauses again", async () => {
+    harness = await payAndAnswer(
+      { result: recorded },
+      { body: JSON.stringify({ resultCode: "Authorised" }) },
+    );
+    await resultEvent(harness);
+    respond(harness.stub, "req-pay", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-pay").length === 3,
+      "second answer continued",
+    );
+
+    expect(harness.resultCalls).toHaveLength(1);
+    expect(
+      harness.events.filter((event) => event.type === "adyen_result"),
+    ).toHaveLength(1);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+  });
+
+  it("continues an answer it did not ask for and reports nothing", async () => {
+    harness = await arm({ result: recorded });
+    respond(harness.stub, "req-other", 200);
+    const continued = await settle(harness.stub, "req-other");
+
+    expect(continued.params).toStrictEqual({ requestId: "req-other" });
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    expect(harness.resultCalls).toHaveLength(0);
+    expect(harness.events).toStrictEqual([]);
+  });
+
+  it("reports nothing when the request failed before any answer", async () => {
+    harness = await payAndAnswer(
+      { result: recorded },
+      { body: "", status: null },
+    );
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-pay").length >= 1,
+      "failed answer continued",
+    );
+
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    expect(harness.resultCalls).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "refuses with a conflict",
+      async (): Promise<AdyenResultResponse> => ({
+        outcome: "refused",
+        status: 409,
+        code: "RESULT_CONFLICT",
+        retryable: false,
+      }),
+      { status: 409, code: "RESULT_CONFLICT" },
+    ],
+    [
+      "fails",
+      async (): Promise<AdyenResultResponse> => {
+        throw new RelayHttpError(500);
+      },
+      { status: 500, timedOut: false },
+    ],
+    [
+      "throws with the body in its message",
+      async (): Promise<AdyenResultResponse> => {
+        throw new Error(`boom ${PII}`);
+      },
+      { timedOut: false },
+    ],
+  ] as const)(
+    "keeps the page's answer and logs only codes when the backend %s",
+    async (_label, result, logged) => {
+      const body = JSON.stringify({
+        resultCode: "Authorised",
+        additionalData: { shopperEmail: PII },
+      });
+      harness = await payAndAnswer({ result }, { body });
+
+      expect(await resultEvent(harness)).toMatchObject({
+        resultCode: "Authorised",
+        reported: false,
+      });
+      expect(
+        responseCommands(harness.stub, "req-pay").at(-1)?.params,
+      ).toStrictEqual({ requestId: "req-pay" });
+      expect(harness.warnings).toHaveLength(1);
+      expect(JSON.parse(harness.warnings[0])).toStrictEqual({
+        message: expect.stringMatching(/^adyen result report /),
+        fields: { resultCode: "Authorised", ...logged },
+      });
+      expect(JSON.stringify([harness.events, harness.warnings])).not.toContain(
+        "pii-marker",
+      );
+    },
+  );
+
+  it("never puts the answer's body in an event or a log line", async () => {
+    harness = await payAndAnswer(
+      { result: recorded },
+      {
+        body: JSON.stringify({
+          resultCode: "Refused",
+          pspReference: PII,
+          additionalData: { shopperEmail: PII },
+        }),
+      },
+    );
+    await resultEvent(harness);
+
+    expect(harness.resultCalls).toStrictEqual([
+      { injectionRef: HELD.injectionRef, resultCode: "Refused" },
+    ]);
+    expect(JSON.stringify([harness.events, harness.warnings])).not.toContain(
+      "pii-marker",
+    );
+  });
+
+  it("emits reported false when the relay cannot report", async () => {
+    harness = await payAndAnswer(
+      {},
+      { body: JSON.stringify({ resultCode: "Authorised" }) },
+    );
+
+    expect(await resultEvent(harness)).toMatchObject({
+      resultCode: "Authorised",
+      reported: false,
+    });
   });
 });

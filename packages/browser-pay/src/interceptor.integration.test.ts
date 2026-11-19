@@ -12,6 +12,7 @@ import {
 } from "./interceptor";
 import type { PaymentRelay, RelayCallOptions } from "./relay";
 import type { HeldPlaceholder, RelayRequest } from "./index";
+import { waitFor } from "../test/cdp-stub";
 import { stubPaymentRelay } from "../test/stub-relay";
 
 const nodeRequire = createRequire(__filename);
@@ -86,6 +87,7 @@ function startServer(
   hits: Hit[],
   html: string,
   host: string,
+  answers: Record<string, string> = {},
 ): Promise<{ server: http.Server; port: number }> {
   const server = http.createServer((req, res) => {
     const pathOnly = (req.url ?? "").split("?")[0];
@@ -105,7 +107,7 @@ function startServer(
         body: Buffer.concat(chunks).toString("utf8"),
       });
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, via: "server" }));
+      res.end(answers[pathOnly] ?? JSON.stringify({ ok: true, via: "server" }));
     });
   });
   return new Promise((resolve) => {
@@ -782,12 +784,20 @@ if (!chromeBin) {
         reference: "order-ü-1",
         paymentMethod: { type: "scheme", holderName: "J. Smith", ...standIn },
       };
+      const answer = JSON.stringify({
+        resultCode: "Authorised",
+        pspReference: "PSP0000000000001",
+        additionalData: { shopperEmail: "pii-marker@example.com" },
+      });
       const shop = await startServer(
         hits,
         `<!doctype html><title>adyen shop</title><pre id="clientKey">test_PLANTEDKEY9</pre><div data-client-key="test_PLANTEDKEY9"></div>`,
         "localhost",
+        { "/api/payments": answer },
       );
       const encryptCalls: unknown[] = [];
+      const resultCalls: unknown[] = [];
+      const warnings: string[] = [];
       const handle = await attachInterceptor(cdpUrl, {
         relay: {
           relay: async () => ({ outcome: "unknown" }),
@@ -795,8 +805,16 @@ if (!chromeBin) {
             encryptCalls.push(request);
             return { outcome: "encrypted", fields: real };
           },
+          adyenResult: async (request) => {
+            resultCalls.push(request);
+            return { outcome: "completed", resultCode: request.resultCode };
+          },
         },
         placeholder: PLACEHOLDER,
+        logger: {
+          warn: (message, fields) =>
+            warnings.push(JSON.stringify({ message, fields })),
+        },
       });
       const events: InterceptorEvent[] = [];
       handle.on((event) => events.push(event));
@@ -823,16 +841,16 @@ if (!chromeBin) {
             return res.status;
           }),
         ).toBe(200);
-        const status = await page.evaluate(async (body) => {
+        const seen = await page.evaluate(async (body) => {
           const res = await fetch("/api/payments", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body,
           });
-          return res.status;
+          return { status: res.status, text: await res.text() };
         }, JSON.stringify(order));
 
-        expect(status).toBe(200);
+        expect(seen).toStrictEqual({ status: 200, text: answer });
         const hit = hits.find((item) => item.path === "/api/payments");
         expect(JSON.parse(hit?.body ?? "null")).toStrictEqual({
           ...order,
@@ -845,10 +863,25 @@ if (!chromeBin) {
             pageOrigin: origin,
           },
         ]);
-        expect(events.map((event) => event.type)).toEqual([
-          "paused",
-          "reencrypted",
+        await waitFor(() => events.length === 3, "the adyen result");
+        expect(events.slice(1)).toStrictEqual([
+          { type: "reencrypted", url: origin },
+          {
+            type: "adyen_result",
+            url: origin,
+            resultCode: "Authorised",
+            status: 200,
+            reported: true,
+          },
         ]);
+        expect(resultCalls).toStrictEqual([
+          {
+            injectionRef: PLACEHOLDER.injectionRef,
+            resultCode: "Authorised",
+            pspReference: "PSP0000000000001",
+          },
+        ]);
+        expect(JSON.stringify([events, warnings])).not.toContain("pii-marker");
         expect(JSON.stringify(encryptCalls)).not.toContain("PLANTEDKEY");
       } finally {
         await page?.close().catch(() => {});

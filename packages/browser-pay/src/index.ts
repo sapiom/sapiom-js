@@ -34,6 +34,9 @@ export type {
   AdyenEncryptedFields,
   AdyenEncryptRequest,
   AdyenEncryptResult,
+  AdyenResultCode,
+  AdyenResultRequest,
+  AdyenResultResponse,
   RelayRequest,
   RelayResponse,
 } from "./contract.js";

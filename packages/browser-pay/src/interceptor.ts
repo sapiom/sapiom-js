@@ -3,11 +3,14 @@ import {
   paymentIdempotencyKey,
   type AdyenEncryptedFields,
   type AdyenEncryptResult,
+  type AdyenResultCode,
+  type AdyenResultResponse,
   type RelayedHttpResponse,
   type RelayResponse,
 } from "./contract.js";
 import {
   adyenClientKeysInRequest,
+  adyenPaymentResult,
   isAdyenClientKey,
   isAdyenSecuredFieldsPayment,
   redactHeld,
@@ -142,6 +145,18 @@ export type InterceptorEvent =
   | { type: "relayed_unfulfilled"; url: string; status: number }
   /** An Adyen secured-fields payment continued with the card's own encrypted fields. */
   | { type: "reencrypted"; url: string }
+  /**
+   * What Adyen answered a re-encrypted payment, once per payment. `status` is
+   * the page's HTTP status; `reported` is false when the backend did not take
+   * the result.
+   */
+  | {
+      type: "adyen_result";
+      url: string;
+      resultCode: AdyenResultCode;
+      status: number;
+      reported: boolean;
+    }
   | {
       type: "refused";
       url: string;
@@ -213,6 +228,12 @@ function publicReason(reason: string): RefusalReason {
   return reason.length <= REASON_MAX_LENGTH && REASON_SHAPE.test(reason)
     ? reason
     : "unrecognized";
+}
+
+const CODE_SHAPE = /^[A-Za-z0-9_]{1,48}$/;
+
+function publicCode(code: string): string {
+  return CODE_SHAPE.test(code) ? code : "unrecognized";
 }
 
 function publicRequestId(id: unknown, heldNumber: string): string | undefined {
@@ -397,6 +418,8 @@ class PaymentInterceptor {
   >();
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
+  /** Re-encrypted payments whose answer is still to come, by inflight key, with their URL. */
+  private readonly adyenResults = new Map<string, string>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
   private adyenPrepareCalls = 0;
   /** Counts not-enabled answers, so a success begun before one is never used. */
@@ -684,6 +707,11 @@ class PaymentInterceptor {
     const parsed = parsePaused(event.params);
     if (!sessionId || !parsed) return;
     const { requestId, request } = parsed;
+    const response = responseStage(event.params);
+    if (response) {
+      void this.onAdyenResponse(sessionId, requestId, response.status);
+      return;
+    }
     if (!this.sessions.has(sessionId)) {
       void failRequest(this.connection, sessionId, requestId);
       this.emit({
@@ -940,26 +968,98 @@ class PaymentInterceptor {
     if (typeof relay.adyenEncrypt !== "function") {
       return { outcome: "not_enabled" };
     }
+    const encrypt = relay.adyenEncrypt.bind(relay);
+    return this.withinAttempt((signal) =>
+      encrypt(
+        {
+          injectionRef: this.options.placeholder.injectionRef,
+          clientKey,
+          pageOrigin,
+        },
+        { signal },
+      ),
+    );
+  }
+
+  private async withinAttempt<T>(
+    call: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(new RelayTimeoutError()),
       this.attemptTimeoutMs,
     );
     try {
-      return await failAfter(
-        relay.adyenEncrypt(
-          {
-            injectionRef: this.options.placeholder.injectionRef,
-            clientKey,
-            pageOrigin,
-          },
-          { signal: controller.signal },
-        ),
-        this.attemptTimeoutMs,
-      );
+      return await failAfter(call(controller.signal), this.attemptTimeoutMs);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * The answer to a payment continued with `interceptResponse`. The page gets
+   * it unchanged, and before the backend is told: a slow report must not hold
+   * the checkout. The body may carry the shopper's details, so only the
+   * result code leaves this method.
+   */
+  private async onAdyenResponse(
+    sessionId: string,
+    requestId: string,
+    status: number | undefined,
+  ): Promise<void> {
+    const key = inflightKey(sessionId, requestId);
+    const url = this.adyenResults.get(key);
+    // Deleting first makes a second answer for the same request pass untouched.
+    this.adyenResults.delete(key);
+    const body =
+      url !== undefined && status !== undefined
+        ? await readResponseBody(this.connection, sessionId, requestId)
+        : undefined;
+    await continueRequest(this.connection, sessionId, requestId);
+    // A request that failed before any answer has no result to report.
+    if (url === undefined || status === undefined) return;
+    const result = adyenPaymentResult(body ?? "");
+    const reported = await this.reportAdyenResult(result);
+    this.emit({
+      type: "adyen_result",
+      url,
+      resultCode: result.resultCode,
+      status,
+      reported,
+    });
+  }
+
+  /** False when the backend did not take the result. Never throws. */
+  private async reportAdyenResult(result: {
+    resultCode: AdyenResultCode;
+    pspReference?: string;
+  }): Promise<boolean> {
+    const relay = this.options.relay;
+    if (typeof relay.adyenResult !== "function") return false;
+    const report = relay.adyenResult.bind(relay);
+    let answer: AdyenResultResponse;
+    try {
+      answer = await this.withinAttempt((signal) =>
+        report(
+          { injectionRef: this.options.placeholder.injectionRef, ...result },
+          { signal },
+        ),
+      );
+    } catch (error) {
+      this.logger.warn("adyen result report failed", {
+        resultCode: result.resultCode,
+        ...(error instanceof RelayHttpError ? { status: error.status } : {}),
+        timedOut: isRelayTimeout(error),
+      });
+      return false;
+    }
+    if (answer.outcome !== "refused") return true;
+    this.logger.warn("adyen result report refused", {
+      resultCode: result.resultCode,
+      status: answer.status,
+      code: publicCode(answer.code),
+    });
+    return false;
   }
 
   /** Another CDP client can fulfill a request before it pauses here; Network still sees it. */
@@ -1154,9 +1254,12 @@ class PaymentInterceptor {
       return;
     }
     if (decision.action === "reencrypted") {
+      // Watched before continuing: the answer can pause before the continue returns.
+      this.adyenResults.set(entry.key, url);
       const continued = await this.settle(entry, {
         continueWith: decision.body,
       });
+      if (!continued) this.adyenResults.delete(entry.key);
       this.emit(
         continued
           ? { type: "reencrypted", url }
@@ -1200,7 +1303,9 @@ class PaymentInterceptor {
         this.connection,
         entry.sessionId,
         entry.requestId,
-        action === "continue" ? undefined : action.continueWith,
+        action === "continue"
+          ? undefined
+          : { postData: action.continueWith, interceptResponse: true },
       )
         .then((ok) => {
           continued = ok;
@@ -1711,6 +1816,19 @@ function parsePaused(
   };
 }
 
+/**
+ * A pause at the Response stage, which only a request continued with
+ * `interceptResponse` reaches. `status` is missing when it failed before an
+ * answer.
+ */
+function responseStage(
+  params: Record<string, unknown>,
+): { status?: number } | undefined {
+  const status = params.responseStatusCode;
+  if (typeof status === "number") return { status };
+  return params.responseErrorReason !== undefined ? {} : undefined;
+}
+
 function parsePostDataEntries(
   value: unknown,
 ): { bytes?: string }[] | undefined {
@@ -1815,20 +1933,29 @@ async function armFetch(
   session.fetchEnabled = true;
 }
 
-/** False when the browser refused to continue and the request was failed instead. */
+/**
+ * False when the browser refused to continue and the request was failed
+ * instead. With `interceptResponse` this one request pauses again at its
+ * answer; every other request stays at the Request stage.
+ */
 async function continueRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  postData?: string,
+  override?: { postData: string; interceptResponse: boolean },
 ): Promise<boolean> {
   try {
     await connection.send(
       "Fetch.continueRequest",
       {
         requestId,
-        ...(postData !== undefined
-          ? { postData: Buffer.from(postData, "utf8").toString("base64") }
+        ...(override
+          ? {
+              postData: Buffer.from(override.postData, "utf8").toString(
+                "base64",
+              ),
+              interceptResponse: override.interceptResponse,
+            }
           : {}),
       },
       sessionId,
@@ -1837,6 +1964,27 @@ async function continueRequest(
   } catch {
     await failRequest(connection, sessionId, requestId);
     return false;
+  }
+}
+
+async function readResponseBody(
+  connection: CdpConnection,
+  sessionId: string,
+  requestId: string,
+): Promise<string | undefined> {
+  try {
+    const result = await connection.send(
+      "Fetch.getResponseBody",
+      { requestId },
+      sessionId,
+    );
+    const body = readStringField(result, "body");
+    if (body === undefined) return undefined;
+    return isRecord(result) && result.base64Encoded === true
+      ? Buffer.from(body, "base64").toString("utf8")
+      : body;
+  } catch {
+    return undefined;
   }
 }
 
