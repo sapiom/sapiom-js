@@ -505,6 +505,22 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.encryptCalls).toHaveLength(0);
   });
 
+  it("prepareAdyen answers adyen_client_key, without asking the backend, once two keys were seen", async () => {
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+    });
+    pause(harness.stub, "req-other-key", {
+      url: `${ADYEN_TEST}/v1/clientKeys/test_OTHERKEY789`,
+      method: "GET",
+    });
+    await settle(harness.stub, "req-other-key");
+
+    await expect(
+      harness.prepare({ clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN }),
+    ).resolves.toStrictEqual({ enabled: false, reason: "adyen_client_key" });
+    expect(harness.encryptCalls).toHaveLength(0);
+  });
+
   it("re-encrypts with a lowercase client key from the secured-field frame", async () => {
     const lowercase = "test_870be2854add4f56b86778353010f36c";
     harness = await arm({
