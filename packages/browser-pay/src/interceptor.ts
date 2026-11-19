@@ -1056,22 +1056,25 @@ class PaymentInterceptor {
     const url = this.adyenResults.get(key)?.url;
     // Deleting first makes a second answer for the same request pass untouched.
     this.adyenResults.delete(key);
-    const body =
-      url !== undefined && status !== undefined
-        ? await readResponseBody(this.connection, sessionId, requestId)
-        : undefined;
-    await continueRequest(this.connection, sessionId, requestId);
     // A request that failed before any answer has no result to report.
-    if (url === undefined || status === undefined) return;
-    const result = adyenPaymentResult(body ?? "");
+    if (url === undefined || status === undefined) {
+      await continueRequest(this.connection, sessionId, requestId);
+      return;
+    }
+    const result = adyenPaymentResult(
+      (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
+    );
     const origin = new URL(url).origin;
-    // An `unknown` answer (an Adyen error or a non-JSON body) keeps the watch:
-    // it is not final, and the page's retried details call may be.
+    // Watched before the page gets the answer: its details call can pause
+    // before the continue returns. An `unknown` answer (an Adyen error or a
+    // non-JSON body) keeps the watch: it is not final, and the page's retried
+    // details call may be.
     if (isAdyenActionResult(result.resultCode)) {
       this.adyenAwaiting3ds.add(origin);
     } else if (result.resultCode !== "unknown") {
       this.adyenAwaiting3ds.delete(origin);
     }
+    await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
     this.emit({
       type: "adyen_result",

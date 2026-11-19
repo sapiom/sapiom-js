@@ -1325,6 +1325,27 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ).toStrictEqual(["ChallengeShopper", "Authorised"]);
     });
 
+    it("watches details that pause before the 3-D Secure answer's continue returns", async () => {
+      let detailsSent = false;
+      harness = await payAndAnswer(
+        {
+          result: recorded,
+          onAnswerContinue: () => {
+            if (detailsSent) return;
+            detailsSent = true;
+            pause(harness!.stub, "req-details", DETAILS);
+          },
+        },
+        {
+          body: JSON.stringify({ resultCode: "ChallengeShopper", action: {} }),
+        },
+      );
+
+      expect(
+        (await settle(harness.stub, "req-details")).params.interceptResponse,
+      ).toBe(true);
+    });
+
     it("keeps watching through a second 3-D Secure code", async () => {
       harness = await challenged();
       harness.responseBodies.set(
