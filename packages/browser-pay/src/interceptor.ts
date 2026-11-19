@@ -151,7 +151,8 @@ export type InterceptorEvent =
   /**
    * What Adyen answered a re-encrypted payment, once per payment. `status` is
    * the page's HTTP status; `reported` is false when the backend did not take
-   * the result.
+   * the result. True means only that the backend took it, not that the
+   * purchase completed: a code that is not final changes nothing.
    */
   | {
       type: "adyen_result";
