@@ -126,3 +126,5 @@ export type {
 
 // Default export for convenience
 export { SapiomClient as default } from "./client/SapiomClient.js";
+
+export { SapiomApiError } from "./errors/SapiomApiError.js";
