@@ -153,7 +153,8 @@ export type InterceptorEvent =
   /**
    * What Adyen answered a re-encrypted payment, once per payment. `status` is
    * the page's HTTP status; `reported` is false when the backend did not take
-   * the result.
+   * the result. True means only that the backend took it, not that the
+   * purchase completed: a code that is not final changes nothing.
    */
   | {
       type: "adyen_result";
@@ -628,16 +629,18 @@ class PaymentInterceptor {
         ? target.type
         : undefined;
     const code = failed?.code;
+    this.warn("browser step failed", {
+      method,
+      ...(code !== undefined ? { code } : {}),
+      timedOut: failed?.timedOut ?? false,
+      ...(targetType ? { targetType } : {}),
+      ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+    });
+  }
+
+  private warn(...args: Parameters<PayLogger["warn"]>): void {
     try {
-      void Promise.resolve(
-        this.logger.warn("browser step failed", {
-          method,
-          ...(code !== undefined ? { code } : {}),
-          timedOut: failed?.timedOut ?? false,
-          ...(targetType ? { targetType } : {}),
-          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
-        }),
-      ).catch(() => {});
+      void Promise.resolve(this.logger.warn(...args)).catch(() => {});
     } catch {
       // A logger must not change control flow.
     }
@@ -1050,8 +1053,9 @@ class PaymentInterceptor {
         ? await readResponseBody(this.connection, sessionId, requestId)
         : undefined;
     await continueRequest(this.connection, sessionId, requestId);
-    // A request that failed before any answer has no result to report.
-    if (url === undefined || status === undefined) return;
+    // A request that failed before any answer has no result to report, and
+    // after detach() a read cut short would be reported as `unknown`.
+    if (url === undefined || status === undefined || this.closed) return;
     const result = adyenPaymentResult(body ?? "");
     const origin = new URL(url).origin;
     if (isAdyenActionResult(result.resultCode)) {
@@ -1086,7 +1090,7 @@ class PaymentInterceptor {
         ),
       );
     } catch (error) {
-      this.logger.warn("adyen result report failed", {
+      this.warn("adyen result report failed", {
         resultCode: result.resultCode,
         ...(error instanceof RelayHttpError ? { status: error.status } : {}),
         timedOut: isRelayTimeout(error),
@@ -1094,7 +1098,7 @@ class PaymentInterceptor {
       return false;
     }
     if (answer.outcome !== "refused") return true;
-    this.logger.warn("adyen result report refused", {
+    this.warn("adyen result report refused", {
       resultCode: result.resultCode,
       status: answer.status,
       code: publicCode(answer.code),
