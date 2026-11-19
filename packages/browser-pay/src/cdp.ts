@@ -453,6 +453,7 @@ class WebSocketClient {
 }
 
 export class CdpConnection {
+  private readonly closeListeners = new Set<() => void>();
   private nextId = 0;
   private closed = false;
   private readonly pending = new Map<number, Pending>();
@@ -503,6 +504,14 @@ export class CdpConnection {
     socket.onclose = () => {
       this.closed = true;
       rejectAll(new Error("CDP connection closed"));
+      for (const listener of this.closeListeners) {
+        try {
+          listener();
+        } catch {
+          /* One observer cannot prevent others from cleaning up. */
+        }
+      }
+      this.closeListeners.clear();
     };
   }
 
@@ -551,6 +560,15 @@ export class CdpConnection {
         reject(new Error("CDP connection closed"));
       }
     });
+  }
+
+  onClose(listener: () => void): () => void {
+    if (this.closed) {
+      listener();
+      return () => {};
+    }
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
   }
 
   onEvent(listener: (event: CdpEvent) => void): () => void {
