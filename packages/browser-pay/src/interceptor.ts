@@ -440,6 +440,8 @@ class PaymentInterceptor {
   private backlog: InterceptorEvent[] | null = [];
   private buffering = true;
   private closed = false;
+  /** Every detach() call waits for the same shutdown. */
+  private detaching: Promise<void> | undefined;
 
   constructor(
     private readonly connection: CdpConnection,
@@ -481,7 +483,11 @@ class PaymentInterceptor {
       this.onPaused(event);
       return;
     }
-    if (this.closed) return;
+    if (this.closed) {
+      // Shutdown can wait on a slow report; a new tab must not wait with it.
+      if (event.method === "Target.attachedToTarget") this.release(event);
+      return;
+    }
     if (event.method === "Target.attachedToTarget") this.onAttached(event);
     else if (event.method === "Target.detachedFromTarget")
       this.onDetached(event);
@@ -502,11 +508,7 @@ class PaymentInterceptor {
     if (this.byTarget.has(info.targetId)) {
       // setAutoAttach already owns this target. A second session would pause
       // every request twice.
-      void this.resumeIfWaiting(sessionId, params.waitingForDebugger).then(() =>
-        this.connection
-          .send("Target.detachFromTarget", { sessionId })
-          .catch(() => {}),
-      );
+      this.release(event);
       return;
     }
     const session = this.trackSession({
@@ -527,6 +529,18 @@ class PaymentInterceptor {
     void arm.finally(() => {
       this.pendingArms.delete(arm);
     });
+  }
+
+  /** Lets a target this interceptor will not watch run, then lets go of it. */
+  private release(event: CdpEvent): void {
+    const params = parseAttachedTarget(event.params);
+    if (!params) return;
+    const { sessionId } = params;
+    void this.resumeIfWaiting(sessionId, params.waitingForDebugger).then(() =>
+      this.connection
+        .send("Target.detachFromTarget", { sessionId })
+        .catch(() => {}),
+    );
   }
 
   private onDetached(event: CdpEvent): void {
@@ -1428,8 +1442,12 @@ class PaymentInterceptor {
     flight.controller.abort();
   }
 
-  private async detach(): Promise<void> {
-    if (this.closed) return;
+  private detach(): Promise<void> {
+    this.detaching ??= this.shutDown();
+    return this.detaching;
+  }
+
+  private async shutDown(): Promise<void> {
     this.closed = true;
     this.buffering = false;
     this.backlog = null;
