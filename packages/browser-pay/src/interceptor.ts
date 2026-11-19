@@ -437,6 +437,8 @@ class PaymentInterceptor {
    * 3-D Secure; the page's next details call there carries the final code.
    */
   private readonly adyenAwaiting3ds = new Set<string>();
+  /** Answers being read, handed to the page and reported; detach() waits for them. */
+  private readonly answers = new Set<Promise<void>>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
   private adyenPrepareCalls = 0;
   /** Counts not-enabled answers, so a success begun before one is never used. */
@@ -734,7 +736,13 @@ class PaymentInterceptor {
     const { requestId, request } = parsed;
     const response = responseStage(event.params);
     if (response) {
-      void this.onAdyenResponse(sessionId, requestId, response.status);
+      const answer = this.onAdyenResponse(
+        sessionId,
+        requestId,
+        response.status,
+      );
+      this.answers.add(answer);
+      void answer.finally(() => this.answers.delete(answer));
       return;
     }
     if (!this.sessions.has(sessionId)) {
@@ -1053,9 +1061,8 @@ class PaymentInterceptor {
         ? await readResponseBody(this.connection, sessionId, requestId)
         : undefined;
     await continueRequest(this.connection, sessionId, requestId);
-    // A request that failed before any answer has no result to report, and
-    // after detach() a read cut short would be reported as `unknown`.
-    if (url === undefined || status === undefined || this.closed) return;
+    // A request that failed before any answer has no result to report.
+    if (url === undefined || status === undefined) return;
     const result = adyenPaymentResult(body ?? "");
     const origin = new URL(url).origin;
     // An `unknown` answer (an Adyen error or a non-JSON body) keeps the watch:
@@ -1427,6 +1434,7 @@ class PaymentInterceptor {
         if (entry.phase.status === "open") await this.settle(entry, "fail");
       }),
     );
+    await Promise.all(this.answers);
   }
 
   private relayOnce(
