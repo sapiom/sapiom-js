@@ -12,6 +12,8 @@ import {
 
 import type { FailureMode, TransactionPollingConfig } from "@sapiom/core";
 
+import { VERSION as SDK_VERSION } from "./_generated/version.js";
+
 /**
  * Authorization configuration for fetch
  */
@@ -29,8 +31,6 @@ export interface PaymentConfig {
   failureMode: FailureMode;
   polling?: TransactionPollingConfig;
 }
-
-const SDK_VERSION = "1.0.0";
 
 /** Default polling configuration (shared with TransactionPoller defaults) */
 const DEFAULT_POLLING: Required<TransactionPollingConfig> = {
