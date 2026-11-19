@@ -1851,6 +1851,137 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ]);
     });
 
+    describe("with merchant routes sharing one checkout key", () => {
+      const route = (cart: string) =>
+        `${PAGE_ORIGIN}/api/sessions/${cart}/payments`;
+      const challenge = JSON.stringify({
+        resultCode: "ChallengeShopper",
+        action: {},
+      });
+
+      /** Pauses each payment, by request id and cart, until re-encrypted. */
+      async function payments(
+        armed: Harness,
+        carts: [requestId: string, cart: string, answer: string][],
+      ): Promise<void> {
+        for (const [id, cart, answer] of carts) {
+          armed.responseBodies.set(id, answer);
+          pause(armed.stub, id, { ...ADVANCED, url: route(cart) });
+        }
+        await waitFor(
+          () =>
+            armed.events.filter((event) => event.type === "reencrypted")
+              .length === carts.length,
+          "payments reencrypted",
+        );
+      }
+
+      /** A details call on a cart, watched and its answer reported. */
+      async function finalDetails(
+        armed: Harness,
+        id: string,
+        cart: string,
+        resultCode: string,
+      ): Promise<void> {
+        const before = armed.resultCalls.length;
+        armed.responseBodies.set(id, JSON.stringify({ resultCode }));
+        pause(armed.stub, id, { ...DETAILS, url: `${route(cart)}/details` });
+        expect((await settle(armed.stub, id)).params.interceptResponse).toBe(
+          true,
+        );
+        respond(armed.stub, id, 200);
+        await waitFor(
+          () => armed.resultCalls.length === before + 1,
+          `${id} reported`,
+        );
+      }
+
+      it("keeps a challenge watch after another payment's final answer", async () => {
+        harness = await arm({
+          frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+          result: recorded,
+        });
+        await payments(harness, [
+          ["req-pay", "cart-a", challenge],
+          ["req-pay-2", "cart-b", JSON.stringify({ resultCode: "Refused" })],
+        ]);
+        respond(harness.stub, "req-pay", 200);
+        await waitFor(() => harness!.resultCalls.length === 1, "A reported");
+        respond(harness.stub, "req-pay-2", 200);
+        await waitFor(() => harness!.resultCalls.length === 2, "B reported");
+        await finalDetails(harness, "req-details", "cart-a", "Authorised");
+
+        expect(resultCodes(harness)).toStrictEqual([
+          "ChallengeShopper",
+          "Refused",
+          "Authorised",
+        ]);
+      });
+
+      it("keeps a concurrent challenge watch on a tab that finished one before", async () => {
+        let reads = 0;
+        harness = await arm({
+          frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+          result: recorded,
+          onResponseBody: () => {
+            reads += 1;
+            // Reads: cart-0's payment, its details, then A's payment, during
+            // which B's final answer starts and finishes its read.
+            if (reads === 3) respond(harness!.stub, "req-pay-2", 200);
+          },
+        });
+        await payments(harness, [
+          ["req-pay-0", "cart-0", challenge],
+          ["req-pay", "cart-a", challenge],
+          ["req-pay-2", "cart-b", JSON.stringify({ resultCode: "Refused" })],
+        ]);
+        respond(harness.stub, "req-pay-0", 200);
+        await waitFor(() => harness!.resultCalls.length === 1, "0 reported");
+        await finalDetails(harness, "req-details-0", "cart-0", "Authorised");
+        respond(harness.stub, "req-pay", 200);
+        await waitFor(() => harness!.resultCalls.length === 4, "A, B reported");
+        await finalDetails(harness, "req-details", "cart-a", "Authorised");
+
+        expect(resultCodes(harness)).toStrictEqual([
+          "ChallengeShopper",
+          "Authorised",
+          "ChallengeShopper",
+          "Refused",
+          "Authorised",
+        ]);
+      });
+
+      it("reports one final answer per challenge on the key", async () => {
+        harness = await arm({
+          frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+          result: recorded,
+        });
+        await payments(harness, [
+          ["req-pay", "cart-a", challenge],
+          ["req-pay-2", "cart-b", challenge],
+        ]);
+        respond(harness.stub, "req-pay", 200);
+        respond(harness.stub, "req-pay-2", 200);
+        await waitFor(() => harness!.resultCalls.length === 2, "both reported");
+        await finalDetails(harness, "req-details", "cart-a", "Authorised");
+        await finalDetails(harness, "req-details-2", "cart-b", "Refused");
+        pause(harness.stub, "req-details-3", {
+          ...DETAILS,
+          url: `${route("cart-a")}/details`,
+        });
+
+        expect(
+          (await settle(harness.stub, "req-details-3")).params,
+        ).toStrictEqual({ requestId: "req-details-3" });
+        expect(resultCodes(harness)).toStrictEqual([
+          "ChallengeShopper",
+          "ChallengeShopper",
+          "Authorised",
+          "Refused",
+        ]);
+      });
+    });
+
     it.each(["Authorised", "Refused"])(
       "does not watch details after a final %s on /payments",
       async (resultCode) => {

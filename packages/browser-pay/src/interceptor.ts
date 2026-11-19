@@ -440,11 +440,12 @@ class PaymentInterceptor {
     }
   >();
   /**
-   * Checkouts, by page session, whose Adyen payment answered a 3-D Secure
-   * code. The agent completes 3-D Secure; the page's next details call there
-   * carries the final code.
+   * Open 3-D Secure challenges, by page session and checkout: each payment
+   * answering a 3-D Secure code adds one. The agent completes 3-D Secure; a
+   * details call there carries the final code, which closes one. Counted, as
+   * merchant routes on one origin share a checkout key.
    */
-  private readonly adyenAwaiting3ds = new Map<string, Set<string>>();
+  private readonly adyenAwaiting3ds = new Map<string, Map<string, number>>();
   /** Answers being read, handed to the page and reported; detach() waits for them. */
   private readonly answers = new Set<Promise<void>>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
@@ -830,7 +831,9 @@ class PaymentInterceptor {
       const checkout = adyenDetailsCheckout(request.method, request.url);
       return checkout !== undefined &&
         !this.closed &&
-        this.adyenAwaiting3ds.get(this.pageOf(entry.sessionId))?.has(checkout)
+        (this.adyenAwaiting3ds
+          .get(this.pageOf(entry.sessionId))
+          ?.get(checkout) ?? 0) > 0
         ? { action: "awaitAdyenResult" }
         : { action: "continue" };
     }
@@ -1088,31 +1091,36 @@ class PaymentInterceptor {
     const { url } = watch;
     // Taken before the read: a tab closed meanwhile must not drop its answer.
     const page = this.pageOf(sessionId);
-    const awaiting = this.adyenAwaiting3ds.get(page);
+    const before = this.adyenAwaiting3ds.get(page);
     const result = adyenPaymentResult(
       (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
     );
     const checkout = adyenCheckout(new URL(url));
-    // Another details answer for this checkout was already final.
-    if (watch.details && !awaiting?.has(checkout)) {
+    // Another answer read meanwhile may have started this tab's challenges.
+    const awaiting = this.adyenAwaiting3ds.get(page) ?? before;
+    const open = awaiting?.get(checkout) ?? 0;
+    // Another details answer already closed every challenge on this checkout.
+    if (watch.details && open === 0) {
       await continueRequest(this.connection, sessionId, requestId);
       return;
     }
-    // Watched before the page gets the answer: its details call can pause
-    // before the continue returns. An `unknown` answer (an Adyen error or a
-    // non-JSON body) keeps the watch: it is not final, and the page's retried
-    // details call may be. Nothing new is watched once detach() starts or the
-    // page has closed.
-    // Another answer read meanwhile may have started this tab's watches.
-    const live = this.adyenAwaiting3ds.get(page) ?? awaiting;
+    // Counted before the page gets the answer: its details call can pause
+    // before the continue returns. A details answer with another action code
+    // continues its challenge; only its final code closes one. An `unknown`
+    // answer (an Adyen error or a non-JSON body) changes nothing: it is not
+    // final, and the page's retried details call may be. A final code on
+    // /payments had no challenge to close. Nothing new is watched once
+    // detach() starts or the page has closed.
     if (isAdyenActionResult(result.resultCode)) {
-      if (!this.closed && this.sessions.has(page)) {
-        this.adyenAwaiting3ds.set(page, (live ?? new Set()).add(checkout));
+      if (!watch.details && !this.closed && this.sessions.has(page)) {
+        this.adyenAwaiting3ds.set(
+          page,
+          (awaiting ?? new Map<string, number>()).set(checkout, open + 1),
+        );
       }
-    } else if (result.resultCode !== "unknown") {
-      // Only a watch this read saw: one added by another answer read
-      // meanwhile (another payment on a shared checkout key) stays.
-      awaiting?.delete(checkout);
+    } else if (watch.details && result.resultCode !== "unknown") {
+      if (open > 1) awaiting?.set(checkout, open - 1);
+      else awaiting?.delete(checkout);
     }
     await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
