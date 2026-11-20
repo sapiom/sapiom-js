@@ -464,6 +464,83 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     assertNothingSecret(harness);
   });
 
+  it.each(["application/json", "text/plain"])(
+    "fails an unrelated collector locally without relaying (%s)",
+    async (contentType) => {
+      harness = await arm({ frames: KEY_FRAME });
+      pause(harness.stub, "req-collector", {
+        url: "https://collector.example/x",
+        body: ADVANCED.body,
+        headers: {
+          "content-type": contentType,
+          "sec-fetch-mode": "no-cors",
+        },
+      });
+      const settled = await settle(harness.stub, "req-collector");
+
+      expect(harness.relayCalls.length).toBe(0);
+      expect(settled.method).toBe("Fetch.failRequest");
+      expect(count(harness.stub.commands, "Fetch.continueRequest")).toBe(0);
+      await waitFor(() => harness!.events.length === 2, "two events");
+      expect(harness.events[1]).toStrictEqual({
+        type: "failed",
+        url: "https://collector.example",
+        reason: "destination_not_allowed",
+      });
+      assertNothingSecret(harness);
+    },
+  );
+
+  it.each([
+    ["https://shop.example.evil.example/api/payments", "POST"],
+    [
+      "https://checkoutshopper-test.adyen.com.evil.example/checkoutshopper/v1/sessions/CS123/payments",
+      "POST",
+    ],
+    [
+      "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/payments",
+      "POST",
+    ],
+    [
+      "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS123/payments/extra",
+      "POST",
+    ],
+    [
+      "http://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS123/payments",
+      "POST",
+    ],
+    [
+      "https://checkoutshopper-live.adyen.com/checkoutshopper/v1/sessions/CS123/payments",
+      "POST",
+    ],
+    [
+      "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS123/payments#fragment",
+      "POST",
+    ],
+    [
+      "https://user@checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS123/payments",
+      "POST",
+    ],
+    [SESSIONS.url, "PUT"],
+    [ADVANCED.url, "PUT"],
+  ])(
+    "fails a destination outside the checkout contract (%s, %s)",
+    async (url, method) => {
+      harness = await arm({ frames: KEY_FRAME });
+      pause(harness.stub, "req-destination", { ...ADVANCED, url, method });
+      const settled = await settle(harness.stub, "req-destination");
+
+      expect(harness.relayCalls.length).toBe(0);
+      expect(settled.method).toBe("Fetch.failRequest");
+      await waitFor(() => harness!.events.length === 2, "two events");
+      expect(harness.events[1]).toMatchObject({
+        type: "failed",
+        reason: "destination_not_allowed",
+      });
+      assertNothingSecret(harness);
+    },
+  );
+
   it("sends the page origin as Origin when the paused request carries none", async () => {
     harness = await arm({ frames: KEY_FRAME });
     pause(harness.stub, "req-no-origin", ADVANCED);
