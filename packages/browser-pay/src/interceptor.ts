@@ -366,6 +366,7 @@ interface AdyenDetailsWatch {
   url: string;
   sessionId: string;
   challenge: AdyenChallenge;
+  redirectNetworkId?: string;
 }
 
 type Listener = (event: InterceptorEvent) => void;
@@ -466,6 +467,11 @@ class PaymentInterceptor {
       this.onTargetInfoChanged(event);
     } else if (event.method === "Network.requestWillBeSent") {
       this.onRequestWillBeSent(event);
+    } else if (
+      event.method === "Network.loadingFinished" ||
+      event.method === "Network.loadingFailed"
+    ) {
+      this.onNetworkCompletion(event);
     } else if (event.method === "Runtime.bindingCalled") {
       this.onBindingCalled(event);
     }
@@ -835,6 +841,7 @@ class PaymentInterceptor {
         requestId,
         response.status,
         response.redirect,
+        request.networkId,
       );
       this.answers.add(answer);
       void answer.finally(() => this.answers.delete(answer));
@@ -859,7 +866,10 @@ class PaymentInterceptor {
     const watch = previousKey
       ? this.adyenDetailsWatches.get(previousKey)
       : undefined;
-    if (watch && previousKey) this.adyenDetailsWatches.delete(previousKey);
+    if (watch && previousKey) {
+      this.adyenDetailsWatches.delete(previousKey);
+      delete watch.redirectNetworkId;
+    }
     const redirectWatch =
       watch && isPageOrigin(request.url, new URL(watch.url).origin)
         ? watch
@@ -1109,11 +1119,13 @@ class PaymentInterceptor {
     requestId: string,
     status: number | undefined,
     redirect = false,
+    networkId?: string,
   ): Promise<void> {
     const key = inflightKey(sessionId, requestId);
     const watch = this.adyenDetailsWatches.get(key);
     if (watch && redirect) {
-      // The next Fetch request names this hop in redirectedRequestId.
+      // The next Fetch request claims this watch; completion without one expires it.
+      watch.redirectNetworkId = networkId;
       const continued = await continueRequest(
         this.connection,
         sessionId,
@@ -1213,6 +1225,19 @@ class PaymentInterceptor {
     const parsed = parsePaused(event.params);
     if (!parsed || !this.sessions.has(event.sessionId ?? "")) return;
     this.noteAdyenRequest(parsed.request);
+  }
+
+  private onNetworkCompletion(event: CdpEvent): void {
+    const requestId = readStringField(event.params, "requestId");
+    if (!requestId) return;
+    for (const [key, watch] of this.adyenDetailsWatches) {
+      if (
+        watch.sessionId === event.sessionId &&
+        watch.redirectNetworkId === requestId
+      ) {
+        this.adyenDetailsWatches.delete(key);
+      }
+    }
   }
 
   private noteAdyenRequest(request: PausedRequest): void {

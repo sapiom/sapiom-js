@@ -926,6 +926,7 @@ function answerPause(
     location?: string;
     method?: string;
     failed?: boolean;
+    networkId?: string;
   } = {},
 ): void {
   stub.emit({
@@ -934,6 +935,7 @@ function answerPause(
     params: {
       requestId,
       request: { url, method: options.method ?? "POST", headers: {} },
+      ...(options.networkId ? { networkId: options.networkId } : {}),
       ...(options.failed
         ? { responseErrorReason: "Failed" }
         : {
@@ -1489,6 +1491,7 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
         answerPause(harness.stub, hop.id, hop.url, "page-1", {
           status: hop.status,
           location: hop.location,
+          networkId: `network-${hop.id}`,
         });
         await waitFor(
           () => continues(harness!.stub, hop.id).length === 2,
@@ -1496,6 +1499,16 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
         );
         expect(harness.resultCalls).toEqual([]);
         expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+        for (const [sessionId, requestId] of [
+          ["page-other", `network-${hop.id}`],
+          ["page-1", "network-unrelated"],
+        ]) {
+          harness.stub.emit({
+            method: "Network.loadingFinished",
+            sessionId,
+            params: { requestId },
+          });
+        }
         pause(
           harness.stub,
           hop.next,
@@ -1506,6 +1519,11 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
         expect((await settle(harness.stub, hop.next)).params).toStrictEqual({
           requestId: hop.next,
           interceptResponse: true,
+        });
+        harness.stub.emit({
+          method: "Network.loadingFinished",
+          sessionId: "page-1",
+          params: { requestId: `network-${hop.id}` },
         });
       }
       answerPause(harness.stub, "final", `${PAGE_ORIGIN}/final`, "page-1", {
@@ -1715,6 +1733,60 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     answerPause(harness.stub, "retry", MERCHANT_DETAILS);
     await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
   });
+
+  it.each(["Network.loadingFinished", "Network.loadingFailed"])(
+    "expires an unclaimed redirect watch on correlated %s and keeps the challenge open",
+    async (method) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+        status: 303,
+        location: `${PAGE_ORIGIN}/final`,
+        networkId: "network-details",
+      });
+      await waitFor(
+        () => continues(harness!.stub, "details").length === 2,
+        "redirect continued",
+      );
+      harness.stub.emit({
+        method,
+        sessionId: "page-1",
+        params: { requestId: "network-details" },
+      });
+      // A stale redirectedRequestId cannot reclaim the expired watch.
+      pause(
+        harness.stub,
+        "late-hop",
+        { url: `${PAGE_ORIGIN}/final`, method: "GET" },
+        "page-1",
+        "details",
+      );
+      expect((await settle(harness.stub, "late-hop")).params).toEqual({
+        requestId: "late-hop",
+      });
+      expect(harness.resultCalls).toEqual([]);
+      pause(harness.stub, "retry", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "retry")).params).toEqual({
+        requestId: "retry",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
+    },
+  );
 
   it("leaves unrelated redirect requests unwatched", async () => {
     harness = await arm({ frames: KEY_FRAME });
