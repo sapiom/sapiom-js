@@ -1492,37 +1492,60 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     },
   );
 
-  it.each([
-    [303, undefined],
-    [304, `${PAGE_ORIGIN}/result`],
-  ] as const)(
-    "reads merchant details status %s without treating it as a redirect",
-    async (status, location) => {
-      harness = await arm({
-        frames: KEY_FRAME,
-        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
-        responseBodies: {
-          details: JSON.stringify({ resultCode: "Authorised" }),
-        },
-      });
-      pause(harness.stub, "pay", ADVANCED);
-      await settle(harness.stub, "pay");
-      pause(harness.stub, "details", {
-        url: MERCHANT_DETAILS,
-        body: DETAILS_BODY,
-      });
-      await settle(harness.stub, "details");
-      answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
-        status,
-        location,
-      });
-      await waitFor(
-        () => harness!.resultCalls.length === 1,
-        "non-redirect final report",
-      );
-      expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
-    },
-  );
+  it("reads a body-bearing 303 without Location as a final answer", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { details: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 303,
+    });
+    await waitFor(() => harness!.resultCalls.length === 1, "303 final report");
+    expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+  });
+
+  it("continues a bodyless 304 without reporting and keeps the challenge open", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 304,
+      location: `${PAGE_ORIGIN}/result`,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "304 continued",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(harness.events.some((event) => event.type === "adyen_result")).toBe(
+      false,
+    );
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "200 final report");
+    expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+  });
 
   it("leaves unrelated redirect requests unwatched", async () => {
     harness = await arm({ frames: KEY_FRAME });
