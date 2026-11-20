@@ -1,0 +1,106 @@
+import { createHash } from "node:crypto";
+
+import { ADYEN_CHECKOUT_ORIGINS } from "./detect.js";
+import { isRecord } from "./guards.js";
+
+/** The four fields Adyen secured fields encrypt, as the Pay body names them. */
+export const ADYEN_ENCRYPTED_FIELDS = [
+  "encryptedCardNumber",
+  "encryptedExpiryMonth",
+  "encryptedExpiryYear",
+  "encryptedSecurityCode",
+] as const;
+
+export type AdyenEncryptedField = (typeof ADYEN_ENCRYPTED_FIELDS)[number];
+
+/** sha256 hex of each blob the page's secured fields produced for the placeholder. */
+export type PlaceholderBlobHashes = Record<AdyenEncryptedField, string>;
+
+export const ADYEN_BLOB_BINDING = "__sapiomAdyenBlob";
+
+/**
+ * Runs in the page before its own scripts. It listens, and only listens, for
+ * the `encryption` messages Adyen's secured-field iframes post to the page:
+ * a JSON string `{ action: "encryption", fieldType, numKey,
+ * [fieldType]: [{ type, encryptedFieldName, blob }] }` from a checkoutshopper
+ * origin (adyen-web 6.x `SecuredField.postMessageListenerFn` and
+ * `handleEncryption`). The message is never altered, stopped or sent again.
+ *
+ * The binding is taken into the closure and removed from `window`, so page
+ * scripts that run later cannot call it. A second run finds no binding and
+ * does nothing, which keeps install idempotent.
+ */
+export function adyenBlobWatchScript(): string {
+  const config = JSON.stringify({
+    binding: ADYEN_BLOB_BINDING,
+    origins: ADYEN_CHECKOUT_ORIGINS,
+    fields: ADYEN_ENCRYPTED_FIELDS,
+  });
+  return `(() => {
+  const config = ${config};
+  const send = globalThis[config.binding];
+  if (typeof send !== "function") return;
+  try { delete globalThis[config.binding]; } catch {}
+  const origins = new Set(config.origins);
+  const fields = new Set(config.fields);
+  addEventListener("message", (event) => {
+    try {
+      if (!event.isTrusted || !origins.has(event.origin)) return;
+      if (typeof event.data !== "string") return;
+      const data = JSON.parse(event.data);
+      if (!data || data.action !== "encryption") return;
+      const list = data[data.fieldType];
+      if (!Array.isArray(list)) return;
+      for (const item of list) {
+        if (!item || !fields.has(item.encryptedFieldName)) continue;
+        if (typeof item.blob !== "string" || item.blob === "") continue;
+        send(JSON.stringify({ field: item.encryptedFieldName, blob: item.blob }));
+      }
+    } catch {}
+  });
+})();`;
+}
+
+/**
+ * Hashes one binding payload. The raw blob is not kept: only the field name
+ * and its sha256 hex leave this function.
+ */
+export function hashObservedBlob(
+  payload: unknown,
+): { field: AdyenEncryptedField; hash: string } | undefined {
+  if (typeof payload !== "string") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) return undefined;
+  const { field, blob } = parsed;
+  if (!isEncryptedField(field)) return undefined;
+  if (typeof blob !== "string" || blob === "") return undefined;
+  return {
+    field,
+    hash: createHash("sha256").update(blob, "utf8").digest("hex"),
+  };
+}
+
+function isEncryptedField(value: unknown): value is AdyenEncryptedField {
+  return (ADYEN_ENCRYPTED_FIELDS as readonly unknown[]).includes(value);
+}
+
+/** All four hashes, or the names of the fields never observed. */
+export function placeholderBlobHashes(
+  seen: ReadonlyMap<AdyenEncryptedField, string>,
+): { hashes: PlaceholderBlobHashes } | { missing: AdyenEncryptedField[] } {
+  const missing = ADYEN_ENCRYPTED_FIELDS.filter((field) => !seen.has(field));
+  if (missing.length > 0) return { missing };
+  return {
+    hashes: {
+      encryptedCardNumber: seen.get("encryptedCardNumber")!,
+      encryptedExpiryMonth: seen.get("encryptedExpiryMonth")!,
+      encryptedExpiryYear: seen.get("encryptedExpiryYear")!,
+      encryptedSecurityCode: seen.get("encryptedSecurityCode")!,
+    },
+  };
+}

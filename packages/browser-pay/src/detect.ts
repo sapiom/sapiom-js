@@ -124,6 +124,11 @@ const ADYEN_KEY_HOST_ENV = new Map([
   ),
 ]);
 
+/** Origins of Adyen's checkoutshopper hosts, which serve the secured-field iframes. */
+export const ADYEN_CHECKOUT_ORIGINS = [...ADYEN_KEY_HOST_ENV.keys()].map(
+  (host) => `https://${host}`,
+);
+
 /** An Adyen client key: `test_` or `live_` and up to 64 letters and digits. */
 function isAdyenClientKey(value: unknown): value is string {
   return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
