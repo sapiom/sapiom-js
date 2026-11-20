@@ -152,7 +152,7 @@ export type InterceptorEvent =
   /** An Adyen secured-fields payment continued with the card's own encrypted fields. */
   | { type: "reencrypted"; url: string }
   /**
-   * What Adyen answered a re-encrypted payment, once per payment. `status` is
+   * What Adyen answered a re-encrypted request, once per request. `status` is
    * the page's HTTP status; `reported` is false when the backend did not take
    * the result. True means only that the backend took it, not that the
    * purchase completed: a code that is not final changes nothing.
@@ -796,6 +796,7 @@ class PaymentInterceptor {
         sessionId,
         requestId,
         response.status,
+        response.redirect,
       );
       this.answers.add(answer);
       void answer.finally(() => this.answers.delete(answer));
@@ -808,6 +809,30 @@ class PaymentInterceptor {
         url: request.url,
         reason: "unknown_session",
       });
+      return;
+    }
+    const redirectedRequestId = readStringField(
+      event.params,
+      "redirectedRequestId",
+    );
+    const previousKey = redirectedRequestId
+      ? inflightKey(sessionId, redirectedRequestId)
+      : undefined;
+    const watch = previousKey ? this.adyenResults.get(previousKey) : undefined;
+    if (watch && previousKey) {
+      const key = inflightKey(sessionId, requestId);
+      this.adyenResults.delete(previousKey);
+      this.adyenResults.set(key, {
+        ...watch,
+        networkId: request.networkId ?? watch.networkId,
+      });
+      const answer = continueRequest(this.connection, sessionId, requestId, {
+        interceptResponse: true,
+      }).then((continued) => {
+        if (!continued) this.adyenResults.delete(key);
+      });
+      this.answers.add(answer);
+      void answer.finally(() => this.answers.delete(answer));
       return;
     }
     this.noteAdyenRequest(request);
@@ -1114,9 +1139,20 @@ class PaymentInterceptor {
     sessionId: string,
     requestId: string,
     status: number | undefined,
+    redirect = false,
   ): Promise<void> {
     const key = inflightKey(sessionId, requestId);
     const watch = this.adyenResults.get(key);
+    if (watch !== undefined && redirect) {
+      // The next Fetch request names this hop in redirectedRequestId.
+      const continued = await continueRequest(
+        this.connection,
+        sessionId,
+        requestId,
+      );
+      if (!continued) this.adyenResults.delete(key);
+      return;
+    }
     // Deleting first makes a second answer for the same request pass untouched.
     this.adyenResults.delete(key);
     // A request that failed before any answer has no result to report.
@@ -2023,9 +2059,16 @@ function parsePaused(
  */
 function responseStage(
   params: Record<string, unknown>,
-): { status?: number } | undefined {
+): { status?: number; redirect?: boolean } | undefined {
   const status = params.responseStatusCode;
-  if (typeof status === "number") return { status };
+  if (typeof status === "number") {
+    return {
+      status,
+      redirect:
+        [301, 302, 303, 307, 308].includes(status) &&
+        headerValue(params.responseHeaders, "location").length > 0,
+    };
+  }
   return params.responseErrorReason !== undefined ? {} : undefined;
 }
 

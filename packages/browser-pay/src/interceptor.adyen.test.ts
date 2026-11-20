@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   AdyenEncryptedFields,
   AdyenEncryptRequest,
@@ -285,6 +287,7 @@ function pause(
   },
   networkId?: string,
   sessionId = "page-1",
+  redirectedRequestId?: string,
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
@@ -292,6 +295,7 @@ function pause(
     params: {
       requestId,
       ...(networkId ? { networkId } : {}),
+      ...(redirectedRequestId ? { redirectedRequestId } : {}),
       request: {
         url: request.url,
         method: request.method ?? "POST",
@@ -978,6 +982,7 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     stub: CdpStub,
     requestId: string,
     status?: number,
+    options: { location?: string; url?: string; method?: string } = {},
     sessionId = "page-1",
   ): void {
     stub.emit({
@@ -985,12 +990,19 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       sessionId,
       params: {
         requestId,
-        request: { url: ADVANCED.url, method: "POST", headers: {} },
+        request: {
+          url: options.url ?? ADVANCED.url,
+          method: options.method ?? "POST",
+          headers: {},
+        },
         ...(status !== undefined
           ? {
               responseStatusCode: status,
               responseHeaders: [
                 { name: "content-type", value: "application/json" },
+                ...(options.location
+                  ? [{ name: "Location", value: options.location }]
+                  : []),
               ],
             }
           : { responseErrorReason: "Failed" }),
@@ -1085,6 +1097,50 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     expect(harness.events.at(-1)).toMatchObject({ status: 422 });
   });
 
+  it("reports per re-encrypted request when the same injectionRef is reused", async () => {
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      result: recorded,
+    });
+    await harness.prepare({ clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN });
+    for (const requestId of ["req-first", "req-second"]) {
+      pause(harness.stub, requestId, ADVANCED);
+      const continued = await settle(harness.stub, requestId);
+      expect(sentBody(continued)).toMatchObject({ paymentMethod: REAL });
+      harness.responseBodies.set(
+        requestId,
+        JSON.stringify({ resultCode: "Authorised" }),
+      );
+      respond(harness.stub, requestId, 200);
+      await waitFor(
+        () =>
+          harness!.events.filter((event) => event.type === "adyen_result")
+            .length === (requestId === "req-first" ? 1 : 2),
+        "each request reported",
+      );
+    }
+    expect(harness.encryptCalls).toStrictEqual([
+      {
+        injectionRef: HELD.injectionRef,
+        clientKey: CLIENT_KEY,
+        pageOrigin: PAGE_ORIGIN,
+      },
+      {
+        injectionRef: HELD.injectionRef,
+        clientKey: CLIENT_KEY,
+        pageOrigin: PAGE_ORIGIN,
+      },
+    ]);
+    expect(harness.resultCalls).toStrictEqual([
+      { injectionRef: HELD.injectionRef, resultCode: "Authorised" },
+      { injectionRef: HELD.injectionRef, resultCode: "Authorised" },
+    ]);
+    expect(readFileSync(join(__dirname, "../README.md"), "utf8")).toContain(
+      "once per re-encrypted request",
+    );
+    assertNothingSecret(harness);
+  });
+
   it("reports once when the same request's answer pauses again", async () => {
     harness = await payAndAnswer(
       { result: recorded },
@@ -1102,6 +1158,157 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       harness.events.filter((event) => event.type === "adyen_result"),
     ).toHaveLength(1);
     expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+  });
+
+  it.each(["Authorised", "Refused"] as const)(
+    "reports only terminal %s after a POST -> 303 -> GET -> 302 -> GET chain",
+    async (resultCode) => {
+      harness = await payWithoutAnswer();
+      harness.responseBodies.set("req-pay", "");
+      const resultUrl = "https://shop.example/result";
+      const finalUrl = "https://shop.example/final";
+      respond(harness.stub, "req-pay", 303, { location: resultUrl });
+      await waitFor(
+        () => responseCommands(harness!.stub, "req-pay").length >= 1,
+        "303 continued",
+      );
+      expect(harness.resultCalls).toHaveLength(0);
+      expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+
+      pause(
+        harness.stub,
+        "req-result",
+        { url: resultUrl, method: "GET" },
+        "net-pay",
+        "page-1",
+        "req-pay",
+      );
+      expect((await settle(harness.stub, "req-result")).params).toStrictEqual({
+        requestId: "req-result",
+        interceptResponse: true,
+      });
+      respond(harness.stub, "req-result", 302, {
+        url: resultUrl,
+        method: "GET",
+        location: finalUrl,
+      });
+      await waitFor(
+        () => responseCommands(harness!.stub, "req-result").length >= 1,
+        "302 continued",
+      );
+      expect(harness.resultCalls).toHaveLength(0);
+      pause(
+        harness.stub,
+        "req-final",
+        { url: finalUrl, method: "GET" },
+        "net-pay",
+        "page-1",
+        "req-result",
+      );
+      expect((await settle(harness.stub, "req-final")).params).toStrictEqual({
+        requestId: "req-final",
+        interceptResponse: true,
+      });
+      harness.responseBodies.set("req-final", JSON.stringify({ resultCode }));
+      respond(harness.stub, "req-final", 200, { url: finalUrl, method: "GET" });
+      expect(await resultEvent(harness)).toStrictEqual({
+        type: "adyen_result",
+        url: PAGE_ORIGIN,
+        resultCode,
+        status: 200,
+        reported: true,
+      });
+      expect(harness.resultCalls).toStrictEqual([
+        { injectionRef: HELD.injectionRef, resultCode },
+      ]);
+      respond(harness.stub, "req-final", 200, { url: finalUrl, method: "GET" });
+      await waitFor(
+        () => responseCommands(harness!.stub, "req-final").length === 3,
+        "duplicate terminal response continued",
+      );
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(harness.encryptCalls).toHaveLength(1);
+      expect(
+        harness.events.filter((event) => event.type === "adyen_result"),
+      ).toHaveLength(1);
+      expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+      assertNothingSecret(harness);
+    },
+  );
+
+  it.each([
+    [303, undefined],
+    [304, "https://shop.example/result"],
+  ] as const)(
+    "reports status %s without following a non-redirect",
+    async (status, location) => {
+      harness = await payWithoutAnswer();
+      respond(harness.stub, "req-pay", status, { location });
+      expect(await resultEvent(harness)).toMatchObject({
+        resultCode: "Authorised",
+        status,
+      });
+      expect(harness.resultCalls).toHaveLength(1);
+    },
+  );
+
+  it("does not watch a redirect unrelated to a re-encrypted request", async () => {
+    harness = await arm({ result: recorded });
+    pause(
+      harness.stub,
+      "req-unrelated-hop",
+      { url: "https://shop.example/result", method: "GET" },
+      "net-other",
+      "page-1",
+      "req-other",
+    );
+    expect(
+      (await settle(harness.stub, "req-unrelated-hop")).params,
+    ).toStrictEqual({ requestId: "req-unrelated-hop" });
+    respond(harness.stub, "req-unrelated-hop", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-unrelated-hop").length === 1,
+      "unrelated response continued",
+    );
+    expect(harness.resultCalls).toHaveLength(0);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+  });
+
+  it("forgets a redirected watch when the hop's network request fails", async () => {
+    harness = await payWithoutAnswer();
+    respond(harness.stub, "req-pay", 303, {
+      location: "https://shop.example/result",
+    });
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-pay").length >= 1,
+      "redirect continued",
+    );
+    pause(
+      harness.stub,
+      "req-hop",
+      { url: "https://shop.example/result", method: "GET" },
+      "net-hop",
+      "page-1",
+      "req-pay",
+    );
+    await settle(harness.stub, "req-hop");
+    harness.stub.emit({
+      method: "Network.loadingFailed",
+      sessionId: "page-1",
+      params: { requestId: "net-hop", errorText: "net::ERR_FAILED" },
+    });
+    respond(harness.stub, "req-hop", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-hop").length === 1,
+      "failed hop response continued",
+    );
+    respond(harness.stub, "req-pay", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-pay").length >= 2,
+      "old hop response continued",
+    );
+    expect(harness.resultCalls).toHaveLength(0);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
   });
 
   it("continues an answer it did not ask for and reports nothing", async () => {
@@ -1754,6 +1961,88 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ]);
     });
 
+    it("does not let redirected stale details consume a newer challenge", async () => {
+      harness = await challenged();
+      for (const id of ["details-a", "details-a-stale"]) {
+        harness.responseBodies.set(
+          id,
+          JSON.stringify({ resultCode: "Authorised" }),
+        );
+        pause(harness.stub, id, DETAILS);
+        await settle(harness.stub, id);
+      }
+      respond(harness.stub, "details-a", 200);
+      await waitFor(() => harness!.resultCalls.length === 2, "A finished");
+
+      harness.responseBodies.set(
+        "payment-b",
+        JSON.stringify({ resultCode: "ChallengeShopper" }),
+      );
+      pause(harness.stub, "payment-b", ADVANCED);
+      await settle(harness.stub, "payment-b");
+      respond(harness.stub, "payment-b", 200);
+      await waitFor(() => harness!.resultCalls.length === 3, "B challenged");
+      const finalUrl = "https://result.example/adyen/final";
+      respond(harness.stub, "details-a-stale", 303, { location: finalUrl });
+      await waitFor(
+        () => responseCommands(harness!.stub, "details-a-stale").length === 1,
+        "stale A redirect continued",
+      );
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+        "ChallengeShopper",
+      ]);
+      pause(
+        harness.stub,
+        "details-a-final",
+        { url: finalUrl, method: "GET" },
+        "net-a-final",
+        "page-1",
+        "details-a-stale",
+      );
+      expect(
+        (await settle(harness.stub, "details-a-final")).params,
+      ).toStrictEqual({
+        requestId: "details-a-final",
+        interceptResponse: true,
+      });
+      harness.responseBodies.set(
+        "details-a-final",
+        JSON.stringify({ resultCode: "Authorised" }),
+      );
+      respond(harness.stub, "details-a-final", 200, {
+        url: finalUrl,
+        method: "GET",
+      });
+      await waitFor(
+        () => responseCommands(harness!.stub, "details-a-final").length === 2,
+        "stale A answer continued",
+      );
+
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+        "ChallengeShopper",
+      ]);
+      harness.responseBodies.set(
+        "details-b",
+        JSON.stringify({ resultCode: "Refused" }),
+      );
+      pause(harness.stub, "details-b", DETAILS);
+      expect(
+        (await settle(harness.stub, "details-b")).params.interceptResponse,
+      ).toBe(true);
+      respond(harness.stub, "details-b", 200);
+      await waitFor(() => harness!.resultCalls.length === 4, "B finished");
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+        "ChallengeShopper",
+        "Refused",
+      ]);
+    });
+
     it.each([1, 2])(
       "shares recovered-frame watches with their owning tab among %i pages",
       async (pages) => {
@@ -1791,7 +2080,7 @@ describe("Adyen's answer to a re-encrypted payment", () => {
           (await settle(harness.stub, "recovered-pay")).params
             .interceptResponse,
         ).toBe(true);
-        respond(harness.stub, "recovered-pay", 200, "frame-pay");
+        respond(harness.stub, "recovered-pay", 200, {}, "frame-pay");
         await waitFor(
           () => harness!.resultCalls.length === 1,
           "recovered challenge reported",
@@ -1824,7 +2113,7 @@ describe("Adyen's answer to a re-encrypted payment", () => {
           (await settle(harness.stub, "recovered-details")).params
             .interceptResponse,
         ).toBe(true);
-        respond(harness.stub, "recovered-details", 200, "frame-details");
+        respond(harness.stub, "recovered-details", 200, {}, "frame-details");
         await waitFor(
           () => harness!.resultCalls.length === 2,
           "recovered final result reported",
