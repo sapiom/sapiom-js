@@ -350,6 +350,17 @@ interface AdyenChallenge {
   readonly clientKey: string;
   /** The idempotency key of the Pay whose answer opened it. */
   readonly payKey: string;
+  /** Deliveries of the opening Pay answer to the page still in progress. */
+  fulfilling: number;
+  /** Whether one delivery of the opening Pay answer reached the page. */
+  delivered: boolean;
+}
+
+/** A challenge a relayed Pay answer opened, before the page has it. */
+interface OpeningChallenge {
+  page: string;
+  checkout: string;
+  challenge: AdyenChallenge;
 }
 
 type Decision =
@@ -357,7 +368,11 @@ type Decision =
   | { action: "awaitAdyenResult"; challenge: AdyenChallenge }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
-  | { action: "relayed"; response: RelayedHttpResponse };
+  | {
+      action: "relayed";
+      response: RelayedHttpResponse;
+      opening?: OpeningChallenge;
+    };
 
 type SettleAction =
   | "continue"
@@ -1034,7 +1049,12 @@ class PaymentInterceptor {
           return { action: "fail", reason: "adyen_client_key" };
         }
       }
-      challenge ??= { clientKey, payKey: idempotencyKey };
+      challenge ??= {
+        clientKey,
+        payKey: idempotencyKey,
+        fulfilling: 0,
+        delivered: false,
+      };
       route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
       // Only a Pay carries the page's card blobs; a details call has none.
       if (adyen) {
@@ -1090,13 +1110,17 @@ class PaymentInterceptor {
     if (challenge && decision.action === "relayed") {
       // Counted before the page gets the answer: its details call can pause
       // before the fulfil returns.
-      this.track3ds(
+      const checkout = details?.checkout ?? adyenCheckout(new URL(request.url));
+      const opened = this.track3ds(
         page,
-        details?.checkout ?? adyenCheckout(new URL(request.url)),
+        checkout,
         adyenPaymentResult(decision.response.body).resultCode,
         challenge,
         adyen,
       );
+      if (opened) {
+        return { ...decision, opening: { page, checkout, challenge: opened } };
+      }
     }
     return decision;
   }
@@ -1128,7 +1152,8 @@ class PaymentInterceptor {
    * code closes one. A details answer with another action code continues its
    * challenge. Non-final or unknown answers change nothing: the page's
    * retried details call may be final. A final code on a payment had no
-   * challenge to close.
+   * challenge to close. Returns the challenge a payment's answer opened or
+   * joined, with its delivery to the page counted.
    */
   private track3ds(
     page: string,
@@ -1136,29 +1161,52 @@ class PaymentInterceptor {
     resultCode: AdyenResultCode,
     challenge: AdyenChallenge,
     opening = false,
-  ): void {
+  ): AdyenChallenge | undefined {
     const awaiting = this.adyenAwaiting3ds.get(page);
     const open = awaiting?.get(checkout);
     if (isAdyenActionResult(resultCode)) {
       if (opening && !this.closed && this.sessions.has(page)) {
         const challenges = open ?? new Map<string, AdyenChallenge>();
-        if (!challenges.has(challenge.payKey)) {
-          challenges.set(challenge.payKey, challenge);
-        }
+        const opened = challenges.get(challenge.payKey) ?? challenge;
+        opened.fulfilling += 1;
         this.adyenAwaiting3ds.set(
           page,
           (awaiting ?? new Map<string, Map<string, AdyenChallenge>>()).set(
             checkout,
-            challenges,
+            challenges.set(opened.payKey, opened),
           ),
         );
+        return opened;
       }
     } else if (!opening && isFinalAdyenResult(resultCode)) {
-      if (open?.get(challenge.payKey) === challenge) {
-        open.delete(challenge.payKey);
-      }
-      if (open?.size === 0) awaiting?.delete(checkout);
+      this.close3ds(page, checkout, challenge);
     }
+    return undefined;
+  }
+
+  /**
+   * A Pay answer no delivery handed to the page opens no challenge: a later
+   * details call must not be bound to an action the page never received.
+   */
+  private settleOpening(opening: OpeningChallenge, fulfilled: boolean): void {
+    const { challenge } = opening;
+    challenge.fulfilling -= 1;
+    if (fulfilled) challenge.delivered = true;
+    if (challenge.delivered || challenge.fulfilling > 0) return;
+    this.close3ds(opening.page, opening.checkout, challenge);
+  }
+
+  private close3ds(
+    page: string,
+    checkout: string,
+    challenge: AdyenChallenge,
+  ): void {
+    const awaiting = this.adyenAwaiting3ds.get(page);
+    const open = awaiting?.get(checkout);
+    if (open?.get(challenge.payKey) === challenge) {
+      open.delete(challenge.payKey);
+    }
+    if (open?.size === 0) awaiting?.delete(checkout);
   }
 
   /**
@@ -1462,6 +1510,7 @@ class PaymentInterceptor {
       return;
     }
     const fulfilled = await this.settle(entry, { fulfill: decision.response });
+    if (decision.opening) this.settleOpening(decision.opening, fulfilled);
     this.emit(
       fulfilled
         ? { type: "relayed", url, status: decision.response.status }

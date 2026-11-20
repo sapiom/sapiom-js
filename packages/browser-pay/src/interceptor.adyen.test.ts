@@ -102,6 +102,8 @@ async function arm(options: {
     | null;
   /** Blobs the page's secured fields posted; all four unless given. */
   observed?: Partial<Record<BlobField, string>>;
+  /** Paused requests whose `Fetch.fulfillRequest` the browser rejects. */
+  unfulfillable?: string[];
 }): Promise<Harness> {
   const stub = await startCdpStub((command) => {
     if (command.method === "Target.getTargets" && options.recoveredFrames) {
@@ -149,6 +151,12 @@ async function arm(options: {
           ],
         },
       };
+    }
+    if (
+      command.method === "Fetch.fulfillRequest" &&
+      options.unfulfillable?.includes(command.params.requestId as string)
+    ) {
+      throw new Error("Invalid InterceptionId.");
     }
     if (command.method === "Fetch.getResponseBody") {
       const body =
@@ -1329,6 +1337,72 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     });
     expect(harness.resultCalls).toHaveLength(1);
   });
+
+  it("opens no challenge for a Pay answer the page never received", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      unfulfillable: ["pay"],
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await waitFor(
+      () => harness!.events.some((e) => e.type === "relayed_unfulfilled"),
+      "relayed_unfulfilled",
+    );
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "details")).params).toStrictEqual({
+      requestId: "details",
+    });
+    expect(harness.relayCalls).toHaveLength(1);
+    expect(harness.resultCalls).toEqual([]);
+  });
+
+  it.each(["pay-a", "pay-b"])(
+    "keeps a shared challenge open when another delivery of its Pay answer reached the page (%s unfulfilled)",
+    async (unfulfilled) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const answer = answersByPath({ "/api/payments": [CHALLENGE] });
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: async (request) => {
+          await gate;
+          return answer(request);
+        },
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+        unfulfillable: [unfulfilled],
+      });
+      pause(harness.stub, "pay-a", ADVANCED);
+      pause(harness.stub, "pay-b", ADVANCED);
+      await joinedRelay(harness, 2);
+      release();
+      await waitFor(
+        () =>
+          harness!.events.filter(
+            (e) => e.type === "relayed" || e.type === "relayed_unfulfilled",
+          ).length === 2,
+        "both deliveries settled",
+      );
+      expect(harness.relayCalls).toHaveLength(1);
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "details")).params).toStrictEqual({
+        requestId: "details",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 1, "one report");
+    },
+  );
 
   it("binds merchant details answers to their admitted challenge", async () => {
     harness = await arm({

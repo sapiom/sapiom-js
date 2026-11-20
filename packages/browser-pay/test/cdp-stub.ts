@@ -9,7 +9,7 @@ export interface CdpCommand {
   sessionId?: string;
 }
 
-/** Returns the `result` for a command, or `undefined` for `{}`. */
+/** Returns the `result` for a command, or `undefined` for `{}`; throwing answers with a CDP error. */
 export type CdpReply = (command: CdpCommand) => unknown;
 
 export interface CdpStub {
@@ -60,8 +60,13 @@ export async function startCdpStub(
       ...(message.sessionId ? { sessionId: message.sessionId } : {}),
     };
     commands.push(command);
-    const result = reply(command) ?? {};
-    socket?.write(serverFrame(JSON.stringify({ id: message.id, result })));
+    let answer: Record<string, unknown>;
+    try {
+      answer = { id: message.id, result: reply(command) ?? {} };
+    } catch (error) {
+      answer = { id: message.id, error: { message: String(error) } };
+    }
+    socket?.write(serverFrame(JSON.stringify(answer)));
   };
 
   const parse = () => {
