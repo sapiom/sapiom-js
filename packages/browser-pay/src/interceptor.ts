@@ -570,44 +570,83 @@ class PaymentInterceptor {
   ): Promise<void> {
     const { sessionId } = session;
     const script = adyenBlobWatchScript();
-    // Chromium runs new-document scripts only with Page enabled, and installs
-    // a binding in new contexts and reports its calls only with Runtime
-    // enabled (checked on headless Chromium; either alone observes nothing).
-    for (const method of ["Page.enable", "Runtime.enable"]) {
+    // Runtime.enable reports existing contexts, including same-target frames
+    // that Page's new-document hook cannot reach retroactively.
+    const contexts = new Set<number>();
+    const stopCollecting = this.connection.onEvent((event) => {
+      if (event.sessionId !== sessionId || !isRecord(event.params)) return;
+      if (event.method === "Runtime.executionContextCreated") {
+        const context = event.params.context;
+        if (
+          isRecord(context) &&
+          typeof context.id === "number" &&
+          isRecord(context.auxData) &&
+          context.auxData.isDefault === true
+        ) {
+          contexts.add(context.id);
+        }
+      } else if (event.method === "Runtime.executionContextDestroyed") {
+        if (typeof event.params.executionContextId === "number") {
+          contexts.delete(event.params.executionContextId);
+        }
+      } else if (event.method === "Runtime.executionContextsCleared") {
+        contexts.clear();
+      }
+    });
+    try {
+      // Chromium runs new-document scripts only with Page enabled, and installs
+      // a binding in new contexts and reports its calls only with Runtime
+      // enabled (checked on headless Chromium; either alone observes nothing).
+      for (const method of ["Page.enable", "Runtime.enable"]) {
+        await this.swallowStep(
+          this.connection.send(method, {}, sessionId),
+          method,
+          session,
+        );
+      }
       await this.swallowStep(
-        this.connection.send(method, {}, sessionId),
-        method,
+        this.connection.send(
+          "Runtime.addBinding",
+          { name: ADYEN_BLOB_BINDING },
+          sessionId,
+        ),
+        "Runtime.addBinding",
         session,
       );
-    }
-    await this.swallowStep(
-      this.connection.send(
-        "Runtime.addBinding",
-        { name: ADYEN_BLOB_BINDING },
-        sessionId,
-      ),
-      "Runtime.addBinding",
-      session,
-    );
-    await this.swallowStep(
-      this.connection.send(
+      await this.swallowStep(
+        this.connection.send(
+          "Page.addScriptToEvaluateOnNewDocument",
+          { source: script },
+          sessionId,
+        ),
         "Page.addScriptToEvaluateOnNewDocument",
-        { source: script },
-        sessionId,
-      ),
-      "Page.addScriptToEvaluateOnNewDocument",
-      session,
-    );
-    if (waitingForDebugger) return;
-    await this.swallowStep(
-      this.connection.send(
-        "Runtime.evaluate",
-        { expression: script, returnByValue: true },
-        sessionId,
-      ),
-      "Runtime.evaluate",
-      session,
-    );
+        session,
+      );
+      if (contexts.size === 0 && !waitingForDebugger) {
+        await this.swallowStep(
+          this.connection.send(
+            "Runtime.evaluate",
+            { expression: script, returnByValue: true },
+            sessionId,
+          ),
+          "Runtime.evaluate",
+          session,
+        );
+      }
+      for (const contextId of contexts) {
+        await this.swallowStep(
+          this.connection.send(
+            "Runtime.evaluate",
+            { expression: script, contextId, returnByValue: true },
+            sessionId,
+          ),
+          "Runtime.evaluate",
+          session,
+        );
+      }
+    } finally {
+      stopCollecting();
+    }
   }
 
   private onBindingCalled(event: CdpEvent): void {
