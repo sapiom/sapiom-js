@@ -83,7 +83,7 @@ export interface FillCardResult {
    * Set when nothing was typed because the form is Adyen secured fields and paying it is not
    * possible: `adyen_not_enabled` (switched off, or no `adyen` gate given), `adyen_client_key`
    * (no single client key: the page's could not be read, or two different keys were seen, in the
-   * secured-field frames or by the `adyen` gate in the browser's requests to Adyen),
+   * secured-field frames or by the `adyen` gate in the browser's requests to Adyen; or the page has no http(s) origin to check the key against),
    * `adyen_encrypt` (the backend failed),
    * `adyen_card_brand` (the card's `brand` is missing or has no Adyen stand-in).
    */
