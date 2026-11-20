@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { ADYEN_BLOB_BINDING } from "./adyen-blobs";
+import { ADYEN_BLOB_BINDING, ADYEN_WATCH_WORLD } from "./adyen-blobs";
 import type {
   AdyenResultRequest,
   AdyenResultResponse,
@@ -250,13 +250,19 @@ async function arm(options: {
   return harness;
 }
 
-/** What the page script reports for each secured-fields encryption message. */
+/** What the watch script reports for each secured-fields encryption message. */
 function observe(
   stub: CdpStub,
   blobs: Partial<Record<BlobField, string>>,
   sessionId = "page-1",
   name = ADYEN_BLOB_BINDING,
+  world = ADYEN_WATCH_WORLD,
 ): void {
+  stub.emit({
+    method: "Runtime.executionContextCreated",
+    sessionId,
+    params: { context: { id: 1, name: world, auxData: { isDefault: false } } },
+  });
   for (const [field, blob] of Object.entries(blobs)) {
     stub.emit({
       method: "Runtime.bindingCalled",
@@ -519,6 +525,10 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     ],
     [
       "https://user@checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS123/payments",
+      "POST",
+    ],
+    [
+      "https://checkoutshopper-test.adyen.com:8443/checkoutshopper/v1/sessions/CS123/payments",
       "POST",
     ],
     [SESSIONS.url, "PUT"],
@@ -821,7 +831,14 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     const binding = harness.stub.commands.find(
       (command) => command.method === "Runtime.addBinding",
     );
-    expect(binding?.params).toStrictEqual({ name: ADYEN_BLOB_BINDING });
+    expect(binding?.params).toStrictEqual({
+      name: ADYEN_BLOB_BINDING,
+      executionContextName: ADYEN_WATCH_WORLD,
+    });
+    const script = harness.stub.commands.find(
+      (command) => command.method === "Page.addScriptToEvaluateOnNewDocument",
+    );
+    expect(script?.params.worldName).toBe(ADYEN_WATCH_WORLD);
   });
 
   it.each(Object.keys(PLACEHOLDER_BLOBS) as BlobField[])(
@@ -853,10 +870,17 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     },
   );
 
-  it("ignores binding calls under another name, from an unknown session, or with a bad shape", async () => {
+  it("ignores binding calls under another name, from an unknown session, from outside the watch world, or with a bad shape", async () => {
     harness = await arm({ frames: KEY_FRAME, observed: {} });
     observe(harness.stub, PLACEHOLDER_BLOBS, "page-1", "otherBinding");
     observe(harness.stub, PLACEHOLDER_BLOBS, "stranger");
+    observe(
+      harness.stub,
+      PLACEHOLDER_BLOBS,
+      "frame-number",
+      ADYEN_BLOB_BINDING,
+      "",
+    );
     for (const payload of [
       "not json",
       JSON.stringify({ field: "encryptedCardNumberX", blob: "eyJ.x" }),

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { createContext, runInContext } from "node:vm";
 
-import { ADYEN_BLOB_BINDING, ADYEN_ENCRYPTED_FIELDS } from "./adyen-blobs";
+import {
+  ADYEN_BLOB_BINDING,
+  ADYEN_ENCRYPTED_FIELDS,
+  ADYEN_WATCH_WORLD,
+} from "./adyen-blobs";
 import type { RelayRequest } from "./contract";
 import { attachInterceptor, type InterceptorHandle } from "./interceptor";
 import { startCdpStub, waitFor, type CdpStub } from "../test/cdp-stub";
@@ -19,22 +23,40 @@ describe("Adyen observations in existing documents", () => {
   it("relays hashes posted to an already-loaded same-origin checkout iframe", async () => {
     const origin = "https://shop.example";
     const relayCalls: RelayRequest[] = [];
-    const listeners = new Map<number, (event: unknown) => void>();
-    // The merchant iframe shares the page's CDP target. Its isolated world
-    // must not receive a second observer for the same document.
-    const worlds = new Map(
-      [1, 2, 3].map((id) => [
-        id,
-        createContext({
-          addEventListener: (
-            name: string,
-            listener: (event: unknown) => void,
-          ) => {
-            if (name === "message") listeners.set(id, listener);
-          },
-        }),
-      ]),
+    const listeners = new Map<string, (event: unknown) => void>();
+    // The merchant iframe shares the page's CDP target. Contexts 1 and 2 are
+    // the frames' main worlds, 3 another tool's isolated world: none of them
+    // may get the binding or the listener. Each frame gets one watch world.
+    const contexts = new Map(
+      [
+        { id: 1, frameId: "top", name: "", isDefault: true },
+        { id: 2, frameId: "checkout", name: "", isDefault: true },
+        { id: 3, frameId: "checkout", name: "other-tool", isDefault: false },
+      ].map((context) => [context.id, context]),
     );
+    const worlds = new Map<number, ReturnType<typeof createContext>>();
+    const world = (id: number, label: string) =>
+      createContext({
+        addEventListener: (
+          name: string,
+          listener: (event: unknown) => void,
+        ) => {
+          if (name === "message") listeners.set(label, listener);
+        },
+      });
+    for (const { id, frameId } of contexts.values()) {
+      worlds.set(id, world(id, `${frameId}:${id}`));
+    }
+    let bindingWorld: string | undefined;
+    const bind = (id: number) => {
+      worlds.get(id)![ADYEN_BLOB_BINDING] = (payload: string) => {
+        stub.emit({
+          method: "Runtime.bindingCalled",
+          sessionId: "page-1",
+          params: { name: ADYEN_BLOB_BINDING, payload, executionContextId: id },
+        });
+      };
+    };
     stub = await startCdpStub((command) => {
       if (command.method === "Target.setAutoAttach" && !command.sessionId) {
         stub.emit({
@@ -47,43 +69,48 @@ describe("Adyen observations in existing documents", () => {
         });
       }
       if (command.method === "Runtime.enable") {
-        for (const id of worlds.keys()) {
+        for (const { id, frameId, name, isDefault } of contexts.values()) {
           stub.emit({
             method: "Runtime.executionContextCreated",
             sessionId: "page-1",
             params: {
-              context: {
-                id,
-                origin,
-                auxData: {
-                  isDefault: id !== 3,
-                  frameId: id === 1 ? "top" : "checkout",
-                },
-              },
+              context: { id, origin, name, auxData: { isDefault, frameId } },
             },
           });
         }
       }
       if (command.method === "Runtime.addBinding") {
-        for (const [id, world] of worlds) {
-          world[ADYEN_BLOB_BINDING] = (payload: string) => {
-            stub.emit({
-              method: "Runtime.bindingCalled",
-              sessionId: "page-1",
-              params: {
-                name: ADYEN_BLOB_BINDING,
-                payload,
-                executionContextId: id,
-              },
-            });
-          };
+        bindingWorld = command.params.executionContextName as string;
+        for (const [id, { name }] of contexts) {
+          if (name === bindingWorld) bind(id);
         }
+      }
+      if (command.method === "Page.createIsolatedWorld") {
+        const id = 10 + contexts.size;
+        const frameId = command.params.frameId as string;
+        const name = command.params.worldName as string;
+        contexts.set(id, { id, frameId, name, isDefault: false });
+        worlds.set(id, world(id, `${frameId}:${name}`));
+        if (name === bindingWorld) bind(id);
+        stub.emit({
+          method: "Runtime.executionContextCreated",
+          sessionId: "page-1",
+          params: {
+            context: {
+              id,
+              origin,
+              name,
+              auxData: { isDefault: false, frameId },
+            },
+          },
+        });
+        return { executionContextId: id };
       }
       if (command.method === "Runtime.evaluate") {
         if (command.params.expression === "location.origin") {
           return { result: { type: "string", value: origin } };
         }
-        const id = (command.params.contextId as number | undefined) ?? 1;
+        const id = command.params.contextId as number;
         runInContext(command.params.expression as string, worlds.get(id)!);
       }
       return undefined;
@@ -100,7 +127,10 @@ describe("Adyen observations in existing documents", () => {
         },
       },
     });
-    expect([...listeners.keys()].sort()).toEqual([1, 2]);
+    expect([...listeners.keys()].sort()).toEqual([
+      `checkout:${ADYEN_WATCH_WORLD}`,
+      `top:${ADYEN_WATCH_WORLD}`,
+    ]);
     stub.emit({
       method: "Network.requestWillBeSent",
       sessionId: "page-1",
@@ -117,7 +147,7 @@ describe("Adyen observations in existing documents", () => {
       ADYEN_ENCRYPTED_FIELDS.map((field) => [field, `eyJ.TEST_${field}`]),
     );
     for (const [field, blob] of Object.entries(blobs)) {
-      listeners.get(2)?.({
+      listeners.get(`checkout:${ADYEN_WATCH_WORLD}`)?.({
         isTrusted: true,
         origin: "https://checkoutshopper-test.adyen.com",
         data: JSON.stringify({

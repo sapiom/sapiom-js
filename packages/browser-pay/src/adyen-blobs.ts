@@ -19,16 +19,23 @@ export type PlaceholderBlobHashes = Record<AdyenEncryptedField, string>;
 export const ADYEN_BLOB_BINDING = "__sapiomAdyenBlob";
 
 /**
- * Runs in the page before its own scripts. It listens, and only listens, for
+ * The isolated world the watch script and its binding live in. Page scripts
+ * run in the main world, so they can neither reach the binding nor replace
+ * what the script uses; window events still reach listeners in every world.
+ */
+export const ADYEN_WATCH_WORLD = "sapiom-adyen-watch";
+
+/**
+ * Runs in each document's watch world. It listens, and only listens, for
  * the `encryption` messages Adyen's secured-field iframes post to the page:
  * a JSON string `{ action: "encryption", fieldType, numKey,
  * [fieldType]: [{ type, encryptedFieldName, blob }] }` from a checkoutshopper
  * origin (adyen-web 6.x `SecuredField.postMessageListenerFn` and
  * `handleEncryption`). The message is never altered, stopped or sent again.
  *
- * The binding is taken into the closure and removed from `window`, so page
- * scripts that run later cannot call it. A second run finds no binding and
- * does nothing, which keeps install idempotent.
+ * The binding is taken into the closure and removed from the world's global.
+ * A second run in the same world finds no binding and does nothing, which
+ * keeps install idempotent.
  */
 export function adyenBlobWatchScript(): string {
   const config = JSON.stringify({
