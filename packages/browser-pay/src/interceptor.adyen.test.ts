@@ -1612,6 +1612,51 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       ]);
     });
 
+    it("does not let a stale details answer consume a newer challenge", async () => {
+      harness = await challenged();
+      for (const id of ["details-a", "details-a-stale"]) {
+        harness.responseBodies.set(
+          id,
+          JSON.stringify({ resultCode: "Authorised" }),
+        );
+        pause(harness.stub, id, DETAILS);
+        await settle(harness.stub, id);
+      }
+      respond(harness.stub, "details-a", 200);
+      await waitFor(() => harness!.resultCalls.length === 2, "A finished");
+
+      harness.responseBodies.set(
+        "payment-b",
+        JSON.stringify({ resultCode: "ChallengeShopper" }),
+      );
+      pause(harness.stub, "payment-b", ADVANCED);
+      await settle(harness.stub, "payment-b");
+      respond(harness.stub, "payment-b", 200);
+      await waitFor(() => harness!.resultCalls.length === 3, "B challenged");
+      respond(harness.stub, "details-a-stale", 200);
+      await waitFor(
+        () => responseCommands(harness!.stub, "details-a-stale").length === 2,
+        "stale A answer continued",
+      );
+
+      harness.responseBodies.set(
+        "details-b",
+        JSON.stringify({ resultCode: "Refused" }),
+      );
+      pause(harness.stub, "details-b", DETAILS);
+      expect(
+        (await settle(harness.stub, "details-b")).params.interceptResponse,
+      ).toBe(true);
+      respond(harness.stub, "details-b", 200);
+      await waitFor(() => harness!.resultCalls.length === 4, "B finished");
+      expect(resultCodes(harness)).toStrictEqual([
+        "ChallengeShopper",
+        "Authorised",
+        "ChallengeShopper",
+        "Refused",
+      ]);
+    });
+
     it("does not watch details that start after detach()", async () => {
       let answerReport: () => void = () => {};
       const reportHeld = new Promise<void>((resolve) => {

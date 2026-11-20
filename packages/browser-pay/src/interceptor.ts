@@ -383,7 +383,7 @@ type HeldRead =
 type Decision =
   | { action: "continue" }
   | { action: "reencrypted"; body: string }
-  | { action: "awaitAdyenResult" }
+  | { action: "awaitAdyenResult"; challenge: symbol }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
   | { action: "relayed"; response: RelayedHttpResponse };
@@ -436,16 +436,19 @@ class PaymentInterceptor {
       sessionId: string;
       networkId?: string;
       /** A 3-D Secure details call, reported only while its checkout waits. */
-      details?: true;
+      details?: symbol;
     }
   >();
   /**
    * Open 3-D Secure challenges, by page session and checkout: each payment
    * answering a 3-D Secure code adds one. The agent completes 3-D Secure; a
-   * details call there carries the final code, which closes one. Counted, as
-   * merchant routes on one origin share a checkout key.
+   * details call there carries the final code, which closes its admitted
+   * challenge. Merchant routes on one origin share a checkout key.
    */
-  private readonly adyenAwaiting3ds = new Map<string, Map<string, number>>();
+  private readonly adyenAwaiting3ds = new Map<
+    string,
+    Map<string, Set<symbol>>
+  >();
   /** Answers being read, handed to the page and reported; detach() waits for them. */
   private readonly answers = new Set<Promise<void>>();
   /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
@@ -829,12 +832,16 @@ class PaymentInterceptor {
         return this.reencryptAdyen(entry, request, read.body);
       }
       const checkout = adyenDetailsCheckout(request.method, request.url);
-      return checkout !== undefined &&
-        !this.closed &&
-        (this.adyenAwaiting3ds
-          .get(this.pageOf(entry.sessionId))
-          ?.get(checkout) ?? 0) > 0
-        ? { action: "awaitAdyenResult" }
+      const challenge =
+        checkout === undefined
+          ? undefined
+          : this.adyenAwaiting3ds
+              .get(this.pageOf(entry.sessionId))
+              ?.get(checkout)
+              ?.values()
+              .next().value;
+      return challenge !== undefined && !this.closed
+        ? { action: "awaitAdyenResult", challenge }
         : { action: "continue" };
     }
     if (this.closed) return { action: "fail", reason: "detached" };
@@ -1098,9 +1105,9 @@ class PaymentInterceptor {
     const checkout = adyenCheckout(new URL(url));
     // Another answer read meanwhile may have started this tab's challenges.
     const awaiting = this.adyenAwaiting3ds.get(page) ?? before;
-    const open = awaiting?.get(checkout) ?? 0;
-    // Another details answer already closed every challenge on this checkout.
-    if (watch.details && open === 0) {
+    const open = awaiting?.get(checkout);
+    // Another details answer may already have closed this admitted challenge.
+    if (watch.details && !open?.has(watch.details)) {
       await continueRequest(this.connection, sessionId, requestId);
       return;
     }
@@ -1115,12 +1122,15 @@ class PaymentInterceptor {
       if (!watch.details && !this.closed && this.sessions.has(page)) {
         this.adyenAwaiting3ds.set(
           page,
-          (awaiting ?? new Map<string, number>()).set(checkout, open + 1),
+          (awaiting ?? new Map<string, Set<symbol>>()).set(
+            checkout,
+            (open ?? new Set<symbol>()).add(Symbol("adyen challenge")),
+          ),
         );
       }
     } else if (watch.details && result.resultCode !== "unknown") {
-      if (open > 1) awaiting?.set(checkout, open - 1);
-      else awaiting?.delete(checkout);
+      open?.delete(watch.details);
+      if (open?.size === 0) awaiting?.delete(checkout);
     }
     await continueRequest(this.connection, sessionId, requestId);
     const reported = await this.reportAdyenResult(result);
@@ -1405,7 +1415,7 @@ class PaymentInterceptor {
         url,
         sessionId: entry.sessionId,
         ...(entry.networkId ? { networkId: entry.networkId } : {}),
-        details: true,
+        details: decision.challenge,
       });
       const continued = await this.settle(entry, "continueForAnswer");
       if (!continued) this.adyenResults.delete(entry.key);
