@@ -225,7 +225,14 @@ async function settle(stub: CdpStub, requestId: string): Promise<CdpCommand> {
   return settledWith(stub, requestId)!;
 }
 
-const SECRETS = [CLIENT_KEY, "FRAMEKEY", "PLACEHOLDER_", "eyJ", "s1;"];
+const SECRETS = [
+  CLIENT_KEY,
+  "FRAMEKEY",
+  "PLACEHOLDER_",
+  "eyJ",
+  "s1;",
+  "shop_session",
+];
 
 function assertNothingSecret(harness: Harness): void {
   const text = JSON.stringify(harness.events) + harness.warnings.join("\n");
@@ -279,10 +286,14 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       },
       idempotencyKey: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
+    // The merchant's own endpoint gets the page's session cookie and CSRF
+    // header, under the same rules as any relayed request.
     expect({ ...sent.request.headers }).toStrictEqual({
       accept: "application/json",
       "content-type": "application/json",
       origin: PAGE_ORIGIN,
+      cookie: "shop_session=abc",
+      "x-csrf-token": "t1",
     });
 
     expect(settled.sessionId).toBe("page-1");
@@ -327,6 +338,27 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       type: "relayed",
       url: "https://checkoutshopper-test.adyen.com",
       status: 200,
+    });
+    assertNothingSecret(harness);
+  });
+
+  it("never sends merchant cookies or CSRF headers to Adyen's sessions endpoint", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    pause(harness.stub, "req-sessions-cookie", {
+      ...SESSIONS,
+      headers: {
+        Accept: "application/json",
+        Origin: PAGE_ORIGIN,
+        Cookie: "shop_session=abc",
+        "X-Csrf-Token": "t1",
+      },
+    });
+    await settle(harness.stub, "req-sessions-cookie");
+
+    expect({ ...harness.relayCalls[0]!.request.headers }).toStrictEqual({
+      accept: "application/json",
+      "content-type": "application/json",
+      origin: PAGE_ORIGIN,
     });
     assertNothingSecret(harness);
   });

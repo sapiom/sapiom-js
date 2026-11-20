@@ -783,7 +783,11 @@ class PaymentInterceptor {
         return { action: "fail", reason: "adyen_client_key" };
       }
       route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
-      forwarded = adyenHeader;
+      // The merchant's own endpoint may need the page's session cookie or a
+      // CSRF header; Adyen's endpoints must never see them.
+      forwarded = isPageOrigin(request.url, pageOrigin)
+        ? genericHeader
+        : adyenHeader;
     } else if (this.options.profileId) {
       route = { profileId: this.options.profileId };
     } else {
@@ -1564,6 +1568,14 @@ const genericHeader = (key: string) =>
   !key.startsWith("sec-fetch-") &&
   !key.startsWith("sec-ch-") &&
   !key.startsWith(":");
+
+function isPageOrigin(url: string, pageOrigin: string): boolean {
+  try {
+    return new URL(url).origin === pageOrigin;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The headers relayed with a paused request, or `undefined` when the relay
