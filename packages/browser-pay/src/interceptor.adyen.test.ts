@@ -90,6 +90,8 @@ interface Harness {
 
 async function arm(options: {
   frames?: { sessionId: string; url: string }[];
+  recoveredFrames?: { sessionId: string; url: string; pageSessionId: string }[];
+  existingPages?: number;
   answer?: (request: RelayRequest) => Promise<RelayResponse>;
   profileId?: string;
   /** Answer bodies the browser read for requests paused at the Response stage. */
@@ -102,13 +104,64 @@ async function arm(options: {
   observed?: Partial<Record<BlobField, string>>;
 }): Promise<Harness> {
   const stub = await startCdpStub((command) => {
+    if (command.method === "Target.getTargets" && options.recoveredFrames) {
+      for (let index = 1; index <= (options.existingPages ?? 1); index++) {
+        stub.emit({
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: `page-${index}`,
+            waitingForDebugger: true,
+            targetInfo: {
+              targetId: `target-page-${index}`,
+              type: "page",
+              url: `${PAGE_ORIGIN}/checkout`,
+            },
+          },
+        });
+      }
+      return {
+        targetInfos: options.recoveredFrames.map((frame) => ({
+          targetId: `target-${frame.sessionId}`,
+          type: "iframe",
+          url: frame.url,
+        })),
+      };
+    }
+    if (command.method === "Target.attachToTarget" && options.recoveredFrames) {
+      const frame = options.recoveredFrames.find(
+        (frame) => `target-${frame.sessionId}` === command.params.targetId,
+      );
+      return frame ? { sessionId: frame.sessionId } : undefined;
+    }
+    if (command.method === "Page.getFrameTree" && options.recoveredFrames) {
+      return {
+        frameTree: {
+          frame: { id: `root-${command.sessionId}` },
+          childFrames: [
+            {
+              frame: { id: `nested-${command.sessionId}` },
+              childFrames: options.recoveredFrames
+                .filter((frame) => frame.pageSessionId === command.sessionId)
+                .map((frame) => ({
+                  frame: { id: `target-${frame.sessionId}` },
+                })),
+            },
+          ],
+        },
+      };
+    }
     if (command.method === "Fetch.getResponseBody") {
       const body =
         options.responseBodies?.[command.params.requestId as string] ?? "";
       return { body, base64Encoded: false };
     }
     if (command.method !== "Runtime.evaluate") return undefined;
-    if (command.params.expression === "location.origin") {
+    if (
+      command.params.expression === "location.origin" ||
+      (options.recoveredFrames &&
+        command.params.expression ===
+          "location.ancestorOrigins[location.ancestorOrigins.length - 1]")
+    ) {
       return { result: { type: "string", value: PAGE_ORIGIN } };
     }
     return undefined;
@@ -156,18 +209,20 @@ async function arm(options: {
     resultCalls,
     detach: () => handle.detach(),
   };
-  stub.emit({
-    method: "Target.attachedToTarget",
-    params: {
-      sessionId: "page-1",
-      waitingForDebugger: true,
-      targetInfo: {
-        targetId: "target-page",
-        type: "page",
-        url: `${PAGE_ORIGIN}/checkout`,
+  if (!options.recoveredFrames) {
+    stub.emit({
+      method: "Target.attachedToTarget",
+      params: {
+        sessionId: "page-1",
+        waitingForDebugger: true,
+        targetInfo: {
+          targetId: "target-page",
+          type: "page",
+          url: `${PAGE_ORIGIN}/checkout`,
+        },
       },
-    },
-  });
+    });
+  }
   for (const frame of options.frames ?? []) {
     stub.emit({
       method: "Target.attachedToTarget",
@@ -183,7 +238,10 @@ async function arm(options: {
       },
     });
   }
-  const sessions = 1 + (options.frames?.length ?? 0);
+  const sessions =
+    (options.existingPages ?? 1) +
+    (options.frames?.length ?? 0) +
+    (options.recoveredFrames?.length ?? 0);
   await waitFor(
     () => count(stub.commands, "Fetch.enable") === sessions,
     "Fetch.enable on every session",
@@ -225,10 +283,11 @@ function pause(
     method?: string;
     headers?: Record<string, string>;
   },
+  sessionId = "page-1",
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
-    sessionId: "page-1",
+    sessionId,
     params: {
       requestId,
       request: {
@@ -768,10 +827,15 @@ function answersByPath(
   };
 }
 
-function answerPause(stub: CdpStub, requestId: string, url: string): void {
+function answerPause(
+  stub: CdpStub,
+  requestId: string,
+  url: string,
+  sessionId = "page-1",
+): void {
   stub.emit({
     method: "Fetch.requestPaused",
-    sessionId: "page-1",
+    sessionId,
     params: {
       requestId,
       request: { url, method: "POST", headers: {} },
@@ -1155,6 +1219,73 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
       });
       expect(harness.relayCalls).toHaveLength(3);
       expect(harness.resultCalls).toEqual([]);
+    },
+  );
+
+  it.each([1, 2])(
+    "shares recovered-frame details watches with owning tab among %i pages",
+    async (pages) => {
+      harness = await arm({
+        existingPages: pages,
+        recoveredFrames: [
+          {
+            sessionId: "frame-pay",
+            url: frameUrl(CLIENT_KEY),
+            pageSessionId: "page-1",
+          },
+          {
+            sessionId: "frame-details",
+            url: `${PAGE_ORIGIN}/details-frame`,
+            pageSessionId: "page-1",
+          },
+          ...(pages > 1
+            ? [
+                {
+                  sessionId: "frame-other",
+                  url: `${PAGE_ORIGIN}/other-frame`,
+                  pageSessionId: "page-2",
+                },
+              ]
+            : []),
+        ],
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: { final: JSON.stringify({ resultCode: "Authorised" }) },
+      });
+      pause(harness.stub, "pay", ADVANCED, "frame-pay");
+      expect((await settle(harness.stub, "pay")).method).toBe(
+        "Fetch.fulfillRequest",
+      );
+      if (pages > 1) {
+        pause(
+          harness.stub,
+          "other",
+          { url: MERCHANT_DETAILS, body: DETAILS_BODY },
+          "frame-other",
+        );
+        expect((await settle(harness.stub, "other")).params).toEqual({
+          requestId: "other",
+        });
+      }
+      pause(
+        harness.stub,
+        "final",
+        { url: MERCHANT_DETAILS, body: DETAILS_BODY },
+        "frame-details",
+      );
+      expect((await settle(harness.stub, "final")).params).toStrictEqual({
+        requestId: "final",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "final", MERCHANT_DETAILS, "frame-details");
+      await waitFor(
+        () => harness!.resultCalls.length === 1,
+        "cross-frame final report",
+      );
+      expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+      expect(harness.relayCalls).toHaveLength(1);
+      expect(
+        harness.events.filter((event) => event.type === "adyen_result"),
+      ).toHaveLength(1);
     },
   );
 

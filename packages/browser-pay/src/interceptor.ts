@@ -714,8 +714,33 @@ class PaymentInterceptor {
       this.connection.send("Target.getTargets"),
       "Target.getTargets",
     );
-    for (const info of parseTargetInfos(listed)) {
-      if (info.type !== "iframe") continue;
+    const frames = parseTargetInfos(listed).filter(
+      (info) => info.type === "iframe" && !this.byTarget.has(info.targetId),
+    );
+    const parents = new Map<string, string>();
+    const pages = [...this.sessions.values()].filter(
+      (session) => session.type === "page",
+    );
+    // Root-level recovery loses the attaching parent's session. CDP frame ids
+    // identify iframe targets in the owning page's tree, including nested ones.
+    if (frames.length > 0 && pages.length > 1) {
+      for (const page of pages) {
+        const tree = await this.swallowStep(
+          this.connection.send("Page.getFrameTree", {}, page.sessionId),
+          "Page.getFrameTree",
+          page,
+        );
+        for (const frame of frames) {
+          if (
+            isRecord(tree) &&
+            frameTreeContains(tree.frameTree, frame.targetId)
+          ) {
+            parents.set(frame.targetId, page.sessionId);
+          }
+        }
+      }
+    }
+    for (const info of frames) {
       if (this.byTarget.has(info.targetId)) continue;
       const attached = await this.swallowStep(
         this.connection.send("Target.attachToTarget", {
@@ -727,12 +752,16 @@ class PaymentInterceptor {
       );
       const sessionId = readAttachedSessionId(attached);
       if (!sessionId || this.sessions.has(sessionId)) continue;
+      const parentSessionId =
+        parents.get(info.targetId) ??
+        (pages.length === 1 ? pages[0].sessionId : undefined);
       const session = this.trackSession({
         sessionId,
         targetId: info.targetId,
         type: "iframe",
         url: info.url,
         fetchEnabled: false,
+        ...(parentSessionId ? { parentSessionId } : {}),
       });
       await this.autoAttachChildren(sessionId);
       await this.enableSession(session.sessionId, false);
@@ -1016,13 +1045,7 @@ class PaymentInterceptor {
 
   /** The tab a session belongs to: its frames share it, other tabs do not. */
   private pageOf(sessionId: string): string {
-    let page = sessionId;
-    for (;;) {
-      const parent = this.sessions.get(page)?.parentSessionId;
-      if (parent === undefined || !this.sessions.has(parent)) break;
-      page = parent;
-    }
-    return page;
+    return topPageSession(this.sessions, sessionId) ?? sessionId;
   }
 
   /** False when the backend did not take the result. Never throws. */
@@ -1580,6 +1603,15 @@ async function originFromSession(
   } catch {
     return undefined;
   }
+}
+
+function frameTreeContains(tree: unknown, targetId: string): boolean {
+  if (!isRecord(tree)) return false;
+  if (isRecord(tree.frame) && tree.frame.id === targetId) return true;
+  return (
+    Array.isArray(tree.childFrames) &&
+    tree.childFrames.some((child) => frameTreeContains(child, targetId))
+  );
 }
 
 function topPageSession(
