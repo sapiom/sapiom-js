@@ -121,6 +121,47 @@ describe("httpPaymentRelay", () => {
     }
   });
 
+  it("POSTs an adyen-checkout request with its client key to the same relay path", async () => {
+    let seen: { url?: string; body?: string } = {};
+    const server = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        seen = { url: req.url, body: Buffer.concat(chunks).toString("utf8") };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(RELAYED));
+      });
+    });
+    const adyen: RelayRequest = {
+      injectionRef: "inj_fixture_adyen",
+      profileId: "adyen-checkout",
+      adyen: { clientKey: "test_FIXTUREKEY1" },
+      pageOrigin: "https://shop.example",
+      request: {
+        method: "POST",
+        url: "https://shop.example/api/payments",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://shop.example",
+        },
+        body: '{"paymentMethod":{"encryptedCardNumber":"eyJ.placeholder"}}',
+      },
+      idempotencyKey: "b".repeat(64),
+    };
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_adyen",
+      });
+      await expect(relay.relay(adyen)).resolves.toEqual(RELAYED);
+      expect(seen.url).toBe("/v1/transactions/tx_fixture_adyen/payment/relay");
+      expect(JSON.parse(seen.body ?? "")).toEqual(adyen);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("returns a relayed response, a preserved refusal reason, and outcome unknown", async () => {
     const payloads = [
       RELAYED,

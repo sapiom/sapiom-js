@@ -1,3 +1,5 @@
+import { isRecord } from "./guards.js";
+
 export interface HeldPlaceholder {
   number: string;
   injectionRef: string;
@@ -111,4 +113,81 @@ export function redactHeld(value: string, number: string): string {
   const digits = placeholderDigits(number);
   if (!digits) return value.split(number).join("••••");
   return maskHeldSpans(value, digits);
+}
+
+const ADYEN_CLIENT_KEY = /^(test|live)_[A-Za-z0-9]{1,64}$/;
+const ADYEN_KEY_HOST_ENV = new Map([
+  ["checkoutshopper-test.adyen.com", "test"],
+  ...["live", "live-us", "live-au", "live-apse", "live-in"].map(
+    (region) => [`checkoutshopper-${region}.adyen.com`, "live"] as const,
+  ),
+]);
+
+/** Origins of Adyen's checkoutshopper hosts, which serve the secured-field iframes. */
+export const ADYEN_CHECKOUT_ORIGINS = [...ADYEN_KEY_HOST_ENV.keys()].map(
+  (host) => `https://${host}`,
+);
+
+/** An Adyen client key: `test_` or `live_` and up to 64 letters and digits. */
+function isAdyenClientKey(value: unknown): value is string {
+  return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
+}
+
+/**
+ * The client keys a request to Adyen's own checkoutshopper host names: its
+ * `clientKey` query, a `/securedfields/{key}/` or `/clientKeys/{key}` path,
+ * or its `x-client-key` header. Only https to exactly
+ * `checkoutshopper-test.adyen.com` or a live host
+ * (`checkoutshopper-live[-us|-au|-apse|-in].adyen.com`) counts: `test_`
+ * keys only from the test host, `live_` keys only from a live one.
+ */
+export function adyenClientKeysInRequest(
+  url: string,
+  clientKeyHeader = "",
+): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  const env = ADYEN_KEY_HOST_ENV.get(parsed.host);
+  if (parsed.protocol !== "https:" || !env) return [];
+  const candidates = [
+    ...parsed.searchParams.getAll("clientKey"),
+    /\/securedfields\/([^/]+)\//.exec(parsed.pathname)?.[1],
+    /\/clientKeys\/([^/]+)/.exec(parsed.pathname)?.[1],
+    clientKeyHeader,
+  ];
+  return candidates.filter(
+    (key): key is string => isAdyenClientKey(key) && key.startsWith(`${env}_`),
+  );
+}
+
+/**
+ * True when the body is JSON whose top-level `paymentMethod.encryptedCardNumber`
+ * is a non-empty string: an Adyen secured-fields payment, on the merchant's
+ * own `/payments` call or on Adyen's `/sessions/{id}/payments`.
+ */
+export function isAdyenSecuredFieldsPayment(body: string): boolean {
+  return adyenPaymentMethod(parseJson(body)) !== undefined;
+}
+
+function parseJson(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+}
+
+function adyenPaymentMethod(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !isRecord(value.paymentMethod)) return undefined;
+  const method = value.paymentMethod;
+  return typeof method.encryptedCardNumber === "string" &&
+    method.encryptedCardNumber.length > 0
+    ? method
+    : undefined;
 }

@@ -1,10 +1,22 @@
+import {
+  ADYEN_BLOB_BINDING,
+  ADYEN_WATCH_WORLD,
+  adyenBlobWatchScript,
+  hashObservedBlob,
+  placeholderBlobHashes,
+  type AdyenEncryptedField,
+} from "./adyen-blobs.js";
 import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
   paymentIdempotencyKey,
   type RelayedHttpResponse,
+  type RelayRequest,
   type RelayResponse,
 } from "./contract.js";
 import {
+  ADYEN_CHECKOUT_ORIGINS,
+  adyenClientKeysInRequest,
+  isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
   type HeldPlaceholder,
@@ -63,7 +75,10 @@ export type FailureReason =
   | "timeout"
   | "network"
   | "response_credential"
-  | "headers_unrelayable";
+  | "headers_unrelayable"
+  | "destination_not_allowed"
+  | "adyen_client_key"
+  | "adyen_placeholder_unobserved";
 
 export const KNOWN_REFUSAL_REASONS = [
   "unknown_injection",
@@ -309,7 +324,7 @@ interface Flight {
 
 type HeldRead =
   | { kind: "unreadable" }
-  | { kind: "miss" }
+  | { kind: "miss"; body: string }
   | { kind: "held"; body: string };
 
 type Decision =
@@ -346,6 +361,12 @@ class PaymentInterceptor {
   private readonly unknownKeys = new Set<string>();
   private readonly loggedRefusals = new Set<string>();
   private readonly pendingArms = new Set<Promise<void>>();
+  /** Every client key Adyen's own requests named: frame URLs and paused requests. */
+  private readonly adyenClientKeys = new Set<string>();
+  /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
+  private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
+  /** Per session, the ids of execution contexts in the watch world. */
+  private readonly watchContexts = new Map<string, Set<number>>();
   private readonly timeoutMs: number;
   private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
@@ -398,6 +419,12 @@ class PaymentInterceptor {
       this.onDetached(event);
     else if (event.method === "Target.targetInfoChanged") {
       this.onTargetInfoChanged(event);
+    } else if (event.method === "Network.requestWillBeSent") {
+      this.onRequestWillBeSent(event);
+    } else if (event.method === "Runtime.bindingCalled") {
+      this.onBindingCalled(event);
+    } else if (event.method.startsWith("Runtime.executionContext")) {
+      this.onExecutionContextChange(event);
     }
   }
 
@@ -443,6 +470,7 @@ class PaymentInterceptor {
     if (!session) return;
     this.sessions.delete(sessionId);
     this.enabledSessions.delete(sessionId);
+    this.watchContexts.delete(sessionId);
     if (this.byTarget.get(session.targetId) === session) {
       this.byTarget.delete(session.targetId);
     }
@@ -454,6 +482,7 @@ class PaymentInterceptor {
     const session = this.byTarget.get(info.targetId);
     if (!session) return;
     session.url = info.url;
+    this.noteAdyenClientKeys(info.url);
     if (!shouldArm(session)) {
       this.disarm(session);
       return;
@@ -489,7 +518,142 @@ class PaymentInterceptor {
     // before we are listening.
     const armed = await this.armOrClose(session);
     if (!armed) return;
+    await this.watchAdyenBlobs(session, waitingForDebugger);
     await this.resumeIfWaiting(sessionId, waitingForDebugger);
+  }
+
+  /**
+   * Installs the passive secured-fields listener before the target runs, and
+   * in the current document when the target was already running. A target
+   * where this fails cannot supply the hashes, so its Adyen Pay fails closed.
+   */
+  private async watchAdyenBlobs(
+    session: Session,
+    waitingForDebugger: boolean,
+  ): Promise<void> {
+    const { sessionId } = session;
+    const script = adyenBlobWatchScript();
+    // Runtime.enable reports existing documents' main-world contexts,
+    // including same-target frames that Page's new-document hook cannot reach
+    // retroactively. Each gives the frame to open a watch world in.
+    const contexts = new Map<number, string>();
+    const stopCollecting = this.connection.onEvent((event) => {
+      if (event.sessionId !== sessionId || !isRecord(event.params)) return;
+      if (event.method === "Runtime.executionContextCreated") {
+        const context = event.params.context;
+        if (
+          isRecord(context) &&
+          typeof context.id === "number" &&
+          isRecord(context.auxData) &&
+          context.auxData.isDefault === true &&
+          typeof context.auxData.frameId === "string"
+        ) {
+          contexts.set(context.id, context.auxData.frameId);
+        }
+      } else if (event.method === "Runtime.executionContextDestroyed") {
+        if (typeof event.params.executionContextId === "number") {
+          contexts.delete(event.params.executionContextId);
+        }
+      } else if (event.method === "Runtime.executionContextsCleared") {
+        contexts.clear();
+      }
+    });
+    try {
+      // Chromium runs new-document scripts only with Page enabled, and installs
+      // a binding in new contexts and reports its calls only with Runtime
+      // enabled (checked on headless Chromium; either alone observes nothing).
+      for (const method of ["Page.enable", "Runtime.enable"]) {
+        await this.swallowStep(
+          this.connection.send(method, {}, sessionId),
+          method,
+          session,
+        );
+      }
+      await this.swallowStep(
+        this.connection.send(
+          "Runtime.addBinding",
+          { name: ADYEN_BLOB_BINDING, executionContextName: ADYEN_WATCH_WORLD },
+          sessionId,
+        ),
+        "Runtime.addBinding",
+        session,
+      );
+      await this.swallowStep(
+        this.connection.send(
+          "Page.addScriptToEvaluateOnNewDocument",
+          { source: script, worldName: ADYEN_WATCH_WORLD },
+          sessionId,
+        ),
+        "Page.addScriptToEvaluateOnNewDocument",
+        session,
+      );
+      const frameIds = new Set(contexts.values());
+      // A target's id is its root frame's id.
+      if (frameIds.size === 0 && !waitingForDebugger) {
+        frameIds.add(session.targetId);
+      }
+      for (const frameId of frameIds) {
+        const world = await this.swallowStep(
+          this.connection.send(
+            "Page.createIsolatedWorld",
+            { frameId, worldName: ADYEN_WATCH_WORLD },
+            sessionId,
+          ),
+          "Page.createIsolatedWorld",
+          session,
+        );
+        if (!isRecord(world) || typeof world.executionContextId !== "number") {
+          continue;
+        }
+        const contextId = world.executionContextId;
+        await this.swallowStep(
+          this.connection.send(
+            "Runtime.evaluate",
+            { expression: script, contextId, returnByValue: true },
+            sessionId,
+          ),
+          "Runtime.evaluate",
+          session,
+        );
+      }
+    } finally {
+      stopCollecting();
+    }
+  }
+
+  /** Tracks the watch world's contexts, the only ones the binding is in. */
+  private onExecutionContextChange(event: CdpEvent): void {
+    const sessionId = event.sessionId;
+    if (!sessionId || !this.sessions.has(sessionId)) return;
+    if (!isRecord(event.params)) return;
+    if (event.method === "Runtime.executionContextCreated") {
+      const context = event.params.context;
+      if (
+        !isRecord(context) ||
+        typeof context.id !== "number" ||
+        context.name !== ADYEN_WATCH_WORLD
+      ) {
+        return;
+      }
+      const ids = this.watchContexts.get(sessionId) ?? new Set<number>();
+      ids.add(context.id);
+      this.watchContexts.set(sessionId, ids);
+    } else if (event.method === "Runtime.executionContextDestroyed") {
+      const id = event.params.executionContextId;
+      if (typeof id === "number") this.watchContexts.get(sessionId)?.delete(id);
+    } else if (event.method === "Runtime.executionContextsCleared") {
+      this.watchContexts.delete(sessionId);
+    }
+  }
+
+  private onBindingCalled(event: CdpEvent): void {
+    if (!isRecord(event.params)) return;
+    if (event.params.name !== ADYEN_BLOB_BINDING) return;
+    const contextId = event.params.executionContextId;
+    if (typeof contextId !== "number") return;
+    if (!this.watchContexts.get(event.sessionId ?? "")?.has(contextId)) return;
+    const observed = hashObservedBlob(event.params.payload);
+    if (observed) this.adyenBlobHashes.set(observed.field, observed.hash);
   }
 
   private async armOrClose(session: Session): Promise<boolean> {
@@ -614,6 +778,7 @@ class PaymentInterceptor {
   }
 
   private trackSession(session: Session): Session {
+    this.noteAdyenClientKeys(session.url);
     this.sessions.set(session.sessionId, session);
     this.byTarget.set(session.targetId, session);
     return session;
@@ -633,6 +798,7 @@ class PaymentInterceptor {
       });
       return;
     }
+    this.noteAdyenRequest(request);
     const key = inflightKey(sessionId, requestId);
     if (this.inflight.has(key)) return;
     const entry: Inflight = {
@@ -677,7 +843,9 @@ class PaymentInterceptor {
     if (read.kind === "unreadable") {
       return { action: "fail", reason: "unreadable_body" };
     }
-    if (read.kind === "miss") return { action: "continue" };
+    const adyen =
+      read.kind === "miss" && isAdyenSecuredFieldsPayment(read.body);
+    if (read.kind === "miss" && !adyen) return { action: "continue" };
     if (this.closed) return { action: "fail", reason: "detached" };
     const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
     this.emit({
@@ -697,6 +865,46 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
+    let route: Pick<RelayRequest, "profileId" | "adyen">;
+    let forwarded = this.options.profileId ? profileHeader : genericHeader;
+    if (adyen) {
+      const clientKey = this.adyenClientKey();
+      if (!clientKey) {
+        this.logger.warn(
+          this.adyenClientKeys.size > 1
+            ? "two different adyen client keys seen in adyen requests"
+            : "adyen client key not seen in adyen requests",
+        );
+        return { action: "fail", reason: "adyen_client_key" };
+      }
+      if (
+        request.method.toUpperCase() !== "POST" ||
+        (!isPageOrigin(request.url, pageOrigin) &&
+          !isAdyenCheckoutDestination(request.url, clientKey))
+      ) {
+        return { action: "fail", reason: "destination_not_allowed" };
+      }
+      const blobs = placeholderBlobHashes(this.adyenBlobHashes);
+      if ("missing" in blobs) {
+        this.logger.warn("adyen placeholder blobs not observed", {
+          missing: blobs.missing.join(","),
+        });
+        return { action: "fail", reason: "adyen_placeholder_unobserved" };
+      }
+      route = {
+        profileId: ADYEN_CHECKOUT_PROFILE,
+        adyen: { clientKey, placeholderBlobHashes: blobs.hashes },
+      };
+      // The merchant's own endpoint may need the page's session cookie or a
+      // CSRF header; Adyen's endpoints must never see them.
+      forwarded = isPageOrigin(request.url, pageOrigin)
+        ? genericHeader
+        : adyenHeader;
+    } else if (this.options.profileId) {
+      route = { profileId: this.options.profileId };
+    } else {
+      route = {};
+    }
     const idempotencyKey = paymentIdempotencyKey(
       request.method,
       request.url,
@@ -705,36 +913,54 @@ class PaymentInterceptor {
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
-    const headers = forwardedHeaders(
-      request.headers,
-      this.options.profileId ? profileHeader : genericHeader,
-    );
+    const headers = forwardedHeaders(request.headers, forwarded);
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
-    return this.awaitRelay(
-      request,
-      headers,
-      read.body,
+    // Adyen checks the Origin a client key is allowed for; CDP can omit it.
+    if (adyen) headers.origin ??= pageOrigin;
+    return this.awaitRelay({
+      injectionRef: this.options.placeholder.injectionRef,
+      ...route,
       pageOrigin,
+      request: {
+        method: request.method,
+        url: request.url,
+        headers,
+        body: read.body,
+      },
       idempotencyKey,
+    });
+  }
+
+  /** Another CDP client can fulfill a request before it pauses here; Network still sees it. */
+  private onRequestWillBeSent(event: CdpEvent): void {
+    const parsed = parsePaused(event.params);
+    if (!parsed || !this.sessions.has(event.sessionId ?? "")) return;
+    this.noteAdyenRequest(parsed.request);
+  }
+
+  private noteAdyenRequest(request: PausedRequest): void {
+    this.noteAdyenClientKeys(
+      request.url,
+      headerValue(request.headers, "x-client-key"),
     );
   }
 
-  private async awaitRelay(
-    request: PausedRequest,
-    headers: Record<string, string>,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
-  ): Promise<Decision> {
+  private noteAdyenClientKeys(url: string, clientKeyHeader?: string): void {
+    for (const key of adyenClientKeysInRequest(url, clientKeyHeader)) {
+      this.adyenClientKeys.add(key);
+    }
+  }
+
+  /** Two different keys give none: the card must not be encrypted to a guess. */
+  private adyenClientKey(): string | undefined {
+    const keys = this.adyenClientKeys;
+    return keys.size === 1 ? [...keys][0] : undefined;
+  }
+
+  private async awaitRelay(relayRequest: RelayRequest): Promise<Decision> {
+    const { idempotencyKey } = relayRequest;
     const flight = this.relayOnce(idempotencyKey, (signal) =>
-      this.pollRelay(
-        request,
-        headers,
-        body,
-        pageOrigin,
-        idempotencyKey,
-        signal,
-      ),
+      this.pollRelay(relayRequest, signal),
     );
     let response: RelayResponse;
     try {
@@ -752,13 +978,10 @@ class PaymentInterceptor {
   }
 
   private async pollRelay(
-    request: PausedRequest,
-    headers: Record<string, string>,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
+    relayRequest: RelayRequest,
     signal: AbortSignal,
   ): Promise<RelayResponse> {
+    const { idempotencyKey } = relayRequest;
     let poll = 0;
     for (;;) {
       if (signal.aborted || this.closed) throw abortError(signal);
@@ -766,14 +989,7 @@ class PaymentInterceptor {
         return { outcome: "unknown" };
       }
       try {
-        const response = await this.postAttempt(
-          request,
-          headers,
-          body,
-          pageOrigin,
-          idempotencyKey,
-          signal,
-        );
+        const response = await this.postAttempt(relayRequest, signal);
         if (response.outcome === "unknown") {
           this.unknownKeys.add(idempotencyKey);
         }
@@ -789,11 +1005,7 @@ class PaymentInterceptor {
   }
 
   private async postAttempt(
-    request: PausedRequest,
-    headers: Record<string, string>,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
+    relayRequest: RelayRequest,
     signal: AbortSignal,
   ): Promise<RelayResponse> {
     const attempt = new AbortController();
@@ -809,21 +1021,9 @@ class PaymentInterceptor {
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort);
     try {
-      return await this.options.relay.relay(
-        {
-          injectionRef: this.options.placeholder.injectionRef,
-          ...(this.options.profileId && { profileId: this.options.profileId }),
-          pageOrigin,
-          request: {
-            method: request.method,
-            url: request.url,
-            headers,
-            body,
-          },
-          idempotencyKey,
-        },
-        { signal: attempt.signal },
-      );
+      return await this.options.relay.relay(relayRequest, {
+        signal: attempt.signal,
+      });
     } catch (error) {
       if (timedOut && !signal.aborted) throw new RelayTimeoutError();
       throw error;
@@ -840,14 +1040,14 @@ class PaymentInterceptor {
     const urlHeld = textHoldsPlaceholderNumber(request.url, this.number);
     if (urlHeld && this.closed) return { kind: "held", body: "" };
     if (postDataPlan(request) === "empty") {
-      return urlHeld ? { kind: "held", body: "" } : { kind: "miss" };
+      return urlHeld ? { kind: "held", body: "" } : { kind: "miss", body: "" };
     }
     const body = await readBody(this.connection, sessionId, request);
     if (body === undefined) return { kind: "unreadable" };
     if (urlHeld || textHoldsPlaceholderNumber(body, this.number)) {
       return { kind: "held", body };
     }
-    return { kind: "miss" };
+    return { kind: "miss", body };
   }
 
   private decisionForOutcome(
@@ -1040,6 +1240,12 @@ class PaymentInterceptor {
     }
   }
 }
+
+/**
+ * The relay profile for an Adyen secured-fields payment, whatever profile the
+ * attach names: the relay encrypts the real card to the page's client key.
+ */
+const ADYEN_CHECKOUT_PROFILE = "adyen-checkout";
 
 function inflightKey(sessionId: string, requestId: string): string {
   return `${sessionId}\n${requestId}`;
@@ -1283,11 +1489,43 @@ const ANALYTICS_COOKIE_PREFIXES = [
 ];
 
 const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
+const adyenHeader = (key: string) =>
+  key === "accept" || key === "content-type" || key === "origin";
 const genericHeader = (key: string) =>
   !UNFORWARDED_HEADERS.has(key) &&
   !key.startsWith("sec-fetch-") &&
   !key.startsWith("sec-ch-") &&
   !key.startsWith(":");
+
+function isPageOrigin(url: string, pageOrigin: string): boolean {
+  try {
+    return new URL(url).origin === pageOrigin;
+  } catch {
+    return false;
+  }
+}
+
+/** Keep sessions destinations aligned with the relay's adyen-checkout profile. */
+function isAdyenCheckoutDestination(url: string, clientKey: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const testHost = parsed.hostname === "checkoutshopper-test.adyen.com";
+    return (
+      parsed.protocol === "https:" &&
+      parsed.port === "" &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.hash &&
+      ADYEN_CHECKOUT_ORIGINS.includes(`https://${parsed.hostname}`) &&
+      testHost === clientKey.startsWith("test_") &&
+      /^\/checkoutshopper\/v\d+\/sessions\/[A-Za-z0-9_-]+\/payments$/.test(
+        parsed.pathname,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The headers relayed with a paused request, or `undefined` when the relay
