@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+
+import { ADYEN_BLOB_BINDING } from "./adyen-blobs";
 import type { RelayRequest, RelayResponse } from "./contract";
 import type { HeldPlaceholder } from "./detect";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
@@ -27,6 +30,16 @@ const PLACEHOLDER_BLOBS = {
   encryptedExpiryYear: "eyJ.PLACEHOLDER_YEAR_BLOB",
   encryptedSecurityCode: "eyJ.PLACEHOLDER_CVC_BLOB",
 };
+type BlobField = keyof typeof PLACEHOLDER_BLOBS;
+
+const sha256 = (value: string) =>
+  createHash("sha256").update(value, "utf8").digest("hex");
+const HASHES = Object.fromEntries(
+  Object.entries(PLACEHOLDER_BLOBS).map(([field, blob]) => [
+    field,
+    sha256(blob),
+  ]),
+) as Record<BlobField, string>;
 
 const ADVANCED = {
   url: "https://shop.example/api/payments",
@@ -73,6 +86,8 @@ async function arm(options: {
   frames?: { sessionId: string; url: string }[];
   answer?: (request: RelayRequest) => Promise<RelayResponse>;
   profileId?: string;
+  /** Blobs the page's secured fields posted; all four unless given. */
+  observed?: Partial<Record<BlobField, string>>;
 }): Promise<Harness> {
   const stub = await startCdpStub((command) => {
     if (command.method !== "Runtime.evaluate") return undefined;
@@ -142,7 +157,28 @@ async function arm(options: {
     () => count(stub.commands, "Fetch.enable") === sessions,
     "Fetch.enable on every session",
   );
+  observe(stub, options.observed ?? PLACEHOLDER_BLOBS);
   return harness;
+}
+
+/** What the page script reports for each secured-fields encryption message. */
+function observe(
+  stub: CdpStub,
+  blobs: Partial<Record<BlobField, string>>,
+  sessionId = "page-1",
+  name = ADYEN_BLOB_BINDING,
+): void {
+  for (const [field, blob] of Object.entries(blobs)) {
+    stub.emit({
+      method: "Runtime.bindingCalled",
+      sessionId,
+      params: {
+        name,
+        payload: JSON.stringify({ field, blob }),
+        executionContextId: 1,
+      },
+    });
+  }
 }
 
 function count(commands: CdpCommand[], method: string): number {
@@ -201,6 +237,7 @@ const SECRETS = [
   "eyJ",
   "s1;",
   "shop_session",
+  ...Object.values(HASHES),
 ];
 
 function assertNothingSecret(harness: Harness): void {
@@ -245,7 +282,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(sent).toStrictEqual({
       injectionRef: HELD.injectionRef,
       profileId: "adyen-checkout",
-      adyen: { clientKey: CLIENT_KEY },
+      adyen: { clientKey: CLIENT_KEY, placeholderBlobHashes: HASHES },
       pageOrigin: PAGE_ORIGIN,
       request: {
         method: "POST",
@@ -298,7 +335,10 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(settled.method).toBe("Fetch.fulfillRequest");
     const sent = harness.relayCalls[0]!;
     expect(sent.profileId).toBe("adyen-checkout");
-    expect(sent.adyen).toStrictEqual({ clientKey: CLIENT_KEY });
+    expect(sent.adyen).toStrictEqual({
+      clientKey: CLIENT_KEY,
+      placeholderBlobHashes: HASHES,
+    });
     expect(sent.request.url).toBe(SESSIONS.url);
     expect(sent.request.body).toBe(JSON.stringify(SESSIONS.body));
     expect(sent.request.headers.origin).toBe(PAGE_ORIGIN);
@@ -450,6 +490,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
 
       expect(harness.relayCalls[0]?.adyen).toStrictEqual({
         clientKey: CLIENT_KEY,
+        placeholderBlobHashes: HASHES,
       });
       assertNothingSecret(harness);
     },
@@ -570,6 +611,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
 
     expect(harness.relayCalls[0]?.adyen).toStrictEqual({
       clientKey: lowercase,
+      placeholderBlobHashes: HASHES,
     });
   });
 
@@ -582,5 +624,92 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     await waitFor(() => harness!.relayCalls.length === 1, "relay call");
     expect(harness.relayCalls[0]).not.toHaveProperty("profileId");
     expect(harness.relayCalls[0]).not.toHaveProperty("adyen");
+  });
+
+  it("installs the passive secured-fields listener on every armed session before it runs", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    for (const sessionId of ["page-1", "frame-number"]) {
+      const methods = harness.stub.commands
+        .filter((command) => command.sessionId === sessionId)
+        .map((command) => command.method);
+      const resumed = methods.indexOf("Runtime.runIfWaitingForDebugger");
+      expect(methods.indexOf("Runtime.addBinding")).toBeGreaterThan(-1);
+      expect(methods.indexOf("Runtime.addBinding")).toBeLessThan(resumed);
+      expect(
+        methods.indexOf("Page.addScriptToEvaluateOnNewDocument"),
+      ).toBeLessThan(resumed);
+    }
+    const binding = harness.stub.commands.find(
+      (command) => command.method === "Runtime.addBinding",
+    );
+    expect(binding?.params).toStrictEqual({ name: ADYEN_BLOB_BINDING });
+  });
+
+  it.each(Object.keys(PLACEHOLDER_BLOBS) as BlobField[])(
+    "fails the Pay locally, without asking the relay, when %s was never observed",
+    async (missing) => {
+      const observed: Partial<Record<BlobField, string>> = {
+        ...PLACEHOLDER_BLOBS,
+      };
+      delete observed[missing];
+      harness = await arm({ frames: KEY_FRAME, observed });
+      pause(harness.stub, "req-unobserved", ADVANCED);
+      const settled = await settle(harness.stub, "req-unobserved");
+
+      expect(settled.method).toBe("Fetch.failRequest");
+      expect(harness.relayCalls).toHaveLength(0);
+      await waitFor(() => harness!.events.length === 2, "two events");
+      expect(harness.events[1]).toStrictEqual({
+        type: "failed",
+        url: PAGE_ORIGIN,
+        reason: "adyen_placeholder_unobserved",
+      });
+      expect(harness.warnings).toStrictEqual([
+        JSON.stringify({
+          message: "adyen placeholder blobs not observed",
+          fields: { missing },
+        }),
+      ]);
+      assertNothingSecret(harness);
+    },
+  );
+
+  it("ignores binding calls under another name, from an unknown session, or with a bad shape", async () => {
+    harness = await arm({ frames: KEY_FRAME, observed: {} });
+    observe(harness.stub, PLACEHOLDER_BLOBS, "page-1", "otherBinding");
+    observe(harness.stub, PLACEHOLDER_BLOBS, "stranger");
+    for (const payload of [
+      "not json",
+      JSON.stringify({ field: "encryptedCardNumberX", blob: "eyJ.x" }),
+      JSON.stringify({ field: "encryptedCardNumber", blob: "" }),
+      JSON.stringify({ field: "encryptedCardNumber", blob: 7 }),
+    ]) {
+      harness.stub.emit({
+        method: "Runtime.bindingCalled",
+        sessionId: "page-1",
+        params: { name: ADYEN_BLOB_BINDING, payload, executionContextId: 1 },
+      });
+    }
+    pause(harness.stub, "req-ignored", ADVANCED);
+    const settled = await settle(harness.stub, "req-ignored");
+
+    expect(settled.method).toBe("Fetch.failRequest");
+    expect(harness.relayCalls).toHaveLength(0);
+  });
+
+  it("sends the hash of the latest blob per field, observed in any armed frame", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    observe(
+      harness.stub,
+      { encryptedSecurityCode: "eyJ.RETYPED_CVC_BLOB" },
+      "frame-number",
+    );
+    pause(harness.stub, "req-latest", ADVANCED);
+    await settle(harness.stub, "req-latest");
+
+    expect(harness.relayCalls[0]?.adyen?.placeholderBlobHashes).toStrictEqual({
+      ...HASHES,
+      encryptedSecurityCode: sha256("eyJ.RETYPED_CVC_BLOB"),
+    });
   });
 });

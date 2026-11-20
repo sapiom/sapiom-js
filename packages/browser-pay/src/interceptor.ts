@@ -1,3 +1,10 @@
+import {
+  ADYEN_BLOB_BINDING,
+  adyenBlobWatchScript,
+  hashObservedBlob,
+  placeholderBlobHashes,
+  type AdyenEncryptedField,
+} from "./adyen-blobs.js";
 import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
   paymentIdempotencyKey,
@@ -67,7 +74,8 @@ export type FailureReason =
   | "network"
   | "response_credential"
   | "headers_unrelayable"
-  | "adyen_client_key";
+  | "adyen_client_key"
+  | "adyen_placeholder_unobserved";
 
 export const KNOWN_REFUSAL_REASONS = [
   "unknown_injection",
@@ -352,6 +360,8 @@ class PaymentInterceptor {
   private readonly pendingArms = new Set<Promise<void>>();
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
+  /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
+  private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
   private readonly timeoutMs: number;
   private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
@@ -406,6 +416,8 @@ class PaymentInterceptor {
       this.onTargetInfoChanged(event);
     } else if (event.method === "Network.requestWillBeSent") {
       this.onRequestWillBeSent(event);
+    } else if (event.method === "Runtime.bindingCalled") {
+      this.onBindingCalled(event);
     }
   }
 
@@ -498,7 +510,67 @@ class PaymentInterceptor {
     // before we are listening.
     const armed = await this.armOrClose(session);
     if (!armed) return;
+    await this.watchAdyenBlobs(session, waitingForDebugger);
     await this.resumeIfWaiting(sessionId, waitingForDebugger);
+  }
+
+  /**
+   * Installs the passive secured-fields listener before the target runs, and
+   * in the current document when the target was already running. A target
+   * where this fails cannot supply the hashes, so its Adyen Pay fails closed.
+   */
+  private async watchAdyenBlobs(
+    session: Session,
+    waitingForDebugger: boolean,
+  ): Promise<void> {
+    const { sessionId } = session;
+    const script = adyenBlobWatchScript();
+    // Chromium runs new-document scripts only with Page enabled, and installs
+    // a binding in new contexts and reports its calls only with Runtime
+    // enabled (checked on headless Chromium; either alone observes nothing).
+    for (const method of ["Page.enable", "Runtime.enable"]) {
+      await this.swallowStep(
+        this.connection.send(method, {}, sessionId),
+        method,
+        session,
+      );
+    }
+    await this.swallowStep(
+      this.connection.send(
+        "Runtime.addBinding",
+        { name: ADYEN_BLOB_BINDING },
+        sessionId,
+      ),
+      "Runtime.addBinding",
+      session,
+    );
+    await this.swallowStep(
+      this.connection.send(
+        "Page.addScriptToEvaluateOnNewDocument",
+        { source: script },
+        sessionId,
+      ),
+      "Page.addScriptToEvaluateOnNewDocument",
+      session,
+    );
+    if (waitingForDebugger) return;
+    await this.swallowStep(
+      this.connection.send(
+        "Runtime.evaluate",
+        { expression: script, returnByValue: true },
+        sessionId,
+      ),
+      "Runtime.evaluate",
+      session,
+    );
+  }
+
+  private onBindingCalled(event: CdpEvent): void {
+    if (!this.sessions.has(event.sessionId ?? "")) return;
+    if (!isRecord(event.params)) return;
+    if (event.params.name !== ADYEN_BLOB_BINDING) return;
+    const observed = hashObservedBlob(event.params.payload);
+    if (observed) this.adyenBlobHashes.set(observed.field, observed.hash);
   }
 
   private async armOrClose(session: Session): Promise<boolean> {
@@ -722,7 +794,17 @@ class PaymentInterceptor {
         );
         return { action: "fail", reason: "adyen_client_key" };
       }
-      route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
+      const blobs = placeholderBlobHashes(this.adyenBlobHashes);
+      if ("missing" in blobs) {
+        this.logger.warn("adyen placeholder blobs not observed", {
+          missing: blobs.missing.join(","),
+        });
+        return { action: "fail", reason: "adyen_placeholder_unobserved" };
+      }
+      route = {
+        profileId: ADYEN_CHECKOUT_PROFILE,
+        adyen: { clientKey, placeholderBlobHashes: blobs.hashes },
+      };
       // The merchant's own endpoint may need the page's session cookie or a
       // CSRF header; Adyen's endpoints must never see them.
       forwarded = isPageOrigin(request.url, pageOrigin)
