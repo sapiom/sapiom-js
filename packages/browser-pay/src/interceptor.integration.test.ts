@@ -855,7 +855,10 @@ addEventListener("message", (event) => {
     const sha256 = (value: string) =>
       createHash("sha256").update(value, "utf8").digest("hex");
 
-    async function runAdyenCheckout(options: { postBlobs: boolean }) {
+    async function runAdyenCheckout(options: {
+      postBlobs: boolean;
+      overrideJsonParse?: boolean;
+    }) {
       const checkout = adyenCheckout();
       const shop = await startServer(hits, checkout.page, "localhost");
       const relayCalls: RelayRequest[] = [];
@@ -900,9 +903,10 @@ addEventListener("message", (event) => {
               });
             }
             const message = JSON.stringify(checkout.messages[index]);
-            const post = options.postBlobs
-              ? `parent.postMessage(${JSON.stringify(message)}, "*");`
-              : "";
+            const post =
+              options.postBlobs && !options.overrideJsonParse
+                ? `parent.postMessage(${JSON.stringify(message)}, "*");`
+                : "";
             return route.fulfill({
               status: 200,
               headers: { "content-type": "text/html" },
@@ -912,6 +916,30 @@ addEventListener("message", (event) => {
         );
         const origin = `http://localhost:${shop.port}`;
         await page.goto(`${origin}/`, { waitUntil: "load" });
+        if (options.overrideJsonParse) {
+          // Merchant replaces the parser after load, before the secured
+          // fields emit ciphertext. Only the page's parser is changed.
+          await page.evaluate(() => {
+            JSON.parse = () => ({
+              action: "encryption",
+              fieldType: "encryptedCardNumber",
+              encryptedCardNumber: [
+                {
+                  encryptedFieldName: "encryptedCardNumber",
+                  blob: "eyJ.PAGE_SELECTED",
+                },
+              ],
+            });
+          });
+          for (const frame of page.frames()) {
+            const url = new URL(frame.url());
+            if (url.hostname !== "checkoutshopper-test.adyen.com") continue;
+            const index = Number(url.searchParams.get("i"));
+            await frame.evaluate(
+              `parent.postMessage(${JSON.stringify(JSON.stringify(checkout.messages[index]))}, "*")`,
+            );
+          }
+        }
         if (options.postBlobs) {
           await page.waitForFunction("window.received === 3");
         }
@@ -1009,6 +1037,24 @@ addEventListener("message", (event) => {
         expect(eventText).not.toContain(blob);
         expect(eventText).not.toContain(sha256(blob));
       }
+    }, 60_000);
+
+    it("keeps the secured-field hashes when the page replaces JSON.parse after load", async () => {
+      const { checkout, seen, answer, relayCalls } = await runAdyenCheckout({
+        postBlobs: true,
+        overrideJsonParse: true,
+      });
+
+      expect(seen).toStrictEqual({ status: 200, text: answer });
+      expect(relayCalls).toHaveLength(1);
+      expect(relayCalls[0]?.adyen?.placeholderBlobHashes).toEqual(
+        Object.fromEntries(
+          Object.entries(checkout.placeholderBlobs).map(([field, blob]) => [
+            field,
+            sha256(blob),
+          ]),
+        ),
+      );
     }, 60_000);
 
     it("fails an Adyen payment in the browser, without asking the relay, when no secured-field frame posted its blobs", async () => {
