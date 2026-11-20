@@ -905,7 +905,7 @@ class PaymentInterceptor {
     redirectWatch?: AdyenDetailsWatch,
   ): Promise<void> {
     try {
-      const decision = await this.decide(entry, request);
+      const decision = await this.decide(entry, request, redirectWatch);
       if (redirectWatch && decision.action === "continue") {
         this.adyenDetailsWatches.set(entry.key, redirectWatch);
         const continued = await this.settle(entry, "continueForAnswer");
@@ -922,6 +922,7 @@ class PaymentInterceptor {
   private async decide(
     entry: Inflight,
     request: PausedRequest,
+    redirectWatch?: AdyenDetailsWatch,
   ): Promise<Decision> {
     const read = await this.readHeld(entry.sessionId, request);
     if (read.kind === "unreadable") {
@@ -929,8 +930,9 @@ class PaymentInterceptor {
     }
     const adyen =
       read.kind === "miss" && isAdyenSecuredFieldsPayment(read.body);
+    // A watched redirect already belongs to its original challenge.
     const details =
-      read.kind === "miss" && !adyen
+      read.kind === "miss" && !adyen && !redirectWatch
         ? this.openDetailsCall(entry.sessionId, request)
         : undefined;
     if (details && !details.relay) {

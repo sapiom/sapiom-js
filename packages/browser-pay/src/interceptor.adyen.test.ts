@@ -1272,6 +1272,79 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     ]);
   });
 
+  it.each([307, 308])(
+    "keeps a stale merchant details %i POST redirect bound to its admitted challenge",
+    async (status) => {
+      const redirectedDetails = `${PAGE_ORIGIN}/api/redirected/payments/details`;
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE, CHALLENGE] }),
+        responseBodies: Object.fromEntries(
+          ["a-first", "a-redirected", "b-final"].map((id) => [
+            id,
+            JSON.stringify({
+              resultCode: "Authorised",
+              pspReference: id.replace(/-/g, ""),
+            }),
+          ]),
+        ),
+      });
+      pause(harness.stub, "pay-a", ADVANCED);
+      await settle(harness.stub, "pay-a");
+      for (const id of ["a-first", "a-stale"]) {
+        pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+        await settle(harness.stub, id);
+      }
+      answerPause(harness.stub, "a-first", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 1, "A final report");
+      pause(harness.stub, "pay-b", {
+        ...ADVANCED,
+        body: { ...ADVANCED.body, reference: "order-b" },
+      });
+      await settle(harness.stub, "pay-b");
+      answerPause(harness.stub, "a-stale", MERCHANT_DETAILS, "page-1", {
+        status,
+        location: redirectedDetails,
+      });
+      await waitFor(
+        () => continues(harness!.stub, "a-stale").length === 2,
+        "stale A redirect continued",
+      );
+      pause(
+        harness.stub,
+        "a-redirected",
+        { url: redirectedDetails, body: DETAILS_BODY },
+        "page-1",
+        "a-stale",
+      );
+      expect((await settle(harness.stub, "a-redirected")).params).toEqual({
+        requestId: "a-redirected",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "a-redirected", redirectedDetails);
+      await waitFor(
+        () => continues(harness!.stub, "a-redirected").length === 2,
+        "stale redirected A answer continued",
+      );
+      pause(harness.stub, "b-final", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "b-final")).params).toEqual({
+        requestId: "b-final",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "b-final", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 2, "B final report");
+      expect(harness.resultCalls.map((call) => call.pspReference)).toEqual([
+        "afirst",
+        "bfinal",
+      ]);
+      expect(harness.relayCalls).toHaveLength(2);
+      assertNothingSecret(harness);
+    },
+  );
+
   it("binds relayed sessions details answers to their admitted challenge", async () => {
     let releaseStale!: (response: RelayResponse) => void;
     const stale = new Promise<RelayResponse>((resolve) => {
