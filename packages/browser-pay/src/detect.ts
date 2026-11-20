@@ -1,8 +1,3 @@
-import {
-  ADYEN_RESULT_CODES,
-  type AdyenEncryptedFields,
-  type AdyenResultCode,
-} from "./contract.js";
 import { isRecord } from "./guards.js";
 
 export interface HeldPlaceholder {
@@ -129,7 +124,7 @@ const ADYEN_KEY_HOST_ENV = new Map([
 ]);
 
 /** An Adyen client key: `test_` or `live_` and up to 64 letters and digits. */
-export function isAdyenClientKey(value: unknown): value is string {
+function isAdyenClientKey(value: unknown): value is string {
   return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
 }
 
@@ -165,74 +160,12 @@ export function adyenClientKeysInRequest(
 }
 
 /**
- * True for an Adyen secured-field iframe URL (https, an `adyen.com` host, a
- * `/securedfields/` path), whether or not its client key can be read.
- */
-export function isAdyenSecuredFieldsFrameUrl(url: string): boolean {
-  return adyenSecuredFieldsUrl(url) !== undefined;
-}
-
-function adyenSecuredFieldsUrl(url: string): URL | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return undefined;
-  }
-  const host = parsed.hostname.toLowerCase();
-  if (parsed.protocol !== "https:") return undefined;
-  if (host !== "adyen.com" && !host.endsWith(".adyen.com")) return undefined;
-  return parsed.pathname.includes("/securedfields/") ? parsed : undefined;
-}
-
-/**
  * True when the body is JSON whose top-level `paymentMethod.encryptedCardNumber`
  * is a non-empty string: an Adyen secured-fields payment, on the merchant's
  * own `/payments` call or on Adyen's `/sessions/{id}/payments`.
  */
 export function isAdyenSecuredFieldsPayment(body: string): boolean {
   return adyenPaymentMethod(parseJson(body)) !== undefined;
-}
-
-/**
- * The body with the four `paymentMethod.encrypted*` fields replaced. Every
- * other key keeps its value and order.
- */
-export function withAdyenEncryptedFields(
-  body: string,
-  fields: AdyenEncryptedFields,
-): string {
-  const parsed = parseJson(body);
-  const method = adyenPaymentMethod(parsed);
-  if (!method || !isRecord(parsed)) {
-    throw new Error("Not an Adyen secured-fields payment body");
-  }
-  return JSON.stringify({
-    ...parsed,
-    paymentMethod: { ...method, ...fields },
-  });
-}
-
-const PSP_REFERENCE_SHAPE = /^[A-Za-z0-9]{1,64}$/;
-
-/**
- * The top-level `resultCode` (and `pspReference`) of the answer to an Adyen
- * payment, from the merchant's `/payments` or Adyen's
- * `/sessions/{id}/payments`. Anything unreadable is `unknown`.
- */
-export function adyenPaymentResult(body: string): {
-  resultCode: AdyenResultCode;
-  pspReference?: string;
-} {
-  const parsed = parseJson(body);
-  if (!isRecord(parsed)) return { resultCode: "unknown" };
-  const code = parsed.resultCode;
-  const resultCode =
-    ADYEN_RESULT_CODES.find((known) => known === code) ?? "unknown";
-  const psp = parsed.pspReference;
-  return typeof psp === "string" && PSP_REFERENCE_SHAPE.test(psp)
-    ? { resultCode, pspReference: psp }
-    : { resultCode };
 }
 
 function parseJson(body: string): unknown {

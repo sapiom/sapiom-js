@@ -15,6 +15,12 @@ export interface RelayRequest {
   pageOrigin: string;
   request: RelayHttpRequest;
   idempotencyKey: string;
+  /**
+   * Sent only with the `adyen-checkout` profile: the merchant's Adyen client
+   * key, which the relay uses to encrypt the real card in place of the four
+   * `paymentMethod.encrypted*` fields the page encrypted for the placeholder.
+   */
+  adyen?: { clientKey: string };
 }
 
 export interface RelayedHttpResponse {
@@ -109,141 +115,5 @@ export function parseRelayResponse(value: unknown): RelayResponse {
       ...(setCookies ? { setCookies } : {}),
       body: response.body,
     },
-  };
-}
-
-/** The four fields Adyen secured fields put on `paymentMethod`, each one encrypted blob. */
-export const ADYEN_ENCRYPTED_FIELDS = [
-  "encryptedCardNumber",
-  "encryptedExpiryMonth",
-  "encryptedExpiryYear",
-  "encryptedSecurityCode",
-] as const;
-
-export type AdyenEncryptedField = (typeof ADYEN_ENCRYPTED_FIELDS)[number];
-
-export type AdyenEncryptedFields = Record<AdyenEncryptedField, string>;
-
-export interface AdyenEncryptRequest {
-  injectionRef: string;
-  /** The merchant's Adyen client key, read from the page. The backend fetches the public key from Adyen itself. */
-  clientKey: string;
-  pageOrigin: string;
-}
-
-/**
- * The backend's typed answer when Adyen card encryption is switched off for
- * this deployment. It arrives as `code` (an error body) or `reason`, in any
- * case: the backend sends `ADYEN_ENCRYPTION_NOT_ENABLED`.
- */
-export const ADYEN_ENCRYPTION_NOT_ENABLED = "adyen_encryption_not_enabled";
-
-export type AdyenEncryptResult =
-  | { outcome: "encrypted"; fields: AdyenEncryptedFields }
-  | { outcome: "not_enabled" };
-
-export function isAdyenNotEnabled(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (isNotEnabledCode(value.code) || isNotEnabledCode(value.reason))
-  );
-}
-
-function isNotEnabledCode(value: unknown): boolean {
-  return (
-    typeof value === "string" &&
-    value.toLowerCase() === ADYEN_ENCRYPTION_NOT_ENABLED
-  );
-}
-
-export function parseAdyenEncryptResponse(value: unknown): AdyenEncryptResult {
-  if (isAdyenNotEnabled(value)) return { outcome: "not_enabled" };
-  if (!isRecord(value)) {
-    throw new Error("Adyen re-encryption returned an unreadable response");
-  }
-  const fields = {} as AdyenEncryptedFields;
-  for (const field of ADYEN_ENCRYPTED_FIELDS) {
-    const blob = value[field];
-    if (typeof blob !== "string" || blob.length === 0) {
-      throw new Error("Adyen re-encryption returned an unreadable response");
-    }
-    fields[field] = blob;
-  }
-  return { outcome: "encrypted", fields };
-}
-
-/** Adyen `resultCode`s after a payment. `unknown` is any other answer, or none readable. */
-export const ADYEN_RESULT_CODES = [
-  "Authorised",
-  "Refused",
-  "Error",
-  "Cancelled",
-  "Pending",
-  "Received",
-  "RedirectShopper",
-  "IdentifyShopper",
-  "ChallengeShopper",
-] as const;
-
-export type AdyenResultCode = (typeof ADYEN_RESULT_CODES)[number] | "unknown";
-
-export interface AdyenResultRequest {
-  injectionRef: string;
-  resultCode: AdyenResultCode;
-  pspReference?: string;
-}
-
-/**
- * The backend's answer to a reported result. `pending` means it changed
- * nothing: the code was not final. `refused` carries the error body's `code`,
- * for example `RESULT_CONFLICT` when another result was already recorded.
- */
-export type AdyenResultResponse =
-  | { outcome: AdyenResultOutcome; resultCode: string }
-  | { outcome: "refused"; status: number; code: string; retryable?: boolean };
-
-/** `recorded`: the backend stored the result but completion is off or dry-run. */
-type AdyenResultOutcome = "completed" | "failed" | "pending" | "recorded";
-
-function isAdyenResultOutcome(value: unknown): value is AdyenResultOutcome {
-  return (
-    value === "completed" ||
-    value === "failed" ||
-    value === "pending" ||
-    value === "recorded"
-  );
-}
-
-export function parseAdyenResultResponse(
-  value: unknown,
-): Extract<AdyenResultResponse, { resultCode: string }> {
-  if (
-    !isRecord(value) ||
-    typeof value.resultCode !== "string" ||
-    !isAdyenResultOutcome(value.outcome)
-  ) {
-    throw new Error("Adyen result report returned an unreadable response");
-  }
-  return {
-    outcome: value.outcome,
-    resultCode: value.resultCode,
-  };
-}
-
-/** A refusal's `code`, or `undefined` when the error body has none. */
-export function adyenResultRefusal(
-  status: number,
-  value: unknown,
-): Extract<AdyenResultResponse, { outcome: "refused" }> | undefined {
-  if (!isRecord(value) || typeof value.code !== "string" || !value.code) {
-    return undefined;
-  }
-  return {
-    outcome: "refused",
-    status,
-    code: value.code,
-    ...(typeof value.retryable === "boolean"
-      ? { retryable: value.retryable }
-      : {}),
   };
 }
