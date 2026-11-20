@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   AdyenEncryptedFields,
   AdyenEncryptRequest,
@@ -1019,6 +1021,50 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       { method: "Fetch.continueRequest", params: { requestId: "req-pay" } },
     ]);
     expect(harness.events.at(-1)).toMatchObject({ status: 422 });
+  });
+
+  it("reports per re-encrypted request when the same injectionRef is reused", async () => {
+    harness = await arm({
+      frames: [{ sessionId: "frame-number", url: frameUrl(CLIENT_KEY) }],
+      result: recorded,
+    });
+    await harness.prepare({ clientKey: CLIENT_KEY, pageOrigin: PAGE_ORIGIN });
+    for (const requestId of ["req-first", "req-second"]) {
+      pause(harness.stub, requestId, ADVANCED);
+      const continued = await settle(harness.stub, requestId);
+      expect(sentBody(continued)).toMatchObject({ paymentMethod: REAL });
+      harness.responseBodies.set(
+        requestId,
+        JSON.stringify({ resultCode: "Authorised" }),
+      );
+      respond(harness.stub, requestId, 200);
+      await waitFor(
+        () =>
+          harness!.events.filter((event) => event.type === "adyen_result")
+            .length === (requestId === "req-first" ? 1 : 2),
+        "each request reported",
+      );
+    }
+    expect(harness.encryptCalls).toStrictEqual([
+      {
+        injectionRef: HELD.injectionRef,
+        clientKey: CLIENT_KEY,
+        pageOrigin: PAGE_ORIGIN,
+      },
+      {
+        injectionRef: HELD.injectionRef,
+        clientKey: CLIENT_KEY,
+        pageOrigin: PAGE_ORIGIN,
+      },
+    ]);
+    expect(harness.resultCalls).toStrictEqual([
+      { injectionRef: HELD.injectionRef, resultCode: "Authorised" },
+      { injectionRef: HELD.injectionRef, resultCode: "Authorised" },
+    ]);
+    expect(readFileSync(join(__dirname, "../README.md"), "utf8")).toContain(
+      "once per re-encrypted request",
+    );
+    assertNothingSecret(harness);
   });
 
   it("reports once when the same request's answer pauses again", async () => {

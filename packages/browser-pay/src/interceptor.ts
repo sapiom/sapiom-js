@@ -149,7 +149,7 @@ export type InterceptorEvent =
   /** An Adyen secured-fields payment continued with the card's own encrypted fields. */
   | { type: "reencrypted"; url: string }
   /**
-   * What Adyen answered a re-encrypted payment, once per payment. `status` is
+   * What Adyen answered a re-encrypted request, once per request. `status` is
    * the page's HTTP status; `reported` is false when the backend did not take
    * the result. True means only that the backend took it, not that the
    * purchase completed: a code that is not final changes nothing.
