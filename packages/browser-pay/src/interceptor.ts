@@ -852,9 +852,9 @@ class PaymentInterceptor {
     const watch = previousKey
       ? this.adyenDetailsWatches.get(previousKey)
       : undefined;
-    if (watch && previousKey) {
+    if (watch && previousKey) this.adyenDetailsWatches.delete(previousKey);
+    if (watch && isPageOrigin(request.url, new URL(watch.url).origin)) {
       const key = inflightKey(sessionId, requestId);
-      this.adyenDetailsWatches.delete(previousKey);
       this.adyenDetailsWatches.set(key, watch);
       const answer = continueRequest(
         this.connection,

@@ -1547,6 +1547,61 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
   });
 
+  it("does not transfer a merchant details watch to a different origin", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: {
+        foreign: JSON.stringify({ resultCode: "Authorised" }),
+        retry: JSON.stringify({ resultCode: "Refused" }),
+      },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    const foreign = "https://other.example/result";
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 303,
+      location: foreign,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "redirect continued",
+    );
+    pause(
+      harness.stub,
+      "foreign",
+      { url: foreign, method: "GET" },
+      "page-1",
+      "details",
+    );
+    expect((await settle(harness.stub, "foreign")).params).toEqual({
+      requestId: "foreign",
+    });
+    answerPause(harness.stub, "foreign", foreign, "page-1", { method: "GET" });
+    await waitFor(
+      () => continues(harness!.stub, "foreign").length === 2,
+      "foreign response continued",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(
+      () => harness!.resultCalls.length === 1,
+      "same-origin retry reported",
+    );
+    expect(harness.resultCalls[0]?.resultCode).toBe("Refused");
+  });
+
   it("leaves unrelated redirect requests unwatched", async () => {
     harness = await arm({ frames: KEY_FRAME });
     pause(
