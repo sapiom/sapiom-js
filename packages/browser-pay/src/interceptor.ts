@@ -348,6 +348,8 @@ type HeldRead =
 
 interface AdyenChallenge {
   readonly clientKey: string;
+  /** The idempotency key of the Pay whose answer opened it. */
+  readonly payKey: string;
 }
 
 type Decision =
@@ -399,14 +401,16 @@ class PaymentInterceptor {
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
   /**
-   * Open 3-D Secure challenges, by page session and checkout: each relayed
-   * payment answering a 3-D Secure code adds one, and a details call's final
-   * code closes its admitted challenge. Merchant routes on one origin share
-   * a checkout key; a stale answer must not close a newer challenge.
+   * Open 3-D Secure challenges, by page session, checkout and Pay
+   * idempotency key: each relayed payment answering a 3-D Secure code adds
+   * one, identical Pays sharing one relay answer share it, and a details
+   * call's final code closes its admitted challenge. Merchant routes on one
+   * origin share a checkout key; a stale answer must not close a newer
+   * challenge.
    */
   private readonly adyenAwaiting3ds = new Map<
     string,
-    Map<string, Set<AdyenChallenge>>
+    Map<string, Map<string, AdyenChallenge>>
   >();
   /** Merchant `/payments/details` calls whose answer is still to come, by inflight key. */
   private readonly adyenDetailsWatches = new Map<string, AdyenDetailsWatch>();
@@ -1002,6 +1006,11 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
+    const idempotencyKey = paymentIdempotencyKey(
+      request.method,
+      request.url,
+      read.body,
+    );
     let challenge = details?.challenge;
     let route: Pick<RelayRequest, "profileId" | "adyen">;
     let forwarded = this.options.profileId ? profileHeader : genericHeader;
@@ -1025,7 +1034,7 @@ class PaymentInterceptor {
           return { action: "fail", reason: "adyen_client_key" };
         }
       }
-      challenge ??= { clientKey };
+      challenge ??= { clientKey, payKey: idempotencyKey };
       route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
       // Only a Pay carries the page's card blobs; a details call has none.
       if (adyen) {
@@ -1057,11 +1066,6 @@ class PaymentInterceptor {
     } else {
       route = {};
     }
-    const idempotencyKey = paymentIdempotencyKey(
-      request.method,
-      request.url,
-      read.body,
-    );
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
@@ -1137,16 +1141,22 @@ class PaymentInterceptor {
     const open = awaiting?.get(checkout);
     if (isAdyenActionResult(resultCode)) {
       if (opening && !this.closed && this.sessions.has(page)) {
+        const challenges = open ?? new Map<string, AdyenChallenge>();
+        if (!challenges.has(challenge.payKey)) {
+          challenges.set(challenge.payKey, challenge);
+        }
         this.adyenAwaiting3ds.set(
           page,
-          (awaiting ?? new Map<string, Set<AdyenChallenge>>()).set(
+          (awaiting ?? new Map<string, Map<string, AdyenChallenge>>()).set(
             checkout,
-            (open ?? new Set<AdyenChallenge>()).add(challenge),
+            challenges,
           ),
         );
       }
     } else if (!opening && isFinalAdyenResult(resultCode)) {
-      open?.delete(challenge);
+      if (open?.get(challenge.payKey) === challenge) {
+        open.delete(challenge.payKey);
+      }
       if (open?.size === 0) awaiting?.delete(checkout);
     }
   }
@@ -1192,7 +1202,8 @@ class PaymentInterceptor {
     const checkout = adyenCheckout(new URL(watch.url));
     const open = this.adyenAwaiting3ds.get(page)?.get(checkout);
     const final =
-      open?.has(watch.challenge) && isFinalAdyenResult(result.resultCode);
+      open?.get(watch.challenge.payKey) === watch.challenge &&
+      isFinalAdyenResult(result.resultCode);
     this.track3ds(page, checkout, result.resultCode, watch.challenge);
     await continueRequest(this.connection, sessionId, requestId);
     // Another details answer may already have closed this admitted challenge.

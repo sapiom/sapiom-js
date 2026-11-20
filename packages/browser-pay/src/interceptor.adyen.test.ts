@@ -344,6 +344,23 @@ async function nextFailure(
   return failures(harness).at(-1)!;
 }
 
+/**
+ * Waits until `pauses` requests read the page origin, the last await before
+ * they join a relay flight, then lets that read's reply land.
+ */
+async function joinedRelay(harness: Harness, pauses: number): Promise<void> {
+  await waitFor(
+    () =>
+      harness.stub.commands.filter(
+        (command) =>
+          command.method === "Runtime.evaluate" &&
+          command.params.expression === "location.origin",
+      ).length === pauses,
+    "pauses joined the relay",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
 const SECRETS = [
   CLIENT_KEY,
   "FRAMEKEY",
@@ -1266,6 +1283,51 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     expect((await settle(harness.stub, "req-d3")).params).toStrictEqual({
       requestId: "req-d3",
     });
+  });
+
+  it("opens one challenge for identical Pays that share one relay call, so a retried final details answer is reported once", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const answer = answersByPath({ "/api/payments": [CHALLENGE] });
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: async (request) => {
+        await gate;
+        return answer(request);
+      },
+      responseBodies: {
+        "req-d1": JSON.stringify({ resultCode: "Authorised" }),
+        "req-d2": JSON.stringify({ resultCode: "Authorised" }),
+      },
+    });
+    pause(harness.stub, "pay-a", ADVANCED);
+    pause(harness.stub, "pay-b", ADVANCED);
+    await joinedRelay(harness, 2);
+    release();
+    await settle(harness.stub, "pay-a");
+    await settle(harness.stub, "pay-b");
+    expect(harness.relayCalls).toHaveLength(1);
+
+    pause(harness.stub, "req-d1", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await waitFor(() => continues(harness!.stub, "req-d1").length === 1, "d1");
+    answerPause(harness.stub, "req-d1", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "one report");
+    await waitFor(() => continues(harness!.stub, "req-d1").length === 2, "d1");
+
+    // The page retries the details call: no challenge is left to admit it.
+    pause(harness.stub, "req-d2", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "req-d2")).params).toStrictEqual({
+      requestId: "req-d2",
+    });
+    expect(harness.resultCalls).toHaveLength(1);
   });
 
   it("binds merchant details answers to their admitted challenge", async () => {
