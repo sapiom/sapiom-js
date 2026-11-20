@@ -858,6 +858,7 @@ addEventListener("message", (event) => {
     async function runAdyenCheckout(options: {
       postBlobs: boolean;
       overrideJsonParse?: boolean;
+      alreadyLoadedCheckoutIframe?: boolean;
     }) {
       const checkout = adyenCheckout();
       const shop = await startServer(hits, checkout.page, "localhost");
@@ -866,28 +867,33 @@ addEventListener("message", (event) => {
         resultCode: "Authorised",
         pspReference: "PSP-INTEGRATION",
       });
-      const handle = await attachInterceptor(cdpUrl, {
-        relay: {
-          relay: async (request) => {
-            relayCalls.push(request);
-            return {
-              outcome: "relayed",
-              response: {
-                status: 200,
-                headers: { "content-type": "application/json" },
-                body: answer,
-              },
-            };
+      const attach = () =>
+        attachInterceptor(cdpUrl, {
+          relay: {
+            relay: async (request) => {
+              relayCalls.push(request);
+              return {
+                outcome: "relayed",
+                response: {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                  body: answer,
+                },
+              };
+            },
           },
-        },
-        placeholder: PLACEHOLDER,
-      });
+          placeholder: PLACEHOLDER,
+        });
       const events: InterceptorEvent[] = [];
-      handle.on((event) => events.push(event));
+      let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
       const { chromium } = await import("playwright");
       const browser = await chromium.connectOverCDP(cdpUrl);
       let page: import("playwright").Page | undefined;
       try {
+        if (!options.alreadyLoadedCheckoutIframe) {
+          handle = await attach();
+          handle.on((event) => events.push(event));
+        }
         const context = browser.contexts()[0];
         page = await context.newPage();
         await page.route(
@@ -904,7 +910,9 @@ addEventListener("message", (event) => {
             }
             const message = JSON.stringify(checkout.messages[index]);
             const post =
-              options.postBlobs && !options.overrideJsonParse
+              options.postBlobs &&
+              !options.overrideJsonParse &&
+              !options.alreadyLoadedCheckoutIframe
                 ? `parent.postMessage(${JSON.stringify(message)}, "*");`
                 : "";
             return route.fulfill({
@@ -915,11 +923,32 @@ addEventListener("message", (event) => {
           },
         );
         const origin = `http://localhost:${shop.port}`;
+        if (options.alreadyLoadedCheckoutIframe) {
+          await page.route(`${origin}/`, (route) =>
+            route.fulfill({
+              contentType: "text/html",
+              body: '<!doctype html><title>merchant</title><iframe src="/frame.html"></iframe>',
+            }),
+          );
+        }
         await page.goto(`${origin}/`, { waitUntil: "load" });
+        const checkoutPage = options.alreadyLoadedCheckoutIframe
+          ? page.frame({ url: `${origin}/frame.html` })!
+          : page;
+        if (options.alreadyLoadedCheckoutIframe) {
+          expect(await page.evaluate("document.readyState")).toBe("complete");
+          expect(await checkoutPage.evaluate("document.readyState")).toBe(
+            "complete",
+          );
+          expect(await checkoutPage.evaluate("location.origin")).toBe(origin);
+          expect(await checkoutPage.evaluate("window.received")).toBe(0);
+          handle = await attach();
+          handle.on((event) => events.push(event));
+        }
         if (options.overrideJsonParse) {
           // Merchant replaces the parser after load, before the secured
           // fields emit ciphertext. Only the page's parser is changed.
-          await page.evaluate(() => {
+          await checkoutPage.evaluate(() => {
             JSON.parse = () => ({
               action: "encryption",
               fieldType: "encryptedCardNumber",
@@ -931,6 +960,11 @@ addEventListener("message", (event) => {
               ],
             });
           });
+        }
+        if (
+          options.postBlobs &&
+          (options.overrideJsonParse || options.alreadyLoadedCheckoutIframe)
+        ) {
           for (const frame of page.frames()) {
             const url = new URL(frame.url());
             if (url.hostname !== "checkoutshopper-test.adyen.com") continue;
@@ -941,7 +975,7 @@ addEventListener("message", (event) => {
           }
         }
         if (options.postBlobs) {
-          await page.waitForFunction("window.received === 3");
+          await checkoutPage.waitForFunction("window.received === 3");
         }
         // A page script forging Adyen's message or calling the binding
         // directly must not be taken as an observed blob.
@@ -957,7 +991,7 @@ addEventListener("message", (event) => {
             },
           ],
         });
-        const pageView: unknown = await page.evaluate(`(() => {
+        const pageView: unknown = await checkoutPage.evaluate(`(() => {
           window.dispatchEvent(new MessageEvent("message", {
             data: ${JSON.stringify(forged)},
             origin: "https://checkoutshopper-test.adyen.com",
@@ -972,14 +1006,14 @@ addEventListener("message", (event) => {
           bindingNow: "undefined",
         });
         expect(
-          await page.evaluate(async () => {
+          await checkoutPage.evaluate(async () => {
             const res = await fetch(
               "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_INTEGRATIONKEY1",
             );
             return res.status;
           }),
         ).toBe(200);
-        const seen = await page.evaluate(async (body) => {
+        const seen = await checkoutPage.evaluate(async (body) => {
           try {
             const res = await fetch("/api/payments", {
               method: "POST",
@@ -994,7 +1028,7 @@ addEventListener("message", (event) => {
         return { checkout, origin, seen, answer, relayCalls, events };
       } finally {
         await page?.close().catch(() => {});
-        await handle.detach();
+        await handle?.detach();
         shop.server.closeAllConnections();
         await new Promise((resolve) => shop.server.close(resolve));
       }
@@ -1037,6 +1071,33 @@ addEventListener("message", (event) => {
         expect(eventText).not.toContain(blob);
         expect(eventText).not.toContain(sha256(blob));
       }
+    }, 60_000);
+
+    it("observes all four Adyen hashes in a same-origin checkout iframe already loaded before attachInterceptor", async () => {
+      const { checkout, seen, answer, relayCalls } = await runAdyenCheckout({
+        postBlobs: true,
+        alreadyLoadedCheckoutIframe: true,
+      });
+
+      expect(seen).toStrictEqual({ status: 200, text: answer });
+      expect(
+        hits.find((item) => item.path === "/api/payments"),
+      ).toBeUndefined();
+      expect(relayCalls).toHaveLength(1);
+      expect(relayCalls[0]?.adyen?.placeholderBlobHashes).toStrictEqual({
+        encryptedCardNumber: sha256(
+          checkout.placeholderBlobs.encryptedCardNumber,
+        ),
+        encryptedExpiryMonth: sha256(
+          checkout.placeholderBlobs.encryptedExpiryMonth,
+        ),
+        encryptedExpiryYear: sha256(
+          checkout.placeholderBlobs.encryptedExpiryYear,
+        ),
+        encryptedSecurityCode: sha256(
+          checkout.placeholderBlobs.encryptedSecurityCode,
+        ),
+      });
     }, 60_000);
 
     it("keeps the secured-field hashes when the page replaces JSON.parse after load", async () => {
