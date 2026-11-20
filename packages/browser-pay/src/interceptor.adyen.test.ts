@@ -284,12 +284,14 @@ function pause(
     headers?: Record<string, string>;
   },
   sessionId = "page-1",
+  redirectedRequestId?: string,
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
     sessionId,
     params: {
       requestId,
+      ...(redirectedRequestId ? { redirectedRequestId } : {}),
       request: {
         url: request.url,
         method: request.method ?? "POST",
@@ -832,15 +834,30 @@ function answerPause(
   requestId: string,
   url: string,
   sessionId = "page-1",
+  options: {
+    status?: number;
+    location?: string;
+    method?: string;
+    failed?: boolean;
+  } = {},
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
     sessionId,
     params: {
       requestId,
-      request: { url, method: "POST", headers: {} },
-      responseStatusCode: 200,
-      responseHeaders: [{ name: "content-type", value: "application/json" }],
+      request: { url, method: options.method ?? "POST", headers: {} },
+      ...(options.failed
+        ? { responseErrorReason: "Failed" }
+        : {
+            responseStatusCode: options.status ?? 200,
+            responseHeaders: [
+              { name: "content-type", value: "application/json" },
+              ...(options.location
+                ? [{ name: "Location", value: options.location }]
+                : []),
+            ],
+          }),
     },
   });
 }
@@ -1288,6 +1305,213 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
       ).toHaveLength(1);
     },
   );
+
+  it.each(["Authorised", "Refused"])(
+    "follows merchant details redirects and reports terminal %s once",
+    async (resultCode) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          final: JSON.stringify({ resultCode, pspReference: "PSP4" }),
+        },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      const hops = [
+        {
+          id: "details",
+          status: 303,
+          next: "hop",
+          url: MERCHANT_DETAILS,
+          location: `${PAGE_ORIGIN}/result`,
+        },
+        {
+          id: "hop",
+          status: 302,
+          next: "final",
+          url: `${PAGE_ORIGIN}/result`,
+          location: `${PAGE_ORIGIN}/final`,
+        },
+      ];
+      for (const hop of hops) {
+        answerPause(harness.stub, hop.id, hop.url, "page-1", {
+          status: hop.status,
+          location: hop.location,
+        });
+        await waitFor(
+          () => continues(harness!.stub, hop.id).length === 2,
+          "redirect continued",
+        );
+        expect(harness.resultCalls).toEqual([]);
+        expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+        pause(
+          harness.stub,
+          hop.next,
+          { url: hop.location, method: "GET" },
+          "page-1",
+          hop.id,
+        );
+        expect((await settle(harness.stub, hop.next)).params).toStrictEqual({
+          requestId: hop.next,
+          interceptResponse: true,
+        });
+      }
+      answerPause(harness.stub, "final", `${PAGE_ORIGIN}/final`, "page-1", {
+        method: "GET",
+      });
+      await waitFor(
+        () => harness!.events.some((event) => event.type === "adyen_result"),
+        "final event",
+      );
+      expect(harness.resultCalls).toEqual([
+        { injectionRef: HELD.injectionRef, resultCode, pspReference: "PSP4" },
+      ]);
+      expect(
+        harness.events.filter((event) => event.type === "adyen_result"),
+      ).toEqual([
+        {
+          type: "adyen_result",
+          url: PAGE_ORIGIN,
+          resultCode,
+          status: 200,
+          reported: true,
+        },
+      ]);
+      answerPause(harness.stub, "final", `${PAGE_ORIGIN}/final`);
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(
+        () =>
+          continues(harness!.stub, "final").length === 3 &&
+          continues(harness!.stub, "details").length === 3,
+        "duplicate and old responses",
+      );
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+      expect(harness.relayCalls).toHaveLength(1);
+      pause(harness.stub, "late", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "late")).params).toEqual({
+        requestId: "late",
+      });
+      assertNothingSecret(harness);
+    },
+  );
+
+  it.each([
+    [303, undefined],
+    [304, `${PAGE_ORIGIN}/result`],
+  ] as const)(
+    "reads merchant details status %s without treating it as a redirect",
+    async (status, location) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+        status,
+        location,
+      });
+      await waitFor(
+        () => harness!.resultCalls.length === 1,
+        "non-redirect final report",
+      );
+      expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+    },
+  );
+
+  it("leaves unrelated redirect requests unwatched", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    pause(
+      harness.stub,
+      "unrelated",
+      { url: `${PAGE_ORIGIN}/final`, method: "GET" },
+      "page-1",
+      "unwatched",
+    );
+    expect((await settle(harness.stub, "unrelated")).params).toEqual({
+      requestId: "unrelated",
+    });
+    answerPause(harness.stub, "unrelated", `${PAGE_ORIGIN}/final`);
+    await waitFor(
+      () => continues(harness!.stub, "unrelated").length === 2,
+      "unwatched answer",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+  });
+
+  it("forgets a failed redirect hop and leaves the challenge open for retry", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 307,
+      location: `${PAGE_ORIGIN}/final`,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "redirect continued",
+    );
+    pause(
+      harness.stub,
+      "failed",
+      { url: `${PAGE_ORIGIN}/final` },
+      "page-1",
+      "details",
+    );
+    expect((await settle(harness.stub, "failed")).params).toStrictEqual({
+      requestId: "failed",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "failed", `${PAGE_ORIGIN}/final`, "page-1", {
+      failed: true,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "failed").length === 2,
+      "failed hop continued",
+    );
+    answerPause(harness.stub, "failed", `${PAGE_ORIGIN}/final`);
+    await waitFor(
+      () => continues(harness!.stub, "failed").length === 3,
+      "duplicate failed hop",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toStrictEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
+  });
 
   it("does not watch a details call from another tab", async () => {
     harness = await arm({
