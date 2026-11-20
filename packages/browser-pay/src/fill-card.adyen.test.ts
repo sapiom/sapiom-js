@@ -340,7 +340,7 @@ describe("fillCard with a lowercase client key, through the real interceptor", (
       });
       expect(result.blocked).toBeUndefined();
       expect(asked).toStrictEqual([lowercase]);
-      expect(typed.encryptedcardnumber).not.toBe(CARD.number);
+      expect(typed.encryptedcardnumber).toBe("4111111111111111");
     } finally {
       await handle.detach();
       await stub.close();
