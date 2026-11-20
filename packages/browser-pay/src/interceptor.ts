@@ -345,9 +345,13 @@ type HeldRead =
   | { kind: "miss"; body: string }
   | { kind: "held"; body: string };
 
+interface AdyenChallenge {
+  readonly clientKey: string;
+}
+
 type Decision =
   | { action: "continue" }
-  | { action: "awaitAdyenResult"; challenge: symbol }
+  | { action: "awaitAdyenResult"; challenge: AdyenChallenge }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
   | { action: "relayed"; response: RelayedHttpResponse };
@@ -361,7 +365,7 @@ type SettleAction =
 interface AdyenDetailsWatch {
   url: string;
   sessionId: string;
-  challenge: symbol;
+  challenge: AdyenChallenge;
 }
 
 type Listener = (event: InterceptorEvent) => void;
@@ -400,7 +404,7 @@ class PaymentInterceptor {
    */
   private readonly adyenAwaiting3ds = new Map<
     string,
-    Map<string, Set<symbol>>
+    Map<string, Set<AdyenChallenge>>
   >();
   /** Merchant `/payments/details` calls whose answer is still to come, by inflight key. */
   private readonly adyenDetailsWatches = new Map<string, AdyenDetailsWatch>();
@@ -944,10 +948,11 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
+    let challenge = details?.challenge;
     let route: Pick<RelayRequest, "profileId" | "adyen">;
     let forwarded = this.options.profileId ? profileHeader : genericHeader;
     if (adyen || details) {
-      const clientKey = this.adyenClientKey();
+      const clientKey = details?.challenge.clientKey ?? this.adyenClientKey();
       if (!clientKey) {
         this.logger.warn(
           this.adyenClientKeys.size > 1
@@ -956,6 +961,17 @@ class PaymentInterceptor {
         );
         return { action: "fail", reason: "adyen_client_key" };
       }
+      if (details) {
+        const explicitKeys = new URL(request.url).searchParams.getAll(
+          "clientKey",
+        );
+        const headerKey = headerValue(request.headers, "x-client-key");
+        if (headerKey) explicitKeys.push(headerKey);
+        if (explicitKeys.some((key) => key !== clientKey)) {
+          return { action: "fail", reason: "adyen_client_key" };
+        }
+      }
+      challenge ??= { clientKey };
       route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
       // Only a Pay carries the page's card blobs; a details call has none.
       if (adyen) {
@@ -1013,14 +1029,15 @@ class PaymentInterceptor {
       },
       idempotencyKey,
     });
-    if ((adyen || details) && decision.action === "relayed") {
+    if (challenge && decision.action === "relayed") {
       // Counted before the page gets the answer: its details call can pause
       // before the fulfil returns.
       this.track3ds(
         page,
         details?.checkout ?? adyenCheckout(new URL(request.url)),
         adyenPaymentResult(decision.response.body).resultCode,
-        details?.challenge,
+        challenge,
+        adyen,
       );
     }
     return decision;
@@ -1034,7 +1051,9 @@ class PaymentInterceptor {
   private openDetailsCall(
     sessionId: string,
     request: PausedRequest,
-  ): { checkout: string; relay: boolean; challenge: symbol } | undefined {
+  ):
+    | { checkout: string; relay: boolean; challenge: AdyenChallenge }
+    | undefined {
     if (this.closed) return undefined;
     const call = adyenDetailsCall(request.method, request.url);
     if (!call) return undefined;
@@ -1057,21 +1076,22 @@ class PaymentInterceptor {
     page: string,
     checkout: string,
     resultCode: AdyenResultCode,
-    challenge?: symbol,
+    challenge: AdyenChallenge,
+    opening = false,
   ): void {
     const awaiting = this.adyenAwaiting3ds.get(page);
     const open = awaiting?.get(checkout);
     if (isAdyenActionResult(resultCode)) {
-      if (challenge === undefined && !this.closed && this.sessions.has(page)) {
+      if (opening && !this.closed && this.sessions.has(page)) {
         this.adyenAwaiting3ds.set(
           page,
-          (awaiting ?? new Map<string, Set<symbol>>()).set(
+          (awaiting ?? new Map<string, Set<AdyenChallenge>>()).set(
             checkout,
-            (open ?? new Set<symbol>()).add(Symbol("adyen challenge")),
+            (open ?? new Set<AdyenChallenge>()).add(challenge),
           ),
         );
       }
-    } else if (challenge !== undefined && isFinalAdyenResult(resultCode)) {
+    } else if (!opening && isFinalAdyenResult(resultCode)) {
       open?.delete(challenge);
       if (open?.size === 0) awaiting?.delete(checkout);
     }

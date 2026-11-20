@@ -1016,6 +1016,65 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     assertNothingSecret(harness);
   });
 
+  it.each([false, true])(
+    "keeps the Sessions challenge key after another tab introduces a key (explicit=%s)",
+    async (explicit) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({
+          "/checkoutshopper/v1/sessions/CS123/payments": [CHALLENGE],
+          "/checkoutshopper/v1/sessions/CS123/paymentDetails": [
+            { resultCode: "Authorised" },
+          ],
+        }),
+      });
+      pause(harness.stub, "pay", SESSIONS);
+      await settle(harness.stub, "pay");
+      harness.stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-other-key",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-other-key",
+            type: "page",
+            url: frameUrl("test_OTHERKEY789"),
+          },
+        },
+      });
+      await waitFor(
+        () => count(harness!.stub.commands, "Fetch.enable") === 3,
+        "other tab attached",
+      );
+      const url = explicit ? SESSIONS_DETAILS : SESSIONS_DETAILS.split("?")[0]!;
+      pause(harness.stub, "conflict", {
+        url,
+        body: DETAILS_BODY,
+        headers: { "x-client-key": "test_OTHERKEY789" },
+      });
+      expect((await settle(harness.stub, "conflict")).method).toBe(
+        "Fetch.failRequest",
+      );
+      expect(harness.events.at(-1)).toMatchObject({
+        reason: "adyen_client_key",
+      });
+      pause(harness.stub, "details", { url, body: DETAILS_BODY });
+      expect((await settle(harness.stub, "details")).method).toBe(
+        "Fetch.fulfillRequest",
+      );
+      expect(harness.relayCalls[1]?.adyen).toEqual({ clientKey: CLIENT_KEY });
+      pause(harness.stub, "second-pay", SESSIONS);
+      expect((await settle(harness.stub, "second-pay")).method).toBe(
+        "Fetch.failRequest",
+      );
+      expect(harness.events.at(-1)).toMatchObject({
+        reason: "adyen_client_key",
+      });
+      expect(harness.relayCalls).toHaveLength(2);
+      assertNothingSecret(harness);
+    },
+  );
+
   it("leaves a details call alone when no challenge is open on its checkout", async () => {
     harness = await arm({
       frames: KEY_FRAME,
