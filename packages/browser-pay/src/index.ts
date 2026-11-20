@@ -1,7 +1,5 @@
 export { attachInterceptor } from "./interceptor.js";
 export type {
-  AdyenGate,
-  AdyenReadiness,
   AttachOptions,
   FailureReason,
   InterceptorEvent,
@@ -15,7 +13,6 @@ export { fillCard } from "./fill-card.js";
 export type {
   CardField,
   CardToFill,
-  FillCardBlock,
   FillCardOptions,
   FillCardResult,
   FrameLike,
@@ -30,16 +27,7 @@ export type {
   RelayCallOptions,
 } from "./relay.js";
 
-export type {
-  AdyenEncryptedFields,
-  AdyenEncryptRequest,
-  AdyenEncryptResult,
-  AdyenResultCode,
-  AdyenResultRequest,
-  AdyenResultResponse,
-  RelayRequest,
-  RelayResponse,
-} from "./contract.js";
+export type { RelayRequest, RelayResponse } from "./contract.js";
 
 export type { HeldPlaceholder } from "./detect.js";
 

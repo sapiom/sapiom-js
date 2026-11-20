@@ -6,15 +6,7 @@ import {
 } from "@sapiom/analytics-core/credential";
 
 import {
-  adyenResultRefusal,
-  isAdyenNotEnabled,
-  parseAdyenEncryptResponse,
-  parseAdyenResultResponse,
   parseRelayResponse,
-  type AdyenEncryptRequest,
-  type AdyenEncryptResult,
-  type AdyenResultRequest,
-  type AdyenResultResponse,
   type RelayRequest,
   type RelayResponse,
 } from "./contract.js";
@@ -28,25 +20,6 @@ export interface PaymentRelay {
     request: RelayRequest,
     options?: RelayCallOptions,
   ): Promise<RelayResponse>;
-  /**
-   * Encrypts the authorized card to the Adyen public key behind `clientKey`,
-   * inside the card vault. Needed only for Adyen secured-fields checkouts.
-   * `not_enabled` is the backend saying the feature is off; a relay without
-   * this method is treated the same way (`adyen_not_enabled`).
-   */
-  adyenEncrypt?(
-    request: AdyenEncryptRequest,
-    options?: RelayCallOptions,
-  ): Promise<AdyenEncryptResult>;
-  /**
-   * Tells the backend what Adyen answered the payment the interceptor
-   * re-encrypted. Reported once per payment; a relay without this method
-   * reports nothing.
-   */
-  adyenResult?(
-    request: AdyenResultRequest,
-    options?: RelayCallOptions,
-  ): Promise<AdyenResultResponse>;
 }
 
 export interface HttpRelayOptions {
@@ -163,65 +136,45 @@ async function discardBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
 
-type HttpConfig = ReturnType<typeof requireHttpOptions>;
-
-/**
- * POSTs JSON under the transaction's payment path and returns the 2xx body
- * text. With `readErrorBody`, a non-2xx, non-redirect body is returned too.
- */
-async function postPayment(
-  config: HttpConfig,
-  path: string,
-  payload: unknown,
-  signal: AbortSignal | undefined,
-  readErrorBody = false,
-): Promise<{ status: number; text: string }> {
-  const url = `${config.baseUrl}/v1/transactions/${encodeURIComponent(config.transactionId)}/payment/${path}`;
-  let response: Response;
-  try {
-    response = await credentialFetch(
-      config.fetchImpl,
-      url,
-      {
-        method: "POST",
-        redirect: "manual",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal,
-      },
-      { header: "x-api-key", value: config.apiKey },
-      config.policy,
-    );
-  } catch (error) {
-    throw transportError(error, signal);
-  }
-  const redirect = response.status >= 300 && response.status < 400;
-  const ok = response.status >= 200 && response.status < 300;
-  if (redirect || (!ok && !readErrorBody)) {
-    await discardBody(response);
-    if (redirect) throw new Error("Payment relay refused a redirect");
-    throw new RelayHttpError(response.status);
-  }
-  try {
-    return { status: response.status, text: await response.text() };
-  } catch (error) {
-    throw transportError(error, signal);
-  }
-}
-
 export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
   const config = requireHttpOptions(options);
   return {
     async relay(request, call) {
-      const { status, text } = await postPayment(
-        config,
-        "relay",
-        request,
-        call?.signal,
-      );
+      const url = `${config.baseUrl}/v1/transactions/${encodeURIComponent(config.transactionId)}/payment/relay`;
+      let response: Response;
+      try {
+        response = await credentialFetch(
+          config.fetchImpl,
+          url,
+          {
+            method: "POST",
+            redirect: "manual",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(request),
+            signal: call?.signal,
+          },
+          { header: "x-api-key", value: config.apiKey },
+          config.policy,
+        );
+      } catch (error) {
+        throw transportError(error, call?.signal);
+      }
+      if (response.status < 200 || response.status >= 300) {
+        await discardBody(response);
+        if (response.status >= 300 && response.status < 400) {
+          throw new Error("Payment relay refused a redirect");
+        }
+        throw new RelayHttpError(response.status);
+      }
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (error) {
+        throw transportError(error, call?.signal);
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -235,59 +188,7 @@ export function httpPaymentRelay(options: HttpRelayOptions): PaymentRelay {
           // The thrown error must not include the response text.
         }
       }
-      throw new Error(`Payment relay failed (HTTP ${status})`);
-    },
-    async adyenEncrypt(request, call) {
-      const { status, text } = await postPayment(
-        config,
-        "adyen/encrypt",
-        {
-          injectionRef: request.injectionRef,
-          clientKey: request.clientKey,
-          pageOrigin: request.pageOrigin,
-        },
-        call?.signal,
-        true,
-      );
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // The thrown error must not include the response text.
-      }
-      if (status < 200 || status >= 300) {
-        // An error body is read only for the typed "not enabled" answer.
-        if (isAdyenNotEnabled(parsed)) return { outcome: "not_enabled" };
-        throw new RelayHttpError(status);
-      }
-      return parseAdyenEncryptResponse(parsed);
-    },
-    async adyenResult(request, call) {
-      const { status, text } = await postPayment(
-        config,
-        "adyen/result",
-        {
-          injectionRef: request.injectionRef,
-          resultCode: request.resultCode,
-          ...(request.pspReference !== undefined
-            ? { pspReference: request.pspReference }
-            : {}),
-        },
-        call?.signal,
-        true,
-      );
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // The thrown error must not include the response text.
-      }
-      if (status < 200 || status >= 300) {
-        const refusal = adyenResultRefusal(status, parsed);
-        if (refusal) return refusal;
-        throw new RelayHttpError(status);
-      }
-      return parseAdyenResultResponse(parsed);
+      throw new Error(`Payment relay failed (HTTP ${response.status})`);
     },
   };
 }
