@@ -1964,6 +1964,44 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     },
   );
 
+  it.each([
+    ["pending", false],
+    ["completed", true],
+    ["failed", true],
+    ["recorded", true],
+  ] as const)(
+    "emits the %s result acknowledgement with reported=%s",
+    async (outcome, reported) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+        adyenResult: async () => ({ outcome, resultCode: "Authorised" }),
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(
+        () => harness!.events.some((event) => event.type === "adyen_result"),
+        "result event",
+      );
+      expect(harness.events.at(-1)).toMatchObject({
+        type: "adyen_result",
+        reported,
+      });
+      expect(continues(harness.stub, "details")).toHaveLength(2);
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(harness.warnings).toEqual([]);
+    },
+  );
+
   it("says reported: false when the relay has no adyenResult", async () => {
     harness = await arm({
       frames: KEY_FRAME,

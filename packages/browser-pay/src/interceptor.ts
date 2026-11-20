@@ -1200,7 +1200,7 @@ class PaymentInterceptor {
     } finally {
       clearTimeout(timer);
     }
-    if (answer.outcome !== "refused") return true;
+    if (answer.outcome !== "refused") return answer.outcome !== "pending";
     this.warn("adyen result report refused", {
       resultCode: result.resultCode,
       status: answer.status,
