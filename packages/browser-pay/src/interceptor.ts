@@ -1,5 +1,6 @@
 import {
   ADYEN_BLOB_BINDING,
+  ADYEN_WATCH_WORLD,
   adyenBlobWatchScript,
   hashObservedBlob,
   placeholderBlobHashes,
@@ -364,6 +365,8 @@ class PaymentInterceptor {
   private readonly adyenClientKeys = new Set<string>();
   /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
   private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
+  /** Per session, the ids of execution contexts in the watch world. */
+  private readonly watchContexts = new Map<string, Set<number>>();
   private readonly timeoutMs: number;
   private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
@@ -420,6 +423,8 @@ class PaymentInterceptor {
       this.onRequestWillBeSent(event);
     } else if (event.method === "Runtime.bindingCalled") {
       this.onBindingCalled(event);
+    } else if (event.method.startsWith("Runtime.executionContext")) {
+      this.onExecutionContextChange(event);
     }
   }
 
@@ -465,6 +470,7 @@ class PaymentInterceptor {
     if (!session) return;
     this.sessions.delete(sessionId);
     this.enabledSessions.delete(sessionId);
+    this.watchContexts.delete(sessionId);
     if (this.byTarget.get(session.targetId) === session) {
       this.byTarget.delete(session.targetId);
     }
@@ -527,9 +533,10 @@ class PaymentInterceptor {
   ): Promise<void> {
     const { sessionId } = session;
     const script = adyenBlobWatchScript();
-    // Runtime.enable reports existing contexts, including same-target frames
-    // that Page's new-document hook cannot reach retroactively.
-    const contexts = new Set<number>();
+    // Runtime.enable reports existing documents' main-world contexts,
+    // including same-target frames that Page's new-document hook cannot reach
+    // retroactively. Each gives the frame to open a watch world in.
+    const contexts = new Map<number, string>();
     const stopCollecting = this.connection.onEvent((event) => {
       if (event.sessionId !== sessionId || !isRecord(event.params)) return;
       if (event.method === "Runtime.executionContextCreated") {
@@ -538,9 +545,10 @@ class PaymentInterceptor {
           isRecord(context) &&
           typeof context.id === "number" &&
           isRecord(context.auxData) &&
-          context.auxData.isDefault === true
+          context.auxData.isDefault === true &&
+          typeof context.auxData.frameId === "string"
         ) {
-          contexts.add(context.id);
+          contexts.set(context.id, context.auxData.frameId);
         }
       } else if (event.method === "Runtime.executionContextDestroyed") {
         if (typeof event.params.executionContextId === "number") {
@@ -564,7 +572,7 @@ class PaymentInterceptor {
       await this.swallowStep(
         this.connection.send(
           "Runtime.addBinding",
-          { name: ADYEN_BLOB_BINDING },
+          { name: ADYEN_BLOB_BINDING, executionContextName: ADYEN_WATCH_WORLD },
           sessionId,
         ),
         "Runtime.addBinding",
@@ -573,24 +581,31 @@ class PaymentInterceptor {
       await this.swallowStep(
         this.connection.send(
           "Page.addScriptToEvaluateOnNewDocument",
-          { source: script },
+          { source: script, worldName: ADYEN_WATCH_WORLD },
           sessionId,
         ),
         "Page.addScriptToEvaluateOnNewDocument",
         session,
       );
-      if (contexts.size === 0 && !waitingForDebugger) {
-        await this.swallowStep(
+      const frameIds = new Set(contexts.values());
+      // A target's id is its root frame's id.
+      if (frameIds.size === 0 && !waitingForDebugger) {
+        frameIds.add(session.targetId);
+      }
+      for (const frameId of frameIds) {
+        const world = await this.swallowStep(
           this.connection.send(
-            "Runtime.evaluate",
-            { expression: script, returnByValue: true },
+            "Page.createIsolatedWorld",
+            { frameId, worldName: ADYEN_WATCH_WORLD },
             sessionId,
           ),
-          "Runtime.evaluate",
+          "Page.createIsolatedWorld",
           session,
         );
-      }
-      for (const contextId of contexts) {
+        if (!isRecord(world) || typeof world.executionContextId !== "number") {
+          continue;
+        }
+        const contextId = world.executionContextId;
         await this.swallowStep(
           this.connection.send(
             "Runtime.evaluate",
@@ -606,10 +621,37 @@ class PaymentInterceptor {
     }
   }
 
+  /** Tracks the watch world's contexts, the only ones the binding is in. */
+  private onExecutionContextChange(event: CdpEvent): void {
+    const sessionId = event.sessionId;
+    if (!sessionId || !this.sessions.has(sessionId)) return;
+    if (!isRecord(event.params)) return;
+    if (event.method === "Runtime.executionContextCreated") {
+      const context = event.params.context;
+      if (
+        !isRecord(context) ||
+        typeof context.id !== "number" ||
+        context.name !== ADYEN_WATCH_WORLD
+      ) {
+        return;
+      }
+      const ids = this.watchContexts.get(sessionId) ?? new Set<number>();
+      ids.add(context.id);
+      this.watchContexts.set(sessionId, ids);
+    } else if (event.method === "Runtime.executionContextDestroyed") {
+      const id = event.params.executionContextId;
+      if (typeof id === "number") this.watchContexts.get(sessionId)?.delete(id);
+    } else if (event.method === "Runtime.executionContextsCleared") {
+      this.watchContexts.delete(sessionId);
+    }
+  }
+
   private onBindingCalled(event: CdpEvent): void {
-    if (!this.sessions.has(event.sessionId ?? "")) return;
     if (!isRecord(event.params)) return;
     if (event.params.name !== ADYEN_BLOB_BINDING) return;
+    const contextId = event.params.executionContextId;
+    if (typeof contextId !== "number") return;
+    if (!this.watchContexts.get(event.sessionId ?? "")?.has(contextId)) return;
     const observed = hashObservedBlob(event.params.payload);
     if (observed) this.adyenBlobHashes.set(observed.field, observed.hash);
   }
@@ -1470,6 +1512,7 @@ function isAdyenCheckoutDestination(url: string, clientKey: string): boolean {
     const testHost = parsed.hostname === "checkoutshopper-test.adyen.com";
     return (
       parsed.protocol === "https:" &&
+      parsed.port === "" &&
       !parsed.username &&
       !parsed.password &&
       !parsed.hash &&

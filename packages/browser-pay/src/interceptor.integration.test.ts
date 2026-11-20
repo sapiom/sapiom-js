@@ -1135,6 +1135,128 @@ addEventListener("message", (event) => {
       });
     }, 60_000);
 
+    // A page loaded before attachInterceptor tries to take the blob binding,
+    // either through an accessor on its global or by polling for it.
+    const BINDING_TRAPS = {
+      setter: `Object.defineProperty(window, "__sapiomAdyenBlob", {
+        configurable: true,
+        set(value) { window.stolen = value; },
+        get() { return undefined; },
+      });`,
+      poll: `const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        if (typeof window.__sapiomAdyenBlob === "function") {
+          window.stolen = window.__sapiomAdyenBlob;
+          return;
+        }
+        channel.port2.postMessage(0);
+      };
+      channel.port2.postMessage(0);`,
+    };
+
+    it.each(Object.keys(BINDING_TRAPS) as (keyof typeof BINDING_TRAPS)[])(
+      "does not relay blobs a page script sends through the binding when attached after load (%s)",
+      async (trap) => {
+        const shop = await startServer(
+          hits,
+          `<!doctype html><title>merchant</title><script>window.stolen = null; ${BINDING_TRAPS[trap]}</script>`,
+          "localhost",
+        );
+        const relayCalls: RelayRequest[] = [];
+        const events: InterceptorEvent[] = [];
+        let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+        const { chromium } = await import("playwright");
+        const browser = await chromium.connectOverCDP(cdpUrl);
+        let page: import("playwright").Page | undefined;
+        try {
+          page = await browser.contexts()[0].newPage();
+          await page.route(
+            "https://checkoutshopper-test.adyen.com/**",
+            (route) =>
+              route.fulfill({
+                status: 200,
+                headers: { "access-control-allow-origin": "*" },
+                body: "{}",
+              }),
+          );
+          await page.goto(`http://localhost:${shop.port}/`, {
+            waitUntil: "load",
+          });
+          handle = await attachInterceptor(cdpUrl, {
+            placeholder: PLACEHOLDER,
+            relay: {
+              relay: async (request) => {
+                relayCalls.push(request);
+                return {
+                  outcome: "relayed",
+                  response: {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                    body: '{"resultCode":"Authorised"}',
+                  },
+                };
+              },
+            },
+          });
+          handle.on((event) => events.push(event));
+          const stolen = await page
+            .waitForFunction("typeof window.stolen === 'function'", undefined, {
+              timeout: 2_000,
+            })
+            .then(() => true)
+            .catch(() => false);
+          const forged = Object.fromEntries(
+            [
+              "encryptedCardNumber",
+              "encryptedExpiryMonth",
+              "encryptedExpiryYear",
+              "encryptedSecurityCode",
+            ].map((field) => [field, `eyJ.PAGE_FORGED_${field}.a.b.c`]),
+          );
+          const seen = await page.evaluate(async (blobs) => {
+            const page = globalThis as unknown as {
+              stolen?: (payload: string) => void;
+            };
+            for (const [field, blob] of Object.entries(blobs)) {
+              page.stolen?.(JSON.stringify({ field, blob }));
+            }
+            await fetch(
+              "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_INTEGRATIONKEY1",
+            );
+            try {
+              const res = await fetch("/api/payments", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ paymentMethod: blobs }),
+              });
+              return { status: res.status, text: await res.text() };
+            } catch {
+              return "network error";
+            }
+          }, forged);
+          process.stdout.write(
+            `binding trap ${trap}: stolen=${stolen} pageSaw=${JSON.stringify(seen)} relayCalls=${relayCalls.length} events=${JSON.stringify(events.map((event) => (event.type === "failed" ? `failed:${event.reason}` : event.type)))}\n`,
+          );
+
+          expect(relayCalls).toHaveLength(0);
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "failed",
+              reason: "adyen_placeholder_unobserved",
+            }),
+          );
+          expect(seen).toBe("network error");
+          expect(stolen).toBe(false);
+        } finally {
+          await page?.close().catch(() => {});
+          await handle?.detach();
+          shop.server.closeAllConnections();
+          await new Promise((resolve) => shop.server.close(resolve));
+        }
+      },
+      60_000,
+    );
+
     it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
       const { chromium } = await import("playwright");
       const browser = await chromium.connectOverCDP(cdpUrl);
