@@ -1482,6 +1482,40 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       },
     );
 
+    it.each(["Pending", "Received"])(
+      "keeps watching after non-final %s until a terminal answer",
+      async (code) => {
+        harness = await challenged();
+        for (const [id, resultCode] of [
+          ["details-wait", code],
+          ["details-final", "Refused"],
+        ]) {
+          harness.responseBodies.set(id, JSON.stringify({ resultCode }));
+          pause(harness.stub, id, DETAILS);
+          expect(
+            (await settle(harness.stub, id)).params.interceptResponse,
+          ).toBe(true);
+          respond(harness.stub, id, 200);
+          await waitFor(
+            () =>
+              harness!.resultCalls.some(
+                (call) => call.resultCode === resultCode,
+              ),
+            "code reported",
+          );
+        }
+        expect(resultCodes(harness)).toStrictEqual([
+          "ChallengeShopper",
+          code,
+          "Refused",
+        ]);
+        pause(harness.stub, "details-after-final", DETAILS);
+        expect(
+          (await settle(harness.stub, "details-after-final")).params,
+        ).toStrictEqual({ requestId: "details-after-final" });
+      },
+    );
+
     it("reports no final result when no details answer comes", async () => {
       harness = await challenged();
 

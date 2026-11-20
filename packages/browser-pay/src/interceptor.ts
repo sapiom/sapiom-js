@@ -1111,11 +1111,11 @@ class PaymentInterceptor {
       await continueRequest(this.connection, sessionId, requestId);
       return;
     }
-    // Counted before the page gets the answer: its details call can pause
+    // Registered before the page gets the answer: its details call can pause
     // before the continue returns. A details answer with another action code
-    // continues its challenge; only its final code closes one. An `unknown`
-    // answer (an Adyen error or a non-JSON body) changes nothing: it is not
-    // final, and the page's retried details call may be. A final code on
+    // continues its challenge; only a terminal code closes one. Pending,
+    // Received and unknown answers keep the watch for a later details call.
+    // A final code on
     // /payments had no challenge to close. Nothing new is watched once
     // detach() starts or the page has closed.
     if (isAdyenActionResult(result.resultCode)) {
@@ -1128,7 +1128,12 @@ class PaymentInterceptor {
           ),
         );
       }
-    } else if (watch.details && result.resultCode !== "unknown") {
+    } else if (
+      watch.details &&
+      ["Authorised", "Refused", "Error", "Cancelled"].includes(
+        result.resultCode,
+      )
+    ) {
       open?.delete(watch.details);
       if (open?.size === 0) awaiting?.delete(checkout);
     }
