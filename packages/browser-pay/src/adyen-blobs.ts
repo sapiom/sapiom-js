@@ -37,24 +37,30 @@ export function adyenBlobWatchScript(): string {
     fields: ADYEN_ENCRYPTED_FIELDS,
   });
   return `(() => {
+  // Capture before merchant scripts can replace these intrinsics.
+  const parse = JSON.parse;
+  const stringify = JSON.stringify;
+  const isArray = Array.isArray;
   const config = ${config};
   const send = globalThis[config.binding];
   if (typeof send !== "function") return;
   try { delete globalThis[config.binding]; } catch {}
-  const origins = new Set(config.origins);
-  const fields = new Set(config.fields);
+  const isOrigin = Set.prototype.has.bind(new Set(config.origins));
+  const isField = Set.prototype.has.bind(new Set(config.fields));
   addEventListener("message", (event) => {
     try {
-      if (!event.isTrusted || !origins.has(event.origin)) return;
+      if (!event.isTrusted || !isOrigin(event.origin)) return;
       if (typeof event.data !== "string") return;
-      const data = JSON.parse(event.data);
+      const data = parse(event.data);
       if (!data || data.action !== "encryption") return;
       const list = data[data.fieldType];
-      if (!Array.isArray(list)) return;
-      for (const item of list) {
-        if (!item || !fields.has(item.encryptedFieldName)) continue;
+      if (!isArray(list)) return;
+      for (let index = 0; index < list.length; index++) {
+        const item = list[index];
+        if (!item || !isField(item.encryptedFieldName)) continue;
         if (typeof item.blob !== "string" || item.blob === "") continue;
-        send(JSON.stringify({ field: item.encryptedFieldName, blob: item.blob }));
+        // No inherited toJSON hook from the merchant's Object.prototype.
+        send(stringify({ __proto__: null, field: item.encryptedFieldName, blob: item.blob }));
       }
     } catch {}
   });
