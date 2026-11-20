@@ -364,7 +364,10 @@ async function nextFailure(
 
 /**
  * Waits until `pauses` requests read the page origin, the last await before
- * they join a relay flight, then lets that read's reply land.
+ * they join a relay flight, then until the SDK has handled those reads'
+ * replies: a probe request paused after them on the same socket is continued
+ * only once they were handled, and each join runs in the microtasks right
+ * after its reply, before the probe's continue can reach the stub.
  */
 async function joinedRelay(harness: Harness, pauses: number): Promise<void> {
   await waitFor(
@@ -374,9 +377,15 @@ async function joinedRelay(harness: Harness, pauses: number): Promise<void> {
           command.method === "Runtime.evaluate" &&
           command.params.expression === "location.origin",
       ).length === pauses,
-    "pauses joined the relay",
+    "pauses read the page origin",
   );
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  pause(harness.stub, "join-probe", {
+    url: `${PAGE_ORIGIN}/join-probe`,
+    method: "GET",
+  });
+  expect((await settle(harness.stub, "join-probe")).params).toStrictEqual({
+    requestId: "join-probe",
+  });
 }
 
 const SECRETS = [
