@@ -13,6 +13,7 @@ import {
   type RelayResponse,
 } from "./contract.js";
 import {
+  ADYEN_CHECKOUT_ORIGINS,
   adyenClientKeysInRequest,
   isAdyenSecuredFieldsPayment,
   redactHeld,
@@ -74,6 +75,7 @@ export type FailureReason =
   | "network"
   | "response_credential"
   | "headers_unrelayable"
+  | "destination_not_allowed"
   | "adyen_client_key"
   | "adyen_placeholder_unobserved";
 
@@ -833,6 +835,13 @@ class PaymentInterceptor {
         );
         return { action: "fail", reason: "adyen_client_key" };
       }
+      if (
+        request.method.toUpperCase() !== "POST" ||
+        (!isPageOrigin(request.url, pageOrigin) &&
+          !isAdyenCheckoutDestination(request.url, clientKey))
+      ) {
+        return { action: "fail", reason: "destination_not_allowed" };
+      }
       const blobs = placeholderBlobHashes(this.adyenBlobHashes);
       if ("missing" in blobs) {
         this.logger.warn("adyen placeholder blobs not observed", {
@@ -1449,6 +1458,27 @@ const genericHeader = (key: string) =>
 function isPageOrigin(url: string, pageOrigin: string): boolean {
   try {
     return new URL(url).origin === pageOrigin;
+  } catch {
+    return false;
+  }
+}
+
+/** Keep sessions destinations aligned with the relay's adyen-checkout profile. */
+function isAdyenCheckoutDestination(url: string, clientKey: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const testHost = parsed.hostname === "checkoutshopper-test.adyen.com";
+    return (
+      parsed.protocol === "https:" &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.hash &&
+      ADYEN_CHECKOUT_ORIGINS.includes(`https://${parsed.hostname}`) &&
+      testHost === clientKey.startsWith("test_") &&
+      /^\/checkoutshopper\/v\d+\/sessions\/[A-Za-z0-9_-]+\/payments$/.test(
+        parsed.pathname,
+      )
+    );
   } catch {
     return false;
   }
