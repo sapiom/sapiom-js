@@ -12,7 +12,11 @@ import {
   type InterceptorTarget,
 } from "./interceptor";
 import type { PaymentRelay, RelayCallOptions } from "./relay";
-import type { HeldPlaceholder, RelayRequest } from "./index";
+import type {
+  AdyenResultRequest,
+  HeldPlaceholder,
+  RelayRequest,
+} from "./index";
 import { stubPaymentRelay } from "../test/stub-relay";
 
 const nodeRequire = createRequire(__filename);
@@ -83,10 +87,17 @@ interface Hit {
   body: string;
 }
 
+interface ServerAnswer {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
 function startServer(
   hits: Hit[],
   html: string,
   host: string,
+  answers: Record<string, ServerAnswer> = {},
 ): Promise<{ server: http.Server; port: number }> {
   const server = http.createServer((req, res) => {
     const pathOnly = (req.url ?? "").split("?")[0];
@@ -105,6 +116,12 @@ function startServer(
         path: req.url ?? "",
         body: Buffer.concat(chunks).toString("utf8"),
       });
+      const answer = answers[pathOnly];
+      if (answer) {
+        res.writeHead(answer.status, answer.headers);
+        res.end(answer.body);
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, via: "server" }));
     });
@@ -859,14 +876,30 @@ addEventListener("message", (event) => {
       postBlobs: boolean;
       overrideJsonParse?: boolean;
       alreadyLoadedCheckoutIframe?: boolean;
+      /** The relayed payment's answer; Authorised unless given. */
+      payAnswer?: string;
+      /** A merchant details call the page POSTs after the payment. */
+      details?: {
+        path: string;
+        body: string;
+        answers: Record<string, ServerAnswer>;
+      };
     }) {
       const checkout = adyenCheckout();
-      const shop = await startServer(hits, checkout.page, "localhost");
+      const shop = await startServer(
+        hits,
+        checkout.page,
+        "localhost",
+        options.details?.answers,
+      );
       const relayCalls: RelayRequest[] = [];
-      const answer = JSON.stringify({
-        resultCode: "Authorised",
-        pspReference: "PSP-INTEGRATION",
-      });
+      const resultCalls: AdyenResultRequest[] = [];
+      const answer =
+        options.payAnswer ??
+        JSON.stringify({
+          resultCode: "Authorised",
+          pspReference: "PSP-INTEGRATION",
+        });
       const attach = () =>
         attachInterceptor(cdpUrl, {
           relay: {
@@ -880,6 +913,10 @@ addEventListener("message", (event) => {
                   body: answer,
                 },
               };
+            },
+            adyenResult: async (request) => {
+              resultCalls.push(request);
+              return { outcome: "completed", resultCode: request.resultCode };
             },
           },
           placeholder: PLACEHOLDER,
@@ -1025,7 +1062,39 @@ addEventListener("message", (event) => {
             return "network error";
           }
         }, JSON.stringify(checkout.order));
-        return { checkout, origin, seen, answer, relayCalls, events };
+        const details = options.details;
+        if (!details) {
+          return { checkout, origin, seen, answer, relayCalls, events };
+        }
+        const detailsSeen = await checkoutPage.evaluate(
+          async ({ path, body }) => {
+            const res = await fetch(path, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body,
+            });
+            return { status: res.status, url: res.url, text: await res.text() };
+          },
+          { path: details.path, body: details.body },
+        );
+        // The page gets the answer before the result is reported.
+        const deadline = Date.now() + 3_000;
+        while (
+          !events.some((event) => event.type === "adyen_result") &&
+          Date.now() < deadline
+        ) {
+          await page.waitForTimeout(25);
+        }
+        return {
+          checkout,
+          origin,
+          seen,
+          answer,
+          relayCalls,
+          events,
+          detailsSeen,
+          resultCalls,
+        };
       } finally {
         await page?.close().catch(() => {});
         await handle?.detach();
@@ -1072,6 +1141,89 @@ addEventListener("message", (event) => {
         expect(eventText).not.toContain(sha256(blob));
       }
     }, 60_000);
+
+    it.each([307, 308])(
+      "reports only the final answer of a merchant details POST %i-redirected by real Chromium",
+      async (status) => {
+        const detailsBody = JSON.stringify({
+          details: { threeDSResult: "eyJ.3ds-result" },
+        });
+        // Not a details path by itself: only Chromium's redirect link binds it.
+        const redirected = "/api/payments/details/redirected";
+        const final = JSON.stringify({
+          resultCode: "Authorised",
+          pspReference: "PSPREDIRECTED1",
+        });
+        const {
+          origin,
+          seen,
+          answer,
+          detailsSeen,
+          relayCalls,
+          resultCalls,
+          events,
+        } = await runAdyenCheckout({
+          postBlobs: true,
+          payAnswer: JSON.stringify({
+            resultCode: "ChallengeShopper",
+            action: { type: "threeDS2", token: "tok" },
+          }),
+          details: {
+            path: "/api/payments/details",
+            body: detailsBody,
+            answers: {
+              // A final code on the redirect itself must not be reported.
+              "/api/payments/details": {
+                status,
+                headers: {
+                  location: redirected,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({ resultCode: "Refused" }),
+              },
+              [redirected]: {
+                status: 200,
+                headers: { "content-type": "application/json" },
+                body: final,
+              },
+            },
+          },
+        });
+
+        expect(seen).toStrictEqual({ status: 200, text: answer });
+        expect(detailsSeen).toStrictEqual({
+          status: 200,
+          url: `${origin}${redirected}`,
+          text: final,
+        });
+        expect(
+          hits.filter((hit) => hit.path.startsWith("/api/payments/details")),
+        ).toStrictEqual([
+          { path: "/api/payments/details", body: detailsBody },
+          { path: redirected, body: detailsBody },
+        ]);
+        expect(relayCalls).toHaveLength(1);
+        expect(resultCalls).toStrictEqual([
+          {
+            injectionRef: PLACEHOLDER.injectionRef,
+            resultCode: "Authorised",
+            pspReference: "PSPREDIRECTED1",
+          },
+        ]);
+        expect(
+          events.filter((event) => event.type === "adyen_result"),
+        ).toStrictEqual([
+          {
+            type: "adyen_result",
+            url: origin,
+            resultCode: "Authorised",
+            status: 200,
+            reported: true,
+          },
+        ]);
+      },
+      60_000,
+    );
 
     it("observes all four Adyen hashes in a same-origin checkout iframe already loaded before attachInterceptor", async () => {
       const { checkout, seen, answer, relayCalls } = await runAdyenCheckout({
