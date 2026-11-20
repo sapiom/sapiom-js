@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { ADYEN_BLOB_BINDING, ADYEN_WATCH_WORLD } from "./adyen-blobs";
+import { CdpConnection } from "./cdp";
 import type {
   AdyenResultRequest,
   AdyenResultResponse,
@@ -12,6 +13,7 @@ import { attachInterceptor, type InterceptorEvent } from "./interceptor";
 import type { PayLogger } from "./logger";
 import type { PaymentRelay } from "./relay";
 import {
+  NO_REPLY,
   startCdpStub,
   waitFor,
   type CdpCommand,
@@ -104,6 +106,8 @@ async function arm(options: {
   observed?: Partial<Record<BlobField, string>>;
   /** Paused requests whose `Fetch.fulfillRequest` the browser rejects. */
   unfulfillable?: string[];
+  /** Paused requests whose `Fetch.fulfillRequest` the browser never acknowledges. */
+  unacknowledged?: string[];
 }): Promise<Harness> {
   const stub = await startCdpStub((command) => {
     if (command.method === "Target.getTargets" && options.recoveredFrames) {
@@ -157,6 +161,12 @@ async function arm(options: {
       options.unfulfillable?.includes(command.params.requestId as string)
     ) {
       throw new Error("Invalid InterceptionId.");
+    }
+    if (
+      command.method === "Fetch.fulfillRequest" &&
+      options.unacknowledged?.includes(command.params.requestId as string)
+    ) {
+      return NO_REPLY;
     }
     if (command.method === "Fetch.getResponseBody") {
       const body =
@@ -1358,6 +1368,63 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     });
     expect(harness.relayCalls).toHaveLength(1);
     expect(harness.resultCalls).toEqual([]);
+  });
+
+  it("keeps the challenge open when the page may have received its Pay answer, so its final details answer is reported once", async () => {
+    // Chrome may deliver a fulfil whose acknowledgement never arrives; the
+    // wait for it is shortened from its 15 s default.
+    const send = CdpConnection.prototype.send;
+    const shortened = jest
+      .spyOn(CdpConnection.prototype, "send")
+      .mockImplementation(function (
+        this: CdpConnection,
+        method,
+        params,
+        sessionId,
+        timeoutMs,
+      ) {
+        return send.call(
+          this,
+          method,
+          params,
+          sessionId,
+          method === "Fetch.fulfillRequest" ? 50 : timeoutMs,
+        );
+      });
+    try {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+        unacknowledged: ["pay"],
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await waitFor(
+        () => harness!.events.some((e) => e.type === "relayed_unfulfilled"),
+        "relayed_unfulfilled",
+      );
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "details")).params).toStrictEqual({
+        requestId: "details",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(
+        () => harness!.events.some((e) => e.type === "adyen_result"),
+        "adyen_result",
+      );
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(
+        harness.events.filter((e) => e.type === "adyen_result"),
+      ).toHaveLength(1);
+    } finally {
+      shortened.mockRestore();
+    }
   });
 
   it.each(["pay-a", "pay-b"])(

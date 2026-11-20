@@ -374,11 +374,13 @@ type Decision =
       opening?: OpeningChallenge;
     };
 
-type SettleAction =
-  | "continue"
-  | "continueForAnswer"
-  | "fail"
-  | { fulfill: RelayedHttpResponse };
+type SettleAction = "continue" | "continueForAnswer" | "fail";
+
+/**
+ * How a relayed answer's hand-off to the page ended: Chrome took it, refused
+ * it with a CDP error, or never confirmed either way (it may have it).
+ */
+type Fulfilment = "fulfilled" | "refused" | "unconfirmed";
 
 interface AdyenDetailsWatch {
   url: string;
@@ -1185,13 +1187,17 @@ class PaymentInterceptor {
   }
 
   /**
-   * A Pay answer no delivery handed to the page opens no challenge: a later
-   * details call must not be bound to an action the page never received.
+   * A Pay answer Chrome refused on every delivery opens no challenge: a later
+   * details call must not be bound to an action the page never received. An
+   * unconfirmed delivery may have reached the page, so it keeps the challenge.
    */
-  private settleOpening(opening: OpeningChallenge, fulfilled: boolean): void {
+  private settleOpening(
+    opening: OpeningChallenge,
+    fulfilment: Fulfilment,
+  ): void {
     const { challenge } = opening;
     challenge.fulfilling -= 1;
-    if (fulfilled) challenge.delivered = true;
+    if (fulfilment !== "refused") challenge.delivered = true;
     if (challenge.delivered || challenge.fulfilling > 0) return;
     this.close3ds(opening.page, opening.checkout, challenge);
   }
@@ -1509,10 +1515,10 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
-    const fulfilled = await this.settle(entry, { fulfill: decision.response });
-    if (decision.opening) this.settleOpening(decision.opening, fulfilled);
+    const fulfilment = await this.fulfil(entry, decision.response);
+    if (decision.opening) this.settleOpening(decision.opening, fulfilment);
     this.emit(
-      fulfilled
+      fulfilment === "fulfilled"
         ? { type: "relayed", url, status: decision.response.status }
         : {
             type: "relayed_unfulfilled",
@@ -1548,20 +1554,34 @@ class PaymentInterceptor {
     }
     entry.phase = { status: "done" };
     try {
-      if (action === "fail") {
-        await failRequest(this.connection, entry.sessionId, entry.requestId);
-        return true;
-      }
+      await failRequest(this.connection, entry.sessionId, entry.requestId);
+      return true;
+    } finally {
+      this.inflight.delete(entry.key);
+    }
+  }
+
+  private async fulfil(
+    entry: Inflight,
+    response: RelayedHttpResponse,
+  ): Promise<Fulfilment> {
+    if (entry.phase.status !== "open") return "refused";
+    entry.phase = { status: "done" };
+    try {
       await fulfillRequest(
         this.connection,
         entry.sessionId,
         entry.requestId,
-        action.fulfill,
+        response,
       );
-      return true;
-    } catch {
+      return "fulfilled";
+    } catch (error) {
       await failRequest(this.connection, entry.sessionId, entry.requestId);
-      return false;
+      // Only a CDP error reply proves Chrome refused the answer: a command
+      // that timed out here is not cancelled there and may still land.
+      return error instanceof CdpCommandError && !error.timedOut
+        ? "refused"
+        : "unconfirmed";
     } finally {
       this.inflight.delete(entry.key);
     }

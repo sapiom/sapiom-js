@@ -9,6 +9,9 @@ export interface CdpCommand {
   sessionId?: string;
 }
 
+/** Returned by a `CdpReply` for a command the browser never acknowledges. */
+export const NO_REPLY = Symbol("no reply");
+
 /** Returns the `result` for a command, or `undefined` for `{}`; throwing answers with a CDP error. */
 export type CdpReply = (command: CdpCommand) => unknown;
 
@@ -62,7 +65,9 @@ export async function startCdpStub(
     commands.push(command);
     let answer: Record<string, unknown>;
     try {
-      answer = { id: message.id, result: reply(command) ?? {} };
+      const result = reply(command);
+      if (result === NO_REPLY) return;
+      answer = { id: message.id, result: result ?? {} };
     } catch (error) {
       answer = { id: message.id, error: { message: String(error) } };
     }
