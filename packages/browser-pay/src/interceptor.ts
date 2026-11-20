@@ -345,7 +345,7 @@ type HeldRead =
 
 type Decision =
   | { action: "continue" }
-  | { action: "awaitAdyenResult" }
+  | { action: "awaitAdyenResult"; challenge: symbol }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
   | { action: "relayed"; response: RelayedHttpResponse };
@@ -387,14 +387,17 @@ class PaymentInterceptor {
   /**
    * Open 3-D Secure challenges, by page session and checkout: each relayed
    * payment answering a 3-D Secure code adds one, and a details call's final
-   * code closes one. Counted, as merchant routes on one origin share a
-   * checkout key and one payment's final answer must not close another's.
+   * code closes its admitted challenge. Merchant routes on one origin share
+   * a checkout key; a stale answer must not close a newer challenge.
    */
-  private readonly adyenAwaiting3ds = new Map<string, Map<string, number>>();
+  private readonly adyenAwaiting3ds = new Map<
+    string,
+    Map<string, Set<symbol>>
+  >();
   /** Merchant `/payments/details` calls whose answer is still to come, by inflight key. */
   private readonly adyenDetailsWatches = new Map<
     string,
-    { url: string; sessionId: string }
+    { url: string; sessionId: string; challenge: symbol }
   >();
   /** Answers being read, handed to the page and reported; detach() waits for them. */
   private readonly answers = new Set<Promise<void>>();
@@ -819,7 +822,9 @@ class PaymentInterceptor {
       read.kind === "miss" && !adyen
         ? this.openDetailsCall(entry.sessionId, request)
         : undefined;
-    if (details && !details.relay) return { action: "awaitAdyenResult" };
+    if (details && !details.relay) {
+      return { action: "awaitAdyenResult", challenge: details.challenge };
+    }
     if (read.kind === "miss" && !adyen && !details) {
       return { action: "continue" };
     }
@@ -909,7 +914,7 @@ class PaymentInterceptor {
         page,
         details?.checkout ?? adyenCheckout(new URL(request.url)),
         adyenPaymentResult(decision.response.body).resultCode,
-        details !== undefined,
+        details?.challenge,
       );
     }
     return decision;
@@ -923,14 +928,16 @@ class PaymentInterceptor {
   private openDetailsCall(
     sessionId: string,
     request: PausedRequest,
-  ): { checkout: string; relay: boolean } | undefined {
+  ): { checkout: string; relay: boolean; challenge: symbol } | undefined {
     if (this.closed) return undefined;
     const call = adyenDetailsCall(request.method, request.url);
     if (!call) return undefined;
-    const open =
-      this.adyenAwaiting3ds.get(this.pageOf(sessionId))?.get(call.checkout) ??
-      0;
-    return open > 0 ? call : undefined;
+    const challenge = this.adyenAwaiting3ds
+      .get(this.pageOf(sessionId))
+      ?.get(call.checkout)
+      ?.values()
+      .next().value;
+    return challenge === undefined ? undefined : { ...call, challenge };
   }
 
   /**
@@ -944,20 +951,23 @@ class PaymentInterceptor {
     page: string,
     checkout: string,
     resultCode: AdyenResultCode,
-    details: boolean,
+    challenge?: symbol,
   ): void {
     const awaiting = this.adyenAwaiting3ds.get(page);
-    const open = awaiting?.get(checkout) ?? 0;
+    const open = awaiting?.get(checkout);
     if (isAdyenActionResult(resultCode)) {
-      if (!details && !this.closed && this.sessions.has(page)) {
+      if (challenge === undefined && !this.closed && this.sessions.has(page)) {
         this.adyenAwaiting3ds.set(
           page,
-          (awaiting ?? new Map<string, number>()).set(checkout, open + 1),
+          (awaiting ?? new Map<string, Set<symbol>>()).set(
+            checkout,
+            (open ?? new Set<symbol>()).add(Symbol("adyen challenge")),
+          ),
         );
       }
-    } else if (details && resultCode !== "unknown" && open > 0) {
-      if (open > 1) awaiting?.set(checkout, open - 1);
-      else awaiting?.delete(checkout);
+    } else if (challenge !== undefined && resultCode !== "unknown") {
+      open?.delete(challenge);
+      if (open?.size === 0) awaiting?.delete(checkout);
     }
   }
 
@@ -987,14 +997,14 @@ class PaymentInterceptor {
       (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
     );
     const checkout = adyenCheckout(new URL(watch.url));
-    const open = this.adyenAwaiting3ds.get(page)?.get(checkout) ?? 0;
+    const open = this.adyenAwaiting3ds.get(page)?.get(checkout);
     const final =
-      open > 0 &&
+      open?.has(watch.challenge) &&
       result.resultCode !== "unknown" &&
       !isAdyenActionResult(result.resultCode);
-    this.track3ds(page, checkout, result.resultCode, true);
+    this.track3ds(page, checkout, result.resultCode, watch.challenge);
     await continueRequest(this.connection, sessionId, requestId);
-    // Another details answer may already have closed every challenge here.
+    // Another details answer may already have closed this admitted challenge.
     if (!final) return;
     const reported = await this.reportAdyenResult(result);
     this.emit({
@@ -1226,6 +1236,7 @@ class PaymentInterceptor {
       this.adyenDetailsWatches.set(entry.key, {
         url,
         sessionId: entry.sessionId,
+        challenge: decision.challenge,
       });
       const continued = await this.settle(entry, "continueForAnswer");
       if (!continued) this.adyenDetailsWatches.delete(entry.key);

@@ -995,6 +995,95 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     });
   });
 
+  it("binds merchant details answers to their admitted challenge", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE, CHALLENGE] }),
+      responseBodies: Object.fromEntries(
+        ["a-first", "a-stale", "b-final"].map((id) => [
+          id,
+          JSON.stringify({ resultCode: "Authorised", pspReference: id.replace(/-/g, "") }),
+        ]),
+      ),
+    });
+    pause(harness.stub, "pay-a", ADVANCED);
+    await settle(harness.stub, "pay-a");
+    for (const id of ["a-first", "a-stale"]) {
+      pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+      await settle(harness.stub, id);
+    }
+    answerPause(harness.stub, "a-first", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "A final report");
+    pause(harness.stub, "pay-b", {
+      ...ADVANCED,
+      body: { ...ADVANCED.body, reference: "order-b" },
+    });
+    await settle(harness.stub, "pay-b");
+    answerPause(harness.stub, "a-stale", MERCHANT_DETAILS);
+    await waitFor(
+      () => continues(harness!.stub, "a-stale").length === 2,
+      "stale A",
+    );
+    pause(harness.stub, "b-final", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "b-final")).params).toStrictEqual({
+      requestId: "b-final",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "b-final", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 2, "B final report");
+    expect(harness.resultCalls.map((call) => call.pspReference)).toEqual([
+      "afirst",
+      "bfinal",
+    ]);
+  });
+
+  it("binds relayed sessions details answers to their admitted challenge", async () => {
+    let releaseStale!: (response: RelayResponse) => void;
+    const stale = new Promise<RelayResponse>((resolve) => {
+      releaseStale = resolve;
+    });
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: async (request) => {
+        if (request.request.url === SESSIONS.url) return relayedBody(CHALLENGE);
+        if (JSON.parse(request.request.body).details.threeDSResult === "stale")
+          return stale;
+        return AUTHORISED;
+      },
+    });
+    pause(harness.stub, "pay-a", SESSIONS);
+    await settle(harness.stub, "pay-a");
+    pause(harness.stub, "a-stale", {
+      url: SESSIONS_DETAILS,
+      body: { details: { threeDSResult: "stale" } },
+    });
+    await waitFor(() => harness!.relayCalls.length === 2, "stale A admitted");
+    pause(harness.stub, "a-first", {
+      url: SESSIONS_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "a-first");
+    pause(harness.stub, "pay-b", {
+      ...SESSIONS,
+      body: { ...SESSIONS.body, reference: "order-b" },
+    });
+    await settle(harness.stub, "pay-b");
+    releaseStale(AUTHORISED);
+    await settle(harness.stub, "a-stale");
+    pause(harness.stub, "b-final", {
+      url: SESSIONS_DETAILS,
+      body: { details: { threeDSResult: "b-final" } },
+    });
+    expect((await settle(harness.stub, "b-final")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(harness.relayCalls).toHaveLength(5);
+    expect(harness.resultCalls).toEqual([]);
+  });
+
   it("does not watch a details call from another tab", async () => {
     harness = await arm({
       frames: KEY_FRAME,
