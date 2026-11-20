@@ -358,6 +358,12 @@ type SettleAction =
   | "fail"
   | { fulfill: RelayedHttpResponse };
 
+interface AdyenDetailsWatch {
+  url: string;
+  sessionId: string;
+  challenge: symbol;
+}
+
 type Listener = (event: InterceptorEvent) => void;
 
 export async function attachInterceptor(
@@ -397,10 +403,7 @@ class PaymentInterceptor {
     Map<string, Set<symbol>>
   >();
   /** Merchant `/payments/details` calls whose answer is still to come, by inflight key. */
-  private readonly adyenDetailsWatches = new Map<
-    string,
-    { url: string; sessionId: string; challenge: symbol }
-  >();
+  private readonly adyenDetailsWatches = new Map<string, AdyenDetailsWatch>();
   /** Answers being read, handed to the page and reported; detach() waits for them. */
   private readonly answers = new Set<Promise<void>>();
   /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
@@ -853,21 +856,10 @@ class PaymentInterceptor {
       ? this.adyenDetailsWatches.get(previousKey)
       : undefined;
     if (watch && previousKey) this.adyenDetailsWatches.delete(previousKey);
-    if (watch && isPageOrigin(request.url, new URL(watch.url).origin)) {
-      const key = inflightKey(sessionId, requestId);
-      this.adyenDetailsWatches.set(key, watch);
-      const answer = continueRequest(
-        this.connection,
-        sessionId,
-        requestId,
-        true,
-      ).then((continued) => {
-        if (!continued) this.adyenDetailsWatches.delete(key);
-      });
-      this.answers.add(answer);
-      void answer.finally(() => this.answers.delete(answer));
-      return;
-    }
+    const redirectWatch =
+      watch && isPageOrigin(request.url, new URL(watch.url).origin)
+        ? watch
+        : undefined;
     this.noteAdyenRequest(request);
     const key = inflightKey(sessionId, requestId);
     if (this.inflight.has(key)) return;
@@ -879,6 +871,7 @@ class PaymentInterceptor {
     };
     this.inflight.set(key, entry);
     if (
+      !redirectWatch &&
       canContinueWithoutReading(
         request.method,
         request.url,
@@ -889,16 +882,23 @@ class PaymentInterceptor {
       void this.settle(entry, "continue");
       return;
     }
-    void this.handlePaused(entry, request);
+    void this.handlePaused(entry, request, redirectWatch);
   }
 
   private async handlePaused(
     entry: Inflight,
     request: PausedRequest,
+    redirectWatch?: AdyenDetailsWatch,
   ): Promise<void> {
     try {
       const decision = await this.decide(entry, request);
-      await this.apply(entry, request.url, decision);
+      if (redirectWatch && decision.action === "continue") {
+        this.adyenDetailsWatches.set(entry.key, redirectWatch);
+        const continued = await this.settle(entry, "continueForAnswer");
+        if (!continued) this.adyenDetailsWatches.delete(entry.key);
+      } else {
+        await this.apply(entry, request.url, decision);
+      }
     } catch {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url: request.url, reason: "network" });

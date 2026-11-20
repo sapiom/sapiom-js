@@ -1602,6 +1602,61 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     expect(harness.resultCalls[0]?.resultCode).toBe("Refused");
   });
 
+  it("blocks an unreadable 307 POST hop just like an ordinary request", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 307,
+      location: `${PAGE_ORIGIN}/final`,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "307 continued",
+    );
+    for (const id of ["ordinary-unreadable", "hop-unreadable"]) {
+      harness.stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: id,
+          ...(id === "hop-unreadable"
+            ? { redirectedRequestId: "details" }
+            : {}),
+          request: {
+            url: `${PAGE_ORIGIN}/final`,
+            method: "POST",
+            headers: {},
+            hasPostData: true,
+          },
+        },
+      });
+      expect((await settle(harness.stub, id)).method).toBe("Fetch.failRequest");
+      expect(harness.events.at(-1)).toMatchObject({
+        type: "failed",
+        reason: "unreadable_body",
+      });
+    }
+    expect(harness.resultCalls).toEqual([]);
+    expect(harness.relayCalls).toHaveLength(1);
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
+  });
+
   it("leaves unrelated redirect requests unwatched", async () => {
     harness = await arm({ frames: KEY_FRAME });
     pause(
