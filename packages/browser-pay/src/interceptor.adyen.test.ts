@@ -706,6 +706,16 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
   it("installs the passive secured-fields listener on every armed session before it runs", async () => {
     harness = await arm({ frames: KEY_FRAME });
     for (const sessionId of ["page-1", "frame-number"]) {
+      // A session's setup can still be in flight when arm returns; its resume is the last step.
+      await waitFor(
+        () =>
+          harness!.stub.commands.some(
+            (command) =>
+              command.sessionId === sessionId &&
+              command.method === "Runtime.runIfWaitingForDebugger",
+          ),
+        `${sessionId} resumed`,
+      );
       const methods = harness.stub.commands
         .filter((command) => command.sessionId === sessionId)
         .map((command) => command.method);
