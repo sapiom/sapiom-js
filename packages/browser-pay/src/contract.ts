@@ -117,3 +117,91 @@ export function parseRelayResponse(value: unknown): RelayResponse {
     },
   };
 }
+
+/** Adyen `resultCode`s after a payment. `unknown` is any other answer, or none readable. */
+export const ADYEN_RESULT_CODES = [
+  "Authorised",
+  "Refused",
+  "Error",
+  "Cancelled",
+  "Pending",
+  "Received",
+  "RedirectShopper",
+  "IdentifyShopper",
+  "ChallengeShopper",
+] as const;
+
+export type AdyenResultCode = (typeof ADYEN_RESULT_CODES)[number] | "unknown";
+
+/**
+ * Codes asking the shopper for 3-D Secure. The page's agent completes it; the
+ * final code comes in the answer to the page's `/payments/details` call.
+ */
+export function isAdyenActionResult(code: AdyenResultCode): boolean {
+  return (
+    code === "RedirectShopper" ||
+    code === "IdentifyShopper" ||
+    code === "ChallengeShopper"
+  );
+}
+
+export interface AdyenResultRequest {
+  injectionRef: string;
+  resultCode: AdyenResultCode;
+  pspReference?: string;
+}
+
+/**
+ * The backend's answer to a reported result. `pending` means it changed
+ * nothing: the code was not final. `refused` carries the error body's `code`,
+ * for example `RESULT_CONFLICT` when another result was already recorded.
+ */
+export type AdyenResultResponse =
+  | { outcome: AdyenResultOutcome; resultCode: string }
+  | { outcome: "refused"; status: number; code: string; retryable?: boolean };
+
+/** `recorded`: the backend stored the result but completion is off or dry-run. */
+type AdyenResultOutcome = "completed" | "failed" | "pending" | "recorded";
+
+function isAdyenResultOutcome(value: unknown): value is AdyenResultOutcome {
+  return (
+    value === "completed" ||
+    value === "failed" ||
+    value === "pending" ||
+    value === "recorded"
+  );
+}
+
+export function parseAdyenResultResponse(
+  value: unknown,
+): Extract<AdyenResultResponse, { resultCode: string }> {
+  if (
+    !isRecord(value) ||
+    typeof value.resultCode !== "string" ||
+    !isAdyenResultOutcome(value.outcome)
+  ) {
+    throw new Error("Adyen result report returned an unreadable response");
+  }
+  return {
+    outcome: value.outcome,
+    resultCode: value.resultCode,
+  };
+}
+
+/** A refusal's `code`, or `undefined` when the error body has none. */
+export function adyenResultRefusal(
+  status: number,
+  value: unknown,
+): Extract<AdyenResultResponse, { outcome: "refused" }> | undefined {
+  if (!isRecord(value) || typeof value.code !== "string" || !value.code) {
+    return undefined;
+  }
+  return {
+    outcome: "refused",
+    status,
+    code: value.code,
+    ...(typeof value.retryable === "boolean"
+      ? { retryable: value.retryable }
+      : {}),
+  };
+}

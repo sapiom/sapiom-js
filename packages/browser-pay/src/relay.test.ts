@@ -453,3 +453,164 @@ function stalledBody(
   });
   return Promise.resolve(new Response(stream, { status: 200 }));
 }
+
+describe("httpPaymentRelay adyenResult", () => {
+  const RESULT = {
+    injectionRef: "inj_fixture_adyen",
+    resultCode: "Authorised",
+    pspReference: "PSP0000000000001",
+  } as const;
+
+  async function answering(
+    status: number,
+    body: string,
+    run: (relay: ReturnType<typeof httpPaymentRelay>) => Promise<void>,
+  ): Promise<void> {
+    const server = await listen((_req, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(body);
+    });
+    try {
+      await run(
+        httpPaymentRelay({
+          baseUrl: origin(server),
+          apiKey: "test-key",
+          transactionId: "tx_adyen",
+        }),
+      );
+    } finally {
+      server.close();
+    }
+  }
+
+  it("POSTs the injection, result code and PSP reference to the result path with the api key", async () => {
+    const seen: {
+      method?: string;
+      url?: string;
+      headers?: http.IncomingHttpHeaders;
+      body?: string;
+    } = {};
+    const server = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        seen.method = req.method;
+        seen.url = req.url;
+        seen.headers = req.headers;
+        seen.body = Buffer.concat(chunks).toString("utf8");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            resultCode: "Authorised",
+            outcome: "completed",
+            extra: "ignored",
+          }),
+        );
+      });
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_adyen",
+      });
+      await expect(relay.adyenResult!(RESULT)).resolves.toStrictEqual({
+        outcome: "completed",
+        resultCode: "Authorised",
+      });
+      expect(seen.method).toBe("POST");
+      expect(seen.url).toBe("/v1/transactions/tx_adyen/payment/adyen/result");
+      expect(seen.headers?.["x-api-key"]).toBe("test-key");
+      expect(seen.headers?.["content-type"]).toBe("application/json");
+      expect(JSON.parse(seen.body ?? "")).toStrictEqual(RESULT);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("sends no pspReference key when there is none", async () => {
+    let body = "";
+    const server = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        body = Buffer.concat(chunks).toString("utf8");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"resultCode":"unknown","outcome":"pending"}');
+      });
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_adyen",
+      });
+      await expect(
+        relay.adyenResult!({ injectionRef: "inj_x", resultCode: "unknown" }),
+      ).resolves.toStrictEqual({ outcome: "pending", resultCode: "unknown" });
+      expect(JSON.parse(body)).toStrictEqual({
+        injectionRef: "inj_x",
+        resultCode: "unknown",
+      });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("accepts the recorded outcome", async () => {
+    const server = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"resultCode":"Authorised","outcome":"recorded"}');
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_adyen",
+      });
+      await expect(
+        relay.adyenResult!({ injectionRef: "inj_x", resultCode: "Authorised" }),
+      ).resolves.toStrictEqual({
+        outcome: "recorded",
+        resultCode: "Authorised",
+      });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("returns a refusal's code and retryable from the error body", async () => {
+    await answering(
+      409,
+      '{"code":"RESULT_CONFLICT","retryable":false,"message":"x"}',
+      async (relay) => {
+        await expect(relay.adyenResult!(RESULT)).resolves.toStrictEqual({
+          outcome: "refused",
+          status: 409,
+          code: "RESULT_CONFLICT",
+          retryable: false,
+        });
+      },
+    );
+  });
+
+  it("throws without the response text on an error with no code or an unreadable 200", async () => {
+    const replies: [number, string][] = [
+      [500, '{"secret":"leaked"}'],
+      [200, '{"outcome":"done","resultCode":"leaked"}'],
+      [200, "leaked not json"],
+    ];
+    for (const [status, body] of replies) {
+      await answering(status, body, async (relay) => {
+        const error = await relay.adyenResult!(RESULT).catch(
+          (caught: unknown) => caught as Error,
+        );
+        expect(error).toBeInstanceOf(Error);
+        if (status !== 200) expect(error).toBeInstanceOf(RelayHttpError);
+        expect(
+          JSON.stringify(error, Object.getOwnPropertyNames(error)),
+        ).not.toContain("leaked");
+      });
+    }
+  });
+});
