@@ -435,6 +435,10 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       "https://user@checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS123/payments",
       "POST",
     ],
+    [
+      "https://checkoutshopper-test.adyen.com:8443/checkoutshopper/v1/sessions/CS123/payments",
+      "POST",
+    ],
     [SESSIONS.url, "PUT"],
     [ADVANCED.url, "PUT"],
   ])(

@@ -1512,6 +1512,7 @@ function isAdyenCheckoutDestination(url: string, clientKey: string): boolean {
     const testHost = parsed.hostname === "checkoutshopper-test.adyen.com";
     return (
       parsed.protocol === "https:" &&
+      parsed.port === "" &&
       !parsed.username &&
       !parsed.password &&
       !parsed.hash &&
