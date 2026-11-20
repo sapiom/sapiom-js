@@ -229,6 +229,7 @@ function pause(
     headers?: Record<string, string>;
   },
   networkId?: string,
+  redirectedRequestId?: string,
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
@@ -236,6 +237,7 @@ function pause(
     params: {
       requestId,
       ...(networkId ? { networkId } : {}),
+      ...(redirectedRequestId ? { redirectedRequestId } : {}),
       request: {
         url: request.url,
         method: request.method ?? "POST",
@@ -917,18 +919,30 @@ describe("Adyen's answer to a re-encrypted payment", () => {
     return armed;
   }
 
-  function respond(stub: CdpStub, requestId: string, status?: number): void {
+  function respond(
+    stub: CdpStub,
+    requestId: string,
+    status?: number,
+    options: { location?: string; url?: string; method?: string } = {},
+  ): void {
     stub.emit({
       method: "Fetch.requestPaused",
       sessionId: "page-1",
       params: {
         requestId,
-        request: { url: ADVANCED.url, method: "POST", headers: {} },
+        request: {
+          url: options.url ?? ADVANCED.url,
+          method: options.method ?? "POST",
+          headers: {},
+        },
         ...(status !== undefined
           ? {
               responseStatusCode: status,
               responseHeaders: [
                 { name: "content-type", value: "application/json" },
+                ...(options.location
+                  ? [{ name: "Location", value: options.location }]
+                  : []),
               ],
             }
           : { responseErrorReason: "Failed" }),
@@ -1084,6 +1098,153 @@ describe("Adyen's answer to a re-encrypted payment", () => {
       harness.events.filter((event) => event.type === "adyen_result"),
     ).toHaveLength(1);
     expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+  });
+
+  it.each(["Authorised", "Refused"] as const)(
+    "reports only terminal %s after a POST -> 303 -> GET -> 302 -> GET chain",
+    async (resultCode) => {
+      harness = await payWithoutAnswer();
+      harness.responseBodies.set("req-pay", "");
+      const resultUrl = "https://shop.example/result";
+      const finalUrl = "https://shop.example/final";
+      respond(harness.stub, "req-pay", 303, { location: resultUrl });
+      await waitFor(
+        () => responseCommands(harness!.stub, "req-pay").length >= 1,
+        "303 continued",
+      );
+      expect(harness.resultCalls).toHaveLength(0);
+      expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+
+      pause(
+        harness.stub,
+        "req-result",
+        { url: resultUrl, method: "GET" },
+        "net-pay",
+        "req-pay",
+      );
+      expect((await settle(harness.stub, "req-result")).params).toStrictEqual({
+        requestId: "req-result",
+        interceptResponse: true,
+      });
+      respond(harness.stub, "req-result", 302, {
+        url: resultUrl,
+        method: "GET",
+        location: finalUrl,
+      });
+      await waitFor(
+        () => responseCommands(harness!.stub, "req-result").length >= 1,
+        "302 continued",
+      );
+      expect(harness.resultCalls).toHaveLength(0);
+      pause(
+        harness.stub,
+        "req-final",
+        { url: finalUrl, method: "GET" },
+        "net-pay",
+        "req-result",
+      );
+      expect((await settle(harness.stub, "req-final")).params).toStrictEqual({
+        requestId: "req-final",
+        interceptResponse: true,
+      });
+      harness.responseBodies.set("req-final", JSON.stringify({ resultCode }));
+      respond(harness.stub, "req-final", 200, { url: finalUrl, method: "GET" });
+      expect(await resultEvent(harness)).toStrictEqual({
+        type: "adyen_result",
+        url: PAGE_ORIGIN,
+        resultCode,
+        status: 200,
+        reported: true,
+      });
+      expect(harness.resultCalls).toStrictEqual([
+        { injectionRef: HELD.injectionRef, resultCode },
+      ]);
+      respond(harness.stub, "req-final", 200, { url: finalUrl, method: "GET" });
+      await waitFor(
+        () => responseCommands(harness!.stub, "req-final").length === 3,
+        "duplicate terminal response continued",
+      );
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(harness.encryptCalls).toHaveLength(1);
+      expect(
+        harness.events.filter((event) => event.type === "adyen_result"),
+      ).toHaveLength(1);
+      expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+      assertNothingSecret(harness);
+    },
+  );
+
+  it.each([
+    [303, undefined],
+    [304, "https://shop.example/result"],
+  ] as const)(
+    "reports status %s without following a non-redirect",
+    async (status, location) => {
+      harness = await payWithoutAnswer();
+      respond(harness.stub, "req-pay", status, { location });
+      expect(await resultEvent(harness)).toMatchObject({
+        resultCode: "Authorised",
+        status,
+      });
+      expect(harness.resultCalls).toHaveLength(1);
+    },
+  );
+
+  it("does not watch a redirect unrelated to a re-encrypted request", async () => {
+    harness = await arm({ result: recorded });
+    pause(
+      harness.stub,
+      "req-unrelated-hop",
+      { url: "https://shop.example/result", method: "GET" },
+      "net-other",
+      "req-other",
+    );
+    expect(
+      (await settle(harness.stub, "req-unrelated-hop")).params,
+    ).toStrictEqual({ requestId: "req-unrelated-hop" });
+    respond(harness.stub, "req-unrelated-hop", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-unrelated-hop").length === 1,
+      "unrelated response continued",
+    );
+    expect(harness.resultCalls).toHaveLength(0);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+  });
+
+  it("forgets a redirected watch when the hop's network request fails", async () => {
+    harness = await payWithoutAnswer();
+    respond(harness.stub, "req-pay", 303, {
+      location: "https://shop.example/result",
+    });
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-pay").length >= 1,
+      "redirect continued",
+    );
+    pause(
+      harness.stub,
+      "req-hop",
+      { url: "https://shop.example/result", method: "GET" },
+      "net-hop",
+      "req-pay",
+    );
+    await settle(harness.stub, "req-hop");
+    harness.stub.emit({
+      method: "Network.loadingFailed",
+      sessionId: "page-1",
+      params: { requestId: "net-hop", errorText: "net::ERR_FAILED" },
+    });
+    respond(harness.stub, "req-hop", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-hop").length === 1,
+      "failed hop response continued",
+    );
+    respond(harness.stub, "req-pay", 200);
+    await waitFor(
+      () => responseCommands(harness!.stub, "req-pay").length >= 2,
+      "old hop response continued",
+    );
+    expect(harness.resultCalls).toHaveLength(0);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
   });
 
   it("continues an answer it did not ask for and reports nothing", async () => {

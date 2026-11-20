@@ -745,6 +745,7 @@ class PaymentInterceptor {
         sessionId,
         requestId,
         response.status,
+        response.redirect,
       );
       this.answers.add(answer);
       void answer.finally(() => this.answers.delete(answer));
@@ -757,6 +758,30 @@ class PaymentInterceptor {
         url: request.url,
         reason: "unknown_session",
       });
+      return;
+    }
+    const redirectedRequestId = readStringField(
+      event.params,
+      "redirectedRequestId",
+    );
+    const previousKey = redirectedRequestId
+      ? inflightKey(sessionId, redirectedRequestId)
+      : undefined;
+    const watch = previousKey ? this.adyenResults.get(previousKey) : undefined;
+    if (watch && previousKey) {
+      const key = inflightKey(sessionId, requestId);
+      this.adyenResults.delete(previousKey);
+      this.adyenResults.set(key, {
+        ...watch,
+        networkId: request.networkId ?? watch.networkId,
+      });
+      const answer = continueRequest(this.connection, sessionId, requestId, {
+        interceptResponse: true,
+      }).then((continued) => {
+        if (!continued) this.adyenResults.delete(key);
+      });
+      this.answers.add(answer);
+      void answer.finally(() => this.answers.delete(answer));
       return;
     }
     this.noteAdyenRequest(request);
@@ -1051,9 +1076,20 @@ class PaymentInterceptor {
     sessionId: string,
     requestId: string,
     status: number | undefined,
+    redirect = false,
   ): Promise<void> {
     const key = inflightKey(sessionId, requestId);
     const url = this.adyenResults.get(key)?.url;
+    if (url !== undefined && redirect) {
+      // The next Fetch request names this hop in redirectedRequestId.
+      const continued = await continueRequest(
+        this.connection,
+        sessionId,
+        requestId,
+      );
+      if (!continued) this.adyenResults.delete(key);
+      return;
+    }
     // Deleting first makes a second answer for the same request pass untouched.
     this.adyenResults.delete(key);
     const body =
@@ -1892,9 +1928,16 @@ function parsePaused(
  */
 function responseStage(
   params: Record<string, unknown>,
-): { status?: number } | undefined {
+): { status?: number; redirect?: boolean } | undefined {
   const status = params.responseStatusCode;
-  if (typeof status === "number") return { status };
+  if (typeof status === "number") {
+    return {
+      status,
+      redirect:
+        [301, 302, 303, 307, 308].includes(status) &&
+        headerValue(params.responseHeaders, "location").length > 0,
+    };
+  }
   return params.responseErrorReason !== undefined ? {} : undefined;
 }
 
@@ -2011,7 +2054,7 @@ async function continueRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  override?: { postData: string; interceptResponse: boolean },
+  override?: { postData?: string; interceptResponse: boolean },
 ): Promise<boolean> {
   try {
     await connection.send(
@@ -2020,9 +2063,13 @@ async function continueRequest(
         requestId,
         ...(override
           ? {
-              postData: Buffer.from(override.postData, "utf8").toString(
-                "base64",
-              ),
+              ...(override.postData !== undefined
+                ? {
+                    postData: Buffer.from(override.postData, "utf8").toString(
+                      "base64",
+                    ),
+                  }
+                : {}),
               interceptResponse: override.interceptResponse,
             }
           : {}),
