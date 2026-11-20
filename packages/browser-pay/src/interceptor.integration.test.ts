@@ -764,36 +764,44 @@ if (!chromeBin) {
       }
     }, 60_000);
 
-    it("sends an Adyen payment on with the backend's encrypted fields, keyed by Adyen's own request, not the DOM", async () => {
-      const standIn = {
-        encryptedCardNumber: "eyJ.stand-in-number",
-        encryptedExpiryMonth: "eyJ.stand-in-month",
-        encryptedExpiryYear: "eyJ.stand-in-year",
-        encryptedSecurityCode: "eyJ.stand-in-cvc",
-      };
-      const real = {
-        encryptedCardNumber: `eyJ.${"n".repeat(700)}`,
-        encryptedExpiryMonth: `eyJ.${"m".repeat(500)}`,
-        encryptedExpiryYear: `eyJ.${"y".repeat(500)}`,
-        encryptedSecurityCode: `eyJ.${"c".repeat(500)}`,
+    it("relays an Adyen payment as adyen-checkout with the client key from Adyen's own request, not the DOM, and hands the page the relay's answer", async () => {
+      const placeholderBlobs = {
+        encryptedCardNumber: "eyJ.placeholder-number",
+        encryptedExpiryMonth: "eyJ.placeholder-month",
+        encryptedExpiryYear: "eyJ.placeholder-year",
+        encryptedSecurityCode: "eyJ.placeholder-cvc",
       };
       const order = {
         amount: { currency: "EUR", value: 1000 },
         reference: "order-ü-1",
-        paymentMethod: { type: "scheme", holderName: "J. Smith", ...standIn },
+        paymentMethod: {
+          type: "scheme",
+          holderName: "J. Smith",
+          ...placeholderBlobs,
+        },
       };
       const shop = await startServer(
         hits,
         `<!doctype html><title>adyen shop</title><pre id="clientKey">test_PLANTEDKEY9</pre><div data-client-key="test_PLANTEDKEY9"></div>`,
         "localhost",
       );
-      const encryptCalls: unknown[] = [];
+      const relayCalls: RelayRequest[] = [];
+      const answer = JSON.stringify({
+        resultCode: "Authorised",
+        pspReference: "PSP-INTEGRATION",
+      });
       const handle = await attachInterceptor(cdpUrl, {
         relay: {
-          relay: async () => ({ outcome: "unknown" }),
-          adyenEncrypt: async (request) => {
-            encryptCalls.push(request);
-            return { outcome: "encrypted", fields: real };
+          relay: async (request) => {
+            relayCalls.push(request);
+            return {
+              outcome: "relayed",
+              response: {
+                status: 200,
+                headers: { "content-type": "application/json" },
+                body: answer,
+              },
+            };
           },
         },
         placeholder: PLACEHOLDER,
@@ -823,33 +831,37 @@ if (!chromeBin) {
             return res.status;
           }),
         ).toBe(200);
-        const status = await page.evaluate(async (body) => {
+        const seen = await page.evaluate(async (body) => {
           const res = await fetch("/api/payments", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body,
           });
-          return res.status;
+          return { status: res.status, text: await res.text() };
         }, JSON.stringify(order));
 
-        expect(status).toBe(200);
-        const hit = hits.find((item) => item.path === "/api/payments");
-        expect(JSON.parse(hit?.body ?? "null")).toStrictEqual({
-          ...order,
-          paymentMethod: { ...order.paymentMethod, ...real },
-        });
-        expect(encryptCalls).toStrictEqual([
-          {
-            injectionRef: PLACEHOLDER.injectionRef,
-            clientKey: "test_INTEGRATIONKEY1",
-            pageOrigin: origin,
+        expect(seen).toStrictEqual({ status: 200, text: answer });
+        expect(hits.find((item) => item.path === "/api/payments")).toBe(
+          undefined,
+        );
+        expect(relayCalls).toHaveLength(1);
+        expect(relayCalls[0]).toMatchObject({
+          injectionRef: PLACEHOLDER.injectionRef,
+          profileId: "adyen-checkout",
+          adyen: { clientKey: "test_INTEGRATIONKEY1" },
+          pageOrigin: origin,
+          request: {
+            method: "POST",
+            url: `${origin}/api/payments`,
+            body: JSON.stringify(order),
           },
-        ]);
+        });
+        expect(relayCalls[0]?.request.headers.origin).toBe(origin);
         expect(events.map((event) => event.type)).toEqual([
           "paused",
-          "reencrypted",
+          "relayed",
         ]);
-        expect(JSON.stringify(encryptCalls)).not.toContain("PLANTEDKEY");
+        expect(JSON.stringify(relayCalls)).not.toContain("PLANTEDKEY");
       } finally {
         await page?.close().catch(() => {});
         await handle.detach();

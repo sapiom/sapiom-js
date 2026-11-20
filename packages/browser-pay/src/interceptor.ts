@@ -1,18 +1,15 @@
 import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
   paymentIdempotencyKey,
-  type AdyenEncryptedFields,
-  type AdyenEncryptResult,
   type RelayedHttpResponse,
+  type RelayRequest,
   type RelayResponse,
 } from "./contract.js";
 import {
   adyenClientKeysInRequest,
-  isAdyenClientKey,
   isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
-  withAdyenEncryptedFields,
   type HeldPlaceholder,
 } from "./detect.js";
 import { isRecord } from "./guards.js";
@@ -20,7 +17,6 @@ import { silentLogger, type PayLogger } from "./logger.js";
 import {
   isRelayTimeout,
   isRetryableRelayError,
-  RelayHttpError,
   RelayTimeoutError,
   type PaymentRelay,
 } from "./relay.js";
@@ -58,36 +54,6 @@ export interface AttachOptions {
   attemptTimeoutMs?: number;
   /** Defaults to a logger that discards every line. */
   logger?: PayLogger;
-  /**
-   * `true` turns Adyen secured-fields payments off for this attach: such a
-   * payment fails with `adyen_not_enabled` and the backend is not asked.
-   * There is no way to force them on: they run only when the backend's
-   * Adyen encryption answers with fields.
-   */
-  disableAdyenEncryption?: boolean;
-}
-
-/** Whether a page's Adyen secured-fields payment can be paid. */
-export type AdyenReadiness =
-  | { enabled: true }
-  | {
-      enabled: false;
-      reason: Extract<
-        FailureReason,
-        "adyen_not_enabled" | "adyen_client_key" | "adyen_encrypt"
-      >;
-    };
-
-/**
- * Asks, before any card is typed, whether an Adyen secured-fields payment on
- * `pageOrigin` with `clientKey` will be paid. `fillCard` takes one as
- * `adyen`; the interceptor handle is one.
- */
-export interface AdyenGate {
-  prepareAdyen(input: {
-    clientKey: string;
-    pageOrigin: string;
-  }): Promise<AdyenReadiness>;
 }
 
 export type FailureReason =
@@ -101,9 +67,7 @@ export type FailureReason =
   | "network"
   | "response_credential"
   | "headers_unrelayable"
-  | "adyen_not_enabled"
-  | "adyen_client_key"
-  | "adyen_encrypt";
+  | "adyen_client_key";
 
 export const KNOWN_REFUSAL_REASONS = [
   "unknown_injection",
@@ -143,8 +107,6 @@ export type InterceptorEvent =
   | { type: "paused"; url: string; method: string; targetType: string }
   | { type: "relayed"; url: string; status: number }
   | { type: "relayed_unfulfilled"; url: string; status: number }
-  /** An Adyen secured-fields payment continued with the card's own encrypted fields. */
-  | { type: "reencrypted"; url: string }
   | {
       type: "refused";
       url: string;
@@ -161,7 +123,7 @@ type PublicRefusal = Omit<
   "type" | "url"
 >;
 
-export interface InterceptorHandle extends AdyenGate {
+export interface InterceptorHandle {
   detach(): Promise<void>;
   /** Subscribe to outcomes. Returns an unsubscribe function. */
   on(listener: (event: InterceptorEvent) => void): () => void;
@@ -356,16 +318,11 @@ type HeldRead =
 
 type Decision =
   | { action: "continue" }
-  | { action: "reencrypted"; body: string }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
   | { action: "relayed"; response: RelayedHttpResponse };
 
-type SettleAction =
-  | "continue"
-  | "fail"
-  | { fulfill: RelayedHttpResponse }
-  | { continueWith: string };
+type SettleAction = "continue" | "fail" | { fulfill: RelayedHttpResponse };
 
 type Listener = (event: InterceptorEvent) => void;
 
@@ -393,17 +350,8 @@ class PaymentInterceptor {
   private readonly unknownKeys = new Set<string>();
   private readonly loggedRefusals = new Set<string>();
   private readonly pendingArms = new Set<Promise<void>>();
-  /** Fields a `prepareAdyen` call fetched, used once by the next matching payment. */
-  private readonly preparedAdyen = new Map<
-    string,
-    { fields: AdyenEncryptedFields; at: number }
-  >();
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
-  /** Counts `prepareAdyen` calls, so only the latest one's answer is kept. */
-  private adyenPrepareCalls = 0;
-  /** Counts not-enabled answers, so a success begun before one is never used. */
-  private adyenDenials = 0;
   private readonly timeoutMs: number;
   private readonly attemptTimeoutMs: number;
   private readonly logger: PayLogger;
@@ -442,7 +390,6 @@ class PaymentInterceptor {
     return {
       on: (listener) => this.subscribe(listener),
       detach: () => this.detach(),
-      prepareAdyen: (input) => this.prepareAdyen(input),
     };
   }
 
@@ -741,11 +688,9 @@ class PaymentInterceptor {
     if (read.kind === "unreadable") {
       return { action: "fail", reason: "unreadable_body" };
     }
-    if (read.kind === "miss") {
-      return isAdyenSecuredFieldsPayment(read.body)
-        ? this.reencryptAdyen(entry, request, read.body)
-        : { action: "continue" };
-    }
+    const adyen =
+      read.kind === "miss" && isAdyenSecuredFieldsPayment(read.body);
+    if (read.kind === "miss" && !adyen) return { action: "continue" };
     if (this.closed) return { action: "fail", reason: "detached" };
     const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
     this.emit({
@@ -765,6 +710,25 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
+    let route: Pick<RelayRequest, "profileId" | "adyen">;
+    let forwarded = this.options.profileId ? profileHeader : genericHeader;
+    if (adyen) {
+      const clientKey = this.adyenClientKey();
+      if (!clientKey) {
+        this.logger.warn(
+          this.adyenClientKeys.size > 1
+            ? "two different adyen client keys seen in adyen requests"
+            : "adyen client key not seen in adyen requests",
+        );
+        return { action: "fail", reason: "adyen_client_key" };
+      }
+      route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
+      forwarded = adyenHeader;
+    } else if (this.options.profileId) {
+      route = { profileId: this.options.profileId };
+    } else {
+      route = {};
+    }
     const idempotencyKey = paymentIdempotencyKey(
       request.method,
       request.url,
@@ -773,200 +737,22 @@ class PaymentInterceptor {
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
-    const headers = forwardedHeaders(
-      request.headers,
-      this.options.profileId ? profileHeader : genericHeader,
-    );
+    const headers = forwardedHeaders(request.headers, forwarded);
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
-    return this.awaitRelay(
-      request,
-      headers,
-      read.body,
+    // Adyen checks the Origin a client key is allowed for; CDP can omit it.
+    if (adyen) headers.origin ??= pageOrigin;
+    return this.awaitRelay({
+      injectionRef: this.options.placeholder.injectionRef,
+      ...route,
       pageOrigin,
+      request: {
+        method: request.method,
+        url: request.url,
+        headers,
+        body: read.body,
+      },
       idempotencyKey,
-    );
-  }
-
-  /**
-   * Adyen secured fields send only ciphertext of the typed placeholder, so
-   * there is nothing to relay. The card vault encrypts the real card to the
-   * merchant's Adyen key instead, and the page's own request goes on with
-   * those four fields. Any failure fails the request: the placeholder's
-   * ciphertext is never sent on.
-   */
-  private async reencryptAdyen(
-    entry: Inflight,
-    request: PausedRequest,
-    body: string,
-  ): Promise<Decision> {
-    if (this.closed) return { action: "fail", reason: "detached" };
-    this.emit({
-      type: "paused",
-      url: request.url,
-      method: request.method,
-      targetType: this.sessions.get(entry.sessionId)?.type ?? "",
     });
-    const pageOrigin = await readPageOrigin(
-      this.connection,
-      this.sessions,
-      entry.sessionId,
-    );
-    if (!pageOrigin || this.closed) {
-      return {
-        action: "fail",
-        reason: pageOrigin ? "detached" : "page_origin",
-      };
-    }
-    if (!this.adyenAllowed()) {
-      return { action: "fail", reason: "adyen_not_enabled" };
-    }
-    const clientKey = this.adyenClientKey();
-    if (!clientKey) {
-      this.logger.warn(
-        this.adyenClientKeys.size > 1
-          ? "two different adyen client keys seen in adyen requests"
-          : "adyen client key not seen in adyen requests",
-      );
-      return { action: "fail", reason: "adyen_client_key" };
-    }
-    const prepared = this.takePreparedAdyen(clientKey, pageOrigin);
-    const denials = this.adyenDenials;
-    let result: AdyenEncryptResult;
-    if (prepared) {
-      result = { outcome: "encrypted", fields: prepared };
-    } else {
-      try {
-        result = await this.adyenEncrypt(clientKey, pageOrigin);
-      } catch (error) {
-        if (this.closed) return { action: "fail", reason: "detached" };
-        this.logAdyenFailure(error);
-        return { action: "fail", reason: "adyen_encrypt" };
-      }
-    }
-    if (this.closed) return { action: "fail", reason: "detached" };
-    if (result.outcome === "not_enabled") {
-      this.denyAdyen();
-      return { action: "fail", reason: "adyen_not_enabled" };
-    }
-    // A success that lands after any not-enabled answer is stale: the backend has since said off.
-    if (denials !== this.adyenDenials) {
-      return { action: "fail", reason: "adyen_not_enabled" };
-    }
-    // A second key seen while encrypting makes the first choice a guess.
-    if (this.adyenClientKey() !== clientKey) {
-      this.logger.warn("adyen client key changed during re-encryption");
-      return { action: "fail", reason: "adyen_client_key" };
-    }
-    return {
-      action: "reencrypted",
-      body: withAdyenEncryptedFields(body, result.fields),
-    };
-  }
-
-  /** Off when the caller turned it off or the relay cannot encrypt; otherwise the backend decides. */
-  private adyenAllowed(): boolean {
-    return (
-      this.options.disableAdyenEncryption !== true &&
-      typeof this.options.relay.adyenEncrypt === "function"
-    );
-  }
-
-  private async prepareAdyen(input: {
-    clientKey: string;
-    pageOrigin: string;
-  }): Promise<AdyenReadiness> {
-    // Any new answer replaces fields an earlier call prepared, so a later "off" is never bypassed.
-    const key = preparedKey(input.clientKey, input.pageOrigin);
-    this.preparedAdyen.delete(key);
-    const call = ++this.adyenPrepareCalls;
-    const denials = this.adyenDenials;
-    if (this.closed || !this.adyenAllowed()) {
-      return { enabled: false, reason: "adyen_not_enabled" };
-    }
-    if (!isAdyenClientKey(input.clientKey)) {
-      return { enabled: false, reason: "adyen_encrypt" };
-    }
-    if (this.adyenClientKeys.size > 1) {
-      this.logger.warn("two different adyen client keys seen in adyen requests");
-      return { enabled: false, reason: "adyen_client_key" };
-    }
-    let result: AdyenEncryptResult;
-    try {
-      result = await this.adyenEncrypt(input.clientKey, input.pageOrigin);
-    } catch (error) {
-      this.logAdyenFailure(error);
-      return { enabled: false, reason: "adyen_encrypt" };
-    }
-    if (result.outcome === "not_enabled") {
-      this.denyAdyen();
-      return { enabled: false, reason: "adyen_not_enabled" };
-    }
-    // A success that lands after any not-enabled answer is stale: the backend has since said off.
-    if (this.closed || denials !== this.adyenDenials) {
-      return { enabled: false, reason: "adyen_not_enabled" };
-    }
-    // A slower, older call must not restore fields a newer call cleared.
-    if (call === this.adyenPrepareCalls) {
-      this.preparedAdyen.set(key, { fields: result.fields, at: Date.now() });
-    }
-    return { enabled: true };
-  }
-
-  /** The backend's "off" covers every key and origin, so no prepared fields survive it. */
-  private denyAdyen(): void {
-    this.adyenDenials += 1;
-    this.preparedAdyen.clear();
-  }
-
-  /** Prepared fields are used once, and only while fresh. */
-  private takePreparedAdyen(
-    clientKey: string,
-    pageOrigin: string,
-  ): AdyenEncryptedFields | undefined {
-    const key = preparedKey(clientKey, pageOrigin);
-    const prepared = this.preparedAdyen.get(key);
-    this.preparedAdyen.delete(key);
-    if (!prepared || Date.now() - prepared.at > PREPARED_ADYEN_TTL_MS) {
-      return undefined;
-    }
-    return prepared.fields;
-  }
-
-  private logAdyenFailure(error: unknown): void {
-    this.logger.warn("adyen re-encryption failed", {
-      ...(error instanceof RelayHttpError ? { status: error.status } : {}),
-      timedOut: isRelayTimeout(error),
-    });
-  }
-
-  private async adyenEncrypt(
-    clientKey: string,
-    pageOrigin: string,
-  ): Promise<AdyenEncryptResult> {
-    const relay = this.options.relay;
-    if (typeof relay.adyenEncrypt !== "function") {
-      return { outcome: "not_enabled" };
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(new RelayTimeoutError()),
-      this.attemptTimeoutMs,
-    );
-    try {
-      return await failAfter(
-        relay.adyenEncrypt(
-          {
-            injectionRef: this.options.placeholder.injectionRef,
-            clientKey,
-            pageOrigin,
-          },
-          { signal: controller.signal },
-        ),
-        this.attemptTimeoutMs,
-      );
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   /** Another CDP client can fulfill a request before it pauses here; Network still sees it. */
@@ -995,22 +781,10 @@ class PaymentInterceptor {
     return keys.size === 1 ? [...keys][0] : undefined;
   }
 
-  private async awaitRelay(
-    request: PausedRequest,
-    headers: Record<string, string>,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
-  ): Promise<Decision> {
+  private async awaitRelay(relayRequest: RelayRequest): Promise<Decision> {
+    const { idempotencyKey } = relayRequest;
     const flight = this.relayOnce(idempotencyKey, (signal) =>
-      this.pollRelay(
-        request,
-        headers,
-        body,
-        pageOrigin,
-        idempotencyKey,
-        signal,
-      ),
+      this.pollRelay(relayRequest, signal),
     );
     let response: RelayResponse;
     try {
@@ -1028,13 +802,10 @@ class PaymentInterceptor {
   }
 
   private async pollRelay(
-    request: PausedRequest,
-    headers: Record<string, string>,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
+    relayRequest: RelayRequest,
     signal: AbortSignal,
   ): Promise<RelayResponse> {
+    const { idempotencyKey } = relayRequest;
     let poll = 0;
     for (;;) {
       if (signal.aborted || this.closed) throw abortError(signal);
@@ -1042,14 +813,7 @@ class PaymentInterceptor {
         return { outcome: "unknown" };
       }
       try {
-        const response = await this.postAttempt(
-          request,
-          headers,
-          body,
-          pageOrigin,
-          idempotencyKey,
-          signal,
-        );
+        const response = await this.postAttempt(relayRequest, signal);
         if (response.outcome === "unknown") {
           this.unknownKeys.add(idempotencyKey);
         }
@@ -1065,11 +829,7 @@ class PaymentInterceptor {
   }
 
   private async postAttempt(
-    request: PausedRequest,
-    headers: Record<string, string>,
-    body: string,
-    pageOrigin: string,
-    idempotencyKey: string,
+    relayRequest: RelayRequest,
     signal: AbortSignal,
   ): Promise<RelayResponse> {
     const attempt = new AbortController();
@@ -1085,21 +845,9 @@ class PaymentInterceptor {
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort);
     try {
-      return await this.options.relay.relay(
-        {
-          injectionRef: this.options.placeholder.injectionRef,
-          ...(this.options.profileId && { profileId: this.options.profileId }),
-          pageOrigin,
-          request: {
-            method: request.method,
-            url: request.url,
-            headers,
-            body,
-          },
-          idempotencyKey,
-        },
-        { signal: attempt.signal },
-      );
+      return await this.options.relay.relay(relayRequest, {
+        signal: attempt.signal,
+      });
     } catch (error) {
       if (timedOut && !signal.aborted) throw new RelayTimeoutError();
       throw error;
@@ -1160,17 +908,6 @@ class PaymentInterceptor {
       await this.settle(entry, "continue");
       return;
     }
-    if (decision.action === "reencrypted") {
-      const continued = await this.settle(entry, {
-        continueWith: decision.body,
-      });
-      this.emit(
-        continued
-          ? { type: "reencrypted", url }
-          : { type: "failed", url, reason: "adyen_encrypt" },
-      );
-      return;
-    }
     if (decision.action === "fail") {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url, reason: decision.reason });
@@ -1198,27 +935,18 @@ class PaymentInterceptor {
     action: SettleAction,
   ): Promise<boolean> {
     if (entry.phase.status !== "open") return false;
-    if (
-      action === "continue" ||
-      (typeof action === "object" && "continueWith" in action)
-    ) {
-      let continued = true;
+    if (action === "continue") {
       const done = continueRequest(
         this.connection,
         entry.sessionId,
         entry.requestId,
-        action === "continue" ? undefined : action.continueWith,
-      )
-        .then((ok) => {
-          continued = ok;
-        })
-        .finally(() => {
-          entry.phase = { status: "done" };
-          this.inflight.delete(entry.key);
-        });
+      ).finally(() => {
+        entry.phase = { status: "done" };
+        this.inflight.delete(entry.key);
+      });
       entry.phase = { status: "continuing", done };
       await done;
-      return continued;
+      return true;
     }
     entry.phase = { status: "done" };
     try {
@@ -1285,7 +1013,6 @@ class PaymentInterceptor {
     this.closed = true;
     this.buffering = false;
     this.backlog = null;
-    this.preparedAdyen.clear();
     for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {
@@ -1339,14 +1066,10 @@ class PaymentInterceptor {
 }
 
 /**
- * How long fields fetched by `prepareAdyen` wait for the payment. Well inside
- * the time Adyen accepts an encrypted field's `generationtime`.
+ * The relay profile for an Adyen secured-fields payment, whatever profile the
+ * attach names: the relay encrypts the real card to the page's client key.
  */
-const PREPARED_ADYEN_TTL_MS = 10 * 60_000;
-
-function preparedKey(clientKey: string, pageOrigin: string): string {
-  return `${clientKey}\n${pageOrigin}`;
-}
+const ADYEN_CHECKOUT_PROFILE = "adyen-checkout";
 
 function inflightKey(sessionId: string, requestId: string): string {
   return `${sessionId}\n${requestId}`;
@@ -1590,6 +1313,8 @@ const ANALYTICS_COOKIE_PREFIXES = [
 ];
 
 const profileHeader = (key: string) => FORWARDED_HEADERS.has(key);
+const adyenHeader = (key: string) =>
+  key === "accept" || key === "content-type" || key === "origin";
 const genericHeader = (key: string) =>
   !UNFORWARDED_HEADERS.has(key) &&
   !key.startsWith("sec-fetch-") &&
@@ -1822,28 +1547,15 @@ async function armFetch(
   session.fetchEnabled = true;
 }
 
-/** False when the browser refused to continue and the request was failed instead. */
 async function continueRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-  postData?: string,
-): Promise<boolean> {
+): Promise<void> {
   try {
-    await connection.send(
-      "Fetch.continueRequest",
-      {
-        requestId,
-        ...(postData !== undefined
-          ? { postData: Buffer.from(postData, "utf8").toString("base64") }
-          : {}),
-      },
-      sessionId,
-    );
-    return true;
+    await connection.send("Fetch.continueRequest", { requestId }, sessionId);
   } catch {
     await failRequest(connection, sessionId, requestId);
-    return false;
   }
 }
 

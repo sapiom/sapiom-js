@@ -1,10 +1,8 @@
 import {
   adyenClientKeysInRequest,
-  isAdyenSecuredFieldsFrameUrl,
   isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
-  withAdyenEncryptedFields,
 } from "./detect";
 
 const NUMBER = "4242424242424242";
@@ -136,23 +134,6 @@ describe("adyenClientKeysInRequest", () => {
       ),
     ).toStrictEqual(["test_XYZ", "test_ABC"]);
   });
-
-  it("tells a secured-field iframe apart from other frames even without a readable key", () => {
-    expect(
-      isAdyenSecuredFieldsFrameUrl(
-        "https://checkoutshopper-live.adyen.com/checkoutshopper/securedfields/pub.v2.ABC/6.4.1/securedFields.html",
-      ),
-    ).toBe(true);
-    for (const url of [
-      "https://js.stripe.com/v3/elements-inner-card.html",
-      "https://checkoutshopper-test.adyen.com/checkoutshopper/v3/analytics",
-      "http://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
-      "https://adyen.com.evil.example/checkoutshopper/securedfields/test_ABC/6.4.1/securedFields.html",
-      "https://shop.example/checkout",
-    ]) {
-      expect(isAdyenSecuredFieldsFrameUrl(url)).toBe(false);
-    }
-  });
 });
 
 describe("Adyen secured-fields payment bodies", () => {
@@ -162,10 +143,10 @@ describe("Adyen secured-fields payment bodies", () => {
     paymentMethod: {
       type: "scheme",
       holderName: "J. Smith",
-      encryptedCardNumber: "eyJ.standin-number",
-      encryptedExpiryMonth: "eyJ.standin-month",
-      encryptedExpiryYear: "eyJ.standin-year",
-      encryptedSecurityCode: "eyJ.standin-cvc",
+      encryptedCardNumber: "eyJ.placeholder-number",
+      encryptedExpiryMonth: "eyJ.placeholder-month",
+      encryptedExpiryYear: "eyJ.placeholder-year",
+      encryptedSecurityCode: "eyJ.placeholder-cvc",
       checkoutAttemptId: "attempt-1",
     },
     browserInfo: { userAgent: "x" },
@@ -184,28 +165,5 @@ describe("Adyen secured-fields payment bodies", () => {
     ]) {
       expect(isAdyenSecuredFieldsPayment(body)).toBe(false);
     }
-  });
-
-  it("replaces the four encrypted fields and keeps everything else", () => {
-    const swapped = JSON.parse(
-      withAdyenEncryptedFields(BODY, {
-        encryptedCardNumber: "eyJ.real-number",
-        encryptedExpiryMonth: "eyJ.real-month",
-        encryptedExpiryYear: "eyJ.real-year",
-        encryptedSecurityCode: "eyJ.real-cvc",
-      }),
-    );
-    const original = JSON.parse(BODY);
-    expect(swapped).toStrictEqual({
-      ...original,
-      paymentMethod: {
-        ...original.paymentMethod,
-        encryptedCardNumber: "eyJ.real-number",
-        encryptedExpiryMonth: "eyJ.real-month",
-        encryptedExpiryYear: "eyJ.real-year",
-        encryptedSecurityCode: "eyJ.real-cvc",
-      },
-    });
-    expect(Object.keys(swapped)).toStrictEqual(Object.keys(original));
   });
 });

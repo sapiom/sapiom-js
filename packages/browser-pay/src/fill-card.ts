@@ -12,12 +12,6 @@
  * whether it sent the card.
  */
 
-import {
-  adyenClientKeysInRequest,
-  isAdyenSecuredFieldsFrameUrl,
-} from "./detect.js";
-import type { AdyenGate, AdyenReadiness } from "./interceptor.js";
-
 /** The card to type: the placeholder's fields, plus an optional cardholder name. */
 export interface CardToFill {
   number: string;
@@ -26,27 +20,7 @@ export interface CardToFill {
   cvc: string;
   /** Typed only when the form has a cardholder-name field. */
   name?: string;
-  /**
-   * The card's brand as the placeholder names it (`visa`, `mastercard`, `american-express`).
-   * Needed only on Adyen secured fields, where it picks the stand-in number typed.
-   */
-  brand?: string;
 }
-
-/**
- * What `fillCard` types into Adyen secured fields instead of the placeholder number: one of
- * Adyen's published test cards per brand, on a plain consumer BIN. Adyen secured fields send the
- * brand and variant they read from the typed BIN with the payment, and Adyen refuses a payment
- * whose variant does not fit the re-encrypted real card ("109 Invalid variant"); a random BIN of
- * the right brand can name a variant the real card is not. The typed number never reaches Adyen:
- * its ciphertext is replaced, or the payment fails closed.
- * Source: https://docs.adyen.com/development-resources/test-cards-and-credentials/test-card-numbers/
- */
-const ADYEN_STAND_IN_NUMBERS: ReadonlyMap<string, string> = new Map([
-  ["visa", "4111111111111111"],
-  ["mastercard", "5555444433331111"],
-  ["american-express", "370000000000002"],
-]);
 
 /** A card form field `fillCard` recognises. */
 export type CardField =
@@ -79,20 +53,7 @@ export interface FillCardResult {
    * page's origin, a built-in card-vault origin, nor in `frameOrigins`.
    */
   untrusted: string[];
-  /**
-   * Set when nothing was typed because the form is Adyen secured fields and paying it is not
-   * possible: `adyen_not_enabled` (switched off, or no `adyen` gate given), `adyen_client_key`
-   * (the page's client key could not be read), `adyen_encrypt` (the backend failed),
-   * `adyen_card_brand` (the card's `brand` is missing or has no Adyen stand-in).
-   */
-  blocked?: FillCardBlock;
 }
-
-/** Why `fillCard` typed nothing. */
-export type FillCardBlock =
-  | Extract<AdyenReadiness, { enabled: false }>["reason"]
-  | "adyen_client_key"
-  | "adyen_card_brand";
 
 export interface FillCardOptions {
   /** Delay between keystrokes, in milliseconds. Defaults to 25. */
@@ -104,12 +65,6 @@ export interface FillCardOptions {
    * list. The page's own origin and the built-in card-vault origins are always allowed.
    */
   frameOrigins?: string[];
-  /**
-   * Asked before typing into Adyen secured fields, which encrypt the card in the page: pass the
-   * interceptor handle. Without it, or when it answers not enabled, nothing is typed and the
-   * result names the reason in `blocked`.
-   */
-  adyen?: AdyenGate;
 }
 
 /** The parts of a Playwright `Locator` this helper uses. */
@@ -803,33 +758,10 @@ export async function fillCard(
     ranked = await rank(page, await scan(page, extra, untrusted));
   }
 
-  const typing = await adyenTyping(page, options.adyen, card);
-  if ("blocked" in typing) {
-    return {
-      ok: false,
-      filled: [],
-      missing: ["number", "expiry", "cvc"],
-      unconfirmed: [],
-      origins: {},
-      untrusted: [...untrusted],
-      blocked: typing.blocked,
-    };
-  }
-
   const split = ranked.has("expMonth") && ranked.has("expYear");
   const mm = two(card.expMonth);
   const plan: Array<[CardField, (m: Match) => Promise<string | null>]> = [
-    [
-      "number",
-      (m) =>
-        typeFirst(
-          m,
-          [isAdyenSecuredFieldsFrameUrl(m.url) ? typing.number : card.number],
-          true,
-          false,
-          delay,
-        ),
-    ],
+    ["number", (m) => typeFirst(m, [card.number], true, false, delay)],
     ...(split
       ? ([
           [
@@ -919,40 +851,4 @@ export async function fillCard(
     origins,
     untrusted: [...untrusted],
   };
-}
-
-/**
- * The number to type into Adyen secured fields, or why typing must not start. A page with Adyen
- * secured-field iframes gets the card brand's stand-in for them, once the gate says the payment
- * will be re-encrypted; a number field outside them, and any other page, gets the card's own number.
- * The client key comes from the iframe URLs Adyen's own host serves.
- */
-async function adyenTyping(
-  page: PageLike,
-  gate: AdyenGate | undefined,
-  card: CardToFill,
-): Promise<{ number: string } | { blocked: FillCardBlock }> {
-  const frames = page.frames();
-  const adyenFrames = frames.filter((f) =>
-    isAdyenSecuredFieldsFrameUrl(f.url()),
-  );
-  if (adyenFrames.length === 0) return { number: card.number };
-  if (!gate) return { blocked: "adyen_not_enabled" };
-  const standIn = ADYEN_STAND_IN_NUMBERS.get(card.brand ?? "");
-  if (!standIn) return { blocked: "adyen_card_brand" };
-  const keys = new Set<string>();
-  for (const frame of adyenFrames) {
-    for (const key of adyenClientKeysInRequest(frame.url())) keys.add(key);
-  }
-  // Two different keys on one page, even within one frame: never encrypt the card to a guess.
-  const clientKey = keys.size === 1 ? [...keys][0] : undefined;
-  if (!clientKey) return { blocked: "adyen_client_key" };
-  const pageOrigin = originOf(frames[0]?.url() ?? "");
-  if (!/^https?:\/\//.test(pageOrigin)) return { blocked: "adyen_client_key" };
-  const readiness = await gate
-    .prepareAdyen({ clientKey, pageOrigin })
-    .catch((): AdyenReadiness => ({ enabled: false, reason: "adyen_encrypt" }));
-  return readiness.enabled
-    ? { number: standIn }
-    : { blocked: readiness.reason };
 }
