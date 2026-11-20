@@ -1002,7 +1002,10 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
       responseBodies: Object.fromEntries(
         ["a-first", "a-stale", "b-final"].map((id) => [
           id,
-          JSON.stringify({ resultCode: "Authorised", pspReference: id.replace(/-/g, "") }),
+          JSON.stringify({
+            resultCode: "Authorised",
+            pspReference: id.replace(/-/g, ""),
+          }),
         ]),
       ),
     });
@@ -1083,6 +1086,77 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     expect(harness.relayCalls).toHaveLength(5);
     expect(harness.resultCalls).toEqual([]);
   });
+
+  it.each(["Pending", "Received"])(
+    "keeps merchant details watches open after %s",
+    async (resultCode) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          pending: JSON.stringify({ resultCode }),
+          final: JSON.stringify({ resultCode: "Refused" }),
+        },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      for (const id of ["pending", "final"]) {
+        pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+        expect((await settle(harness.stub, id)).params).toStrictEqual({
+          requestId: id,
+          interceptResponse: true,
+        });
+        answerPause(harness.stub, id, MERCHANT_DETAILS);
+        await waitFor(() => continues(harness!.stub, id).length === 2, id);
+        if (id === "pending") expect(harness.resultCalls).toEqual([]);
+      }
+      await waitFor(() => harness!.resultCalls.length === 1, "final report");
+      expect(harness.resultCalls[0]?.resultCode).toBe("Refused");
+      pause(harness.stub, "late", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "late")).params).toEqual({
+        requestId: "late",
+      });
+    },
+  );
+
+  it.each(["Pending", "Received"])(
+    "keeps relayed sessions details watches open after %s",
+    async (resultCode) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({
+          "/checkoutshopper/v1/sessions/CS123/payments": [CHALLENGE],
+          "/checkoutshopper/v1/sessions/CS123/paymentDetails": [
+            { resultCode },
+            { resultCode: "Authorised" },
+          ],
+        }),
+      });
+      pause(harness.stub, "pay", SESSIONS);
+      await settle(harness.stub, "pay");
+      for (const id of ["pending", "final"]) {
+        pause(harness.stub, id, {
+          url: SESSIONS_DETAILS,
+          body: { details: { threeDSResult: id } },
+        });
+        expect((await settle(harness.stub, id)).method).toBe(
+          "Fetch.fulfillRequest",
+        );
+      }
+      pause(harness.stub, "late", {
+        url: SESSIONS_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "late")).params).toEqual({
+        requestId: "late",
+      });
+      expect(harness.relayCalls).toHaveLength(3);
+      expect(harness.resultCalls).toEqual([]);
+    },
+  );
 
   it("does not watch a details call from another tab", async () => {
     harness = await arm({

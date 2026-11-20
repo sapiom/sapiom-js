@@ -943,9 +943,9 @@ class PaymentInterceptor {
   /**
    * A payment's 3-D Secure code opens a challenge; a details answer's final
    * code closes one. A details answer with another action code continues its
-   * challenge. An `unknown` answer (an Adyen error or a non-JSON body)
-   * changes nothing: the page's retried details call may be final. A final
-   * code on a payment had no challenge to close.
+   * challenge. Non-final or unknown answers change nothing: the page's
+   * retried details call may be final. A final code on a payment had no
+   * challenge to close.
    */
   private track3ds(
     page: string,
@@ -965,7 +965,7 @@ class PaymentInterceptor {
           ),
         );
       }
-    } else if (challenge !== undefined && resultCode !== "unknown") {
+    } else if (challenge !== undefined && isFinalAdyenResult(resultCode)) {
       open?.delete(challenge);
       if (open?.size === 0) awaiting?.delete(checkout);
     }
@@ -999,9 +999,7 @@ class PaymentInterceptor {
     const checkout = adyenCheckout(new URL(watch.url));
     const open = this.adyenAwaiting3ds.get(page)?.get(checkout);
     const final =
-      open?.has(watch.challenge) &&
-      result.resultCode !== "unknown" &&
-      !isAdyenActionResult(result.resultCode);
+      open?.has(watch.challenge) && isFinalAdyenResult(result.resultCode);
     this.track3ds(page, checkout, result.resultCode, watch.challenge);
     await continueRequest(this.connection, sessionId, requestId);
     // Another details answer may already have closed this admitted challenge.
@@ -1940,6 +1938,10 @@ async function readResponseBody(
   } catch {
     return undefined;
   }
+}
+
+function isFinalAdyenResult(code: AdyenResultCode): boolean {
+  return ["Authorised", "Refused", "Error", "Cancelled"].includes(code);
 }
 
 /**
