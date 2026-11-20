@@ -328,6 +328,22 @@ async function settle(stub: CdpStub, requestId: string): Promise<CdpCommand> {
   return settledWith(stub, requestId)!;
 }
 
+function failures(harness: Harness): InterceptorEvent[] {
+  return harness.events.filter((event) => event.type === "failed");
+}
+
+/** A request's failure is emitted only after `Fetch.failRequest` replies. */
+async function nextFailure(
+  harness: Harness,
+  failuresBefore: number,
+): Promise<InterceptorEvent> {
+  await waitFor(
+    () => failures(harness).length === failuresBefore + 1,
+    "failed event",
+  );
+  return failures(harness).at(-1)!;
+}
+
 const SECRETS = [
   CLIENT_KEY,
   "FRAMEKEY",
@@ -1073,6 +1089,7 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
         "other tab attached",
       );
       const url = explicit ? SESSIONS_DETAILS : SESSIONS_DETAILS.split("?")[0]!;
+      const failuresBefore = failures(harness).length;
       pause(harness.stub, "conflict", {
         url,
         body: DETAILS_BODY,
@@ -1081,7 +1098,8 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
       expect((await settle(harness.stub, "conflict")).method).toBe(
         "Fetch.failRequest",
       );
-      expect(harness.events.at(-1)).toMatchObject({
+      expect(await nextFailure(harness, failuresBefore)).toMatchObject({
+        url: new URL(url).origin,
         reason: "adyen_client_key",
       });
       pause(harness.stub, "details", { url, body: DETAILS_BODY });
@@ -1089,11 +1107,13 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
         "Fetch.fulfillRequest",
       );
       expect(harness.relayCalls[1]?.adyen).toEqual({ clientKey: CLIENT_KEY });
+      const failuresBeforePay = failures(harness).length;
       pause(harness.stub, "second-pay", SESSIONS);
       expect((await settle(harness.stub, "second-pay")).method).toBe(
         "Fetch.failRequest",
       );
-      expect(harness.events.at(-1)).toMatchObject({
+      expect(await nextFailure(harness, failuresBeforePay)).toMatchObject({
+        url: new URL(SESSIONS.url).origin,
         reason: "adyen_client_key",
       });
       expect(harness.relayCalls).toHaveLength(2);
@@ -1798,6 +1818,7 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
       "307 continued",
     );
     for (const id of ["ordinary-unreadable", "hop-unreadable"]) {
+      const failuresBefore = failures(harness).length;
       harness.stub.emit({
         method: "Fetch.requestPaused",
         sessionId: "page-1",
@@ -1815,8 +1836,8 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
         },
       });
       expect((await settle(harness.stub, id)).method).toBe("Fetch.failRequest");
-      expect(harness.events.at(-1)).toMatchObject({
-        type: "failed",
+      expect(await nextFailure(harness, failuresBefore)).toMatchObject({
+        url: PAGE_ORIGIN,
         reason: "unreadable_body",
       });
     }
