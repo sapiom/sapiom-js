@@ -141,6 +141,15 @@ The injection is consumed. The paused request fails and the same body is not sen
 
 A redirect, a non-2xx HTTP status other than 502, 503, or 504, or an unreadable body fails the paused browser request. The payment relay returns HTTP 200 for every outcome, so a 401 or 500 is not read as `unknown` or `refused`. It is not fulfilled with the error JSON. A transport error, a per-attempt timeout, and a router HTTP 502, 503, or 504 are posted again with the same idempotency key. If fulfill fails, the paused request is failed and the agent event is `relayed_unfulfilled`.
 
+## The checkout browser
+
+Browser Pay never changes how the browser identifies itself, and neither should the agent. Run the checkout the way the buyer would:
+
+- Headed: `headless: false` for a Sapiom browser, no `--headless` for a local Chrome.
+- A persistent profile, so the merchant sees the same signed-in browser each time: a saved `profileId` from `browserAutomation.profiles` for a Sapiom browser, or a fixed `--user-data-dir` for a local Chrome.
+- The browser's own User-Agent. Do not pass `--user-agent` or override it over CDP. A merchant can serve a bot-check page to a browser whose User-Agent does not match its version.
+- When a merchant shows a captcha or a bot check, stop and hand the checkout to the buyer.
+
 ## What an agent does
 
 ```typescript
