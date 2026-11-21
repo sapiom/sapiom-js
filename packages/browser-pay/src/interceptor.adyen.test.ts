@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 
 import { ADYEN_BLOB_BINDING, ADYEN_WATCH_WORLD } from "./adyen-blobs";
-import type { RelayRequest, RelayResponse } from "./contract";
+import { CdpConnection } from "./cdp";
+import type {
+  AdyenResultRequest,
+  AdyenResultResponse,
+  RelayRequest,
+  RelayResponse,
+} from "./contract";
 import type { HeldPlaceholder } from "./detect";
 import { attachInterceptor, type InterceptorEvent } from "./interceptor";
 import type { PayLogger } from "./logger";
 import type { PaymentRelay } from "./relay";
 import {
+  NO_REPLY,
   startCdpStub,
   waitFor,
   type CdpCommand,
@@ -79,19 +86,100 @@ interface Harness {
   events: InterceptorEvent[];
   warnings: string[];
   relayCalls: RelayRequest[];
+  resultCalls: AdyenResultRequest[];
   detach(): Promise<void>;
 }
 
 async function arm(options: {
   frames?: { sessionId: string; url: string }[];
+  recoveredFrames?: { sessionId: string; url: string; pageSessionId: string }[];
+  existingPages?: number;
   answer?: (request: RelayRequest) => Promise<RelayResponse>;
   profileId?: string;
+  /** Answer bodies the browser read for requests paused at the Response stage. */
+  responseBodies?: Record<string, string>;
+  /** `null` gives a relay without `adyenResult`. */
+  adyenResult?:
+    | ((request: AdyenResultRequest) => Promise<AdyenResultResponse>)
+    | null;
   /** Blobs the page's secured fields posted; all four unless given. */
   observed?: Partial<Record<BlobField, string>>;
+  /** Paused requests whose `Fetch.fulfillRequest` the browser rejects. */
+  unfulfillable?: string[];
+  /** Paused requests whose `Fetch.fulfillRequest` the browser never acknowledges. */
+  unacknowledged?: string[];
 }): Promise<Harness> {
   const stub = await startCdpStub((command) => {
+    if (command.method === "Target.getTargets" && options.recoveredFrames) {
+      for (let index = 1; index <= (options.existingPages ?? 1); index++) {
+        stub.emit({
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: `page-${index}`,
+            waitingForDebugger: true,
+            targetInfo: {
+              targetId: `target-page-${index}`,
+              type: "page",
+              url: `${PAGE_ORIGIN}/checkout`,
+            },
+          },
+        });
+      }
+      return {
+        targetInfos: options.recoveredFrames.map((frame) => ({
+          targetId: `target-${frame.sessionId}`,
+          type: "iframe",
+          url: frame.url,
+        })),
+      };
+    }
+    if (command.method === "Target.attachToTarget" && options.recoveredFrames) {
+      const frame = options.recoveredFrames.find(
+        (frame) => `target-${frame.sessionId}` === command.params.targetId,
+      );
+      return frame ? { sessionId: frame.sessionId } : undefined;
+    }
+    if (command.method === "Page.getFrameTree" && options.recoveredFrames) {
+      return {
+        frameTree: {
+          frame: { id: `root-${command.sessionId}` },
+          childFrames: [
+            {
+              frame: { id: `nested-${command.sessionId}` },
+              childFrames: options.recoveredFrames
+                .filter((frame) => frame.pageSessionId === command.sessionId)
+                .map((frame) => ({
+                  frame: { id: `target-${frame.sessionId}` },
+                })),
+            },
+          ],
+        },
+      };
+    }
+    if (
+      command.method === "Fetch.fulfillRequest" &&
+      options.unfulfillable?.includes(command.params.requestId as string)
+    ) {
+      throw new Error("Invalid InterceptionId.");
+    }
+    if (
+      command.method === "Fetch.fulfillRequest" &&
+      options.unacknowledged?.includes(command.params.requestId as string)
+    ) {
+      return NO_REPLY;
+    }
+    if (command.method === "Fetch.getResponseBody") {
+      const body =
+        options.responseBodies?.[command.params.requestId as string] ?? "";
+      return { body, base64Encoded: false };
+    }
     if (command.method !== "Runtime.evaluate") return undefined;
-    if (command.params.expression === "location.origin") {
+    if (
+      command.params.expression === "location.origin" ||
+      (options.recoveredFrames &&
+        command.params.expression ===
+          "location.ancestorOrigins[location.ancestorOrigins.length - 1]")
+    ) {
       return { result: { type: "string", value: PAGE_ORIGIN } };
     }
     return undefined;
@@ -99,6 +187,7 @@ async function arm(options: {
   const events: InterceptorEvent[] = [];
   const warnings: string[] = [];
   const relayCalls: RelayRequest[] = [];
+  const resultCalls: AdyenResultRequest[] = [];
   const answer = options.answer ?? (async () => AUTHORISED);
   const relay: PaymentRelay = {
     async relay(request) {
@@ -106,6 +195,18 @@ async function arm(options: {
       return answer(request);
     },
   };
+  if (options.adyenResult !== null) {
+    const report =
+      options.adyenResult ??
+      (async (request: AdyenResultRequest) => ({
+        outcome: "completed" as const,
+        resultCode: request.resultCode,
+      }));
+    relay.adyenResult = async (request) => {
+      resultCalls.push(request);
+      return report(request);
+    };
+  }
   const logger: PayLogger = {
     warn(message, fields) {
       warnings.push(JSON.stringify({ message, fields }));
@@ -123,20 +224,23 @@ async function arm(options: {
     events,
     warnings,
     relayCalls,
+    resultCalls,
     detach: () => handle.detach(),
   };
-  stub.emit({
-    method: "Target.attachedToTarget",
-    params: {
-      sessionId: "page-1",
-      waitingForDebugger: true,
-      targetInfo: {
-        targetId: "target-page",
-        type: "page",
-        url: `${PAGE_ORIGIN}/checkout`,
+  if (!options.recoveredFrames) {
+    stub.emit({
+      method: "Target.attachedToTarget",
+      params: {
+        sessionId: "page-1",
+        waitingForDebugger: true,
+        targetInfo: {
+          targetId: "target-page",
+          type: "page",
+          url: `${PAGE_ORIGIN}/checkout`,
+        },
       },
-    },
-  });
+    });
+  }
   for (const frame of options.frames ?? []) {
     stub.emit({
       method: "Target.attachedToTarget",
@@ -152,7 +256,10 @@ async function arm(options: {
       },
     });
   }
-  const sessions = 1 + (options.frames?.length ?? 0);
+  const sessions =
+    (options.existingPages ?? 1) +
+    (options.frames?.length ?? 0) +
+    (options.recoveredFrames?.length ?? 0);
   await waitFor(
     () => count(stub.commands, "Fetch.enable") === sessions,
     "Fetch.enable on every session",
@@ -200,12 +307,15 @@ function pause(
     method?: string;
     headers?: Record<string, string>;
   },
+  sessionId = "page-1",
+  redirectedRequestId?: string,
 ): void {
   stub.emit({
     method: "Fetch.requestPaused",
-    sessionId: "page-1",
+    sessionId,
     params: {
       requestId,
+      ...(redirectedRequestId ? { redirectedRequestId } : {}),
       request: {
         url: request.url,
         method: request.method ?? "POST",
@@ -234,6 +344,48 @@ async function settle(stub: CdpStub, requestId: string): Promise<CdpCommand> {
     `request ${requestId} settled`,
   );
   return settledWith(stub, requestId)!;
+}
+
+function failures(harness: Harness): InterceptorEvent[] {
+  return harness.events.filter((event) => event.type === "failed");
+}
+
+/** A request's failure is emitted only after `Fetch.failRequest` replies. */
+async function nextFailure(
+  harness: Harness,
+  failuresBefore: number,
+): Promise<InterceptorEvent> {
+  await waitFor(
+    () => failures(harness).length === failuresBefore + 1,
+    "failed event",
+  );
+  return failures(harness).at(-1)!;
+}
+
+/**
+ * Waits until `pauses` requests read the page origin, the last await before
+ * they join a relay flight, then until the SDK has handled those reads'
+ * replies: a probe request paused after them on the same socket is continued
+ * only once they were handled, and each join runs in the microtasks right
+ * after its reply, before the probe's continue can reach the stub.
+ */
+async function joinedRelay(harness: Harness, pauses: number): Promise<void> {
+  await waitFor(
+    () =>
+      harness.stub.commands.filter(
+        (command) =>
+          command.method === "Runtime.evaluate" &&
+          command.params.expression === "location.origin",
+      ).length === pauses,
+    "pauses read the page origin",
+  );
+  pause(harness.stub, "join-probe", {
+    url: `${PAGE_ORIGIN}/join-probe`,
+    method: "GET",
+  });
+  expect((await settle(harness.stub, "join-probe")).params).toStrictEqual({
+    requestId: "join-probe",
+  });
 }
 
 const SECRETS = [
@@ -821,6 +973,1413 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.relayCalls[0]?.adyen?.placeholderBlobHashes).toStrictEqual({
       ...HASHES,
       encryptedSecurityCode: sha256("eyJ.RETYPED_CVC_BLOB"),
+    });
+  });
+});
+
+function relayedBody(body: unknown): RelayResponse {
+  return {
+    outcome: "relayed",
+    response: {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  };
+}
+
+/** The relay's answer per request URL path, in order of calls to it. */
+function answersByPath(
+  answers: Record<string, unknown[]>,
+): (request: RelayRequest) => Promise<RelayResponse> {
+  return async (request) => {
+    const path = new URL(request.request.url).pathname;
+    const queue = answers[path];
+    if (!queue?.length) throw new Error(`no relay answer for ${path}`);
+    return relayedBody(queue.shift());
+  };
+}
+
+function answerPause(
+  stub: CdpStub,
+  requestId: string,
+  url: string,
+  sessionId = "page-1",
+  options: {
+    status?: number;
+    location?: string;
+    method?: string;
+    failed?: boolean;
+    networkId?: string;
+  } = {},
+): void {
+  stub.emit({
+    method: "Fetch.requestPaused",
+    sessionId,
+    params: {
+      requestId,
+      request: { url, method: options.method ?? "POST", headers: {} },
+      ...(options.networkId ? { networkId: options.networkId } : {}),
+      ...(options.failed
+        ? { responseErrorReason: "Failed" }
+        : {
+            responseStatusCode: options.status ?? 200,
+            responseHeaders: [
+              { name: "content-type", value: "application/json" },
+              ...(options.location
+                ? [{ name: "Location", value: options.location }]
+                : []),
+            ],
+          }),
+    },
+  });
+}
+
+function continues(stub: CdpStub, requestId: string): CdpCommand[] {
+  return stub.commands.filter(
+    (command) =>
+      command.method === "Fetch.continueRequest" &&
+      command.params.requestId === requestId,
+  );
+}
+
+const CHALLENGE = {
+  resultCode: "ChallengeShopper",
+  action: { type: "threeDS2", token: "tok" },
+};
+const DETAILS_BODY = { details: { threeDSResult: "eyJ.3ds-result" } };
+const SESSIONS_DETAILS = `${ADYEN_TEST}/v1/sessions/CS123/paymentDetails?clientKey=${CLIENT_KEY}`;
+const MERCHANT_DETAILS = `${PAGE_ORIGIN}/api/payments/details`;
+
+describe("interceptor after an Adyen 3-D Secure challenge", () => {
+  let harness: Harness | undefined;
+
+  afterEach(async () => {
+    await harness?.detach();
+    await harness?.stub.close();
+    harness = undefined;
+  });
+
+  it("relays Adyen's sessions paymentDetails call with the same profile and client key, and the page gets the final answer", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({
+        "/checkoutshopper/v1/sessions/CS123/payments": [CHALLENGE],
+        "/checkoutshopper/v1/sessions/CS123/paymentDetails": [
+          { resultCode: "Authorised", pspReference: "PSP2" },
+        ],
+      }),
+    });
+    pause(harness.stub, "req-pay", SESSIONS);
+    expect((await settle(harness.stub, "req-pay")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    pause(harness.stub, "req-details", {
+      url: SESSIONS_DETAILS,
+      body: DETAILS_BODY,
+    });
+    const settled = await settle(harness.stub, "req-details");
+
+    expect(settled.method).toBe("Fetch.fulfillRequest");
+    expect(
+      Buffer.from(settled.params.body as string, "base64").toString("utf8"),
+    ).toBe(JSON.stringify({ resultCode: "Authorised", pspReference: "PSP2" }));
+    expect(harness.relayCalls).toHaveLength(2);
+    expect(harness.relayCalls[1]).toMatchObject({
+      profileId: "adyen-checkout",
+      adyen: { clientKey: CLIENT_KEY },
+      request: {
+        method: "POST",
+        url: SESSIONS_DETAILS,
+        body: JSON.stringify(DETAILS_BODY),
+      },
+    });
+    // A details call carries no card blobs, so no blob hashes either.
+    expect(harness.relayCalls[1]?.adyen).toStrictEqual({
+      clientKey: CLIENT_KEY,
+    });
+    expect(harness.resultCalls).toStrictEqual([]);
+    assertNothingSecret(harness);
+  });
+
+  it.each([false, true])(
+    "keeps the Sessions challenge key after another tab introduces a key (explicit=%s)",
+    async (explicit) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({
+          "/checkoutshopper/v1/sessions/CS123/payments": [CHALLENGE],
+          "/checkoutshopper/v1/sessions/CS123/paymentDetails": [
+            { resultCode: "Authorised" },
+          ],
+        }),
+      });
+      pause(harness.stub, "pay", SESSIONS);
+      await settle(harness.stub, "pay");
+      harness.stub.emit({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "page-other-key",
+          waitingForDebugger: true,
+          targetInfo: {
+            targetId: "target-other-key",
+            type: "page",
+            url: frameUrl("test_OTHERKEY789"),
+          },
+        },
+      });
+      await waitFor(
+        () => count(harness!.stub.commands, "Fetch.enable") === 3,
+        "other tab attached",
+      );
+      const url = explicit ? SESSIONS_DETAILS : SESSIONS_DETAILS.split("?")[0]!;
+      const failuresBefore = failures(harness).length;
+      pause(harness.stub, "conflict", {
+        url,
+        body: DETAILS_BODY,
+        headers: { "x-client-key": "test_OTHERKEY789" },
+      });
+      expect((await settle(harness.stub, "conflict")).method).toBe(
+        "Fetch.failRequest",
+      );
+      expect(await nextFailure(harness, failuresBefore)).toMatchObject({
+        url: new URL(url).origin,
+        reason: "adyen_client_key",
+      });
+      pause(harness.stub, "details", { url, body: DETAILS_BODY });
+      expect((await settle(harness.stub, "details")).method).toBe(
+        "Fetch.fulfillRequest",
+      );
+      expect(harness.relayCalls[1]?.adyen).toEqual({ clientKey: CLIENT_KEY });
+      const failuresBeforePay = failures(harness).length;
+      pause(harness.stub, "second-pay", SESSIONS);
+      expect((await settle(harness.stub, "second-pay")).method).toBe(
+        "Fetch.failRequest",
+      );
+      expect(await nextFailure(harness, failuresBeforePay)).toMatchObject({
+        url: new URL(SESSIONS.url).origin,
+        reason: "adyen_client_key",
+      });
+      expect(harness.relayCalls).toHaveLength(2);
+      assertNothingSecret(harness);
+    },
+  );
+
+  it("leaves a details call alone when no challenge is open on its checkout", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({
+        "/checkoutshopper/v1/sessions/CS123/payments": [CHALLENGE],
+      }),
+    });
+    // Before any payment: nothing to watch.
+    pause(harness.stub, "req-early", {
+      url: SESSIONS_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "req-early");
+    pause(harness.stub, "req-pay", SESSIONS);
+    await settle(harness.stub, "req-pay");
+    // Another Adyen session, and a merchant route on another checkout.
+    pause(harness.stub, "req-other-session", {
+      url: `${ADYEN_TEST}/v1/sessions/CS999/paymentDetails`,
+      body: DETAILS_BODY,
+    });
+    pause(harness.stub, "req-merchant", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    for (const id of ["req-early", "req-other-session", "req-merchant"]) {
+      const settled = await settle(harness.stub, id);
+      expect(settled.method).toBe("Fetch.continueRequest");
+      expect(settled.params).toStrictEqual({ requestId: id });
+    }
+    expect(harness.relayCalls).toHaveLength(1);
+  });
+
+  it("reports only the final answer of a merchant's own /payments/details call, once, and hands the page the answer unchanged", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: {
+        "req-details-1": JSON.stringify({
+          resultCode: "ChallengeShopper",
+          action: { type: "threeDS2" },
+        }),
+        "req-details-2": JSON.stringify({
+          resultCode: "Authorised",
+          pspReference: "PSP3",
+          shopperEmail: "shopper@example.com",
+        }),
+      },
+    });
+    pause(harness.stub, "req-pay", ADVANCED);
+    await settle(harness.stub, "req-pay");
+
+    for (const id of ["req-details-1", "req-details-2"]) {
+      pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+      await waitFor(() => continues(harness!.stub, id).length === 1, id);
+      expect(continues(harness.stub, id)[0]?.params).toStrictEqual({
+        requestId: id,
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, id, MERCHANT_DETAILS);
+      await waitFor(() => continues(harness!.stub, id).length === 2, id);
+      expect(continues(harness.stub, id)[1]?.params).toStrictEqual({
+        requestId: id,
+      });
+    }
+    await waitFor(() => harness!.resultCalls.length === 1, "one report");
+    expect(harness.resultCalls).toStrictEqual([
+      {
+        injectionRef: HELD.injectionRef,
+        resultCode: "Authorised",
+        pspReference: "PSP3",
+      },
+    ]);
+    await waitFor(
+      () => harness!.events.some((event) => event.type === "adyen_result"),
+      "adyen_result",
+    );
+    expect(harness.events.filter((e) => e.type === "adyen_result")).toEqual([
+      {
+        type: "adyen_result",
+        url: PAGE_ORIGIN,
+        resultCode: "Authorised",
+        status: 200,
+        reported: true,
+      },
+    ]);
+    expect(harness.relayCalls).toHaveLength(1);
+    expect(JSON.stringify(harness.events)).not.toContain("shopper@");
+
+    // The challenge is closed: a later details call is not watched.
+    pause(harness.stub, "req-late", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "req-late")).params).toStrictEqual({
+      requestId: "req-late",
+    });
+  });
+
+  it("counts challenges per checkout, so one payment's final answer does not clear another's, and a final payment closes none", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({
+        "/api/payments": [
+          CHALLENGE,
+          { resultCode: "Authorised", pspReference: "PSPX" },
+          CHALLENGE,
+        ],
+      }),
+      responseBodies: {
+        "req-d1": JSON.stringify({ resultCode: "Authorised" }),
+        "req-d2": JSON.stringify({ resultCode: "Refused" }),
+      },
+    });
+    for (const [id, reference] of [
+      ["req-p1", "order-1"],
+      ["req-p2", "order-2"],
+      ["req-p3", "order-3"],
+    ] as const) {
+      pause(harness.stub, id, {
+        ...ADVANCED,
+        body: { ...ADVANCED.body, reference },
+      });
+      await settle(harness.stub, id);
+    }
+    for (const id of ["req-d1", "req-d2"]) {
+      pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+      await waitFor(() => continues(harness!.stub, id).length === 1, id);
+      expect(continues(harness.stub, id)[0]?.params).toMatchObject({
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, id, MERCHANT_DETAILS);
+      await waitFor(() => continues(harness!.stub, id).length === 2, id);
+    }
+    await waitFor(() => harness!.resultCalls.length === 2, "two reports");
+    expect(harness.resultCalls.map((call) => call.resultCode)).toStrictEqual([
+      "Authorised",
+      "Refused",
+    ]);
+    pause(harness.stub, "req-d3", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "req-d3")).params).toStrictEqual({
+      requestId: "req-d3",
+    });
+  });
+
+  it("opens one challenge for identical Pays that share one relay call, so a retried final details answer is reported once", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const answer = answersByPath({ "/api/payments": [CHALLENGE] });
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: async (request) => {
+        await gate;
+        return answer(request);
+      },
+      responseBodies: {
+        "req-d1": JSON.stringify({ resultCode: "Authorised" }),
+        "req-d2": JSON.stringify({ resultCode: "Authorised" }),
+      },
+    });
+    pause(harness.stub, "pay-a", ADVANCED);
+    pause(harness.stub, "pay-b", ADVANCED);
+    await joinedRelay(harness, 2);
+    release();
+    await settle(harness.stub, "pay-a");
+    await settle(harness.stub, "pay-b");
+    expect(harness.relayCalls).toHaveLength(1);
+
+    pause(harness.stub, "req-d1", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await waitFor(() => continues(harness!.stub, "req-d1").length === 1, "d1");
+    answerPause(harness.stub, "req-d1", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "one report");
+    await waitFor(() => continues(harness!.stub, "req-d1").length === 2, "d1");
+
+    // The page retries the details call: no challenge is left to admit it.
+    pause(harness.stub, "req-d2", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "req-d2")).params).toStrictEqual({
+      requestId: "req-d2",
+    });
+    expect(harness.resultCalls).toHaveLength(1);
+  });
+
+  it("opens no challenge for a Pay answer the page never received", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      unfulfillable: ["pay"],
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await waitFor(
+      () => harness!.events.some((e) => e.type === "relayed_unfulfilled"),
+      "relayed_unfulfilled",
+    );
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "details")).params).toStrictEqual({
+      requestId: "details",
+    });
+    expect(harness.relayCalls).toHaveLength(1);
+    expect(harness.resultCalls).toEqual([]);
+  });
+
+  it("keeps the challenge open when the page may have received its Pay answer, so its final details answer is reported once", async () => {
+    // Chrome may deliver a fulfil whose acknowledgement never arrives; the
+    // wait for it is shortened from its 15 s default.
+    const send = CdpConnection.prototype.send;
+    const shortened = jest
+      .spyOn(CdpConnection.prototype, "send")
+      .mockImplementation(function (
+        this: CdpConnection,
+        method,
+        params,
+        sessionId,
+        timeoutMs,
+      ) {
+        return send.call(
+          this,
+          method,
+          params,
+          sessionId,
+          method === "Fetch.fulfillRequest" ? 50 : timeoutMs,
+        );
+      });
+    try {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+        unacknowledged: ["pay"],
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await waitFor(
+        () => harness!.events.some((e) => e.type === "relayed_unfulfilled"),
+        "relayed_unfulfilled",
+      );
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "details")).params).toStrictEqual({
+        requestId: "details",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(
+        () => harness!.events.some((e) => e.type === "adyen_result"),
+        "adyen_result",
+      );
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(
+        harness.events.filter((e) => e.type === "adyen_result"),
+      ).toHaveLength(1);
+    } finally {
+      shortened.mockRestore();
+    }
+  });
+
+  it.each(["pay-a", "pay-b"])(
+    "keeps a shared challenge open when another delivery of its Pay answer reached the page (%s unfulfilled)",
+    async (unfulfilled) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const answer = answersByPath({ "/api/payments": [CHALLENGE] });
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: async (request) => {
+          await gate;
+          return answer(request);
+        },
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+        unfulfillable: [unfulfilled],
+      });
+      pause(harness.stub, "pay-a", ADVANCED);
+      pause(harness.stub, "pay-b", ADVANCED);
+      await joinedRelay(harness, 2);
+      release();
+      await waitFor(
+        () =>
+          harness!.events.filter(
+            (e) => e.type === "relayed" || e.type === "relayed_unfulfilled",
+          ).length === 2,
+        "both deliveries settled",
+      );
+      expect(harness.relayCalls).toHaveLength(1);
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "details")).params).toStrictEqual({
+        requestId: "details",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 1, "one report");
+    },
+  );
+
+  it("binds merchant details answers to their admitted challenge", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE, CHALLENGE] }),
+      responseBodies: Object.fromEntries(
+        ["a-first", "a-stale", "b-final"].map((id) => [
+          id,
+          JSON.stringify({
+            resultCode: "Authorised",
+            pspReference: id.replace(/-/g, ""),
+          }),
+        ]),
+      ),
+    });
+    pause(harness.stub, "pay-a", ADVANCED);
+    await settle(harness.stub, "pay-a");
+    for (const id of ["a-first", "a-stale"]) {
+      pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+      await settle(harness.stub, id);
+    }
+    answerPause(harness.stub, "a-first", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "A final report");
+    pause(harness.stub, "pay-b", {
+      ...ADVANCED,
+      body: { ...ADVANCED.body, reference: "order-b" },
+    });
+    await settle(harness.stub, "pay-b");
+    answerPause(harness.stub, "a-stale", MERCHANT_DETAILS);
+    await waitFor(
+      () => continues(harness!.stub, "a-stale").length === 2,
+      "stale A",
+    );
+    pause(harness.stub, "b-final", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    expect((await settle(harness.stub, "b-final")).params).toStrictEqual({
+      requestId: "b-final",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "b-final", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 2, "B final report");
+    expect(harness.resultCalls.map((call) => call.pspReference)).toEqual([
+      "afirst",
+      "bfinal",
+    ]);
+  });
+
+  it.each([307, 308])(
+    "keeps a stale merchant details %i POST redirect bound to its admitted challenge",
+    async (status) => {
+      const redirectedDetails = `${PAGE_ORIGIN}/api/redirected/payments/details`;
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE, CHALLENGE] }),
+        responseBodies: Object.fromEntries(
+          ["a-first", "a-redirected", "b-final"].map((id) => [
+            id,
+            JSON.stringify({
+              resultCode: "Authorised",
+              pspReference: id.replace(/-/g, ""),
+            }),
+          ]),
+        ),
+      });
+      pause(harness.stub, "pay-a", ADVANCED);
+      await settle(harness.stub, "pay-a");
+      for (const id of ["a-first", "a-stale"]) {
+        pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+        await settle(harness.stub, id);
+      }
+      answerPause(harness.stub, "a-first", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 1, "A final report");
+      pause(harness.stub, "pay-b", {
+        ...ADVANCED,
+        body: { ...ADVANCED.body, reference: "order-b" },
+      });
+      await settle(harness.stub, "pay-b");
+      answerPause(harness.stub, "a-stale", MERCHANT_DETAILS, "page-1", {
+        status,
+        location: redirectedDetails,
+      });
+      await waitFor(
+        () => continues(harness!.stub, "a-stale").length === 2,
+        "stale A redirect continued",
+      );
+      pause(
+        harness.stub,
+        "a-redirected",
+        { url: redirectedDetails, body: DETAILS_BODY },
+        "page-1",
+        "a-stale",
+      );
+      expect((await settle(harness.stub, "a-redirected")).params).toEqual({
+        requestId: "a-redirected",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "a-redirected", redirectedDetails);
+      await waitFor(
+        () => continues(harness!.stub, "a-redirected").length === 2,
+        "stale redirected A answer continued",
+      );
+      pause(harness.stub, "b-final", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "b-final")).params).toEqual({
+        requestId: "b-final",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "b-final", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 2, "B final report");
+      expect(harness.resultCalls.map((call) => call.pspReference)).toEqual([
+        "afirst",
+        "bfinal",
+      ]);
+      expect(harness.relayCalls).toHaveLength(2);
+      assertNothingSecret(harness);
+    },
+  );
+
+  it("binds relayed sessions details answers to their admitted challenge", async () => {
+    let releaseStale!: (response: RelayResponse) => void;
+    const stale = new Promise<RelayResponse>((resolve) => {
+      releaseStale = resolve;
+    });
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: async (request) => {
+        if (request.request.url === SESSIONS.url) return relayedBody(CHALLENGE);
+        if (JSON.parse(request.request.body).details.threeDSResult === "stale")
+          return stale;
+        return AUTHORISED;
+      },
+    });
+    pause(harness.stub, "pay-a", SESSIONS);
+    await settle(harness.stub, "pay-a");
+    pause(harness.stub, "a-stale", {
+      url: SESSIONS_DETAILS,
+      body: { details: { threeDSResult: "stale" } },
+    });
+    await waitFor(() => harness!.relayCalls.length === 2, "stale A admitted");
+    pause(harness.stub, "a-first", {
+      url: SESSIONS_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "a-first");
+    pause(harness.stub, "pay-b", {
+      ...SESSIONS,
+      body: { ...SESSIONS.body, reference: "order-b" },
+    });
+    await settle(harness.stub, "pay-b");
+    releaseStale(AUTHORISED);
+    await settle(harness.stub, "a-stale");
+    pause(harness.stub, "b-final", {
+      url: SESSIONS_DETAILS,
+      body: { details: { threeDSResult: "b-final" } },
+    });
+    expect((await settle(harness.stub, "b-final")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(harness.relayCalls).toHaveLength(5);
+    expect(harness.resultCalls).toEqual([]);
+  });
+
+  it.each(["Pending", "Received"])(
+    "keeps merchant details watches open after %s",
+    async (resultCode) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          pending: JSON.stringify({ resultCode }),
+          final: JSON.stringify({ resultCode: "Refused" }),
+        },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      for (const id of ["pending", "final"]) {
+        pause(harness.stub, id, { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+        expect((await settle(harness.stub, id)).params).toStrictEqual({
+          requestId: id,
+          interceptResponse: true,
+        });
+        answerPause(harness.stub, id, MERCHANT_DETAILS);
+        await waitFor(() => continues(harness!.stub, id).length === 2, id);
+        if (id === "pending") expect(harness.resultCalls).toEqual([]);
+      }
+      await waitFor(() => harness!.resultCalls.length === 1, "final report");
+      expect(harness.resultCalls[0]?.resultCode).toBe("Refused");
+      pause(harness.stub, "late", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "late")).params).toEqual({
+        requestId: "late",
+      });
+    },
+  );
+
+  it.each(["Pending", "Received"])(
+    "keeps relayed sessions details watches open after %s",
+    async (resultCode) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({
+          "/checkoutshopper/v1/sessions/CS123/payments": [CHALLENGE],
+          "/checkoutshopper/v1/sessions/CS123/paymentDetails": [
+            { resultCode },
+            { resultCode: "Authorised" },
+          ],
+        }),
+      });
+      pause(harness.stub, "pay", SESSIONS);
+      await settle(harness.stub, "pay");
+      for (const id of ["pending", "final"]) {
+        pause(harness.stub, id, {
+          url: SESSIONS_DETAILS,
+          body: { details: { threeDSResult: id } },
+        });
+        expect((await settle(harness.stub, id)).method).toBe(
+          "Fetch.fulfillRequest",
+        );
+      }
+      pause(harness.stub, "late", {
+        url: SESSIONS_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "late")).params).toEqual({
+        requestId: "late",
+      });
+      expect(harness.relayCalls).toHaveLength(3);
+      expect(harness.resultCalls).toEqual([]);
+    },
+  );
+
+  it.each([1, 2])(
+    "shares recovered-frame details watches with owning tab among %i pages",
+    async (pages) => {
+      harness = await arm({
+        existingPages: pages,
+        recoveredFrames: [
+          {
+            sessionId: "frame-pay",
+            url: frameUrl(CLIENT_KEY),
+            pageSessionId: "page-1",
+          },
+          {
+            sessionId: "frame-details",
+            url: `${PAGE_ORIGIN}/details-frame`,
+            pageSessionId: "page-1",
+          },
+          ...(pages > 1
+            ? [
+                {
+                  sessionId: "frame-other",
+                  url: `${PAGE_ORIGIN}/other-frame`,
+                  pageSessionId: "page-2",
+                },
+              ]
+            : []),
+        ],
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: { final: JSON.stringify({ resultCode: "Authorised" }) },
+      });
+      pause(harness.stub, "pay", ADVANCED, "frame-pay");
+      expect((await settle(harness.stub, "pay")).method).toBe(
+        "Fetch.fulfillRequest",
+      );
+      if (pages > 1) {
+        pause(
+          harness.stub,
+          "other",
+          { url: MERCHANT_DETAILS, body: DETAILS_BODY },
+          "frame-other",
+        );
+        expect((await settle(harness.stub, "other")).params).toEqual({
+          requestId: "other",
+        });
+      }
+      pause(
+        harness.stub,
+        "final",
+        { url: MERCHANT_DETAILS, body: DETAILS_BODY },
+        "frame-details",
+      );
+      expect((await settle(harness.stub, "final")).params).toStrictEqual({
+        requestId: "final",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "final", MERCHANT_DETAILS, "frame-details");
+      await waitFor(
+        () => harness!.resultCalls.length === 1,
+        "cross-frame final report",
+      );
+      expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+      expect(harness.relayCalls).toHaveLength(1);
+      expect(
+        harness.events.filter((event) => event.type === "adyen_result"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["Authorised", "Refused"])(
+    "follows merchant details redirects and reports terminal %s once",
+    async (resultCode) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          final: JSON.stringify({ resultCode, pspReference: "PSP4" }),
+        },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      const hops = [
+        {
+          id: "details",
+          status: 303,
+          next: "hop",
+          url: MERCHANT_DETAILS,
+          location: `${PAGE_ORIGIN}/result`,
+        },
+        {
+          id: "hop",
+          status: 302,
+          next: "final",
+          url: `${PAGE_ORIGIN}/result`,
+          location: `${PAGE_ORIGIN}/final`,
+        },
+      ];
+      for (const hop of hops) {
+        answerPause(harness.stub, hop.id, hop.url, "page-1", {
+          status: hop.status,
+          location: hop.location,
+          networkId: `network-${hop.id}`,
+        });
+        await waitFor(
+          () => continues(harness!.stub, hop.id).length === 2,
+          "redirect continued",
+        );
+        expect(harness.resultCalls).toEqual([]);
+        expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+        for (const [sessionId, requestId] of [
+          ["page-other", `network-${hop.id}`],
+          ["page-1", "network-unrelated"],
+        ]) {
+          harness.stub.emit({
+            method: "Network.loadingFinished",
+            sessionId,
+            params: { requestId },
+          });
+        }
+        pause(
+          harness.stub,
+          hop.next,
+          { url: hop.location, method: "GET" },
+          "page-1",
+          hop.id,
+        );
+        expect((await settle(harness.stub, hop.next)).params).toStrictEqual({
+          requestId: hop.next,
+          interceptResponse: true,
+        });
+        harness.stub.emit({
+          method: "Network.loadingFinished",
+          sessionId: "page-1",
+          params: { requestId: `network-${hop.id}` },
+        });
+      }
+      answerPause(harness.stub, "final", `${PAGE_ORIGIN}/final`, "page-1", {
+        method: "GET",
+      });
+      await waitFor(
+        () => harness!.events.some((event) => event.type === "adyen_result"),
+        "final event",
+      );
+      expect(harness.resultCalls).toEqual([
+        { injectionRef: HELD.injectionRef, resultCode, pspReference: "PSP4" },
+      ]);
+      expect(
+        harness.events.filter((event) => event.type === "adyen_result"),
+      ).toEqual([
+        {
+          type: "adyen_result",
+          url: PAGE_ORIGIN,
+          resultCode,
+          status: 200,
+          reported: true,
+        },
+      ]);
+      answerPause(harness.stub, "final", `${PAGE_ORIGIN}/final`);
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(
+        () =>
+          continues(harness!.stub, "final").length === 3 &&
+          continues(harness!.stub, "details").length === 3,
+        "duplicate and old responses",
+      );
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(1);
+      expect(harness.relayCalls).toHaveLength(1);
+      pause(harness.stub, "late", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "late")).params).toEqual({
+        requestId: "late",
+      });
+      assertNothingSecret(harness);
+    },
+  );
+
+  it("reads a body-bearing 303 without Location as a final answer", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { details: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 303,
+    });
+    await waitFor(() => harness!.resultCalls.length === 1, "303 final report");
+    expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+  });
+
+  it("continues a bodyless 304 without reporting and keeps the challenge open", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 304,
+      location: `${PAGE_ORIGIN}/result`,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "304 continued",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(harness.events.some((event) => event.type === "adyen_result")).toBe(
+      false,
+    );
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "200 final report");
+    expect(harness.resultCalls[0]?.resultCode).toBe("Authorised");
+  });
+
+  it("does not transfer a merchant details watch to a different origin", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: {
+        foreign: JSON.stringify({ resultCode: "Authorised" }),
+        retry: JSON.stringify({ resultCode: "Refused" }),
+      },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    const foreign = "https://other.example/result";
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 303,
+      location: foreign,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "redirect continued",
+    );
+    pause(
+      harness.stub,
+      "foreign",
+      { url: foreign, method: "GET" },
+      "page-1",
+      "details",
+    );
+    expect((await settle(harness.stub, "foreign")).params).toEqual({
+      requestId: "foreign",
+    });
+    answerPause(harness.stub, "foreign", foreign, "page-1", { method: "GET" });
+    await waitFor(
+      () => continues(harness!.stub, "foreign").length === 2,
+      "foreign response continued",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(
+      () => harness!.resultCalls.length === 1,
+      "same-origin retry reported",
+    );
+    expect(harness.resultCalls[0]?.resultCode).toBe("Refused");
+  });
+
+  it("blocks an unreadable 307 POST hop just like an ordinary request", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 307,
+      location: `${PAGE_ORIGIN}/final`,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "307 continued",
+    );
+    for (const id of ["ordinary-unreadable", "hop-unreadable"]) {
+      const failuresBefore = failures(harness).length;
+      harness.stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: id,
+          ...(id === "hop-unreadable"
+            ? { redirectedRequestId: "details" }
+            : {}),
+          request: {
+            url: `${PAGE_ORIGIN}/final`,
+            method: "POST",
+            headers: {},
+            hasPostData: true,
+          },
+        },
+      });
+      expect((await settle(harness.stub, id)).method).toBe("Fetch.failRequest");
+      expect(await nextFailure(harness, failuresBefore)).toMatchObject({
+        url: PAGE_ORIGIN,
+        reason: "unreadable_body",
+      });
+    }
+    expect(harness.resultCalls).toEqual([]);
+    expect(harness.relayCalls).toHaveLength(1);
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
+  });
+
+  it.each(["Network.loadingFinished", "Network.loadingFailed"])(
+    "expires an unclaimed redirect watch on correlated %s and keeps the challenge open",
+    async (method) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+        status: 303,
+        location: `${PAGE_ORIGIN}/final`,
+        networkId: "network-details",
+      });
+      await waitFor(
+        () => continues(harness!.stub, "details").length === 2,
+        "redirect continued",
+      );
+      harness.stub.emit({
+        method,
+        sessionId: "page-1",
+        params: { requestId: "network-details" },
+      });
+      // A stale redirectedRequestId cannot reclaim the expired watch.
+      pause(
+        harness.stub,
+        "late-hop",
+        { url: `${PAGE_ORIGIN}/final`, method: "GET" },
+        "page-1",
+        "details",
+      );
+      expect((await settle(harness.stub, "late-hop")).params).toEqual({
+        requestId: "late-hop",
+      });
+      expect(harness.resultCalls).toEqual([]);
+      pause(harness.stub, "retry", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      expect((await settle(harness.stub, "retry")).params).toEqual({
+        requestId: "retry",
+        interceptResponse: true,
+      });
+      answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+      await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
+    },
+  );
+
+  it("leaves unrelated redirect requests unwatched", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    pause(
+      harness.stub,
+      "unrelated",
+      { url: `${PAGE_ORIGIN}/final`, method: "GET" },
+      "page-1",
+      "unwatched",
+    );
+    expect((await settle(harness.stub, "unrelated")).params).toEqual({
+      requestId: "unrelated",
+    });
+    answerPause(harness.stub, "unrelated", `${PAGE_ORIGIN}/final`);
+    await waitFor(
+      () => continues(harness!.stub, "unrelated").length === 2,
+      "unwatched answer",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+  });
+
+  it("forgets a failed redirect hop and leaves the challenge open for retry", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { retry: JSON.stringify({ resultCode: "Authorised" }) },
+    });
+    pause(harness.stub, "pay", ADVANCED);
+    await settle(harness.stub, "pay");
+    pause(harness.stub, "details", {
+      url: MERCHANT_DETAILS,
+      body: DETAILS_BODY,
+    });
+    await settle(harness.stub, "details");
+    answerPause(harness.stub, "details", MERCHANT_DETAILS, "page-1", {
+      status: 307,
+      location: `${PAGE_ORIGIN}/final`,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "details").length === 2,
+      "redirect continued",
+    );
+    pause(
+      harness.stub,
+      "failed",
+      { url: `${PAGE_ORIGIN}/final` },
+      "page-1",
+      "details",
+    );
+    expect((await settle(harness.stub, "failed")).params).toStrictEqual({
+      requestId: "failed",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "failed", `${PAGE_ORIGIN}/final`, "page-1", {
+      failed: true,
+    });
+    await waitFor(
+      () => continues(harness!.stub, "failed").length === 2,
+      "failed hop continued",
+    );
+    answerPause(harness.stub, "failed", `${PAGE_ORIGIN}/final`);
+    await waitFor(
+      () => continues(harness!.stub, "failed").length === 3,
+      "duplicate failed hop",
+    );
+    expect(harness.resultCalls).toEqual([]);
+    expect(count(harness.stub.commands, "Fetch.getResponseBody")).toBe(0);
+    pause(harness.stub, "retry", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    expect((await settle(harness.stub, "retry")).params).toStrictEqual({
+      requestId: "retry",
+      interceptResponse: true,
+    });
+    answerPause(harness.stub, "retry", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "retry reported");
+  });
+
+  it("does not watch a details call from another tab", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+    });
+    harness.stub.emit({
+      method: "Target.attachedToTarget",
+      params: {
+        sessionId: "page-2",
+        waitingForDebugger: true,
+        targetInfo: {
+          targetId: "target-page-2",
+          type: "page",
+          url: `${PAGE_ORIGIN}/checkout`,
+        },
+      },
+    });
+    await waitFor(
+      () => count(harness!.stub.commands, "Fetch.enable") === 3,
+      "Fetch.enable on page-2",
+    );
+    pause(harness.stub, "req-pay", ADVANCED);
+    await settle(harness.stub, "req-pay");
+    harness.stub.emit({
+      method: "Fetch.requestPaused",
+      sessionId: "page-2",
+      params: {
+        requestId: "req-tab-2",
+        request: {
+          url: MERCHANT_DETAILS,
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          postData: JSON.stringify(DETAILS_BODY),
+          hasPostData: true,
+        },
+      },
+    });
+    await waitFor(
+      () => continues(harness!.stub, "req-tab-2").length === 1,
+      "tab 2",
+    );
+    expect(continues(harness.stub, "req-tab-2")[0]?.params).toStrictEqual({
+      requestId: "req-tab-2",
+    });
+  });
+
+  it.each([
+    [
+      "the backend refuses the report",
+      async (): Promise<AdyenResultResponse> => ({
+        outcome: "refused",
+        status: 409,
+        code: "RESULT_CONFLICT",
+      }),
+      '"code":"RESULT_CONFLICT"',
+    ],
+    [
+      "the report fails",
+      async (): Promise<AdyenResultResponse> => {
+        throw new Error("ECONNREFUSED PSP4");
+      },
+      "adyen result report failed",
+    ],
+  ] as const)(
+    "never touches the page when %s, and says reported: false",
+    async (_label, adyenResult, warning) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          "req-d": JSON.stringify({
+            resultCode: "Authorised",
+            pspReference: "PSP4",
+          }),
+        },
+        adyenResult,
+      });
+      pause(harness.stub, "req-pay", ADVANCED);
+      await settle(harness.stub, "req-pay");
+      pause(harness.stub, "req-d", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await waitFor(() => continues(harness!.stub, "req-d").length === 1, "d");
+      answerPause(harness.stub, "req-d", MERCHANT_DETAILS);
+      await waitFor(
+        () => harness!.events.some((event) => event.type === "adyen_result"),
+        "adyen_result",
+      );
+      expect(continues(harness.stub, "req-d")).toHaveLength(2);
+      expect(count(harness.stub.commands, "Fetch.failRequest")).toBe(0);
+      expect(harness.events.at(-1)).toMatchObject({
+        type: "adyen_result",
+        reported: false,
+      });
+      expect(harness.warnings.join("\n")).toContain(warning);
+      expect(harness.warnings.join("\n")).not.toContain("PSP4");
+    },
+  );
+
+  it.each([
+    ["pending", false],
+    ["completed", true],
+    ["failed", true],
+    ["recorded", true],
+  ] as const)(
+    "emits the %s result acknowledgement with reported=%s",
+    async (outcome, reported) => {
+      harness = await arm({
+        frames: KEY_FRAME,
+        answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+        responseBodies: {
+          details: JSON.stringify({ resultCode: "Authorised" }),
+        },
+        adyenResult: async () => ({ outcome, resultCode: "Authorised" }),
+      });
+      pause(harness.stub, "pay", ADVANCED);
+      await settle(harness.stub, "pay");
+      pause(harness.stub, "details", {
+        url: MERCHANT_DETAILS,
+        body: DETAILS_BODY,
+      });
+      await settle(harness.stub, "details");
+      answerPause(harness.stub, "details", MERCHANT_DETAILS);
+      await waitFor(
+        () => harness!.events.some((event) => event.type === "adyen_result"),
+        "result event",
+      );
+      expect(harness.events.at(-1)).toMatchObject({
+        type: "adyen_result",
+        reported,
+      });
+      expect(continues(harness.stub, "details")).toHaveLength(2);
+      expect(harness.resultCalls).toHaveLength(1);
+      expect(harness.warnings).toEqual([]);
+    },
+  );
+
+  it("says reported: false when the relay has no adyenResult", async () => {
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { "req-d": JSON.stringify({ resultCode: "Authorised" }) },
+      adyenResult: null,
+    });
+    pause(harness.stub, "req-pay", ADVANCED);
+    await settle(harness.stub, "req-pay");
+    pause(harness.stub, "req-d", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    await waitFor(() => continues(harness!.stub, "req-d").length === 1, "d");
+    answerPause(harness.stub, "req-d", MERCHANT_DETAILS);
+    await waitFor(
+      () => harness!.events.some((event) => event.type === "adyen_result"),
+      "adyen_result",
+    );
+    expect(harness.events.at(-1)).toMatchObject({ reported: false });
+  });
+
+  it("detach() waits for a details answer already paused to reach the page and be reported", async () => {
+    let release!: () => void;
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { "req-d": JSON.stringify({ resultCode: "Authorised" }) },
+      adyenResult: (request) =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ outcome: "completed", resultCode: request.resultCode });
+        }),
+    });
+    pause(harness.stub, "req-pay", ADVANCED);
+    await settle(harness.stub, "req-pay");
+    pause(harness.stub, "req-d", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    await waitFor(() => continues(harness!.stub, "req-d").length === 1, "d");
+    answerPause(harness.stub, "req-d", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "report started");
+    let detached = false;
+    const detaching = harness.detach().then(() => {
+      detached = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(detached).toBe(false);
+    release();
+    await detaching;
+    expect(harness.events.at(-1)).toMatchObject({
+      type: "adyen_result",
+      reported: true,
     });
   });
 });

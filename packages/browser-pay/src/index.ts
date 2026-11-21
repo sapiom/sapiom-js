@@ -27,7 +27,13 @@ export type {
   RelayCallOptions,
 } from "./relay.js";
 
-export type { RelayRequest, RelayResponse } from "./contract.js";
+export type {
+  AdyenResultCode,
+  AdyenResultRequest,
+  AdyenResultResponse,
+  RelayRequest,
+  RelayResponse,
+} from "./contract.js";
 
 export type { HeldPlaceholder } from "./detect.js";
 

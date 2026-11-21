@@ -1,5 +1,7 @@
 import {
   adyenClientKeysInRequest,
+  adyenDetailsCall,
+  adyenPaymentResult,
   isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
@@ -165,5 +167,54 @@ describe("Adyen secured-fields payment bodies", () => {
     ]) {
       expect(isAdyenSecuredFieldsPayment(body)).toBe(false);
     }
+  });
+});
+
+describe("Adyen 3-D Secure details calls", () => {
+  const ADYEN = "https://checkoutshopper-test.adyen.com/checkoutshopper/v1";
+
+  it("relays only Adyen's own sessions paymentDetails, keyed by session", () => {
+    expect(
+      adyenDetailsCall(
+        "POST",
+        `${ADYEN}/sessions/CS1/paymentDetails?clientKey=k`,
+      ),
+    ).toStrictEqual({
+      checkout: `https://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS1`,
+      relay: true,
+    });
+    expect(
+      adyenDetailsCall("post", "https://shop.example/api/payments/details"),
+    ).toStrictEqual({ checkout: "https://shop.example", relay: false });
+    expect(
+      adyenDetailsCall(
+        "POST",
+        "https://shop.example/sessions/S1/paymentDetails",
+      ),
+    ).toStrictEqual({ checkout: "https://shop.example", relay: false });
+  });
+
+  it("matches nothing else", () => {
+    for (const [method, url] of [
+      ["GET", `${ADYEN}/sessions/CS1/paymentDetails`],
+      ["POST", `${ADYEN}/sessions/CS1/payments`],
+      ["POST", "https://shop.example/api/payments"],
+      ["POST", "https://shop.example/api/payments/details/extra"],
+      ["POST", "not a url"],
+    ]) {
+      expect(adyenDetailsCall(method!, url!)).toBeUndefined();
+    }
+  });
+
+  it("reads a known resultCode and a well-formed pspReference, else unknown", () => {
+    expect(
+      adyenPaymentResult('{"resultCode":"Authorised","pspReference":"PSP1"}'),
+    ).toStrictEqual({ resultCode: "Authorised", pspReference: "PSP1" });
+    expect(
+      adyenPaymentResult('{"resultCode":"Paid","pspReference":"a b"}'),
+    ).toStrictEqual({ resultCode: "unknown" });
+    expect(adyenPaymentResult("<html>")).toStrictEqual({
+      resultCode: "unknown",
+    });
   });
 });

@@ -8,14 +8,20 @@ import {
 } from "./adyen-blobs.js";
 import { CdpCommandError, CdpConnection, type CdpEvent } from "./cdp.js";
 import {
+  isAdyenActionResult,
   paymentIdempotencyKey,
+  type AdyenResultCode,
+  type AdyenResultResponse,
   type RelayedHttpResponse,
   type RelayRequest,
   type RelayResponse,
 } from "./contract.js";
 import {
   ADYEN_CHECKOUT_ORIGINS,
+  adyenCheckout,
   adyenClientKeysInRequest,
+  adyenDetailsCall,
+  adyenPaymentResult,
   isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
@@ -26,6 +32,7 @@ import { silentLogger, type PayLogger } from "./logger.js";
 import {
   isRelayTimeout,
   isRetryableRelayError,
+  RelayHttpError,
   RelayTimeoutError,
   type PaymentRelay,
 } from "./relay.js";
@@ -118,6 +125,18 @@ export type InterceptorEvent =
   | { type: "paused"; url: string; method: string; targetType: string }
   | { type: "relayed"; url: string; status: number }
   | { type: "relayed_unfulfilled"; url: string; status: number }
+  /**
+   * Adyen's final answer after 3-D Secure on a merchant's own
+   * `/payments/details`, which the relay cannot see. `status` is the page's
+   * HTTP status; `reported` is false when the backend did not take it.
+   */
+  | {
+      type: "adyen_result";
+      url: string;
+      resultCode: AdyenResultCode;
+      status: number;
+      reported: boolean;
+    }
   | {
       type: "refused";
       url: string;
@@ -327,13 +346,48 @@ type HeldRead =
   | { kind: "miss"; body: string }
   | { kind: "held"; body: string };
 
+interface AdyenChallenge {
+  readonly clientKey: string;
+  /** The idempotency key of the Pay whose answer opened it. */
+  readonly payKey: string;
+  /** Deliveries of the opening Pay answer to the page still in progress. */
+  fulfilling: number;
+  /** Whether one delivery of the opening Pay answer reached the page. */
+  delivered: boolean;
+}
+
+/** A challenge a relayed Pay answer opened, before the page has it. */
+interface OpeningChallenge {
+  page: string;
+  checkout: string;
+  challenge: AdyenChallenge;
+}
+
 type Decision =
   | { action: "continue" }
+  | { action: "awaitAdyenResult"; challenge: AdyenChallenge }
   | { action: "fail"; reason: FailureReason }
   | { action: "refused"; refusal: PublicRefusal }
-  | { action: "relayed"; response: RelayedHttpResponse };
+  | {
+      action: "relayed";
+      response: RelayedHttpResponse;
+      opening?: OpeningChallenge;
+    };
 
-type SettleAction = "continue" | "fail" | { fulfill: RelayedHttpResponse };
+type SettleAction = "continue" | "continueForAnswer" | "fail";
+
+/**
+ * How a relayed answer's hand-off to the page ended: Chrome took it, refused
+ * it with a CDP error, or never confirmed either way (it may have it).
+ */
+type Fulfilment = "fulfilled" | "refused" | "unconfirmed";
+
+interface AdyenDetailsWatch {
+  url: string;
+  sessionId: string;
+  challenge: AdyenChallenge;
+  redirectNetworkId?: string;
+}
 
 type Listener = (event: InterceptorEvent) => void;
 
@@ -363,6 +417,22 @@ class PaymentInterceptor {
   private readonly pendingArms = new Set<Promise<void>>();
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
+  /**
+   * Open 3-D Secure challenges, by page session, checkout and Pay
+   * idempotency key: each relayed payment answering a 3-D Secure code adds
+   * one, identical Pays sharing one relay answer share it, and a details
+   * call's final code closes its admitted challenge. Merchant routes on one
+   * origin share a checkout key; a stale answer must not close a newer
+   * challenge.
+   */
+  private readonly adyenAwaiting3ds = new Map<
+    string,
+    Map<string, Map<string, AdyenChallenge>>
+  >();
+  /** Merchant `/payments/details` calls whose answer is still to come, by inflight key. */
+  private readonly adyenDetailsWatches = new Map<string, AdyenDetailsWatch>();
+  /** Answers being read, handed to the page and reported; detach() waits for them. */
+  private readonly answers = new Set<Promise<void>>();
   /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
   private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
   /** Per session, the ids of execution contexts in the watch world. */
@@ -421,6 +491,11 @@ class PaymentInterceptor {
       this.onTargetInfoChanged(event);
     } else if (event.method === "Network.requestWillBeSent") {
       this.onRequestWillBeSent(event);
+    } else if (
+      event.method === "Network.loadingFinished" ||
+      event.method === "Network.loadingFailed"
+    ) {
+      this.onNetworkCompletion(event);
     } else if (event.method === "Runtime.bindingCalled") {
       this.onBindingCalled(event);
     } else if (event.method.startsWith("Runtime.executionContext")) {
@@ -474,6 +549,10 @@ class PaymentInterceptor {
     if (this.byTarget.get(session.targetId) === session) {
       this.byTarget.delete(session.targetId);
     }
+    for (const [key, watch] of this.adyenDetailsWatches) {
+      if (watch.sessionId === sessionId) this.adyenDetailsWatches.delete(key);
+    }
+    this.adyenAwaiting3ds.delete(sessionId);
   }
 
   private onTargetInfoChanged(event: CdpEvent): void {
@@ -752,8 +831,33 @@ class PaymentInterceptor {
       this.connection.send("Target.getTargets"),
       "Target.getTargets",
     );
-    for (const info of parseTargetInfos(listed)) {
-      if (info.type !== "iframe") continue;
+    const frames = parseTargetInfos(listed).filter(
+      (info) => info.type === "iframe" && !this.byTarget.has(info.targetId),
+    );
+    const parents = new Map<string, string>();
+    const pages = [...this.sessions.values()].filter(
+      (session) => session.type === "page",
+    );
+    // Root-level recovery loses the attaching parent's session. CDP frame ids
+    // identify iframe targets in the owning page's tree, including nested ones.
+    if (frames.length > 0 && pages.length > 1) {
+      for (const page of pages) {
+        const tree = await this.swallowStep(
+          this.connection.send("Page.getFrameTree", {}, page.sessionId),
+          "Page.getFrameTree",
+          page,
+        );
+        for (const frame of frames) {
+          if (
+            isRecord(tree) &&
+            frameTreeContains(tree.frameTree, frame.targetId)
+          ) {
+            parents.set(frame.targetId, page.sessionId);
+          }
+        }
+      }
+    }
+    for (const info of frames) {
       if (this.byTarget.has(info.targetId)) continue;
       const attached = await this.swallowStep(
         this.connection.send("Target.attachToTarget", {
@@ -765,12 +869,16 @@ class PaymentInterceptor {
       );
       const sessionId = readAttachedSessionId(attached);
       if (!sessionId || this.sessions.has(sessionId)) continue;
+      const parentSessionId =
+        parents.get(info.targetId) ??
+        (pages.length === 1 ? pages[0].sessionId : undefined);
       const session = this.trackSession({
         sessionId,
         targetId: info.targetId,
         type: "iframe",
         url: info.url,
         fetchEnabled: false,
+        ...(parentSessionId ? { parentSessionId } : {}),
       });
       await this.autoAttachChildren(sessionId);
       await this.enableSession(session.sessionId, false);
@@ -789,6 +897,19 @@ class PaymentInterceptor {
     const parsed = parsePaused(event.params);
     if (!sessionId || !parsed) return;
     const { requestId, request } = parsed;
+    const response = responseStage(event.params);
+    if (response) {
+      const answer = this.onDetailsAnswer(
+        sessionId,
+        requestId,
+        response.status,
+        response.redirect,
+        request.networkId,
+      );
+      this.answers.add(answer);
+      void answer.finally(() => this.answers.delete(answer));
+      return;
+    }
     if (!this.sessions.has(sessionId)) {
       void failRequest(this.connection, sessionId, requestId);
       this.emit({
@@ -798,6 +919,24 @@ class PaymentInterceptor {
       });
       return;
     }
+    const redirectedRequestId = readStringField(
+      event.params,
+      "redirectedRequestId",
+    );
+    const previousKey = redirectedRequestId
+      ? inflightKey(sessionId, redirectedRequestId)
+      : undefined;
+    const watch = previousKey
+      ? this.adyenDetailsWatches.get(previousKey)
+      : undefined;
+    if (watch && previousKey) {
+      this.adyenDetailsWatches.delete(previousKey);
+      delete watch.redirectNetworkId;
+    }
+    const redirectWatch =
+      watch && isPageOrigin(request.url, new URL(watch.url).origin)
+        ? watch
+        : undefined;
     this.noteAdyenRequest(request);
     const key = inflightKey(sessionId, requestId);
     if (this.inflight.has(key)) return;
@@ -809,6 +948,7 @@ class PaymentInterceptor {
     };
     this.inflight.set(key, entry);
     if (
+      !redirectWatch &&
       canContinueWithoutReading(
         request.method,
         request.url,
@@ -819,16 +959,23 @@ class PaymentInterceptor {
       void this.settle(entry, "continue");
       return;
     }
-    void this.handlePaused(entry, request);
+    void this.handlePaused(entry, request, redirectWatch);
   }
 
   private async handlePaused(
     entry: Inflight,
     request: PausedRequest,
+    redirectWatch?: AdyenDetailsWatch,
   ): Promise<void> {
     try {
-      const decision = await this.decide(entry, request);
-      await this.apply(entry, request.url, decision);
+      const decision = await this.decide(entry, request, redirectWatch);
+      if (redirectWatch && decision.action === "continue") {
+        this.adyenDetailsWatches.set(entry.key, redirectWatch);
+        const continued = await this.settle(entry, "continueForAnswer");
+        if (!continued) this.adyenDetailsWatches.delete(entry.key);
+      } else {
+        await this.apply(entry, request.url, decision);
+      }
     } catch {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url: request.url, reason: "network" });
@@ -838,6 +985,7 @@ class PaymentInterceptor {
   private async decide(
     entry: Inflight,
     request: PausedRequest,
+    redirectWatch?: AdyenDetailsWatch,
   ): Promise<Decision> {
     const read = await this.readHeld(entry.sessionId, request);
     if (read.kind === "unreadable") {
@@ -845,7 +993,17 @@ class PaymentInterceptor {
     }
     const adyen =
       read.kind === "miss" && isAdyenSecuredFieldsPayment(read.body);
-    if (read.kind === "miss" && !adyen) return { action: "continue" };
+    // A watched redirect already belongs to its original challenge.
+    const details =
+      read.kind === "miss" && !adyen && !redirectWatch
+        ? this.openDetailsCall(entry.sessionId, request)
+        : undefined;
+    if (details && !details.relay) {
+      return { action: "awaitAdyenResult", challenge: details.challenge };
+    }
+    if (read.kind === "miss" && !adyen && !details) {
+      return { action: "continue" };
+    }
     if (this.closed) return { action: "fail", reason: "detached" };
     const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
     this.emit({
@@ -865,10 +1023,16 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
+    const idempotencyKey = paymentIdempotencyKey(
+      request.method,
+      request.url,
+      read.body,
+    );
+    let challenge = details?.challenge;
     let route: Pick<RelayRequest, "profileId" | "adyen">;
     let forwarded = this.options.profileId ? profileHeader : genericHeader;
-    if (adyen) {
-      const clientKey = this.adyenClientKey();
+    if (adyen || details) {
+      const clientKey = details?.challenge.clientKey ?? this.adyenClientKey();
       if (!clientKey) {
         this.logger.warn(
           this.adyenClientKeys.size > 1
@@ -877,24 +1041,43 @@ class PaymentInterceptor {
         );
         return { action: "fail", reason: "adyen_client_key" };
       }
-      if (
-        request.method.toUpperCase() !== "POST" ||
-        (!isPageOrigin(request.url, pageOrigin) &&
-          !isAdyenCheckoutDestination(request.url, clientKey))
-      ) {
-        return { action: "fail", reason: "destination_not_allowed" };
+      if (details) {
+        const explicitKeys = new URL(request.url).searchParams.getAll(
+          "clientKey",
+        );
+        const headerKey = headerValue(request.headers, "x-client-key");
+        if (headerKey) explicitKeys.push(headerKey);
+        if (explicitKeys.some((key) => key !== clientKey)) {
+          return { action: "fail", reason: "adyen_client_key" };
+        }
       }
-      const blobs = placeholderBlobHashes(this.adyenBlobHashes);
-      if ("missing" in blobs) {
-        this.logger.warn("adyen placeholder blobs not observed", {
-          missing: blobs.missing.join(","),
-        });
-        return { action: "fail", reason: "adyen_placeholder_unobserved" };
-      }
-      route = {
-        profileId: ADYEN_CHECKOUT_PROFILE,
-        adyen: { clientKey, placeholderBlobHashes: blobs.hashes },
+      challenge ??= {
+        clientKey,
+        payKey: idempotencyKey,
+        fulfilling: 0,
+        delivered: false,
       };
+      route = { profileId: ADYEN_CHECKOUT_PROFILE, adyen: { clientKey } };
+      // Only a Pay carries the page's card blobs; a details call has none.
+      if (adyen) {
+        // A Pay is relayed only to the page's own origin or Adyen's sessions
+        // payments endpoint; any other destination is refused here.
+        if (
+          request.method.toUpperCase() !== "POST" ||
+          (!isPageOrigin(request.url, pageOrigin) &&
+            !isAdyenCheckoutDestination(request.url, clientKey))
+        ) {
+          return { action: "fail", reason: "destination_not_allowed" };
+        }
+        const blobs = placeholderBlobHashes(this.adyenBlobHashes);
+        if ("missing" in blobs) {
+          this.logger.warn("adyen placeholder blobs not observed", {
+            missing: blobs.missing.join(","),
+          });
+          return { action: "fail", reason: "adyen_placeholder_unobserved" };
+        }
+        route.adyen = { clientKey, placeholderBlobHashes: blobs.hashes };
+      }
       // The merchant's own endpoint may need the page's session cookie or a
       // CSRF header; Adyen's endpoints must never see them.
       forwarded = isPageOrigin(request.url, pageOrigin)
@@ -905,19 +1088,16 @@ class PaymentInterceptor {
     } else {
       route = {};
     }
-    const idempotencyKey = paymentIdempotencyKey(
-      request.method,
-      request.url,
-      read.body,
-    );
     if (this.unknownKeys.has(idempotencyKey)) {
       return { action: "fail", reason: "unknown" };
     }
     const headers = forwardedHeaders(request.headers, forwarded);
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
     // Adyen checks the Origin a client key is allowed for; CDP can omit it.
-    if (adyen) headers.origin ??= pageOrigin;
-    return this.awaitRelay({
+    if (adyen || details) headers.origin ??= pageOrigin;
+    // Resolved before the relay answers, while the frame still knows its tab.
+    const page = this.pageOf(entry.sessionId);
+    const decision = await this.awaitRelay({
       injectionRef: this.options.placeholder.injectionRef,
       ...route,
       pageOrigin,
@@ -929,6 +1109,224 @@ class PaymentInterceptor {
       },
       idempotencyKey,
     });
+    if (challenge && decision.action === "relayed") {
+      // Counted before the page gets the answer: its details call can pause
+      // before the fulfil returns.
+      const checkout = details?.checkout ?? adyenCheckout(new URL(request.url));
+      const opened = this.track3ds(
+        page,
+        checkout,
+        adyenPaymentResult(decision.response.body).resultCode,
+        challenge,
+        adyen,
+      );
+      if (opened) {
+        return { ...decision, opening: { page, checkout, challenge: opened } };
+      }
+    }
+    return decision;
+  }
+
+  /**
+   * A details call the page sends for a 3-D Secure challenge this tab opened
+   * on the same checkout, or `undefined`. Nothing new is watched once
+   * detach() starts.
+   */
+  private openDetailsCall(
+    sessionId: string,
+    request: PausedRequest,
+  ):
+    | { checkout: string; relay: boolean; challenge: AdyenChallenge }
+    | undefined {
+    if (this.closed) return undefined;
+    const call = adyenDetailsCall(request.method, request.url);
+    if (!call) return undefined;
+    const challenge = this.adyenAwaiting3ds
+      .get(this.pageOf(sessionId))
+      ?.get(call.checkout)
+      ?.values()
+      .next().value;
+    return challenge === undefined ? undefined : { ...call, challenge };
+  }
+
+  /**
+   * A payment's 3-D Secure code opens a challenge; a details answer's final
+   * code closes one. A details answer with another action code continues its
+   * challenge. Non-final or unknown answers change nothing: the page's
+   * retried details call may be final. A final code on a payment had no
+   * challenge to close. Returns the challenge a payment's answer opened or
+   * joined, with its delivery to the page counted.
+   */
+  private track3ds(
+    page: string,
+    checkout: string,
+    resultCode: AdyenResultCode,
+    challenge: AdyenChallenge,
+    opening = false,
+  ): AdyenChallenge | undefined {
+    const awaiting = this.adyenAwaiting3ds.get(page);
+    const open = awaiting?.get(checkout);
+    if (isAdyenActionResult(resultCode)) {
+      if (opening && !this.closed && this.sessions.has(page)) {
+        const challenges = open ?? new Map<string, AdyenChallenge>();
+        const opened = challenges.get(challenge.payKey) ?? challenge;
+        opened.fulfilling += 1;
+        this.adyenAwaiting3ds.set(
+          page,
+          (awaiting ?? new Map<string, Map<string, AdyenChallenge>>()).set(
+            checkout,
+            challenges.set(opened.payKey, opened),
+          ),
+        );
+        return opened;
+      }
+    } else if (!opening && isFinalAdyenResult(resultCode)) {
+      this.close3ds(page, checkout, challenge);
+    }
+    return undefined;
+  }
+
+  /**
+   * A Pay answer Chrome refused on every delivery opens no challenge: a later
+   * details call must not be bound to an action the page never received. An
+   * unconfirmed delivery may have reached the page, so it keeps the challenge.
+   */
+  private settleOpening(
+    opening: OpeningChallenge,
+    fulfilment: Fulfilment,
+  ): void {
+    const { challenge } = opening;
+    challenge.fulfilling -= 1;
+    if (fulfilment !== "refused") challenge.delivered = true;
+    if (challenge.delivered || challenge.fulfilling > 0) return;
+    this.close3ds(opening.page, opening.checkout, challenge);
+  }
+
+  private close3ds(
+    page: string,
+    checkout: string,
+    challenge: AdyenChallenge,
+  ): void {
+    const awaiting = this.adyenAwaiting3ds.get(page);
+    const open = awaiting?.get(checkout);
+    if (open?.get(challenge.payKey) === challenge) {
+      open.delete(challenge.payKey);
+    }
+    if (open?.size === 0) awaiting?.delete(checkout);
+  }
+
+  /**
+   * The answer to a merchant `/payments/details` call continued with
+   * `interceptResponse`. The page gets it unchanged, before the backend is
+   * told: a slow report must not hold the checkout. Only a final code is
+   * reported, once per challenge. The body may carry the shopper's details,
+   * so only the result code leaves this method.
+   */
+  private async onDetailsAnswer(
+    sessionId: string,
+    requestId: string,
+    status: number | undefined,
+    redirect = false,
+    networkId?: string,
+  ): Promise<void> {
+    const key = inflightKey(sessionId, requestId);
+    const watch = this.adyenDetailsWatches.get(key);
+    if (watch && redirect) {
+      // The next Fetch request claims this watch; completion without one expires it.
+      watch.redirectNetworkId = networkId;
+      const continued = await continueRequest(
+        this.connection,
+        sessionId,
+        requestId,
+      );
+      if (!continued) this.adyenDetailsWatches.delete(key);
+      return;
+    }
+    // Deleting first makes a second answer for the same request pass untouched.
+    this.adyenDetailsWatches.delete(key);
+    // A request that failed before any answer has no result to report.
+    if (watch === undefined || status === undefined) {
+      await continueRequest(this.connection, sessionId, requestId);
+      return;
+    }
+    const page = this.pageOf(sessionId);
+    const result = adyenPaymentResult(
+      (await readResponseBody(this.connection, sessionId, requestId)) ?? "",
+    );
+    const checkout = adyenCheckout(new URL(watch.url));
+    const open = this.adyenAwaiting3ds.get(page)?.get(checkout);
+    const final =
+      open?.get(watch.challenge.payKey) === watch.challenge &&
+      isFinalAdyenResult(result.resultCode);
+    this.track3ds(page, checkout, result.resultCode, watch.challenge);
+    await continueRequest(this.connection, sessionId, requestId);
+    // Another details answer may already have closed this admitted challenge.
+    if (!final) return;
+    const reported = await this.reportAdyenResult(result);
+    this.emit({
+      type: "adyen_result",
+      url: watch.url,
+      resultCode: result.resultCode,
+      status,
+      reported,
+    });
+  }
+
+  /** The tab a session belongs to: its frames share it, other tabs do not. */
+  private pageOf(sessionId: string): string {
+    return topPageSession(this.sessions, sessionId) ?? sessionId;
+  }
+
+  /** False when the backend did not take the result. Never throws. */
+  private async reportAdyenResult(result: {
+    resultCode: AdyenResultCode;
+    pspReference?: string;
+  }): Promise<boolean> {
+    const relay = this.options.relay;
+    if (typeof relay.adyenResult !== "function") return false;
+    const report = relay.adyenResult.bind(relay);
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new RelayTimeoutError()),
+      this.attemptTimeoutMs,
+    );
+    let answer: AdyenResultResponse;
+    try {
+      answer = await failAfter(
+        report(
+          { injectionRef: this.options.placeholder.injectionRef, ...result },
+          { signal: controller.signal },
+        ),
+        this.attemptTimeoutMs,
+      );
+    } catch (error) {
+      this.warn("adyen result report failed", {
+        resultCode: result.resultCode,
+        ...(error instanceof RelayHttpError ? { status: error.status } : {}),
+        timedOut: isRelayTimeout(error),
+      });
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (answer.outcome !== "refused") return answer.outcome !== "pending";
+    this.warn("adyen result report refused", {
+      resultCode: result.resultCode,
+      status: answer.status,
+      code: REASON_SHAPE.test(answer.code.toLowerCase())
+        ? answer.code
+        : "unrecognized",
+    });
+    return false;
+  }
+
+  /** A logger must not change control flow. */
+  private warn(...args: Parameters<PayLogger["warn"]>): void {
+    try {
+      void Promise.resolve(this.logger.warn(...args)).catch(() => {});
+    } catch {
+      // Ignored on purpose.
+    }
   }
 
   /** Another CDP client can fulfill a request before it pauses here; Network still sees it. */
@@ -936,6 +1334,19 @@ class PaymentInterceptor {
     const parsed = parsePaused(event.params);
     if (!parsed || !this.sessions.has(event.sessionId ?? "")) return;
     this.noteAdyenRequest(parsed.request);
+  }
+
+  private onNetworkCompletion(event: CdpEvent): void {
+    const requestId = readStringField(event.params, "requestId");
+    if (!requestId) return;
+    for (const [key, watch] of this.adyenDetailsWatches) {
+      if (
+        watch.sessionId === event.sessionId &&
+        watch.redirectNetworkId === requestId
+      ) {
+        this.adyenDetailsWatches.delete(key);
+      }
+    }
   }
 
   private noteAdyenRequest(request: PausedRequest): void {
@@ -1084,6 +1495,16 @@ class PaymentInterceptor {
       await this.settle(entry, "continue");
       return;
     }
+    if (decision.action === "awaitAdyenResult") {
+      this.adyenDetailsWatches.set(entry.key, {
+        url,
+        sessionId: entry.sessionId,
+        challenge: decision.challenge,
+      });
+      const continued = await this.settle(entry, "continueForAnswer");
+      if (!continued) this.adyenDetailsWatches.delete(entry.key);
+      return;
+    }
     if (decision.action === "fail") {
       await this.settle(entry, "fail");
       this.emit({ type: "failed", url, reason: decision.reason });
@@ -1094,9 +1515,10 @@ class PaymentInterceptor {
       this.emit({ type: "refused", url, ...decision.refusal });
       return;
     }
-    const fulfilled = await this.settle(entry, { fulfill: decision.response });
+    const fulfilment = await this.fulfil(entry, decision.response);
+    if (decision.opening) this.settleOpening(decision.opening, fulfilment);
     this.emit(
-      fulfilled
+      fulfilment === "fulfilled"
         ? { type: "relayed", url, status: decision.response.status }
         : {
             type: "relayed_unfulfilled",
@@ -1111,35 +1533,55 @@ class PaymentInterceptor {
     action: SettleAction,
   ): Promise<boolean> {
     if (entry.phase.status !== "open") return false;
-    if (action === "continue") {
+    if (action === "continue" || action === "continueForAnswer") {
+      let continued = true;
       const done = continueRequest(
         this.connection,
         entry.sessionId,
         entry.requestId,
-      ).finally(() => {
-        entry.phase = { status: "done" };
-        this.inflight.delete(entry.key);
-      });
+        action === "continueForAnswer",
+      )
+        .then((ok) => {
+          continued = ok;
+        })
+        .finally(() => {
+          entry.phase = { status: "done" };
+          this.inflight.delete(entry.key);
+        });
       entry.phase = { status: "continuing", done };
       await done;
-      return true;
+      return continued;
     }
     entry.phase = { status: "done" };
     try {
-      if (action === "fail") {
-        await failRequest(this.connection, entry.sessionId, entry.requestId);
-        return true;
-      }
+      await failRequest(this.connection, entry.sessionId, entry.requestId);
+      return true;
+    } finally {
+      this.inflight.delete(entry.key);
+    }
+  }
+
+  private async fulfil(
+    entry: Inflight,
+    response: RelayedHttpResponse,
+  ): Promise<Fulfilment> {
+    if (entry.phase.status !== "open") return "refused";
+    entry.phase = { status: "done" };
+    try {
       await fulfillRequest(
         this.connection,
         entry.sessionId,
         entry.requestId,
-        action.fulfill,
+        response,
       );
-      return true;
-    } catch {
+      return "fulfilled";
+    } catch (error) {
       await failRequest(this.connection, entry.sessionId, entry.requestId);
-      return false;
+      // Only a CDP error reply proves Chrome refused the answer: a command
+      // that timed out here is not cancelled there and may still land.
+      return error instanceof CdpCommandError && !error.timedOut
+        ? "refused"
+        : "unconfirmed";
     } finally {
       this.inflight.delete(entry.key);
     }
@@ -1156,6 +1598,7 @@ class PaymentInterceptor {
         if (entry.phase.status === "open") await this.settle(entry, "fail");
       }),
     );
+    await Promise.all(this.answers);
   }
 
   private relayOnce(
@@ -1189,6 +1632,7 @@ class PaymentInterceptor {
     this.closed = true;
     this.buffering = false;
     this.backlog = null;
+    this.adyenDetailsWatches.clear();
     for (const flight of this.relayFlights.values()) flight.controller.abort();
     await this.drainInflight();
     for (const sessionId of this.sessions.keys()) {
@@ -1416,6 +1860,15 @@ async function originFromSession(
   } catch {
     return undefined;
   }
+}
+
+function frameTreeContains(tree: unknown, targetId: string): boolean {
+  if (!isRecord(tree)) return false;
+  if (isRecord(tree.frame) && tree.frame.id === targetId) return true;
+  return (
+    Array.isArray(tree.childFrames) &&
+    tree.childFrames.some((child) => frameTreeContains(child, targetId))
+  );
 }
 
 function topPageSession(
@@ -1753,16 +2206,73 @@ async function armFetch(
   session.fetchEnabled = true;
 }
 
+/**
+ * False when the browser refused to continue and the request was failed
+ * instead. With `interceptResponse` this one request pauses again at its
+ * answer; every other request stays at the Request stage.
+ */
 async function continueRequest(
   connection: CdpConnection,
   sessionId: string,
   requestId: string,
-): Promise<void> {
+  interceptResponse = false,
+): Promise<boolean> {
   try {
-    await connection.send("Fetch.continueRequest", { requestId }, sessionId);
+    await connection.send(
+      "Fetch.continueRequest",
+      { requestId, ...(interceptResponse ? { interceptResponse } : {}) },
+      sessionId,
+    );
+    return true;
   } catch {
     await failRequest(connection, sessionId, requestId);
+    return false;
   }
+}
+
+async function readResponseBody(
+  connection: CdpConnection,
+  sessionId: string,
+  requestId: string,
+): Promise<string | undefined> {
+  try {
+    const result = await connection.send(
+      "Fetch.getResponseBody",
+      { requestId },
+      sessionId,
+    );
+    const body = readStringField(result, "body");
+    if (body === undefined) return undefined;
+    return isRecord(result) && result.base64Encoded === true
+      ? Buffer.from(body, "base64").toString("utf8")
+      : body;
+  } catch {
+    return undefined;
+  }
+}
+
+function isFinalAdyenResult(code: AdyenResultCode): boolean {
+  return ["Authorised", "Refused", "Error", "Cancelled"].includes(code);
+}
+
+/**
+ * A pause at the Response stage, which only a request continued with
+ * `interceptResponse` reaches. `status` is missing when it failed before an
+ * answer.
+ */
+function responseStage(
+  params: Record<string, unknown>,
+): { status?: number; redirect?: boolean } | undefined {
+  const status = params.responseStatusCode;
+  if (typeof status === "number") {
+    return {
+      status,
+      redirect:
+        [301, 302, 303, 307, 308].includes(status) &&
+        headerValue(params.responseHeaders, "location").length > 0,
+    };
+  }
+  return params.responseErrorReason !== undefined ? {} : undefined;
 }
 
 async function failRequest(
