@@ -1,4 +1,3 @@
-export { TransactionRevisionRequiredError } from "./utils/TransactionRevisionRequiredError.js";
 /**
  * @sapiom/core - Core SDK for Sapiom API
  *
@@ -43,6 +42,7 @@ export type {
 // Transaction Authorizer
 export { TransactionAuthorizer } from "./utils/TransactionAuthorizer.js";
 export type { TransactionAuthorizerConfig } from "./utils/TransactionAuthorizer.js";
+export { TransactionRevisionRequiredError } from "./utils/TransactionRevisionRequiredError.js";
 
 // Transaction Polling
 export { TransactionPoller } from "./client/TransactionPoller.js";

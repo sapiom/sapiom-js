@@ -1,4 +1,3 @@
-import { TransactionRevisionRequiredError } from "./TransactionRevisionRequiredError.js";
 /**
  * Core transaction authorization logic
  *
@@ -12,6 +11,7 @@ import type {
   TransactionResponse,
   CreateTransactionRequest,
 } from "../types/transaction.js";
+import { TransactionRevisionRequiredError } from "./TransactionRevisionRequiredError.js";
 
 /**
  * Parameters for creating and authorizing a transaction
