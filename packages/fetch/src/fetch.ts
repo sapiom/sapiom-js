@@ -1,4 +1,4 @@
-import { SapiomClient } from "@sapiom/core";
+import { SapiomClient, TransactionRevisionRequiredError } from "@sapiom/core";
 import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
@@ -168,14 +168,15 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       throw err;
     } finally {
       // Fire-and-forget: complete the transaction
-      handleCompletion(
-        request,
-        response,
-        error,
-        completionConfig,
-        startTime,
-        defaultMetadata,
-      );
+      if (!(error instanceof TransactionRevisionRequiredError))
+        handleCompletion(
+          request,
+          response,
+          error,
+          completionConfig,
+          startTime,
+          defaultMetadata,
+        );
     }
   };
 

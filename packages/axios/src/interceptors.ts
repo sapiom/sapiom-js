@@ -9,6 +9,8 @@ import {
   SapiomClient,
   TransactionPoller,
   TransactionStatus,
+  TransactionRevisionRequiredError,
+  isRevisionRequired,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -303,11 +305,15 @@ export function addAuthorizationInterceptor(
           return axiosConfig;
         }
 
+        if (isRevisionRequired(transaction))
+          throw new TransactionRevisionRequiredError(transaction);
+
         switch (transaction.status) {
           case TransactionStatus.AUTHORIZED:
             return axiosConfig;
 
           case TransactionStatus.PENDING:
+          case TransactionStatus.WAITING_APPROVAL:
           case TransactionStatus.PREPARING: {
             let authResult;
             try {
@@ -322,6 +328,11 @@ export function addAuthorizationInterceptor(
               );
               return axiosConfig;
             }
+
+            if (authResult.status === "needs_revision")
+              throw new TransactionRevisionRequiredError(
+                authResult.transaction,
+              );
 
             if (authResult.status === "authorized") {
               return axiosConfig;
@@ -472,6 +483,9 @@ export function addAuthorizationInterceptor(
         return axiosConfig;
       }
 
+      if (isRevisionRequired(transaction))
+        throw new TransactionRevisionRequiredError(transaction);
+
       if (
         transaction.status === TransactionStatus.DENIED ||
         transaction.status === TransactionStatus.CANCELLED
@@ -503,6 +517,9 @@ export function addAuthorizationInterceptor(
         );
         return axiosConfig;
       }
+
+      if (result.status === "needs_revision")
+        throw new TransactionRevisionRequiredError(result.transaction);
 
       if (result.status === "authorized") {
         setHeader(
@@ -616,7 +633,8 @@ export function addPaymentInterceptor(
 
           if (
             !transaction.requiresPayment &&
-            transaction.status === TransactionStatus.AUTHORIZED
+            transaction.status === TransactionStatus.AUTHORIZED &&
+            !isRevisionRequired(transaction)
           ) {
             transaction =
               await config.sapiomClient.transactions.reauthorizeWithPayment(
@@ -684,6 +702,9 @@ export function addPaymentInterceptor(
         }
       }
 
+      if (isRevisionRequired(transaction))
+        throw new TransactionRevisionRequiredError(transaction);
+
       if (
         transaction.status === TransactionStatus.DENIED ||
         transaction.status === TransactionStatus.CANCELLED
@@ -707,6 +728,9 @@ export function addPaymentInterceptor(
           );
           return Promise.reject(error);
         }
+
+        if (result.status === "needs_revision")
+          throw new TransactionRevisionRequiredError(result.transaction);
 
         if (result.status !== "authorized") {
           // Clear payment handling flag so completion interceptor fires

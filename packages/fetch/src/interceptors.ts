@@ -2,6 +2,8 @@ import {
   SapiomClient,
   TransactionPoller,
   TransactionStatus,
+  TransactionRevisionRequiredError,
+  isRevisionRequired,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -135,11 +137,15 @@ export async function handleAuthorization(
 
     const endpoint = request.url;
 
+    if (isRevisionRequired(transaction))
+      throw new TransactionRevisionRequiredError(transaction);
+
     switch (transaction.status) {
       case TransactionStatus.AUTHORIZED:
         return request;
 
       case TransactionStatus.PENDING:
+      case TransactionStatus.WAITING_APPROVAL:
       case TransactionStatus.PREPARING: {
         let authResult;
         try {
@@ -152,6 +158,9 @@ export async function handleAuthorization(
           );
           return request;
         }
+
+        if (authResult.status === "needs_revision")
+          throw new TransactionRevisionRequiredError(authResult.transaction);
 
         if (authResult.status === "authorized") {
           return request;
@@ -259,11 +268,15 @@ export async function handleAuthorization(
     return request;
   }
 
+  if (isRevisionRequired(transaction))
+    throw new TransactionRevisionRequiredError(transaction);
+
   switch (transaction.status) {
     case TransactionStatus.AUTHORIZED:
       break;
 
     case TransactionStatus.PENDING:
+    case TransactionStatus.WAITING_APPROVAL:
     case TransactionStatus.PREPARING: {
       const poller = new TransactionPoller(config.sapiomClient, polling);
 
@@ -278,6 +291,9 @@ export async function handleAuthorization(
         );
         return request;
       }
+
+      if (authResult.status === "needs_revision")
+        throw new TransactionRevisionRequiredError(authResult.transaction);
 
       if (authResult.status === "denied") {
         throw new AuthorizationDeniedError(transaction.id, endpoint);
@@ -370,12 +386,16 @@ export async function handlePayment(
   // If no transaction ID exists (authorization was skipped/failed in failureMode:open),
   // create one on-demand so we can still handle the 402 payment flow.
   if (!existingTransactionId) {
-    const requestMetadata = { ...defaultMetadata, ...((request as any).__sapiom || {}) };
+    const requestMetadata = {
+      ...defaultMetadata,
+      ...((request as any).__sapiom || {}),
+    };
     const callSite = captureUserCallSite();
     const parsedUrl = new URL(request.url);
 
+    let newTransaction;
     try {
-      const newTransaction = await config.sapiomClient.transactions.create({
+      newTransaction = await config.sapiomClient.transactions.create({
         requestFacts: {
           source: "http-client",
           version: "v1",
@@ -418,11 +438,6 @@ export async function handlePayment(
           onDemandPayment: true,
         },
       });
-      existingTransactionId = newTransaction.id;
-      // Write the transaction ID back to the original request so
-      // handleCompletion (which reads X-Sapiom-Transaction-Id from
-      // request headers) can complete this on-demand transaction.
-      setHeader(request.headers, "X-Sapiom-Transaction-Id", existingTransactionId);
     } catch (error) {
       if (config.failureMode === "closed") throw error;
       console.error(
@@ -431,6 +446,19 @@ export async function handlePayment(
       );
       return response;
     }
+
+    if (isRevisionRequired(newTransaction))
+      throw new TransactionRevisionRequiredError(newTransaction);
+
+    existingTransactionId = newTransaction.id;
+    // Write the transaction ID back to the original request so
+    // handleCompletion (which reads X-Sapiom-Transaction-Id from
+    // request headers) can complete this on-demand transaction.
+    setHeader(
+      request.headers,
+      "X-Sapiom-Transaction-Id",
+      existingTransactionId,
+    );
   }
 
   let transaction;
@@ -459,6 +487,8 @@ export async function handlePayment(
     return response;
   }
 
+  if (isRevisionRequired(transaction))
+    throw new TransactionRevisionRequiredError(transaction);
   // Poll for authorization if not already authorized
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
     const poller = new TransactionPoller(config.sapiomClient, polling);
@@ -474,6 +504,9 @@ export async function handlePayment(
       );
       return response;
     }
+
+    if (authResult.status === "needs_revision")
+      throw new TransactionRevisionRequiredError(authResult.transaction);
 
     if (authResult.status !== "authorized") {
       return response;
