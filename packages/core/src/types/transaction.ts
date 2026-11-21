@@ -256,6 +256,24 @@ export type X402PaymentRequirement =
 export type X402Response = X402ResponseV1 | X402ResponseV2;
 
 // ============================================================================
+// Transaction Helpers
+// ============================================================================
+
+/**
+ * Check if a spending rule refused the purchase, a refusal the integrator
+ * resolves by revising the purchase. Either field signals it: the
+ * `needs_revision` status or a `revise` next action.
+ */
+export function isRevisionRequired(
+  transaction: Pick<TransactionResponse, "status" | "nextAction">,
+): boolean {
+  return (
+    transaction.status === TransactionStatus.NEEDS_REVISION ||
+    transaction.nextAction?.type === "revise"
+  );
+}
+
+// ============================================================================
 // x402 Type Guards
 // ============================================================================
 

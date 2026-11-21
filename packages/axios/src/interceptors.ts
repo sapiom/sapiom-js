@@ -10,6 +10,7 @@ import {
   TransactionPoller,
   TransactionStatus,
   TransactionRevisionRequiredError,
+  isRevisionRequired,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -304,10 +305,7 @@ export function addAuthorizationInterceptor(
           return axiosConfig;
         }
 
-        if (
-          transaction.status === TransactionStatus.NEEDS_REVISION ||
-          transaction.nextAction?.type === "revise"
-        )
+        if (isRevisionRequired(transaction))
           throw new TransactionRevisionRequiredError(transaction);
 
         switch (transaction.status) {
@@ -485,10 +483,7 @@ export function addAuthorizationInterceptor(
         return axiosConfig;
       }
 
-      if (
-        transaction.status === TransactionStatus.NEEDS_REVISION ||
-        transaction.nextAction?.type === "revise"
-      )
+      if (isRevisionRequired(transaction))
         throw new TransactionRevisionRequiredError(transaction);
 
       if (
@@ -639,7 +634,7 @@ export function addPaymentInterceptor(
           if (
             !transaction.requiresPayment &&
             transaction.status === TransactionStatus.AUTHORIZED &&
-            transaction.nextAction?.type !== "revise"
+            !isRevisionRequired(transaction)
           ) {
             transaction =
               await config.sapiomClient.transactions.reauthorizeWithPayment(
@@ -707,10 +702,7 @@ export function addPaymentInterceptor(
         }
       }
 
-      if (
-        transaction.status === TransactionStatus.NEEDS_REVISION ||
-        transaction.nextAction?.type === "revise"
-      )
+      if (isRevisionRequired(transaction))
         throw new TransactionRevisionRequiredError(transaction);
 
       if (

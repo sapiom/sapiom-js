@@ -1,4 +1,4 @@
-import { TransactionStatus } from "../types/transaction.js";
+import { TransactionStatus, isRevisionRequired } from "../types/transaction.js";
 import { TransactionResponse } from "../types/transaction.js";
 import { SapiomClient } from "./SapiomClient.js";
 
@@ -109,10 +109,7 @@ export class TransactionPoller {
       const transaction =
         await this.sapiomClient.transactions.get(transactionId);
 
-      if (
-        transaction.status === TransactionStatus.NEEDS_REVISION ||
-        transaction.nextAction?.type === "revise"
-      ) {
+      if (isRevisionRequired(transaction)) {
         return { status: "needs_revision", transaction };
       }
 

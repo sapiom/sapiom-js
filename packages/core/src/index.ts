@@ -59,6 +59,8 @@ export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry.js";
 export {
   TransactionStatus,
   TransactionOutcome,
+  // transaction helpers
+  isRevisionRequired,
   // x402 type guards
   isV1Response,
   isV2Response,

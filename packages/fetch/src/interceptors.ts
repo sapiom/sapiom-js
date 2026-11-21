@@ -3,6 +3,7 @@ import {
   TransactionPoller,
   TransactionStatus,
   TransactionRevisionRequiredError,
+  isRevisionRequired,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -136,10 +137,7 @@ export async function handleAuthorization(
 
     const endpoint = request.url;
 
-    if (
-      transaction.status === TransactionStatus.NEEDS_REVISION ||
-      transaction.nextAction?.type === "revise"
-    )
+    if (isRevisionRequired(transaction))
       throw new TransactionRevisionRequiredError(transaction);
 
     switch (transaction.status) {
@@ -270,10 +268,7 @@ export async function handleAuthorization(
     return request;
   }
 
-  if (
-    transaction.status === TransactionStatus.NEEDS_REVISION ||
-    transaction.nextAction?.type === "revise"
-  )
+  if (isRevisionRequired(transaction))
     throw new TransactionRevisionRequiredError(transaction);
 
   switch (transaction.status) {
@@ -452,10 +447,7 @@ export async function handlePayment(
       return response;
     }
 
-    if (
-      newTransaction.status === TransactionStatus.NEEDS_REVISION ||
-      newTransaction.nextAction?.type === "revise"
-    )
+    if (isRevisionRequired(newTransaction))
       throw new TransactionRevisionRequiredError(newTransaction);
 
     existingTransactionId = newTransaction.id;
@@ -495,12 +487,9 @@ export async function handlePayment(
     return response;
   }
 
-  // Poll for authorization if not already authorized
-  if (
-    transaction.status === TransactionStatus.NEEDS_REVISION ||
-    transaction.nextAction?.type === "revise"
-  )
+  if (isRevisionRequired(transaction))
     throw new TransactionRevisionRequiredError(transaction);
+  // Poll for authorization if not already authorized
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
     const poller = new TransactionPoller(config.sapiomClient, polling);
 

@@ -208,7 +208,9 @@ read and a new key. UCP uses `{ version, checkout }` on the same method; an unce
 merchant update requires reconciliation, not an automatic retry.
 
 A response with `status: "needs_revision"` or `nextAction.type: "revise"` requires
-revised terms, with refusing rules in `nextAction.reasons`. The poller returns
+revised terms, with refusing rules in `nextAction.reasons`. To check for either
+signal, use `isRevisionRequired(transaction)` from `@sapiom/core`; the poller and
+the HTTP integrations use the same check. The poller returns
 this decision immediately. The authorizer
 throws `TransactionRevisionRequiredError`, carrying the transaction and reasons
 (or returns the decision with `throwOnDenied: false`). Fetch, Axios and Node HTTP

@@ -3,6 +3,7 @@ import {
   TransactionPoller,
   TransactionStatus,
   TransactionRevisionRequiredError,
+  isRevisionRequired,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -141,10 +142,7 @@ export async function handleAuthorization(
 
     const endpoint = request.url;
 
-    if (
-      transaction.status === TransactionStatus.NEEDS_REVISION ||
-      transaction.nextAction?.type === "revise"
-    )
+    if (isRevisionRequired(transaction))
       throw new TransactionRevisionRequiredError(transaction);
 
     switch (transaction.status) {
@@ -272,10 +270,7 @@ export async function handleAuthorization(
     return request;
   }
 
-  if (
-    transaction.status === TransactionStatus.NEEDS_REVISION ||
-    transaction.nextAction?.type === "revise"
-  )
+  if (isRevisionRequired(transaction))
     throw new TransactionRevisionRequiredError(transaction);
 
   if (
@@ -395,10 +390,7 @@ export async function handlePayment(
     throw error;
   }
 
-  if (
-    transaction.status === TransactionStatus.NEEDS_REVISION ||
-    transaction.nextAction?.type === "revise"
-  )
+  if (isRevisionRequired(transaction))
     throw new TransactionRevisionRequiredError(transaction);
 
   if (
