@@ -1,3 +1,4 @@
+import { TransactionRevisionRequiredError } from "./TransactionRevisionRequiredError";
 /**
  * Tests for TransactionAuthorizer
  */
@@ -45,6 +46,35 @@ describe("TransactionAuthorizer", () => {
       onAuthorizationDenied,
     });
   });
+
+  it.each(["create", "existing"])(
+    "preserves actionable revision details for %s authorization",
+    async (mode) => {
+      const transaction = {
+        id: "tx-123",
+        status: "needs_revision",
+        nextAction: { type: "revise", actor: "agent", reasons: [] },
+      };
+      (mockClient.transactions.get as jest.Mock).mockResolvedValue(transaction);
+      const call = () =>
+        mode === "create"
+          ? authorizer.createAndAuthorize({ resourceName: "shop" })
+          : authorizer.waitForExisting("tx-123");
+      await expect(call()).rejects.toBeInstanceOf(
+        TransactionRevisionRequiredError,
+      );
+      await expect(call()).rejects.toMatchObject({
+        transaction,
+        nextAction: transaction.nextAction,
+      });
+      expect(onAuthorizationSuccess).not.toHaveBeenCalled();
+      authorizer = new TransactionAuthorizer({
+        sapiomClient: mockClient,
+        throwOnDenied: false,
+      });
+      expect(await call()).toBe(transaction);
+    },
+  );
 
   describe("createAndAuthorize", () => {
     it("creates transaction with traceExternalId", async () => {

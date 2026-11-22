@@ -42,6 +42,7 @@ export type {
 // Transaction Authorizer
 export { TransactionAuthorizer } from "./utils/TransactionAuthorizer.js";
 export type { TransactionAuthorizerConfig } from "./utils/TransactionAuthorizer.js";
+export { TransactionRevisionRequiredError } from "./utils/TransactionRevisionRequiredError.js";
 
 // Transaction Polling
 export { TransactionPoller } from "./client/TransactionPoller.js";
@@ -58,6 +59,8 @@ export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry.js";
 export {
   TransactionStatus,
   TransactionOutcome,
+  // transaction helpers
+  isRevisionRequired,
   // x402 type guards
   isV1Response,
   isV2Response,
@@ -73,6 +76,12 @@ export type {
   CompleteTransactionRequest,
   CompleteTransactionResult,
   CreateTransactionRequest,
+  BrowserPurchase,
+  UcpPurchase,
+  PurchaseFunding,
+  UpdatePurchaseRequest,
+  PurchaseView,
+  PurchaseGovernanceReason,
   TransactionResponse,
   PaymentTransactionResponse,
   PaymentProtocolData,
