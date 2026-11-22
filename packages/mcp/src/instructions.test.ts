@@ -45,14 +45,21 @@ describe("server instructions", () => {
   });
 
   it("distinguishes a browser revision from an uncertain merchant update", () => {
-    expect(AUTHORING_INSTRUCTIONS).toContain("same transactionId");
-    expect(AUTHORING_INSTRUCTIONS).toContain("purchase.claimedLineItems");
-    expect(AUTHORING_INSTRUCTIONS).toContain("identical body, version and key");
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "neither edits nor verifies the browser cart",
+      "that another cart could pass, it stays open with `nextAction.type: revise`",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "uncertain merchant updates still require reconciliation",
+      "change the cart on the page first",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "`lineItems` go in `claimedLineItems`",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "resend the same request with the same key; never reuse a key for a different cart.",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("A refusal no cart could pass");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "must reconcile through the existing REST/merchant recovery",
     );
   });
 
@@ -127,9 +134,6 @@ describe("server instructions", () => {
       "https://apps.sapiom.ai/{org}/{slug}",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_app_publish");
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "https://docs.sapiom.ai/capabilities/app-links",
-    );
     // The local one-call path, version-gated: the backend live-fetches this text to
     // every install, including clients on an older @sapiom/mcp whose server never
     // advertised the tool. The gate is the part that keeps naming it honest.

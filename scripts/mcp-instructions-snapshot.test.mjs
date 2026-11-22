@@ -169,16 +169,11 @@ test("writes a stamped body without its footer, then is a no-op on the second ru
   assert.equal(await readFile(out, "utf8"), generated);
 });
 
-// Reproduce the snapshot from its body and recorded source. --api-url also supports a
-// local backend release fixture, which must not claim to have been served by production.
-test("the committed snapshot is the generator's output for its body and source", async () => {
+// A hand edit anywhere in the committed snapshot, header included, fails this offline:
+// the file must be exactly what the generator renders from its own constants.
+test("the committed snapshot is the generator's output for its own body", async () => {
   // The generated file holds no types, so it loads as JavaScript on every supported Node.
   const committed = await readFile(OUTPUT_PATH, "utf8");
-  const source =
-    /^\/\/ Source: GET (https?:\/\/[^\s]+)\/v1\/mcp\/instructions$/m.exec(
-      committed,
-    );
-  assert.ok(source, "snapshot records the endpoint used by the generator");
   const snapshot = await import(
     `data:text/javascript,${encodeURIComponent(committed)}`
   );
@@ -187,7 +182,7 @@ test("the committed snapshot is the generator's output for its body and source",
       body: snapshot.AUTHORING_INSTRUCTIONS,
       release: snapshot.AUTHORING_INSTRUCTIONS_RELEASE,
       digest: snapshot.AUTHORING_INSTRUCTIONS_DIGEST,
-      apiURL: source[1],
+      apiURL: "https://api.sapiom.ai",
     }),
     { filepath: OUTPUT_PATH },
   );
