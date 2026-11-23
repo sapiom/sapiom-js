@@ -1,7 +1,8 @@
 /**
- * What an agent platform runs: open a Sapiom browser (captcha solving is the
- * capability's own flag), attach the interceptor to the returned CDP URL, and
- * let the agent's own driver use that same URL.
+ * What an agent platform runs: open a headed Sapiom browser, attach the
+ * interceptor to the returned CDP URL, and let the agent's own driver use that
+ * same URL. The browser keeps its own identity and User-Agent (see "The
+ * checkout browser" in README.md).
  *
  * A raw CDP URL works the same way: `attachInterceptor(process.env.CDP_URL, …)`.
  *
@@ -9,7 +10,8 @@
  *   npx tsx examples/attach.ts
  *
  * Set PROFILE_ID=shopify-card-vault for a Shopify checkout; leave it unset for
- * any other checkout.
+ * any other checkout. Set BROWSER_PROFILE_ID to a saved browser profile
+ * (`browserAutomation.profiles`) to open the same signed-in browser each time.
  */
 import { randomUUID } from "node:crypto";
 import { createClient } from "@sapiom/tools";
@@ -35,6 +37,7 @@ async function main(): Promise<void> {
   const injectionRef = process.env.INJECTION_REF;
   const number = process.env.PLACEHOLDER_NUMBER;
   const profileId = process.env.PROFILE_ID || undefined;
+  const browserProfileId = process.env.BROWSER_PROFILE_ID || undefined;
   if (!transactionId || !injectionRef || !number) {
     throw new Error(
       "TRANSACTION_ID, INJECTION_REF, and PLACEHOLDER_NUMBER are required",
@@ -45,10 +48,8 @@ async function main(): Promise<void> {
   const session = await sapiom.browserAutomation.sessions.createManaged({
     idempotencyKey: randomUUID(),
     recording: false,
-    captchaSolver: true,
-    proxy: true,
-    stealth: true,
     headless: false,
+    ...(browserProfileId && { profileId: browserProfileId }),
   });
   let handle: InterceptorHandle | undefined;
   const shutdown = async () => {
