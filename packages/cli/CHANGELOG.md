@@ -1,5 +1,14 @@
 # @sapiom/cli
 
+## 22.0.1
+
+### Patch Changes
+
+- 5d037df: Scaffolded agent projects no longer include a `CLAUDE.md`. `AGENTS.md` is the only agent-instruction file in each project; Claude Code reads it directly. Comments that pointed to `CLAUDE.md` now point to `AGENTS.md`.
+- Updated dependencies [5d037df]
+  - @sapiom/agent-core@0.16.3
+  - @sapiom/harness@0.23.1
+
 ## 22.0.0
 
 ### Patch Changes

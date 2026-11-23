@@ -1,5 +1,19 @@
 # @sapiom/mcp
 
+## 0.20.6
+
+### Patch Changes
+
+- e9c43de: Add versioned browser purchase updates with stable idempotency keys. Polling returns `needs_revision` with actionable reasons, and HTTP adapters block that policy decision even in failureMode open. Updates require the backend browser revision release and do not edit the merchant's cart.
+
+  HTTP adapters stop on either the revision status or the revise action, including Fetch's on-demand transaction creation after an HTTP 402, before further authorization or retry.
+
+  Export `isRevisionRequired(transaction)` from `@sapiom/core`, which checks for either revision signal; the poller and HTTP adapters use it.
+
+- e660ede: Bundle the authoring primer as production serves it (release 2026-11-22.3) instead of a copy taken from a local backend. The package falls back to it only when neither the live instructions nor a cached copy is available.
+- Updated dependencies [5d037df]
+  - @sapiom/agent-core@0.16.3
+
 ## 0.20.5
 
 ### Patch Changes

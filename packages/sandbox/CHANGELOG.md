@@ -1,5 +1,12 @@
 # @sapiom/sandbox
 
+## 0.8.11
+
+### Patch Changes
+
+- Updated dependencies [e9c43de]
+  - @sapiom/fetch@0.5.6
+
 ## 0.8.10
 
 ### Patch Changes
