@@ -69,7 +69,6 @@ Call `sapiom_dev_agents_scaffold` with a target directory. The scaffold writes:
 my-agent/
 ├── index.ts            # your agent definition (edit this)
 ├── AGENTS.md           # quick in-project reference
-├── CLAUDE.md           # points your coding agent at AGENTS.md
 ├── .claude/skills/     # this skill, locally — the deep guide
 ├── .sapiom-dev/stubs.json
 ├── package.json / tsconfig.json / ...

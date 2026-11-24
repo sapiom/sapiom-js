@@ -2,6 +2,8 @@ import {
   SapiomClient,
   TransactionPoller,
   TransactionStatus,
+  TransactionRevisionRequiredError,
+  isRevisionRequired,
   captureUserCallSite,
   extractX402Response,
   extractResourceFromError,
@@ -140,11 +142,15 @@ export async function handleAuthorization(
 
     const endpoint = request.url;
 
+    if (isRevisionRequired(transaction))
+      throw new TransactionRevisionRequiredError(transaction);
+
     switch (transaction.status) {
       case TransactionStatus.AUTHORIZED:
         return request;
 
       case TransactionStatus.PENDING:
+      case TransactionStatus.WAITING_APPROVAL:
       case TransactionStatus.PREPARING: {
         let authResult;
         try {
@@ -157,6 +163,9 @@ export async function handleAuthorization(
           );
           return request;
         }
+
+        if (authResult.status === "needs_revision")
+          throw new TransactionRevisionRequiredError(authResult.transaction);
 
         if (authResult.status === "authorized") {
           return request;
@@ -261,6 +270,9 @@ export async function handleAuthorization(
     return request;
   }
 
+  if (isRevisionRequired(transaction))
+    throw new TransactionRevisionRequiredError(transaction);
+
   if (
     transaction.status === TransactionStatus.DENIED ||
     transaction.status === TransactionStatus.CANCELLED
@@ -291,6 +303,9 @@ export async function handleAuthorization(
     );
     return request;
   }
+
+  if (result.status === "needs_revision")
+    throw new TransactionRevisionRequiredError(result.transaction);
 
   if (result.status === "authorized") {
     const modifiedRequest = { ...request };
@@ -375,6 +390,9 @@ export async function handlePayment(
     throw error;
   }
 
+  if (isRevisionRequired(transaction))
+    throw new TransactionRevisionRequiredError(transaction);
+
   if (
     transaction.status === TransactionStatus.DENIED ||
     transaction.status === TransactionStatus.CANCELLED
@@ -396,6 +414,9 @@ export async function handlePayment(
       );
       throw error;
     }
+
+    if (authResult.status === "needs_revision")
+      throw new TransactionRevisionRequiredError(authResult.transaction);
 
     if (authResult.status !== "authorized") {
       throw error;

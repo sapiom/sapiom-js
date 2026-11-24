@@ -6,7 +6,7 @@
  * first (flow-map-chat-overlay.md 4.4b). Now each is a macro: a NEW session at
  * the project root, unbound (design-map-chat.md I2), whose first message names
  * the job and the agent. The agent is context in the message, never a binding,
- * so the session reads the project's CLAUDE.md and skills like any other and
+ * so the session reads the project's AGENTS.md and skills like any other and
  * the canvas never renders from it.
  *
  * The surfaces' own text ("Walk me through the step of this agent…") says

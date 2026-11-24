@@ -3,7 +3,11 @@
  * These tests ensure Sapiom failures don't break customer apps
  */
 import { createClient } from "./node-http";
-import { SapiomClient, TransactionAPI } from "@sapiom/core";
+import {
+  SapiomClient,
+  TransactionAPI,
+  TransactionRevisionRequiredError,
+} from "@sapiom/core";
 import nock from "nock";
 
 describe("Node-HTTP failureMode", () => {
@@ -15,6 +19,7 @@ describe("Node-HTTP failureMode", () => {
       create: jest.fn(),
       get: jest.fn(),
       reauthorizeWithPayment: jest.fn(),
+      complete: jest.fn().mockResolvedValue({}),
       list: jest.fn(),
       isAuthorized: jest.fn(),
       isCompleted: jest.fn(),
@@ -30,6 +35,116 @@ describe("Node-HTTP failureMode", () => {
   afterEach(() => {
     nock.cleanAll();
   });
+
+  it.each([
+    ["open", false, "needs_revision"],
+    ["open", true, "needs_revision"],
+    ["closed", false, "needs_revision"],
+    ["closed", true, "needs_revision"],
+    ["open", false, "authorized"],
+    ["open", true, "authorized"],
+    ["closed", false, "authorized"],
+    ["closed", true, "authorized"],
+  ] as const)(
+    "leaves a payment revision open (%s, polled: %s, status: %s)",
+    async (failureMode, pending, status) => {
+      const revision = {
+        id: "tx-revise",
+        status,
+        ...(status === "authorized" && {
+          nextAction: { type: "revise", actor: "agent", reasons: [] },
+        }),
+      };
+      mockTransactionAPI.create.mockResolvedValue({
+        id: "tx-revise",
+        status: "authorized",
+      } as any);
+      mockTransactionAPI.reauthorizeWithPayment.mockResolvedValue(
+        pending
+          ? ({ id: "tx-revise", status: "pending" } as any)
+          : (revision as any),
+      );
+      mockTransactionAPI.get.mockResolvedValue(revision as any);
+      const paymentRequired = {
+        x402Version: 1,
+        accepts: [
+          {
+            scheme: "exact",
+            network: "base",
+            maxAmountRequired: "1000000",
+            resource: "https://api.example.com/test",
+            payTo: "0x123",
+            asset: "0xUSDC",
+          },
+        ],
+      };
+      const merchant = nock("https://api.example.com")
+        .get("/test")
+        .reply(402, paymentRequired);
+      const client = createClient({
+        sapiomClient: mockSapiomClient,
+        failureMode,
+        polling: { pollInterval: 1 },
+      });
+      await expect(
+        client.request({
+          method: "GET",
+          url: "https://api.example.com/test",
+          headers: {},
+        }),
+      ).rejects.toBeInstanceOf(TransactionRevisionRequiredError);
+      expect(merchant.isDone()).toBe(true);
+      expect(mockTransactionAPI.reauthorizeWithPayment).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(mockTransactionAPI.complete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["open", "needs_revision"],
+    ["closed", "needs_revision"],
+    ["open", "authorized"],
+    ["closed", "authorized"],
+  ] as const)(
+    "blocks revision decisions in failureMode %s with status %s",
+    async (failureMode, status) => {
+      for (const mode of ["create", "existing", "poll"] as const) {
+        const transaction = {
+          id: "tx-revise",
+          status,
+          ...(status === "authorized" && {
+            nextAction: { type: "revise", actor: "agent", reasons: [] },
+          }),
+        };
+        mockTransactionAPI.create.mockResolvedValue(
+          mode === "poll"
+            ? ({ id: "tx-revise", status: "pending" } as any)
+            : (transaction as any),
+        );
+        mockTransactionAPI.get.mockResolvedValue(transaction as any);
+        const endpoint = nock("https://api.example.com")
+          .get("/test")
+          .reply(200);
+        const client = createClient({
+          sapiomClient: mockSapiomClient,
+          failureMode,
+          polling: { pollInterval: 1 },
+        });
+        await expect(
+          client.request({
+            method: "GET",
+            url: "https://api.example.com/test",
+            headers:
+              mode === "existing"
+                ? { "X-Sapiom-Transaction-Id": "tx-revise" }
+                : {},
+          }),
+        ).rejects.toBeInstanceOf(TransactionRevisionRequiredError);
+        expect(endpoint.isDone()).toBe(false);
+      }
+    },
+  );
 
   describe('failureMode: "open" (default)', () => {
     it("should allow request when Sapiom API returns 500", async () => {

@@ -105,7 +105,7 @@ only: `prepare` fails on any other branch, because the signing secrets live in t
 
 6. **Watch it.** macOS notarization can take ~35 min (job cap is 75). Don't kill a
    build that looks stuck in signing — read the diagnostic first (see
-   `packages/harness-desktop/CLAUDE.md` → macOS).
+   `packages/harness-desktop/AGENTS.md` → macOS).
 
 ## Answering "is the version bumped / ready to release?"
 - Current version: `node -p "require('./packages/harness-desktop/package.json').version"`.
@@ -118,5 +118,5 @@ only: `prepare` fails on any other branch, because the signing secrets live in t
 - `publish.yml` publishes the **npm** packages (`@sapiom/harness`, `@sapiom/tools`,
   …) on version bump — separate from the desktop installer release.
 - Full desktop packaging/signing gotchas live in
-  `packages/harness-desktop/CLAUDE.md` (asar, node-pty rebuild, mac signing secrets,
+  `packages/harness-desktop/AGENTS.md` (asar, node-pty rebuild, mac signing secrets,
   the `--smoke` gate). Read it before touching the build itself.

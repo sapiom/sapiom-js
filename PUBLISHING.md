@@ -41,7 +41,7 @@ Bump `packages/harness-desktop/package.json` **first**: the tag must match it
 exactly or the build fails, by design — that field names the artifacts and drives
 auto-update. Installed apps then update themselves in place, so a release only
 has to reach people once. Details and pitfalls:
-`packages/harness-desktop/CLAUDE.md`.
+`packages/harness-desktop/AGENTS.md`.
 
 ## The normal flow (automated)
 

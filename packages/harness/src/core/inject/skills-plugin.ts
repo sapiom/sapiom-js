@@ -195,7 +195,7 @@ function resolveAgentCoreSkillsDir(): string | null {
   // in the packaged desktop app require.resolve reports the app.asar virtual
   // path, and while readFile works there (Electron patches fs), copyFile's
   // SOURCE must be a real on-disk file — node_modules are asarUnpacked, so the
-  // twin exists (harness CLAUDE.md's mandatory translation for any
+  // twin exists (harness AGENTS.md's mandatory translation for any
   // package-relative path).
   try {
     const pkgJsonPath = require.resolve("@sapiom/agent-core/package.json");

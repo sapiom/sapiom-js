@@ -11,6 +11,7 @@ import type {
   TransactionResponse,
   CreateTransactionRequest,
 } from "../types/transaction.js";
+import { TransactionRevisionRequiredError } from "./TransactionRevisionRequiredError.js";
 
 /**
  * Parameters for creating and authorizing a transaction
@@ -264,6 +265,12 @@ export class TransactionAuthorizer {
     // Wait for authorization using centralized poller
     const result = await this.poller.waitForAuthorization(tx.id);
 
+    if (result.status === "needs_revision") {
+      if (this.config.throwOnDenied !== false)
+        throw new TransactionRevisionRequiredError(result.transaction);
+      return result.transaction;
+    }
+
     // Handle result
     if (result.status === "authorized") {
       this.config.onAuthorizationSuccess?.(
@@ -314,6 +321,11 @@ export class TransactionAuthorizer {
    */
   async waitForExisting(transactionId: string): Promise<TransactionResponse> {
     const result = await this.poller.waitForAuthorization(transactionId);
+    if (result.status === "needs_revision") {
+      if (this.config.throwOnDenied !== false)
+        throw new TransactionRevisionRequiredError(result.transaction);
+      return result.transaction;
+    }
 
     if (result.status === "authorized") {
       return result.transaction;

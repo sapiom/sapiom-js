@@ -1,10 +1,12 @@
 import {
+  TransactionStatus,
   X402PaymentRequirementV1,
   X402PaymentRequirementV2,
   X402ResponseV1,
   X402ResponseV2,
   X402PaymentRequirement,
   X402Response,
+  isRevisionRequired,
   isV1Response,
   isV2Response,
   isV1Requirement,
@@ -187,5 +189,52 @@ describe("getX402Version", () => {
 
   it("returns 2 for V2 response", () => {
     expect(getX402Version(v2Response)).toBe(2);
+  });
+});
+
+// ============================================================================
+// Transaction Helper Tests
+// ============================================================================
+
+describe("isRevisionRequired", () => {
+  const reviseAction = { type: "revise", actor: "agent", reasons: [] };
+
+  it("returns true for the needs_revision status alone", () => {
+    expect(
+      isRevisionRequired({ status: TransactionStatus.NEEDS_REVISION }),
+    ).toBe(true);
+  });
+
+  it("returns true for a revise action alone", () => {
+    expect(
+      isRevisionRequired({
+        status: TransactionStatus.AUTHORIZED,
+        nextAction: reviseAction,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when the status and the action both signal it", () => {
+    expect(
+      isRevisionRequired({
+        status: TransactionStatus.NEEDS_REVISION,
+        nextAction: reviseAction,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when neither the status nor an action signals it", () => {
+    expect(isRevisionRequired({ status: TransactionStatus.PENDING })).toBe(
+      false,
+    );
+  });
+
+  it("returns false for an authorized status with a different action", () => {
+    expect(
+      isRevisionRequired({
+        status: TransactionStatus.AUTHORIZED,
+        nextAction: { type: "payment_ready", actor: "agent" },
+      }),
+    ).toBe(false);
   });
 });
