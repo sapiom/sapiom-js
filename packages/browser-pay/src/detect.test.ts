@@ -177,7 +177,8 @@ describe("adyenClientKeysInRequest", () => {
 });
 
 describe("Adyen secured-fields payment bodies", () => {
-  const blob = "eyJ_-0.KEY_1.aXY-2.Y2lwaGVy_3.dGFn-4";
+  const blob =
+    "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.KEY_-1.aXY-2.Y2lwaGVy_3.dGFn-4";
   const hash = createHash("sha256").update(blob).digest("hex");
   it.each(adyenBodies({ encryptedCardNumber: blob }))(
     "keeps a compact JWE verbatim through $name",
@@ -199,7 +200,8 @@ describe("Adyen secured-fields payment bodies", () => {
     expect(adyenPayCandidate('{"number":"plain"}', [])).toBe(false);
   });
   it("separates raw hashes from percent-encoded and JSON-escaped hashes", () => {
-    const other = "eyJ.UNKNOWN.aXY.Y2lwaGVy.dGFn";
+    const other =
+      "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.UNKNOWN.aXY.Y2lwaGVy.dGFn";
     const otherHash = createHash("sha256").update(other).digest("hex");
     for (const encoded of [
       other.replace(/\./g, "%2E"),
@@ -214,17 +216,31 @@ describe("Adyen secured-fields payment bodies", () => {
       expect(adyenPayCandidate(`opaque=${encoded}`, [])).toBe(false);
     }
   });
-  it("deduplicates hashes and excludes already raw ciphertexts from hidden", () => {
+  it("deduplicates raw hashes", () => {
+    expect(bodyJweHashes(`${blob} ${blob}`)).toEqual({
+      raw: new Set([hash]),
+      hidden: new Set(),
+    });
+  });
+  it("reports an escaped copy as hidden even when the ciphertext is also raw", () => {
     expect(
       bodyJweHashes(`${blob} ${blob.replace(/\./g, "%2e")} ${blob}`),
     ).toEqual({
       raw: new Set([hash]),
-      hidden: new Set(),
+      hidden: new Set([hash]),
     });
     expect(bodyJweHashes("a.b.c.d a..b.c.d")).toEqual({
       raw: new Set(),
       hidden: new Set(),
     });
+  });
+  it("takes only runs whose first segment is a JWE header for ciphertexts", () => {
+    const noEnc = Buffer.from('{"alg":"RSA-OAEP"}').toString("base64url");
+    expect(
+      compactJweTokens(
+        `https://checkout.shop.example.co.uk/complete 1.2.3.4.5 ${noEnc}.a.b.c.d e30.a.b.c.d`,
+      ),
+    ).toEqual([]);
   });
   it("never extracts a five-part substring from a longer or incomplete run", () => {
     expect(compactJweTokens(`${blob}.extra a.b.c.d a..b.c.d ${blob}`)).toEqual([

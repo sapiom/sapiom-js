@@ -33,10 +33,14 @@ const frameUrl = (key: string, field = "encryptedCardNumber") =>
 
 /** What the page's secured fields encrypted: the placeholder card. */
 const PLACEHOLDER_BLOBS = {
-  encryptedCardNumber: "eyJ.PLACEHOLDER_NUMBER_BLOB.aXY.Y2lwaGVy.dGFn",
-  encryptedExpiryMonth: "eyJ.PLACEHOLDER_MONTH_BLOB.aXY.Y2lwaGVy.dGFn",
-  encryptedExpiryYear: "eyJ.PLACEHOLDER_YEAR_BLOB.aXY.Y2lwaGVy.dGFn",
-  encryptedSecurityCode: "eyJ.PLACEHOLDER_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedCardNumber:
+    "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PLACEHOLDER_NUMBER_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedExpiryMonth:
+    "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PLACEHOLDER_MONTH_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedExpiryYear:
+    "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PLACEHOLDER_YEAR_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedSecurityCode:
+    "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PLACEHOLDER_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
 };
 type BlobField = keyof typeof PLACEHOLDER_BLOBS;
 
@@ -467,7 +471,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
         url: ADVANCED.url,
         rawBody: body.replace(
           PLACEHOLDER_BLOBS.encryptedSecurityCode,
-          "eyJ.other.aXY.Y2lwaGVy.dGFn",
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.other.aXY.Y2lwaGVy.dGFn",
         ),
         headers: { "content-type": contentType },
       });
@@ -516,7 +520,11 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     harness = await arm({ frames: KEY_FRAME });
     pause(harness.stub, "unknown-fifth", {
       ...ADVANCED,
-      body: { ...ADVANCED.body, extra: "eyJ.UNKNOWN.aXY.Y2lwaGVy.dGFn" },
+      body: {
+        ...ADVANCED.body,
+        extra:
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.UNKNOWN.aXY.Y2lwaGVy.dGFn",
+      },
     });
     expect((await settle(harness.stub, "unknown-fifth")).method).toBe(
       "Fetch.failRequest",
@@ -904,7 +912,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
           return { outcome: "unknown" };
         }
         throw new Error(
-          "connect ECONNREFUSED eyJ.PLACEHOLDER_NUMBER_BLOB.aXY.Y2lwaGVy.dGFn",
+          "connect ECONNREFUSED eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PLACEHOLDER_NUMBER_BLOB.aXY.Y2lwaGVy.dGFn",
         );
       },
     });
@@ -1318,7 +1326,10 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     harness = await arm({ frames: KEY_FRAME });
     observe(
       harness.stub,
-      { encryptedSecurityCode: "eyJ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn" },
+      {
+        encryptedSecurityCode:
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
+      },
       "frame-number",
     );
     pause(harness.stub, "req-latest", {
@@ -1327,7 +1338,8 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
         ...ADVANCED.body,
         paymentMethod: {
           ...ADVANCED.body.paymentMethod,
-          encryptedSecurityCode: "eyJ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
+          encryptedSecurityCode:
+            "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
         },
       },
     });
@@ -1335,7 +1347,9 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
 
     expect(harness.relayCalls[0]?.adyen?.placeholderBlobHashes).toStrictEqual({
       ...HASHES,
-      encryptedSecurityCode: sha256("eyJ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn"),
+      encryptedSecurityCode: sha256(
+        "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
+      ),
     });
   });
 });
@@ -2839,7 +2853,8 @@ describe("Adyen ciphertexts an escape or a late parent would hide", () => {
 
   it("refuses an escaped unobserved fifth ciphertext beside four observed ones", async () => {
     harness = await arm({ frames: KEY_FRAME });
-    const unknown = "eyJ.UNKNOWN_CVC.aXY.Y2lwaGVy.dGFn";
+    const unknown =
+      "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.UNKNOWN_CVC.aXY.Y2lwaGVy.dGFn";
     const rawBody = JSON.stringify({
       paymentMethod: PLACEHOLDER_BLOBS,
       extra: unknown,

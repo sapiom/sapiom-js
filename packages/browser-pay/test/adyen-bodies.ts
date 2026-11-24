@@ -1,6 +1,10 @@
 /** Merchant formats inferred from checkout JavaScript; synthetic JWE values only. */
 export function adyenBodies(blobs: Record<string, string>) {
-  const state = { paymentMethod: { type: "scheme", brand: "mc", ...blobs } };
+  const returnUrl = "https://checkout.shop.example.co.uk/complete";
+  const state = {
+    paymentMethod: { type: "scheme", brand: "mc", ...blobs },
+    returnUrl,
+  };
   const json = JSON.stringify(state);
   const flat = Object.fromEntries(
     Object.entries(blobs).map(([key, value]) => [
@@ -17,7 +21,7 @@ export function adyenBodies(blobs: Record<string, string>) {
     {
       name: "top-level JSON",
       contentType: "application/json",
-      body: ` { "paymentMethod" : ${JSON.stringify(state.paymentMethod)}, "note" : "café" }\n`,
+      body: ` { "paymentMethod" : ${JSON.stringify(state.paymentMethod)}, "returnUrl" : "${returnUrl}", "note" : "café" }\n`,
     },
     {
       name: "flat JSON",
@@ -27,6 +31,7 @@ export function adyenBodies(blobs: Record<string, string>) {
         Brand: "visa",
         HolderName: "Synthetic",
         ...flat,
+        ReturnUrl: returnUrl,
       }),
     },
     {

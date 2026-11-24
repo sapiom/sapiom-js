@@ -792,13 +792,13 @@ if (!chromeBin) {
     function adyenCheckout() {
       const placeholderBlobs = {
         encryptedCardNumber:
-          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-number.aXY.Y2lwaGVy.dGFn",
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.placeholder-number.aXY.Y2lwaGVy.dGFn",
         encryptedExpiryMonth:
-          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-month.aXY.Y2lwaGVy.dGFn",
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.placeholder-month.aXY.Y2lwaGVy.dGFn",
         encryptedExpiryYear:
-          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-year.aXY.Y2lwaGVy.dGFn",
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.placeholder-year.aXY.Y2lwaGVy.dGFn",
         encryptedSecurityCode:
-          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-cvc.aXY.Y2lwaGVy.dGFn",
+          "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.placeholder-cvc.aXY.Y2lwaGVy.dGFn",
       };
       const messages = [
         {
@@ -996,7 +996,7 @@ addEventListener("message", (event) => {
               encryptedCardNumber: [
                 {
                   encryptedFieldName: "encryptedCardNumber",
-                  blob: "eyJ.PAGE_SELECTED.aXY.Y2lwaGVy.dGFn",
+                  blob: "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PAGE_SELECTED.aXY.Y2lwaGVy.dGFn",
                 },
               ],
             });
@@ -1028,7 +1028,7 @@ addEventListener("message", (event) => {
             {
               type: "cvc",
               encryptedFieldName: "encryptedSecurityCode",
-              blob: "eyJ.forged.aXY.Y2lwaGVy.dGFn",
+              blob: "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.forged.aXY.Y2lwaGVy.dGFn",
             },
           ],
         });
@@ -1367,7 +1367,10 @@ addEventListener("message", (event) => {
               "encryptedExpiryMonth",
               "encryptedExpiryYear",
               "encryptedSecurityCode",
-            ].map((field) => [field, `eyJ.PAGE_FORGED_${field}.a.b.c`]),
+            ].map((field) => [
+              field,
+              `eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.PAGE_FORGED_${field}.a.b.c`,
+            ]),
           );
           const seen = await page.evaluate(async (blobs) => {
             const page = globalThis as unknown as {

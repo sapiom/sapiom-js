@@ -171,11 +171,33 @@ export function adyenClientKeysInRequest(
   );
 }
 
-/** Maximal raw-body runs that are five non-empty base64url segments. */
+/**
+ * The compact JWEs in a raw body: maximal runs of five non-empty base64url
+ * segments whose first decodes to a JWE header naming `alg` and `enc`, so a
+ * five-label hostname or a version string is never taken for a ciphertext.
+ */
 export function compactJweTokens(body: string): string[] {
   return (body.match(/%[0-9a-fA-F]{2}|[A-Za-z0-9_.-]+/g) ?? []).filter(
-    (token) => /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){4}$/.test(token),
+    isCompactJwe,
   );
+}
+
+function isCompactJwe(token: string): boolean {
+  if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){4}$/.test(token)) return false;
+  const encoded = token.slice(0, token.indexOf("."));
+  try {
+    const header: unknown = JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8"),
+    );
+    return (
+      typeof header === "object" &&
+      header !== null &&
+      typeof (header as { alg?: unknown }).alg === "string" &&
+      typeof (header as { enc?: unknown }).enc === "string"
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -205,20 +227,28 @@ const sha256Hex = (text: string) =>
 
 /**
  * The sha256 of each compact JWE in the raw body (`raw`), and of each one an
- * escape or encoding hides from a raw scan (`hidden`). A hidden ciphertext
- * can't be swapped byte for byte, so callers refuse it.
+ * escape or encoding hides from a raw scan (`hidden`), even where another
+ * copy of it is raw. A hidden copy can't be swapped byte for byte, so callers
+ * refuse it.
  */
 export function bodyJweHashes(body: string): {
   raw: Set<string>;
   hidden: Set<string>;
 } {
-  const raw = new Set(compactJweTokens(body).map(sha256Hex));
-  const hidden = new Set(
-    compactJweTokens(inspectionText(body))
-      .map(sha256Hex)
-      .filter((hash) => !raw.has(hash)),
+  const raw = tally(compactJweTokens(body).map(sha256Hex));
+  const inspected = tally(
+    compactJweTokens(inspectionText(body)).map(sha256Hex),
   );
-  return { raw, hidden };
+  const hidden = [...inspected]
+    .filter(([hash, count]) => count > (raw.get(hash) ?? 0))
+    .map(([hash]) => hash);
+  return { raw: new Set(raw.keys()), hidden: new Set(hidden) };
+}
+
+function tally(hashes: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const hash of hashes) counts.set(hash, (counts.get(hash) ?? 0) + 1);
+  return counts;
 }
 
 /** A known placeholder ciphertext, or a secured-field name in any body format. */
