@@ -234,6 +234,14 @@ describe("Adyen secured-fields payment bodies", () => {
       hidden: new Set(),
     });
   });
+  it("reports an escaped copy as hidden when another run consumes a raw copy", () => {
+    expect(
+      bodyJweHashes(`${blob} ${blob}%2Eextra ${blob.replace(/\./g, "%2E")}`),
+    ).toEqual({
+      raw: new Set([hash]),
+      hidden: new Set([hash]),
+    });
+  });
   it("takes only runs whose first segment is a JWE header for ciphertexts", () => {
     const noEnc = Buffer.from('{"alg":"RSA-OAEP"}').toString("base64url");
     expect(

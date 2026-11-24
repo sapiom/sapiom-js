@@ -227,28 +227,23 @@ const sha256Hex = (text: string) =>
 
 /**
  * The sha256 of each compact JWE in the raw body (`raw`), and of each one an
- * escape or encoding hides from a raw scan (`hidden`), even where another
- * copy of it is raw. A hidden copy can't be swapped byte for byte, so callers
+ * escape or encoding hides from a raw scan (`hidden`), even when another copy
+ * of it is raw. A hidden copy can't be swapped byte for byte, so callers
  * refuse it.
  */
 export function bodyJweHashes(body: string): {
   raw: Set<string>;
   hidden: Set<string>;
 } {
-  const raw = tally(compactJweTokens(body).map(sha256Hex));
-  const inspected = tally(
-    compactJweTokens(inspectionText(body)).map(sha256Hex),
-  );
-  const hidden = [...inspected]
-    .filter(([hash, count]) => count > (raw.get(hash) ?? 0))
-    .map(([hash]) => hash);
-  return { raw: new Set(raw.keys()), hidden: new Set(hidden) };
-}
-
-function tally(hashes: string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const hash of hashes) counts.set(hash, (counts.get(hash) ?? 0) + 1);
-  return counts;
+  const tokens = new Set(compactJweTokens(body));
+  // Inspect what is left once every raw copy is gone, so a raw copy can never
+  // stand in for an escaped one.
+  let rest = body;
+  for (const token of tokens) rest = rest.split(token).join(" ");
+  return {
+    raw: new Set([...tokens].map(sha256Hex)),
+    hidden: new Set(compactJweTokens(inspectionText(rest)).map(sha256Hex)),
+  };
 }
 
 /** A known placeholder ciphertext, or a secured-field name in any body format. */
