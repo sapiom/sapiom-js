@@ -203,10 +203,24 @@ describe("Adyen secured-fields payment bodies", () => {
     );
     expect(adyenPayCandidate('{"number":"plain"}', [])).toBe(false);
   });
-  it("needs a ciphertext beside a field name", () => {
+  it("needs a value given to a field name, not a mention", () => {
     expect(
       adyenPayCandidate('{"error":"encryptedCardNumber is required"}', []),
     ).toBe(false);
+    expect(
+      adyenPayCandidate('{"paymentMethod":{"encryptedCardNumber":"x"}}', []),
+    ).toBe(true);
+    expect(adyenPayCandidate("encryptedSecurityCode=abc", [])).toBe(true);
+  });
+  it("keeps a ciphertext raw in a doubly encoded form value", () => {
+    const value = encodeURIComponent(
+      encodeURIComponent(JSON.stringify({ n: blob })),
+    );
+    expect(value).toContain("%2522");
+    expect(bodyJweHashes(`data=${value}`)).toEqual({
+      raw: new Set([hash]),
+      swappable: true,
+    });
   });
   it("separates raw hashes from percent-encoded and JSON-escaped hashes", () => {
     const other =

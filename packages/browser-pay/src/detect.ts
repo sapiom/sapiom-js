@@ -173,10 +173,11 @@ export function adyenClientKeysInRequest(
 
 /**
  * A raw body as runs of base64url-and-dot characters, with each percent or
- * JSON escape a token of its own, so an escape's letters never join a run.
+ * JSON escape a token of its own, so an escape's letters never join a run. A
+ * percent escape of a percent escape (`%2522`) is one token.
  */
 const BODY_TOKENS =
-  /%[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\["\\/bfnrt]|[A-Za-z0-9_.-]+/g;
+  /%(?:25)*[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\["\\/bfnrt]|[A-Za-z0-9_.-]+/g;
 
 /**
  * The compact JWEs in a body: runs of five non-empty base64url segments whose
@@ -295,14 +296,15 @@ export function bodyJweHashes(body: string): {
   return { raw, swappable };
 }
 
-const SECURED_FIELD_NAME =
-  /encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)/i;
+/** A value given to a secured-field name, as a JSON member or a form field. */
+const SECURED_FIELD =
+  /encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)["']?\s*[:=]\s*["']?[^\s"'&,}]/i;
 
 /**
  * Whether a body is an Adyen secured-fields Pay, in any format: it carries a
- * ciphertext the page's Adyen fields produced, or a ciphertext beside a
- * secured-field name. A body too deeply encoded to read counts too, so it is
- * refused rather than sent on.
+ * ciphertext the page's Adyen fields produced, or gives a secured field a
+ * value. A name only mentioned, as in a validation message, doesn't count. A
+ * body too deeply encoded to read counts, so it is refused, not sent on.
  */
 export function adyenPayCandidate(
   body: string,
@@ -310,10 +312,11 @@ export function adyenPayCandidate(
 ): boolean {
   const scan = scanBody(body);
   if (!scan.settled) return true;
-  const ciphertexts = [...scan.raw, ...scan.unescaped];
   const seen = new Set(observedHashes);
-  if (ciphertexts.some((hash) => seen.has(hash))) return true;
-  return ciphertexts.length > 0 && SECURED_FIELD_NAME.test(scan.text);
+  if ([...scan.raw, ...scan.unescaped].some((hash) => seen.has(hash))) {
+    return true;
+  }
+  return SECURED_FIELD.test(scan.text);
 }
 
 /**
