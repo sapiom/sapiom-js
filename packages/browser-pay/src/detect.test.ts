@@ -211,6 +211,9 @@ describe("Adyen secured-fields payment bodies", () => {
       adyenPayCandidate('{"paymentMethod":{"encryptedCardNumber":"x"}}', []),
     ).toBe(true);
     expect(adyenPayCandidate("encryptedSecurityCode=abc", [])).toBe(true);
+    expect(
+      adyenPayCandidate('{"paymentMethod":{"encryptedCardNumber":""}}', []),
+    ).toBe(true);
   });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
     const value = encodeURIComponent(

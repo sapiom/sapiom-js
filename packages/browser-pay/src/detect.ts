@@ -296,9 +296,9 @@ export function bodyJweHashes(body: string): {
   return { raw, swappable };
 }
 
-/** A value given to a secured-field name, as a JSON member or a form field. */
+/** A secured-field name given a value (even empty), as a JSON member or form field. */
 const SECURED_FIELD =
-  /encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)["']?\s*[:=]\s*["']?[^\s"'&,}]/i;
+  /encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)["']?\s*[:=]/i;
 
 /**
  * Whether a body is an Adyen secured-fields Pay, in any format: it carries a
