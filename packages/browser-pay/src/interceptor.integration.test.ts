@@ -791,10 +791,14 @@ if (!chromeBin) {
      */
     function adyenCheckout() {
       const placeholderBlobs = {
-        encryptedCardNumber: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-number",
-        encryptedExpiryMonth: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-month",
-        encryptedExpiryYear: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-year",
-        encryptedSecurityCode: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-cvc",
+        encryptedCardNumber:
+          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-number.aXY.Y2lwaGVy.dGFn",
+        encryptedExpiryMonth:
+          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-month.aXY.Y2lwaGVy.dGFn",
+        encryptedExpiryYear:
+          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-year.aXY.Y2lwaGVy.dGFn",
+        encryptedSecurityCode:
+          "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-cvc.aXY.Y2lwaGVy.dGFn",
       };
       const messages = [
         {
@@ -992,7 +996,7 @@ addEventListener("message", (event) => {
               encryptedCardNumber: [
                 {
                   encryptedFieldName: "encryptedCardNumber",
-                  blob: "eyJ.PAGE_SELECTED",
+                  blob: "eyJ.PAGE_SELECTED.aXY.Y2lwaGVy.dGFn",
                 },
               ],
             });
@@ -1024,7 +1028,7 @@ addEventListener("message", (event) => {
             {
               type: "cvc",
               encryptedFieldName: "encryptedSecurityCode",
-              blob: "eyJ.forged",
+              blob: "eyJ.forged.aXY.Y2lwaGVy.dGFn",
             },
           ],
         });

@@ -23,7 +23,8 @@ import {
   adyenDetailsCall,
   adyenPaymentResult,
   isAdyenCheckoutUrl,
-  isAdyenSecuredFieldsPayment,
+  adyenPayCandidate,
+  bodyJweHashes,
   redactHeld,
   textHoldsPlaceholderNumber,
   type HeldPlaceholder,
@@ -1026,7 +1027,8 @@ class PaymentInterceptor {
       return { action: "fail", reason: "unreadable_body" };
     }
     const adyen =
-      read.kind === "miss" && isAdyenSecuredFieldsPayment(read.body);
+      read.kind === "miss" &&
+      adyenPayCandidate(read.body, this.adyenBlobHashes.values());
     // A watched redirect already belongs to its original challenge.
     const details =
       read.kind === "miss" && !adyen && !redirectWatch
@@ -1111,9 +1113,18 @@ class PaymentInterceptor {
           return { action: "fail", reason: "destination_not_allowed" };
         }
         const blobs = placeholderBlobHashes(this.adyenBlobHashes);
-        if ("missing" in blobs) {
+        // The body's ciphertexts must be exactly the four observed ones, each
+        // in raw bytes the relay can swap without re-encoding the body.
+        const { raw, hidden } = bodyJweHashes(read.body);
+        const observed = "missing" in blobs ? [] : Object.values(blobs.hashes);
+        if (
+          "missing" in blobs ||
+          hidden.size > 0 ||
+          raw.size !== observed.length ||
+          observed.some((hash) => !raw.has(hash))
+        ) {
           this.safeWarn("adyen placeholder blobs not observed", {
-            missing: blobs.missing.join(","),
+            missing: "missing" in blobs ? blobs.missing.join(",") : "body",
           });
           return { action: "fail", reason: "adyen_placeholder_unobserved" };
         }

@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
+import { adyenBodies } from "../test/adyen-bodies";
 import {
   adyenCheckout,
   adyenClientKeysInRequest,
   adyenDetailsCall,
   adyenPaymentResult,
   isAdyenCheckoutUrl,
-  isAdyenSecuredFieldsPayment,
+  compactJweTokens,
+  bodyJweHashes,
+  adyenPayCandidate,
   redactHeld,
   textHoldsPlaceholderNumber,
 } from "./detect";
@@ -173,34 +177,59 @@ describe("adyenClientKeysInRequest", () => {
 });
 
 describe("Adyen secured-fields payment bodies", () => {
-  const BODY = JSON.stringify({
-    amount: { currency: "EUR", value: 1000 },
-    reference: "order-1",
-    paymentMethod: {
-      type: "scheme",
-      holderName: "J. Smith",
-      encryptedCardNumber: "eyJ.placeholder-number",
-      encryptedExpiryMonth: "eyJ.placeholder-month",
-      encryptedExpiryYear: "eyJ.placeholder-year",
-      encryptedSecurityCode: "eyJ.placeholder-cvc",
-      checkoutAttemptId: "attempt-1",
+  const blob = "eyJ_-0.KEY_1.aXY-2.Y2lwaGVy_3.dGFn-4";
+  const hash = createHash("sha256").update(blob).digest("hex");
+  it.each(adyenBodies({ encryptedCardNumber: blob }))(
+    "keeps a compact JWE verbatim through $name",
+    ({ body }) => {
+      expect(body).toContain(blob);
+      expect(compactJweTokens(body)).toContain(blob);
+      expect(adyenPayCandidate(body, [])).toBe(true);
     },
-    browserInfo: { userAgent: "x" },
+  );
+  it("recognises opaque field names only by observed hashes", () => {
+    expect(adyenPayCandidate(`opaque=${blob}`, [hash])).toBe(true);
+    expect(adyenPayCandidate(`opaque=${blob}`, [])).toBe(false);
+    expect(encodeURIComponent(blob)).toBe(blob);
+    expect(JSON.stringify(JSON.stringify(blob))).toContain(blob);
   });
-
-  it("recognises only JSON with paymentMethod.encryptedCardNumber", () => {
-    expect(isAdyenSecuredFieldsPayment(BODY)).toBe(true);
-    for (const body of [
-      "",
-      "encryptedCardNumber=eyJ",
-      JSON.stringify({ encryptedCardNumber: "eyJ" }),
-      JSON.stringify({ paymentMethod: { encryptedCardNumber: "" } }),
-      JSON.stringify({ paymentMethod: { encryptedCardNumber: 1 } }),
-      JSON.stringify({ paymentMethod: { type: "scheme" } }),
-      JSON.stringify([{ paymentMethod: { encryptedCardNumber: "eyJ" } }]),
+  it("recognises case-insensitive names through nested percent escapes", () => {
+    expect(adyenPayCandidate("%22%45ncryptedCardNumber%22", [])).toBe(true);
+    expect(adyenPayCandidate("%2545ncryptedCardNumber", [])).toBe(true);
+    expect(adyenPayCandidate('{"number":"plain"}', [])).toBe(false);
+  });
+  it("separates raw hashes from percent-encoded and JSON-escaped hashes", () => {
+    const other = "eyJ.UNKNOWN.aXY.Y2lwaGVy.dGFn";
+    const otherHash = createHash("sha256").update(other).digest("hex");
+    for (const encoded of [
+      other.replace(/\./g, "%2E"),
+      other.replace(/\./g, "\\u002e"),
+      other.replace(/\./g, "\\\\u002e"),
     ]) {
-      expect(isAdyenSecuredFieldsPayment(body)).toBe(false);
+      expect(bodyJweHashes(`${blob} ${encoded}`)).toEqual({
+        raw: new Set([hash]),
+        hidden: new Set([otherHash]),
+      });
+      expect(adyenPayCandidate(`opaque=${encoded}`, [otherHash])).toBe(true);
+      expect(adyenPayCandidate(`opaque=${encoded}`, [])).toBe(false);
     }
+  });
+  it("deduplicates hashes and excludes already raw ciphertexts from hidden", () => {
+    expect(
+      bodyJweHashes(`${blob} ${blob.replace(/\./g, "%2e")} ${blob}`),
+    ).toEqual({
+      raw: new Set([hash]),
+      hidden: new Set(),
+    });
+    expect(bodyJweHashes("a.b.c.d a..b.c.d")).toEqual({
+      raw: new Set(),
+      hidden: new Set(),
+    });
+  });
+  it("never extracts a five-part substring from a longer or incomplete run", () => {
+    expect(compactJweTokens(`${blob}.extra a.b.c.d a..b.c.d ${blob}`)).toEqual([
+      blob,
+    ]);
   });
 });
 

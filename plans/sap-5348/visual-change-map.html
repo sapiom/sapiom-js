@@ -1,0 +1,70 @@
+<!doctype html><html><head><meta charset="utf-8"><title>SAP-5348 visual change map: Adyen Pay in any format, per tab</title>
+<style>
+body{margin:0;font-family:Inter,Helvetica,Arial,sans-serif;background:#0f1420;color:#e8ecf4}
+#wrap{display:flex;height:100vh}#side{width:250px;background:#151b2b;padding:12px;overflow:auto;font-size:13px}
+#side li{cursor:pointer;padding:4px 2px;opacity:.6;list-style:none}#side li.on{opacity:1;color:#ffd166}
+#main{flex:1;display:flex;flex-direction:column}#cap{font-size:26px;padding:18px 24px 6px;min-height:40px}
+svg{flex:1}#ctl{padding:8px 24px;display:flex;gap:8px;align-items:center}button{background:#26304a;color:#e8ecf4;border:0;padding:6px 12px;border-radius:6px;cursor:pointer}
+details{margin:4px 24px;font-size:12px;color:#aab3c5}.box{rx:10}.lbl{font-size:15px;fill:#e8ecf4;text-anchor:middle}
+.sm{font-size:12px;fill:#aab3c5;text-anchor:middle}.el{transition:opacity .6s, transform .8s}
+</style></head><body><div id="wrap"><div id="side"><b>Scenes</b><ol id="list" style="padding-left:0"></ol>
+<details><summary>notes</summary><p>Merchant body formats are inferred from merchant page JS (live probe 2026-11-24); Pay was never clicked on a real merchant. The fixture merchant in the TEST run is FAKED (local server on localhost:8080). The relay swap lives in a companion Sapiom branch, not in this PR. Not in this PR: per-tab Adyen state (F3), safeWarn refusals (F2), J8GZ, J8Gz, hideCVC (I85U).</p></details></div>
+<div id="main"><div id="cap"></div>
+<svg id="s" viewBox="0 0 1000 520">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#7d8aa8"/></marker></defs>
+<!-- actors -->
+<g id="tabB" class="el"><rect class="box" x="30" y="40" width="200" height="120" fill="#1f6f8b"/><text class="lbl" x="130" y="70">Tab B: Adyen checkout</text><text class="sm" x="130" y="92">secured-field iframes</text></g>
+<g id="tabA" class="el"><rect class="box" x="30" y="330" width="200" height="110" fill="#5b4b8a"/><text class="lbl" x="130" y="362">Tab A: other shop</text><text class="sm" x="130" y="384">no Adyen</text></g>
+<g id="sdk" class="el"><rect class="box" x="330" y="160" width="220" height="190" fill="#2d6a4f"/><text class="lbl" x="440" y="188">Browser Pay SDK</text><text class="sm" x="440" y="208">interceptor</text></g>
+<g id="rec" class="el"><rect x="345" y="222" width="190" height="40" rx="6" fill="#1b4332"/><text class="sm" x="440" y="238" style="fill:#d8f3dc">Tab B record</text><text class="sm" x="440" y="254" style="fill:#d8f3dc">seen · key · 4 hashes</text></g>
+<g id="recA" class="el"><rect x="345" y="290" width="190" height="40" rx="6" fill="#1b4332"/><text class="sm" x="440" y="306" style="fill:#d8f3dc">Tab A record</text><text class="sm" x="440" y="322" style="fill:#d8f3dc">empty</text></g>
+<g id="relay" class="el"><rect class="box" x="640" y="160" width="160" height="190" fill="#9c6644"/><text class="lbl" x="720" y="188">Sapiom relay</text><text class="sm" x="720" y="208">swap ciphertexts</text></g>
+<g id="merch" class="el"><rect class="box" x="850" y="200" width="130" height="110" fill="#6c757d"/><text class="lbl" x="915" y="240">Merchant</text><text class="sm" x="915" y="262">same origin</text></g>
+<!-- flows -->
+<g id="blobs" class="el"><path d="M230,100 C290,100 300,230 345,240" stroke="#7d8aa8" fill="none" marker-end="url(#ar)" stroke-dasharray="5 4"/><text class="sm" x="290" y="140">blob hashes</text></g>
+<g id="pkt" class="el"><rect x="0" y="0" width="150" height="34" rx="6" fill="#ffd166"/><text id="pkttxt" x="75" y="22" style="font-size:12px;fill:#1a1a1a;text-anchor:middle">form: stateData=…JWE…</text></g>
+<g id="pktA" class="el"><rect x="0" y="0" width="150" height="34" rx="6" fill="#ffd166"/><text x="75" y="22" style="font-size:12px;fill:#1a1a1a;text-anchor:middle">EncryptedCardNumber</text></g>
+<g id="scan" class="el"><rect x="560" y="60" width="300" height="70" rx="8" fill="#26304a"/><text x="710" y="86" class="sm" style="fill:#e8ecf4">…stateData=%7B%22encryptedCardNumber%22%3A%22</text><text x="710" y="110" class="sm" style="fill:#ffd166">eyJhbGc.aaa.bbb.ccc.ddd</text></g>
+<g id="gates" class="el"><rect x="560" y="380" width="420" height="120" rx="8" fill="#26304a"/>
+<text x="770" y="404" class="sm" style="fill:#e8ecf4">1 tab saw Adyen? else unsupported_encrypted_checkout</text>
+<text x="770" y="428" class="sm" style="fill:#e8ecf4">2 one client key? else adyen_client_key</text>
+<text x="770" y="452" class="sm" style="fill:#e8ecf4">3 page origin or Adyen sessions? else destination_not_allowed</text>
+<text x="770" y="476" class="sm" style="fill:#e8ecf4">4 every body JWE observed? else adyen_placeholder_unobserved</text></g>
+<g id="xA" class="el"><text x="300" y="420" style="font-size:40px;fill:#e63946">✕</text><text x="300" y="450" class="sm" style="fill:#e63946;text-anchor:start">unsupported_encrypted_checkout</text></g>
+<g id="leak" class="el"><path d="M230,380 C400,470 600,420 680,350" stroke="#e63946" stroke-width="3" fill="none" marker-end="url(#ar)"/><text x="470" y="480" class="sm" style="fill:#e63946">before: browser-wide flag let it through</text></g>
+<g id="oldx" class="el"><text x="560" y="300" style="font-size:40px;fill:#e63946">✕</text><text x="600" y="296" class="sm" style="fill:#e63946;text-anchor:start">before: not top-level JSON → not Adyen</text></g>
+<g id="swap" class="el"><rect x="560" y="60" width="420" height="80" rx="8" fill="#26304a"/><text x="770" y="86" class="sm" style="fill:#e8ecf4">bytes before:  csrf_token=t&amp;…%22[JWE₁]%22…</text><text x="770" y="112" class="sm" style="fill:#e8ecf4">bytes after:   csrf_token=t&amp;…%22[JWE′₁]%22…</text><text x="770" y="132" class="sm" style="fill:#7bd389">only the JWE spans change</text></g>
+<g id="cvc" class="el"><rect x="560" y="60" width="420" height="80" rx="8" fill="#26304a"/><text x="770" y="88" class="sm" style="fill:#7bd389">hideCVC: 3 observed, 3 in body → relayed</text><text x="770" y="116" class="sm" style="fill:#e63946">extra unobserved JWE in body → refused</text></g>
+<g id="ancestry" class="el"><path d="M130,160 L130,195 L330,195" stroke="#7bd389" fill="none" stroke-dasharray="3 3"/><text x="230" y="186" class="sm" style="fill:#7bd389">OOPIF → parent session → tab</text></g>
+<g id="ok" class="el"><path d="M800,255 L850,255" stroke="#7bd389" stroke-width="3" marker-end="url(#ar)"/><text x="825" y="335" class="sm" style="fill:#7bd389">cookie + CSRF</text></g>
+</svg>
+<div id="ctl"><button id="prev">◀ prev</button><button id="play">▶ play</button><button id="next">next ▶</button><span id="num" style="margin-left:10px;color:#aab3c5"></span></div>
+<details id="src"><summary>source</summary><div id="srctxt"></div></details></div></div>
+<script>
+const W="sapiom-js ewan/sap-5348-adyen-any-format (base ee4eab12)";
+const S=[
+{c:"An agent presses Pay on a Cotton On style form.",show:["tabB","sdk","merch","pkt"],pkt:[60,170],src:"fixtures/findings.json: Cotton On posts dwfrm_adyPaydata_adyenStateData = JSON.stringify(stateData) (inferred from page JS)"},
+{c:"Adyen iframes post the placeholder's ciphertexts; the SDK keeps hashes.",show:["tabB","sdk","rec","blobs","merch"],src:"interceptor.ts:765 adyenBlobHashes.set; adyen-blobs.ts:40 watch script; adyen-blobs.ts:106 placeholderBlobHashes"},
+{c:"Before: only top-level JSON counted, so this form wasn't Adyen.",show:["tabB","sdk","rec","pkt","oldx","merch"],pkt:[380,120],src:"ee4eab12 detect.ts:177 isAdyenSecuredFieldsPayment (top-level paymentMethod.encryptedCardNumber only)"},
+{c:"Now: scan the raw body for compact JWE tokens.",show:["tabB","sdk","rec","pkt","scan","merch"],pkt:[380,120],src:"detect.ts:175 compactJweTokens: five base64url segments; these bytes never change under JSON, form or multipart encoding"},
+{c:"A token hashing to an observed blob makes it Adyen.",show:["tabB","sdk","rec","pkt","scan","merch"],pkt:[380,120],src:"detect.ts:225 adyenPayCandidate (observed hash, or an encryptedcardnumber name after unescaping); interceptor.ts:1031"},
+{c:"Escapes are undone only to look, never to send.",show:["tabB","sdk","rec","pkt","scan","merch"],pkt:[380,120],src:"detect.ts:186 inspectionText; detect.ts:211 bodyJweHashes (raw vs hidden)"},
+{c:"Four gates, in order, before anything is relayed.",show:["tabB","sdk","rec","gates","merch"],src:"interceptor.ts:1076 unsupported_encrypted_checkout, :1085/:1094 adyen_client_key, :1113 destination_not_allowed, :1129 adyen_placeholder_unobserved"},
+{c:"Exactly the four observed ciphertexts, raw, or it fails.",show:["tabB","sdk","rec","gates","merch"],src:"interceptor.ts:1116-1129: hidden token, extra token or missing token -> adyen_placeholder_unobserved"},
+{c:"The relay gets the page's body, byte for byte.",show:["tabB","sdk","rec","relay","pkt","merch"],pkt:[640,120],src:"interceptor.ts:1169 body: read.body"},
+{c:"The relay swaps only the ciphertext spans.",show:["tabB","sdk","rec","relay","swap","merch"],src:"NOT IN THIS PR: Sapiom relay today parses JSON at fixed pointers (Sapiom main relay-request-check.ts:163 checkAdyenRequest). Local companion branch ewan/sap-5180-adyen-any-format-relay: swappedBody exact-string replace"},
+{c:"The merchant gets its own bytes, cookie and CSRF intact.",show:["tabB","sdk","rec","relay","merch","ok","blobs"],src:"interceptor.ts:1135 genericHeader (cookie, CSRF) only for the page origin; local TEST run e2e16 (fixture merchant FAKED)"},
+];
+const all=[...document.querySelectorAll('.el')].map(e=>e.id);let i=0,timer=null;
+const list=document.getElementById('list');S.forEach((s,k)=>{const li=document.createElement('li');li.textContent=(k+1)+'. '+s.c;li.onclick=()=>go(k);list.appendChild(li)});
+function go(k){i=(k+S.length)%S.length;const s=S[i];document.getElementById('cap').textContent=s.c;
+all.forEach(id=>{const e=document.getElementById(id);e.style.opacity=s.show.includes(id)?1:0});
+const p=document.getElementById('pkt'),pa=document.getElementById('pktA');
+p.setAttribute('transform',`translate(${(s.pkt||[60,170])[0]},${(s.pkt||[60,170])[1]})`);pa.setAttribute('transform',`translate(${(s.pktA||[60,290])[0]},${(s.pktA||[60,290])[1]})`);
+document.getElementById('srctxt').textContent=s.src+'  ['+W+']';document.getElementById('num').textContent=(i+1)+' / '+S.length;
+[...list.children].forEach((li,j)=>li.className=j===i?'on':'')}
+document.getElementById('next').onclick=()=>go(i+1);document.getElementById('prev').onclick=()=>go(i-1);
+document.getElementById('play').onclick=()=>{if(timer){clearInterval(timer);timer=null;play.textContent='▶ play'}else{timer=setInterval(()=>go(i+1),3000);play.textContent='❚❚ pause'}};
+addEventListener('keydown',e=>{if(e.key==='ArrowRight')go(i+1);if(e.key==='ArrowLeft')go(i-1);if(e.key===' ')document.getElementById('play').click()});
+go(0);
+</script></body></html>

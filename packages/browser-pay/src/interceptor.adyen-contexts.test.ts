@@ -281,7 +281,10 @@ describe("Adyen observations in existing documents", () => {
       },
     });
     const blobs = Object.fromEntries(
-      ADYEN_ENCRYPTED_FIELDS.map((field) => [field, `eyJ.TEST_${field}`]),
+      ADYEN_ENCRYPTED_FIELDS.map((field) => [
+        field,
+        `eyJ.TEST_${field}.aXY.Y2lwaGVy.dGFn`,
+      ]),
     );
     const postBlobs = (values: Record<string, string>) => {
       for (const [field, blob] of Object.entries(values)) {
@@ -380,7 +383,10 @@ describe("Adyen observations in existing documents", () => {
       }
     }
     const newBlobs = Object.fromEntries(
-      ADYEN_ENCRYPTED_FIELDS.map((field) => [field, `eyJ.REARMED_${field}`]),
+      ADYEN_ENCRYPTED_FIELDS.map((field) => [
+        field,
+        `eyJ.REARMED_${field}.aXY.Y2lwaGVy.dGFn`,
+      ]),
     );
     postBlobs(newBlobs);
     pay("pay-rearmed", newBlobs);

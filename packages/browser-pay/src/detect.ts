@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { ADYEN_RESULT_CODES, type AdyenResultCode } from "./contract.js";
 import { isRecord } from "./guards.js";
 
@@ -169,13 +171,65 @@ export function adyenClientKeysInRequest(
   );
 }
 
+/** Maximal raw-body runs that are five non-empty base64url segments. */
+export function compactJweTokens(body: string): string[] {
+  return (body.match(/%[0-9a-fA-F]{2}|[A-Za-z0-9_.-]+/g) ?? []).filter(
+    (token) => /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){4}$/.test(token),
+  );
+}
+
 /**
- * True when the body is JSON whose top-level `paymentMethod.encryptedCardNumber`
- * is a non-empty string: an Adyen secured-fields payment, on the merchant's
- * own `/payments` call or on Adyen's `/sessions/{id}/payments`.
+ * An inspection copy of a body: backslash, JSON `\uXXXX` and percent escapes
+ * undone until stable, so nested or escaped field names and ciphertexts show.
+ * Only for matching; the body that is relayed is never rewritten.
  */
-export function isAdyenSecuredFieldsPayment(body: string): boolean {
-  return adyenPaymentMethod(parseJson(body)) !== undefined;
+function inspectionText(body: string): string {
+  let text = body;
+  for (let pass = 0; pass < 8; pass++) {
+    const next = text
+      .replace(/\\\\/g, "\\")
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      )
+      .replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      );
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
+const sha256Hex = (text: string) =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+
+/**
+ * The sha256 of each compact JWE in the raw body (`raw`), and of each one an
+ * escape or encoding hides from a raw scan (`hidden`). A hidden ciphertext
+ * can't be swapped byte for byte, so callers refuse it.
+ */
+export function bodyJweHashes(body: string): {
+  raw: Set<string>;
+  hidden: Set<string>;
+} {
+  const raw = new Set(compactJweTokens(body).map(sha256Hex));
+  const hidden = new Set(
+    compactJweTokens(inspectionText(body))
+      .map(sha256Hex)
+      .filter((hash) => !raw.has(hash)),
+  );
+  return { raw, hidden };
+}
+
+/** A known placeholder ciphertext, or a secured-field name in any body format. */
+export function adyenPayCandidate(
+  body: string,
+  observedHashes: Iterable<string>,
+): boolean {
+  if (/encryptedcardnumber/i.test(inspectionText(body))) return true;
+  const seen = new Set(observedHashes);
+  const { raw, hidden } = bodyJweHashes(body);
+  return [...raw, ...hidden].some((hash) => seen.has(hash));
 }
 
 /**
@@ -246,15 +300,4 @@ function parseJson(body: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function adyenPaymentMethod(
-  value: unknown,
-): Record<string, unknown> | undefined {
-  if (!isRecord(value) || !isRecord(value.paymentMethod)) return undefined;
-  const method = value.paymentMethod;
-  return typeof method.encryptedCardNumber === "string" &&
-    method.encryptedCardNumber.length > 0
-    ? method
-    : undefined;
 }

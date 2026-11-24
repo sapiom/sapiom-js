@@ -1,3 +1,4 @@
+import { adyenBodies } from "../test/adyen-bodies";
 import { createHash } from "node:crypto";
 
 import { ADYEN_BLOB_BINDING, ADYEN_WATCH_WORLD } from "./adyen-blobs";
@@ -32,10 +33,10 @@ const frameUrl = (key: string, field = "encryptedCardNumber") =>
 
 /** What the page's secured fields encrypted: the placeholder card. */
 const PLACEHOLDER_BLOBS = {
-  encryptedCardNumber: "eyJ.PLACEHOLDER_NUMBER_BLOB",
-  encryptedExpiryMonth: "eyJ.PLACEHOLDER_MONTH_BLOB",
-  encryptedExpiryYear: "eyJ.PLACEHOLDER_YEAR_BLOB",
-  encryptedSecurityCode: "eyJ.PLACEHOLDER_CVC_BLOB",
+  encryptedCardNumber: "eyJ.PLACEHOLDER_NUMBER_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedExpiryMonth: "eyJ.PLACEHOLDER_MONTH_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedExpiryYear: "eyJ.PLACEHOLDER_YEAR_BLOB.aXY.Y2lwaGVy.dGFn",
+  encryptedSecurityCode: "eyJ.PLACEHOLDER_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
 };
 type BlobField = keyof typeof PLACEHOLDER_BLOBS;
 
@@ -305,6 +306,7 @@ function pause(
   request: {
     url: string;
     body?: unknown;
+    rawBody?: string;
     method?: string;
     headers?: Record<string, string>;
   },
@@ -321,8 +323,11 @@ function pause(
         url: request.url,
         method: request.method ?? "POST",
         headers: { "content-type": "application/json", ...request.headers },
-        ...(request.body !== undefined
-          ? { postData: JSON.stringify(request.body), hasPostData: true }
+        ...(request.rawBody !== undefined || request.body !== undefined
+          ? {
+              postData: request.rawBody ?? JSON.stringify(request.body),
+              hasPostData: true,
+            }
           : {}),
       },
     },
@@ -413,6 +418,160 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     await harness?.detach();
     await harness?.stub.close();
     harness = undefined;
+  });
+
+  it.each(adyenBodies(PLACEHOLDER_BLOBS))(
+    "relays $name byte-for-byte with the four observed hashes and merchant headers",
+    async ({ body, contentType }) => {
+      harness = await arm({ frames: KEY_FRAME });
+      pause(harness.stub, "format", {
+        url: ADVANCED.url,
+        rawBody: body,
+        headers: {
+          "content-type": contentType,
+          Cookie: "synthetic=session",
+          "x-csrf-token": "synthetic-csrf",
+          "x-xsrf-token": "synthetic-xsrf",
+          "csrf-token": "synthetic-token",
+          "x-requested-with": "XMLHttpRequest",
+          "content-length": String(Buffer.byteLength(body)),
+        },
+      });
+      expect((await settle(harness.stub, "format")).method).toBe(
+        "Fetch.fulfillRequest",
+      );
+      expect(harness.relayCalls).toHaveLength(1);
+      expect(harness.relayCalls[0].request.body).toBe(body);
+      expect(harness.relayCalls[0].adyen?.placeholderBlobHashes).toEqual(
+        HASHES,
+      );
+      expect(harness.relayCalls[0].request.headers).toMatchObject({
+        "content-type": contentType,
+        cookie: "synthetic=session",
+        "x-csrf-token": "synthetic-csrf",
+        "x-xsrf-token": "synthetic-xsrf",
+        "csrf-token": "synthetic-token",
+        "x-requested-with": "XMLHttpRequest",
+      });
+      expect(harness.relayCalls[0].request.headers).not.toHaveProperty(
+        "content-length",
+      );
+    },
+  );
+
+  it.each(adyenBodies(PLACEHOLDER_BLOBS))(
+    "refuses $name when the body lacks one observed blob",
+    async ({ body, contentType }) => {
+      harness = await arm({ frames: KEY_FRAME });
+      pause(harness.stub, "missing", {
+        url: ADVANCED.url,
+        rawBody: body.replace(
+          PLACEHOLDER_BLOBS.encryptedSecurityCode,
+          "eyJ.other.aXY.Y2lwaGVy.dGFn",
+        ),
+        headers: { "content-type": contentType },
+      });
+      expect((await settle(harness.stub, "missing")).method).toBe(
+        "Fetch.failRequest",
+      );
+      expect(harness.relayCalls).toHaveLength(0);
+      await waitFor(
+        () => harness!.events.some((e) => e.type === "failed"),
+        "refusal event",
+      );
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({
+          type: "failed",
+          reason: "adyen_placeholder_unobserved",
+        }),
+      );
+    },
+  );
+
+  it.each(adyenBodies(PLACEHOLDER_BLOBS))(
+    "refuses $name when one body blob was never observed",
+    async ({ body, contentType }) => {
+      const observed: Partial<Record<BlobField, string>> = {
+        ...PLACEHOLDER_BLOBS,
+      };
+      delete observed.encryptedSecurityCode;
+      harness = await arm({ frames: KEY_FRAME, observed });
+      pause(harness.stub, "unobserved-format", {
+        url: ADVANCED.url,
+        rawBody: body,
+        headers: { "content-type": contentType },
+      });
+      expect((await settle(harness.stub, "unobserved-format")).method).toBe(
+        "Fetch.failRequest",
+      );
+      await waitFor(() => failures(harness!).length === 1, "unobserved blob");
+      expect(failures(harness)[0]).toMatchObject({
+        reason: "adyen_placeholder_unobserved",
+      });
+      expect(harness.relayCalls).toHaveLength(0);
+    },
+  );
+
+  it("refuses an unobserved raw fifth JWE beside all four observed blobs", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    pause(harness.stub, "unknown-fifth", {
+      ...ADVANCED,
+      body: { ...ADVANCED.body, extra: "eyJ.UNKNOWN.aXY.Y2lwaGVy.dGFn" },
+    });
+    expect((await settle(harness.stub, "unknown-fifth")).method).toBe(
+      "Fetch.failRequest",
+    );
+    await waitFor(
+      () => failures(harness!).length === 1,
+      "unobserved fifth blob",
+    );
+    expect(failures(harness)[0]).toMatchObject({
+      reason: "adyen_placeholder_unobserved",
+    });
+    expect(harness.relayCalls).toHaveLength(0);
+  });
+
+  it("forwards only Adyen headers for a form Pay to the sessions endpoint", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const { body, contentType } = adyenBodies(PLACEHOLDER_BLOBS).find(
+      ({ name }) => name.startsWith("urlencoded"),
+    )!;
+    pause(harness.stub, "sessions-form", {
+      url: SESSIONS.url,
+      rawBody: body,
+      headers: {
+        Accept: "application/json",
+        "content-type": contentType,
+        Cookie: "shop_session=abc",
+        "X-Csrf-Token": "t1",
+        "x-requested-with": "XMLHttpRequest",
+      },
+    });
+    expect((await settle(harness.stub, "sessions-form")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(harness.relayCalls).toHaveLength(1);
+    expect(harness.relayCalls[0].request.body).toBe(body);
+    expect(harness.relayCalls[0].adyen?.placeholderBlobHashes).toEqual(HASHES);
+    expect({ ...harness.relayCalls[0].request.headers }).toStrictEqual({
+      accept: "application/json",
+      "content-type": contentType,
+      origin: PAGE_ORIGIN,
+    });
+  });
+
+  it("relays opaque fields by hashes observed through a nested iframe binding", async () => {
+    harness = await arm({ frames: KEY_FRAME, observed: {} });
+    observe(harness.stub, PLACEHOLDER_BLOBS, "frame-number");
+    pause(harness.stub, "opaque", {
+      url: ADVANCED.url,
+      rawBody: Object.values(PLACEHOLDER_BLOBS).join("&"),
+      headers: { "content-type": "text/plain" },
+    });
+    expect((await settle(harness.stub, "opaque")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(harness.relayCalls[0].adyen?.placeholderBlobHashes).toEqual(HASHES);
   });
 
   it("relays the merchant's /payments call verbatim with profile adyen-checkout and the frame's client key, and fulfils the page with the relay's answer", async () => {
@@ -744,7 +903,9 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
         if (request.request.url.endsWith("/unknown")) {
           return { outcome: "unknown" };
         }
-        throw new Error("connect ECONNREFUSED eyJ.PLACEHOLDER_NUMBER_BLOB");
+        throw new Error(
+          "connect ECONNREFUSED eyJ.PLACEHOLDER_NUMBER_BLOB.aXY.Y2lwaGVy.dGFn",
+        );
       },
     });
     pause(harness.stub, "req-unknown", {
@@ -823,11 +984,11 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     });
     pause(harness.stub, "req-other", {
       url: "https://shop.example/api/cart",
-      body: { encryptedCardNumber: "eyJ.top-level-is-not-adyen" },
+      body: { opaque: "eyJ.not-a-secured-field" },
     });
     pause(harness.stub, "req-form", {
       url: "https://shop.example/api/payments",
-      body: "paymentMethod.encryptedCardNumber=eyJ",
+      body: "paymentMethod=scheme",
     });
     pause(harness.stub, "req-get", {
       url: "https://shop.example/api/payments",
@@ -1157,15 +1318,24 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     harness = await arm({ frames: KEY_FRAME });
     observe(
       harness.stub,
-      { encryptedSecurityCode: "eyJ.RETYPED_CVC_BLOB" },
+      { encryptedSecurityCode: "eyJ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn" },
       "frame-number",
     );
-    pause(harness.stub, "req-latest", ADVANCED);
+    pause(harness.stub, "req-latest", {
+      ...ADVANCED,
+      body: {
+        ...ADVANCED.body,
+        paymentMethod: {
+          ...ADVANCED.body.paymentMethod,
+          encryptedSecurityCode: "eyJ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn",
+        },
+      },
+    });
     await settle(harness.stub, "req-latest");
 
     expect(harness.relayCalls[0]?.adyen?.placeholderBlobHashes).toStrictEqual({
       ...HASHES,
-      encryptedSecurityCode: sha256("eyJ.RETYPED_CVC_BLOB"),
+      encryptedSecurityCode: sha256("eyJ.RETYPED_CVC_BLOB.aXY.Y2lwaGVy.dGFn"),
     });
   });
 });
@@ -2609,6 +2779,76 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
     expect(harness.events.at(-1)).toMatchObject({
       type: "adyen_result",
       reported: true,
+    });
+  });
+});
+
+describe("Adyen ciphertexts an escape or a late parent would hide", () => {
+  let harness: Harness | undefined;
+  afterEach(async () => {
+    await harness?.detach();
+    await harness?.stub.close();
+    harness = undefined;
+  });
+  async function drain(id: string) {
+    await settle(harness!.stub, id);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const last = failures(harness!).at(-1);
+    return {
+      method: settledWith(harness!.stub, id)?.method,
+      reason:
+        last?.type === "failed"
+          ? (last as { reason: string }).reason
+          : undefined,
+      relayCalls: harness!.relayCalls.length,
+    };
+  }
+
+  it("treats a JSON-escaped placeholder ciphertext and field name as an Adyen Pay", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const rawBody = JSON.stringify(ADVANCED.body)
+      .replace(/\./g, "\\u002e")
+      .replace("encryptedCardNumber", "\\u0065ncryptedCardNumber");
+    expect(JSON.parse(rawBody)).toEqual(ADVANCED.body);
+    pause(harness.stub, "escaped", {
+      url: "https://outside.example/collect",
+      rawBody,
+    });
+    expect(await drain("escaped")).toEqual({
+      method: "Fetch.failRequest",
+      reason: "destination_not_allowed",
+      relayCalls: 0,
+    });
+  });
+
+  it("refuses an observed ciphertext the relay could not swap byte for byte", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const json = JSON.stringify(ADVANCED.body);
+    const rawBody = `dwfrm_adyPaydata_adyenStateData=${encodeURIComponent(json).replace(/\./g, "%2E")}`;
+    pause(harness.stub, "encoded", {
+      url: ADVANCED.url,
+      rawBody,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    expect(await drain("encoded")).toEqual({
+      method: "Fetch.failRequest",
+      reason: "adyen_placeholder_unobserved",
+      relayCalls: 0,
+    });
+  });
+
+  it("refuses an escaped unobserved fifth ciphertext beside four observed ones", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const unknown = "eyJ.UNKNOWN_CVC.aXY.Y2lwaGVy.dGFn";
+    const rawBody = JSON.stringify({
+      paymentMethod: PLACEHOLDER_BLOBS,
+      extra: unknown,
+    }).replace(unknown, unknown.replace(/\./g, "\\u002e"));
+    pause(harness.stub, "unknown-escaped", { url: ADVANCED.url, rawBody });
+    expect(await drain("unknown-escaped")).toEqual({
+      method: "Fetch.failRequest",
+      reason: "adyen_placeholder_unobserved",
+      relayCalls: 0,
     });
   });
 });
