@@ -300,17 +300,19 @@ export function bodyJweHashes(body: string): {
 const SECURED_FIELD_KEY =
   "[\\w$.\\[\\]-]*encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)\\]?";
 /**
- * A secured field given a value (even empty), by its key: a JSON member
- * (`"paymentMethod[encryptedCardNumber]":`, `+` for a space too), a form field
- * (`encryptedCardNumber=`) or a multipart part (`Content-Disposition: …;
+ * A secured field given a value (even empty), by its key: a JSON member, which
+ * starts a line, opens an object or follows a comma
+ * (`{"paymentMethod[encryptedCardNumber]":`, `+` for a space too), a form
+ * field (`encryptedCardNumber=`, or a bare `encryptedCardNumber&`) or a
+ * multipart part, whose header starts a line (`Content-Disposition: …;
  * name="encryptedCardNumber"`). The name inside a string value, as in a
  * validation message, is not a key.
  */
 const SECURED_FIELD = new RegExp(
   [
-    `["']${SECURED_FIELD_KEY}["'][\\s+]*:`,
-    `(?:^|[&?])${SECURED_FIELD_KEY}=`,
-    `content-disposition:[^\\r\\n]*;[ \\t]*name=["']?${SECURED_FIELD_KEY}["']?(?=[;\\s]|$)`,
+    `(?:^|[{,])[\\s+]*["']${SECURED_FIELD_KEY}["'][\\s+]*:`,
+    `(?:^|[&?])${SECURED_FIELD_KEY}(?:=|&|$)`,
+    `^content-disposition:[^\\r\\n]*;[ \\t]*name=["']?${SECURED_FIELD_KEY}["']?(?=[;\\s]|$)`,
   ].join("|"),
   "im",
 );

@@ -222,6 +222,10 @@ describe("Adyen secured-fields payment bodies", () => {
     ],
     ["a bracketed form field", "paymentMethod%5BencryptedCardNumber%5D=x"],
     [
+      "a form key with no equals sign",
+      "encryptedCardNumber&encryptedSecurityCode",
+    ],
+    [
       "a multipart part",
       '--b\r\nContent-Disposition: form-data; name="encryptedCardNumber"\r\n\r\nx\r\n--b--',
     ],
@@ -242,6 +246,7 @@ describe("Adyen secured-fields payment bodies", () => {
     '{"message":"encryptedCardNumber: is required"}',
     '{"message":"Required field: input[name=\\"encryptedCardNumber\\"]"}',
     '{"message":"see name=encryptedSecurityCode"}',
+    '{"message":"Invalid \\"encryptedCardNumber\\": required"}',
     // Adyen Web's own card BIN lookup carries a ciphertext the fields never made.
     `{"encryptedBin":"${blob}","requestId":"1","supportedBrands":["visa"]}`,
   ])(
@@ -257,6 +262,14 @@ describe("Adyen secured-fields payment bodies", () => {
     });
     const started = performance.now();
     expect(adyenPayCandidate(body, [])).toBe(true);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+  it("reads a long line of multipart-header near-matches in linear time", () => {
+    const body = JSON.stringify({
+      note: "Content-Disposition: ".repeat(20_000),
+    });
+    const started = performance.now();
+    expect(adyenPayCandidate(body, [])).toBe(false);
     expect(performance.now() - started).toBeLessThan(250);
   });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
