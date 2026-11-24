@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import http from "node:http";
@@ -763,6 +764,498 @@ if (!chromeBin) {
         await new Promise((resolve) => shop.server.close(resolve));
       }
     }, 60_000);
+
+    /**
+     * A checkout page with three secured-field iframes on Adyen's own origin.
+     * Each frame posts what adyen-web 6.48.1's SecuredField listener parses:
+     * a JSON string `{ action: "encryption", fieldType, numKey,
+     * [fieldType]: [{ type, encryptedFieldName, blob }] }`. The expiry-date
+     * frame carries month and year in one message, as handleEncryption reads.
+     */
+    function adyenCheckout() {
+      const placeholderBlobs = {
+        encryptedCardNumber: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-number",
+        encryptedExpiryMonth: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-month",
+        encryptedExpiryYear: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-year",
+        encryptedSecurityCode: "eyJhbGciOiJSU0EtT0FFUCJ9.placeholder-cvc",
+      };
+      const messages = [
+        {
+          action: "encryption",
+          fieldType: "encryptedCardNumber",
+          numKey: 1001,
+          endDigits: "1111",
+          encryptedCardNumber: [
+            {
+              type: "number",
+              encryptedFieldName: "encryptedCardNumber",
+              blob: placeholderBlobs.encryptedCardNumber,
+            },
+          ],
+        },
+        {
+          action: "encryption",
+          fieldType: "encryptedExpiryDate",
+          numKey: 1002,
+          encryptedExpiryDate: [
+            {
+              type: "month",
+              encryptedFieldName: "encryptedExpiryMonth",
+              blob: placeholderBlobs.encryptedExpiryMonth,
+            },
+            {
+              type: "year",
+              encryptedFieldName: "encryptedExpiryYear",
+              blob: placeholderBlobs.encryptedExpiryYear,
+            },
+          ],
+        },
+        {
+          action: "encryption",
+          fieldType: "encryptedSecurityCode",
+          numKey: 1003,
+          encryptedSecurityCode: [
+            {
+              type: "cvc",
+              encryptedFieldName: "encryptedSecurityCode",
+              blob: placeholderBlobs.encryptedSecurityCode,
+            },
+          ],
+        },
+      ];
+      const frameBase =
+        "https://checkoutshopper-test.adyen.com/checkoutshopper/securedfields/test_INTEGRATIONKEY1/6.48.1/securedFields.html";
+      const frames = messages
+        .map(
+          (message, index) =>
+            `<iframe src="${frameBase}?type=card&d=${message.fieldType}&i=${index}"></iframe>`,
+        )
+        .join("");
+      // The page counts what it received; a forged event with Adyen's origin
+      // and a direct call to the binding must not count as observed.
+      const page = `<!doctype html><title>adyen shop</title><pre id="clientKey">test_PLANTEDKEY9</pre><div data-client-key="test_PLANTEDKEY9"></div><script>
+window.received = 0;
+window.bindingVisible = typeof window.__sapiomAdyenBlob;
+addEventListener("message", (event) => {
+  if (event.origin === "https://checkoutshopper-test.adyen.com") window.received += 1;
+});
+</script>${frames}`;
+      const order = {
+        amount: { currency: "EUR", value: 1000 },
+        reference: "order-ü-1",
+        paymentMethod: {
+          type: "scheme",
+          holderName: "J. Smith",
+          ...placeholderBlobs,
+        },
+      };
+      return { placeholderBlobs, messages, page, order };
+    }
+
+    const sha256 = (value: string) =>
+      createHash("sha256").update(value, "utf8").digest("hex");
+
+    async function runAdyenCheckout(options: {
+      postBlobs: boolean;
+      overrideJsonParse?: boolean;
+      alreadyLoadedCheckoutIframe?: boolean;
+    }) {
+      const checkout = adyenCheckout();
+      const shop = await startServer(hits, checkout.page, "localhost");
+      const relayCalls: RelayRequest[] = [];
+      const answer = JSON.stringify({
+        resultCode: "Authorised",
+        pspReference: "PSP-INTEGRATION",
+      });
+      const attach = () =>
+        attachInterceptor(cdpUrl, {
+          relay: {
+            relay: async (request) => {
+              relayCalls.push(request);
+              return {
+                outcome: "relayed",
+                response: {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                  body: answer,
+                },
+              };
+            },
+          },
+          placeholder: PLACEHOLDER,
+        });
+      const events: InterceptorEvent[] = [];
+      let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+      const { chromium } = await import("playwright");
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      let page: import("playwright").Page | undefined;
+      try {
+        if (!options.alreadyLoadedCheckoutIframe) {
+          handle = await attach();
+          handle.on((event) => events.push(event));
+        }
+        const context = browser.contexts()[0];
+        page = await context.newPage();
+        await page.route(
+          "https://checkoutshopper-test.adyen.com/**",
+          (route) => {
+            const url = new URL(route.request().url());
+            const index = Number(url.searchParams.get("i"));
+            if (!url.pathname.endsWith("/securedFields.html")) {
+              return route.fulfill({
+                status: 200,
+                headers: { "access-control-allow-origin": "*" },
+                body: "{}",
+              });
+            }
+            const message = JSON.stringify(checkout.messages[index]);
+            const post =
+              options.postBlobs &&
+              !options.overrideJsonParse &&
+              !options.alreadyLoadedCheckoutIframe
+                ? `parent.postMessage(${JSON.stringify(message)}, "*");`
+                : "";
+            return route.fulfill({
+              status: 200,
+              headers: { "content-type": "text/html" },
+              body: `<!doctype html><input><script>${post}</script>`,
+            });
+          },
+        );
+        const origin = `http://localhost:${shop.port}`;
+        if (options.alreadyLoadedCheckoutIframe) {
+          await page.route(`${origin}/`, (route) =>
+            route.fulfill({
+              contentType: "text/html",
+              body: '<!doctype html><title>merchant</title><iframe src="/frame.html"></iframe>',
+            }),
+          );
+        }
+        await page.goto(`${origin}/`, { waitUntil: "load" });
+        const checkoutPage = options.alreadyLoadedCheckoutIframe
+          ? page.frame({ url: `${origin}/frame.html` })!
+          : page;
+        if (options.alreadyLoadedCheckoutIframe) {
+          expect(await page.evaluate("document.readyState")).toBe("complete");
+          expect(await checkoutPage.evaluate("document.readyState")).toBe(
+            "complete",
+          );
+          expect(await checkoutPage.evaluate("location.origin")).toBe(origin);
+          expect(await checkoutPage.evaluate("window.received")).toBe(0);
+          handle = await attach();
+          handle.on((event) => events.push(event));
+        }
+        if (options.overrideJsonParse) {
+          // Merchant replaces the parser after load, before the secured
+          // fields emit ciphertext. Only the page's parser is changed.
+          await checkoutPage.evaluate(() => {
+            JSON.parse = () => ({
+              action: "encryption",
+              fieldType: "encryptedCardNumber",
+              encryptedCardNumber: [
+                {
+                  encryptedFieldName: "encryptedCardNumber",
+                  blob: "eyJ.PAGE_SELECTED",
+                },
+              ],
+            });
+          });
+        }
+        if (
+          options.postBlobs &&
+          (options.overrideJsonParse || options.alreadyLoadedCheckoutIframe)
+        ) {
+          for (const frame of page.frames()) {
+            const url = new URL(frame.url());
+            if (url.hostname !== "checkoutshopper-test.adyen.com") continue;
+            const index = Number(url.searchParams.get("i"));
+            await frame.evaluate(
+              `parent.postMessage(${JSON.stringify(JSON.stringify(checkout.messages[index]))}, "*")`,
+            );
+          }
+        }
+        if (options.postBlobs) {
+          await checkoutPage.waitForFunction("window.received === 3");
+        }
+        // A page script forging Adyen's message or calling the binding
+        // directly must not be taken as an observed blob.
+        const forged = JSON.stringify({
+          action: "encryption",
+          fieldType: "encryptedSecurityCode",
+          numKey: 1003,
+          encryptedSecurityCode: [
+            {
+              type: "cvc",
+              encryptedFieldName: "encryptedSecurityCode",
+              blob: "eyJ.forged",
+            },
+          ],
+        });
+        const pageView: unknown = await checkoutPage.evaluate(`(() => {
+          window.dispatchEvent(new MessageEvent("message", {
+            data: ${JSON.stringify(forged)},
+            origin: "https://checkoutshopper-test.adyen.com",
+          }));
+          return {
+            bindingVisible: window.bindingVisible,
+            bindingNow: typeof window.__sapiomAdyenBlob,
+          };
+        })()`);
+        expect(pageView).toStrictEqual({
+          bindingVisible: "undefined",
+          bindingNow: "undefined",
+        });
+        expect(
+          await checkoutPage.evaluate(async () => {
+            const res = await fetch(
+              "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_INTEGRATIONKEY1",
+            );
+            return res.status;
+          }),
+        ).toBe(200);
+        const seen = await checkoutPage.evaluate(async (body) => {
+          try {
+            const res = await fetch("/api/payments", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body,
+            });
+            return { status: res.status, text: await res.text() };
+          } catch {
+            return "network error";
+          }
+        }, JSON.stringify(checkout.order));
+        return { checkout, origin, seen, answer, relayCalls, events };
+      } finally {
+        await page?.close().catch(() => {});
+        await handle?.detach();
+        shop.server.closeAllConnections();
+        await new Promise((resolve) => shop.server.close(resolve));
+      }
+    }
+
+    it("relays an Adyen payment as adyen-checkout with the client key from Adyen's own request, not the DOM, and the hashes of the blobs the secured-field frames posted", async () => {
+      const { checkout, origin, seen, answer, relayCalls, events } =
+        await runAdyenCheckout({ postBlobs: true });
+
+      expect(seen).toStrictEqual({ status: 200, text: answer });
+      expect(hits.find((item) => item.path === "/api/payments")).toBe(
+        undefined,
+      );
+      expect(relayCalls).toHaveLength(1);
+      expect(relayCalls[0]).toMatchObject({
+        injectionRef: PLACEHOLDER.injectionRef,
+        profileId: "adyen-checkout",
+        pageOrigin: origin,
+        request: {
+          method: "POST",
+          url: `${origin}/api/payments`,
+          body: JSON.stringify(checkout.order),
+        },
+      });
+      const blobs = checkout.placeholderBlobs;
+      expect(relayCalls[0]?.adyen).toStrictEqual({
+        clientKey: "test_INTEGRATIONKEY1",
+        placeholderBlobHashes: {
+          encryptedCardNumber: sha256(blobs.encryptedCardNumber),
+          encryptedExpiryMonth: sha256(blobs.encryptedExpiryMonth),
+          encryptedExpiryYear: sha256(blobs.encryptedExpiryYear),
+          encryptedSecurityCode: sha256(blobs.encryptedSecurityCode),
+        },
+      });
+      expect(relayCalls[0]?.request.headers.origin).toBe(origin);
+      expect(events.map((event) => event.type)).toEqual(["paused", "relayed"]);
+      expect(JSON.stringify(relayCalls)).not.toContain("PLANTEDKEY");
+      const eventText = JSON.stringify(events);
+      for (const [, blob] of Object.entries(blobs)) {
+        expect(eventText).not.toContain(blob);
+        expect(eventText).not.toContain(sha256(blob));
+      }
+    }, 60_000);
+
+    it("observes all four Adyen hashes in a same-origin checkout iframe already loaded before attachInterceptor", async () => {
+      const { checkout, seen, answer, relayCalls } = await runAdyenCheckout({
+        postBlobs: true,
+        alreadyLoadedCheckoutIframe: true,
+      });
+
+      expect(seen).toStrictEqual({ status: 200, text: answer });
+      expect(
+        hits.find((item) => item.path === "/api/payments"),
+      ).toBeUndefined();
+      expect(relayCalls).toHaveLength(1);
+      expect(relayCalls[0]?.adyen?.placeholderBlobHashes).toStrictEqual({
+        encryptedCardNumber: sha256(
+          checkout.placeholderBlobs.encryptedCardNumber,
+        ),
+        encryptedExpiryMonth: sha256(
+          checkout.placeholderBlobs.encryptedExpiryMonth,
+        ),
+        encryptedExpiryYear: sha256(
+          checkout.placeholderBlobs.encryptedExpiryYear,
+        ),
+        encryptedSecurityCode: sha256(
+          checkout.placeholderBlobs.encryptedSecurityCode,
+        ),
+      });
+    }, 60_000);
+
+    it("keeps the secured-field hashes when the page replaces JSON.parse after load", async () => {
+      const { checkout, seen, answer, relayCalls } = await runAdyenCheckout({
+        postBlobs: true,
+        overrideJsonParse: true,
+      });
+
+      expect(seen).toStrictEqual({ status: 200, text: answer });
+      expect(relayCalls).toHaveLength(1);
+      expect(relayCalls[0]?.adyen?.placeholderBlobHashes).toEqual(
+        Object.fromEntries(
+          Object.entries(checkout.placeholderBlobs).map(([field, blob]) => [
+            field,
+            sha256(blob),
+          ]),
+        ),
+      );
+    }, 60_000);
+
+    it("fails an Adyen payment in the browser, without asking the relay, when no secured-field frame posted its blobs", async () => {
+      const { seen, relayCalls, events } = await runAdyenCheckout({
+        postBlobs: false,
+      });
+
+      expect(seen).toBe("network error");
+      expect(relayCalls).toHaveLength(0);
+      expect(hits.find((item) => item.path === "/api/payments")).toBe(
+        undefined,
+      );
+      expect(events).toContainEqual({
+        type: "failed",
+        url: expect.stringMatching(/^http:\/\/localhost:\d+$/),
+        reason: "adyen_placeholder_unobserved",
+      });
+    }, 60_000);
+
+    // A page loaded before attachInterceptor tries to take the blob binding,
+    // either through an accessor on its global or by polling for it.
+    const BINDING_TRAPS = {
+      setter: `Object.defineProperty(window, "__sapiomAdyenBlob", {
+        configurable: true,
+        set(value) { window.stolen = value; },
+        get() { return undefined; },
+      });`,
+      poll: `const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        if (typeof window.__sapiomAdyenBlob === "function") {
+          window.stolen = window.__sapiomAdyenBlob;
+          return;
+        }
+        channel.port2.postMessage(0);
+      };
+      channel.port2.postMessage(0);`,
+    };
+
+    it.each(Object.keys(BINDING_TRAPS) as (keyof typeof BINDING_TRAPS)[])(
+      "does not relay blobs a page script sends through the binding when attached after load (%s)",
+      async (trap) => {
+        const shop = await startServer(
+          hits,
+          `<!doctype html><title>merchant</title><script>window.stolen = null; ${BINDING_TRAPS[trap]}</script>`,
+          "localhost",
+        );
+        const relayCalls: RelayRequest[] = [];
+        const events: InterceptorEvent[] = [];
+        let handle: Awaited<ReturnType<typeof attachInterceptor>> | undefined;
+        const { chromium } = await import("playwright");
+        const browser = await chromium.connectOverCDP(cdpUrl);
+        let page: import("playwright").Page | undefined;
+        try {
+          page = await browser.contexts()[0].newPage();
+          await page.route(
+            "https://checkoutshopper-test.adyen.com/**",
+            (route) =>
+              route.fulfill({
+                status: 200,
+                headers: { "access-control-allow-origin": "*" },
+                body: "{}",
+              }),
+          );
+          await page.goto(`http://localhost:${shop.port}/`, {
+            waitUntil: "load",
+          });
+          handle = await attachInterceptor(cdpUrl, {
+            placeholder: PLACEHOLDER,
+            relay: {
+              relay: async (request) => {
+                relayCalls.push(request);
+                return {
+                  outcome: "relayed",
+                  response: {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                    body: '{"resultCode":"Authorised"}',
+                  },
+                };
+              },
+            },
+          });
+          handle.on((event) => events.push(event));
+          const stolen = await page
+            .waitForFunction("typeof window.stolen === 'function'", undefined, {
+              timeout: 2_000,
+            })
+            .then(() => true)
+            .catch(() => false);
+          const forged = Object.fromEntries(
+            [
+              "encryptedCardNumber",
+              "encryptedExpiryMonth",
+              "encryptedExpiryYear",
+              "encryptedSecurityCode",
+            ].map((field) => [field, `eyJ.PAGE_FORGED_${field}.a.b.c`]),
+          );
+          const seen = await page.evaluate(async (blobs) => {
+            const page = globalThis as unknown as {
+              stolen?: (payload: string) => void;
+            };
+            for (const [field, blob] of Object.entries(blobs)) {
+              page.stolen?.(JSON.stringify({ field, blob }));
+            }
+            await fetch(
+              "https://checkoutshopper-test.adyen.com/checkoutshopper/v1/clientKeys/test_INTEGRATIONKEY1",
+            );
+            try {
+              const res = await fetch("/api/payments", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ paymentMethod: blobs }),
+              });
+              return { status: res.status, text: await res.text() };
+            } catch {
+              return "network error";
+            }
+          }, forged);
+          process.stdout.write(
+            `binding trap ${trap}: stolen=${stolen} pageSaw=${JSON.stringify(seen)} relayCalls=${relayCalls.length} events=${JSON.stringify(events.map((event) => (event.type === "failed" ? `failed:${event.reason}` : event.type)))}\n`,
+          );
+
+          expect(relayCalls).toHaveLength(0);
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "failed",
+              reason: "adyen_placeholder_unobserved",
+            }),
+          );
+          expect(seen).toBe("network error");
+          expect(stolen).toBe(false);
+        } finally {
+          await page?.close().catch(() => {});
+          await handle?.detach();
+          shop.server.closeAllConnections();
+          await new Promise((resolve) => shop.server.close(resolve));
+        }
+      },
+      60_000,
+    );
 
     it("refuses a real Playwright browser and page, which have no wsEndpoint()", async () => {
       const { chromium } = await import("playwright");

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+
+import type { PlaceholderBlobHashes } from "./adyen-blobs.js";
 import { isRecord } from "./guards.js";
 
 export interface RelayHttpRequest {
@@ -15,6 +17,14 @@ export interface RelayRequest {
   pageOrigin: string;
   request: RelayHttpRequest;
   idempotencyKey: string;
+  /**
+   * Sent only with the `adyen-checkout` profile: the merchant's Adyen client
+   * key, which the relay uses to encrypt the real card in place of the four
+   * `paymentMethod.encrypted*` fields the page encrypted for the placeholder.
+   * A Pay also carries the sha256 hex of each blob the page's secured fields
+   * produced, so the relay swaps only the blobs seen in this browser.
+   */
+  adyen?: { clientKey: string; placeholderBlobHashes?: PlaceholderBlobHashes };
 }
 
 export interface RelayedHttpResponse {
