@@ -369,6 +369,7 @@ class PaymentInterceptor {
   private unsupportedEncryptedCheckoutWarned = false;
   /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
   private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
+  private readonly watchedSessions = new Set<string>();
   /** Per session, the ids of execution contexts in the watch world. */
   private readonly watchContexts = new Map<string, Set<number>>();
   private readonly timeoutMs: number;
@@ -474,6 +475,7 @@ class PaymentInterceptor {
     if (!session) return;
     this.sessions.delete(sessionId);
     this.enabledSessions.delete(sessionId);
+    this.watchedSessions.delete(sessionId);
     this.watchContexts.delete(sessionId);
     if (this.byTarget.get(session.targetId) === session) {
       this.byTarget.delete(session.targetId);
@@ -491,7 +493,15 @@ class PaymentInterceptor {
       this.disarm(session);
       return;
     }
-    if (!session.fetchEnabled) void this.armOrClose(session);
+    if (!session.fetchEnabled) {
+      void this.armOrClose(session)
+        .then((armed) => {
+          if (armed) return this.watchAdyenBlobs(session, false);
+        })
+        .catch((error) =>
+          this.logStepFailure("watchAdyenBlobs", error, session),
+        );
+    }
   }
 
   private disarm(session: Session): void {
@@ -536,6 +546,14 @@ class PaymentInterceptor {
     waitingForDebugger: boolean,
   ): Promise<void> {
     const { sessionId } = session;
+    if (
+      this.closed ||
+      this.sessions.get(sessionId) !== session ||
+      this.watchedSessions.has(sessionId)
+    ) {
+      return;
+    }
+    this.watchedSessions.add(sessionId);
     const script = adyenBlobWatchScript();
     // Runtime.enable reports existing documents' main-world contexts,
     // including same-target frames that Page's new-document hook cannot reach
@@ -692,16 +710,21 @@ class PaymentInterceptor {
         ? target.type
         : undefined;
     const code = failed?.code;
+    this.safeWarn("browser step failed", {
+      method,
+      ...(code !== undefined ? { code } : {}),
+      timedOut: failed?.timedOut ?? false,
+      ...(targetType ? { targetType } : {}),
+      ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
+    });
+  }
+
+  private safeWarn(
+    message: string,
+    fields?: Parameters<PayLogger["warn"]>[1],
+  ): void {
     try {
-      void Promise.resolve(
-        this.logger.warn("browser step failed", {
-          method,
-          ...(code !== undefined ? { code } : {}),
-          timedOut: failed?.timedOut ?? false,
-          ...(targetType ? { targetType } : {}),
-          ...(target ? { origin: eventUrl(target.url, this.number) } : {}),
-        }),
-      ).catch(() => {});
+      void Promise.resolve(this.logger.warn(message, fields)).catch(() => {});
     } catch {
       // A logger must not change control flow.
     }
@@ -875,13 +898,13 @@ class PaymentInterceptor {
       if (!this.adyenSeen) {
         if (!this.unsupportedEncryptedCheckoutWarned) {
           this.unsupportedEncryptedCheckoutWarned = true;
-          this.logger.warn("encrypted checkout has no supported PSP signal");
+          this.safeWarn("encrypted checkout has no supported PSP signal");
         }
         return { action: "fail", reason: "unsupported_encrypted_checkout" };
       }
       const clientKey = this.adyenClientKey();
       if (!clientKey) {
-        this.logger.warn(
+        this.safeWarn(
           this.adyenClientKeys.size > 1
             ? "two different adyen client keys seen in adyen requests"
             : "adyen client key not seen in adyen requests",
@@ -897,7 +920,7 @@ class PaymentInterceptor {
       }
       const blobs = placeholderBlobHashes(this.adyenBlobHashes);
       if ("missing" in blobs) {
-        this.logger.warn("adyen placeholder blobs not observed", {
+        this.safeWarn("adyen placeholder blobs not observed", {
           missing: blobs.missing.join(","),
         });
         return { action: "fail", reason: "adyen_placeholder_unobserved" };
@@ -927,7 +950,16 @@ class PaymentInterceptor {
     const headers = forwardedHeaders(request.headers, forwarded);
     if (!headers) return { action: "fail", reason: "headers_unrelayable" };
     // Adyen checks the Origin a client key is allowed for; CDP can omit it.
-    if (adyen) headers.origin ??= pageOrigin;
+    if (adyen && headers.origin === undefined) {
+      if (Object.keys(headers).length >= MAX_FORWARDED_HEADERS) {
+        // Cookies are optional; preserve every non-cookie merchant header.
+        delete headers.cookie;
+        if (Object.keys(headers).length >= MAX_FORWARDED_HEADERS) {
+          return { action: "fail", reason: "headers_unrelayable" };
+        }
+      }
+      headers.origin = pageOrigin;
+    }
     return this.awaitRelay({
       injectionRef: this.options.placeholder.injectionRef,
       ...route,

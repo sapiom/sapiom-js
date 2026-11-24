@@ -20,7 +20,8 @@ describe("Adyen observations in existing documents", () => {
     handle = undefined;
   });
 
-  it("relays hashes posted to an already-loaded same-origin checkout iframe", async () => {
+  const paths = ["checkout", "recaptcha/start"];
+  it.each(paths)("watches once; relays after /%s", async (initialPath) => {
     const origin = "https://shop.example";
     const relayCalls: RelayRequest[] = [];
     const listeners = new Map<string, (event: unknown) => void>();
@@ -53,7 +54,11 @@ describe("Adyen observations in existing documents", () => {
         stub.emit({
           method: "Runtime.bindingCalled",
           sessionId: "page-1",
-          params: { name: ADYEN_BLOB_BINDING, payload, executionContextId: id },
+          params: {
+            name: ADYEN_BLOB_BINDING,
+            payload,
+            executionContextId: id,
+          },
         });
       };
     };
@@ -64,7 +69,11 @@ describe("Adyen observations in existing documents", () => {
           params: {
             sessionId: "page-1",
             waitingForDebugger: false,
-            targetInfo: { targetId: "page", type: "page", url: `${origin}/` },
+            targetInfo: {
+              targetId: "page",
+              type: "page",
+              url: `${origin}/${initialPath}`,
+            },
           },
         });
       }
@@ -116,7 +125,10 @@ describe("Adyen observations in existing documents", () => {
       return undefined;
     });
     handle = await attachInterceptor(stub.url, {
-      placeholder: { number: "4242424242424242", injectionRef: "inj_contexts" },
+      placeholder: {
+        number: "4242424242424242",
+        injectionRef: "inj_contexts",
+      },
       relay: {
         async relay(request) {
           relayCalls.push(request);
@@ -127,6 +139,29 @@ describe("Adyen observations in existing documents", () => {
         },
       },
     });
+    const navigate = (path: string) =>
+      stub.emit({
+        method: "Target.targetInfoChanged",
+        params: {
+          targetInfo: {
+            targetId: "page",
+            type: "page",
+            url: `${origin}/${path}`,
+          },
+        },
+      });
+    if (initialPath === "recaptcha/start") {
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Runtime.addBinding",
+        ),
+      ).toBe(false);
+      expect(listeners.size).toBe(0);
+      navigate("checkout");
+      // A second update can arrive while the first arm is still in flight.
+      navigate("checkout?ready=1");
+    }
+    await waitFor(() => listeners.size === 2, "watch listeners installed");
     expect([...listeners.keys()].sort()).toEqual([
       `checkout:${ADYEN_WATCH_WORLD}`,
       `top:${ADYEN_WATCH_WORLD}`,
@@ -157,19 +192,21 @@ describe("Adyen observations in existing documents", () => {
         }),
       });
     }
-    stub.emit({
-      method: "Fetch.requestPaused",
-      sessionId: "page-1",
-      params: {
-        requestId: "pay",
-        request: {
-          method: "POST",
-          url: `${origin}/api/payments`,
-          headers: { "content-type": "application/json" },
-          postData: JSON.stringify({ paymentMethod: blobs }),
+    const pay = (requestId: string) =>
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId,
+          request: {
+            method: "POST",
+            url: `${origin}/api/payments`,
+            headers: { "content-type": "application/json" },
+            postData: JSON.stringify({ paymentMethod: blobs }),
+          },
         },
-      },
-    });
+      });
+    pay("pay");
     await waitFor(
       () =>
         stub.commands.some(
@@ -189,5 +226,44 @@ describe("Adyen observations in existing documents", () => {
         ]),
       ),
     );
+    navigate("recaptcha/start");
+    await waitFor(
+      () => stub.commands.some((command) => command.method === "Fetch.disable"),
+      "session disarmed",
+    );
+    const enables = stub.commands.filter(
+      (command) => command.method === "Fetch.enable",
+    ).length;
+    navigate("checkout");
+    await waitFor(
+      () =>
+        stub.commands.filter((command) => command.method === "Fetch.enable")
+          .length > enables,
+      "session re-armed",
+    );
+    pay("pay-rearmed");
+    await waitFor(
+      () =>
+        stub.commands.some(
+          (command) =>
+            command.method === "Fetch.fulfillRequest" &&
+            command.params.requestId === "pay-rearmed",
+        ),
+      "re-armed payment fulfilled",
+    );
+    expect(relayCalls).toHaveLength(2);
+    for (const method of [
+      "Page.enable",
+      "Runtime.enable",
+      "Runtime.addBinding",
+      "Page.addScriptToEvaluateOnNewDocument",
+    ]) {
+      expect(
+        stub.commands.filter(
+          (command) =>
+            command.sessionId === "page-1" && command.method === method,
+        ),
+      ).toHaveLength(1);
+    }
   });
 });

@@ -86,6 +86,7 @@ async function arm(options: {
   frames?: { sessionId: string; url: string }[];
   answer?: (request: RelayRequest) => Promise<RelayResponse>;
   profileId?: string;
+  logger?: PayLogger;
   /** Blobs the page's secured fields posted; all four unless given. */
   observed?: Partial<Record<BlobField, string>>;
 }): Promise<Harness> {
@@ -106,7 +107,7 @@ async function arm(options: {
       return answer(request);
     },
   };
-  const logger: PayLogger = {
+  const logger: PayLogger = options.logger ?? {
     warn(message, fields) {
       warnings.push(JSON.stringify({ message, fields }));
     },
@@ -467,6 +468,62 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.relayCalls[0]?.request.headers.origin).toBe(PAGE_ORIGIN);
   });
 
+  it("refuses 32 non-cookie headers when fallback Origin would exceed the limit", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const headers = Object.fromEntries(
+      Array.from({ length: 31 }, (_, i) => [`x-merchant-${i}`, "value"]),
+    );
+    pause(harness.stub, "req-header-limit", { ...ADVANCED, headers });
+    expect((await settle(harness.stub, "req-header-limit")).method).toBe(
+      "Fetch.failRequest",
+    );
+    expect(harness.relayCalls).toHaveLength(0);
+    await waitFor(() => harness!.events.length === 2, "failure event");
+    expect(harness.events[1]).toMatchObject({
+      type: "failed",
+      reason: "headers_unrelayable",
+    });
+  });
+
+  it("omits the optional cookie to fit fallback Origin within 32 headers", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const headers = {
+      ...Object.fromEntries(
+        Array.from({ length: 30 }, (_, i) => [`x-merchant-${i}`, "value"]),
+      ),
+      Cookie: "shop_session=abc",
+    };
+    pause(harness.stub, "req-cookie-limit", { ...ADVANCED, headers });
+    expect((await settle(harness.stub, "req-cookie-limit")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(harness.relayCalls).toHaveLength(1);
+    const forwarded = harness.relayCalls[0].request.headers;
+    expect(Object.keys(forwarded)).toHaveLength(32);
+    expect(forwarded.origin).toBe(PAGE_ORIGIN);
+    expect(forwarded).not.toHaveProperty("cookie");
+    expect(forwarded["content-type"]).toBe("application/json");
+    for (const [key, value] of Object.entries(headers)) {
+      if (key !== "Cookie") expect(forwarded[key]).toBe(value);
+    }
+  });
+
+  it("keeps 32 forwarded headers when Origin is already present", async () => {
+    harness = await arm({ frames: KEY_FRAME });
+    const headers = {
+      ...Object.fromEntries(
+        Array.from({ length: 30 }, (_, i) => [`x-merchant-${i}`, "value"]),
+      ),
+      Origin: PAGE_ORIGIN,
+    };
+    pause(harness.stub, "req-origin-limit", { ...ADVANCED, headers });
+    expect((await settle(harness.stub, "req-origin-limit")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(Object.keys(harness.relayCalls[0].request.headers)).toHaveLength(32);
+    expect(harness.relayCalls[0].request.headers.origin).toBe(PAGE_ORIGIN);
+  });
+
   it("uses adyen-checkout even when the attach names another profile", async () => {
     harness = await arm({ frames: KEY_FRAME, profileId: "shopify-card-vault" });
     pause(harness.stub, "req-advanced", ADVANCED);
@@ -657,6 +714,59 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     ]);
     assertNothingSecret(harness);
   });
+
+  describe.each(["throws", "rejects"] as const)(
+    "when the warning logger %s",
+    (mode) => {
+      it.each([
+        ["unsupported checkout", "unsupported_encrypted_checkout"],
+        ["missing client key", "adyen_client_key"],
+        ["ambiguous client key", "adyen_client_key"],
+        ["missing placeholder blobs", "adyen_placeholder_unobserved"],
+      ] as const)(
+        "preserves refusal for %s without an unhandled rejection",
+        async (scenario, reason) => {
+          const unhandled: unknown[] = [];
+          const onUnhandled = (error: unknown) => unhandled.push(error);
+          process.on("unhandledRejection", onUnhandled);
+          try {
+            const warn = jest.fn(() => {
+              const error = new Error("logger failure");
+              if (mode === "rejects") return Promise.reject(error);
+              throw error;
+            });
+            const frames =
+              scenario === "missing placeholder blobs"
+                ? KEY_FRAME
+                : scenario === "ambiguous client key"
+                  ? [
+                      ...KEY_FRAME,
+                      {
+                        sessionId: "frame-other",
+                        url: frameUrl("test_OTHERKEY789"),
+                      },
+                    ]
+                  : scenario === "missing client key"
+                    ? [{ sessionId: "frame-no-key", url: ADYEN_TEST }]
+                    : [];
+            harness = await arm({ frames, logger: { warn }, observed: {} });
+            pause(harness.stub, "req-logger", ADVANCED);
+            expect((await settle(harness.stub, "req-logger")).method).toBe(
+              "Fetch.failRequest",
+            );
+            await waitFor(() => harness!.events.length === 2, "failure event");
+            await new Promise((resolve) => setImmediate(resolve));
+            expect(harness.events[1]).toMatchObject({ type: "failed", reason });
+            expect(harness.relayCalls).toHaveLength(0);
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(unhandled).toEqual([]);
+          } finally {
+            process.off("unhandledRejection", onUnhandled);
+          }
+        },
+      );
+    },
+  );
 
   it.each([
     "http://checkoutshopper-test.adyen.com/checkoutshopper",
