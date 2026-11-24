@@ -20,6 +20,104 @@ describe("Adyen observations in existing documents", () => {
     handle = undefined;
   });
 
+  it("awaits a racing watcher install before resuming a waiting target", async () => {
+    let releaseAutoAttach!: () => void;
+    const autoAttach = new Promise<void>((resolve) => {
+      releaseAutoAttach = resolve;
+    });
+    let releaseScript!: () => void;
+    const script = new Promise<void>((resolve) => {
+      releaseScript = resolve;
+    });
+    const targetInfo = {
+      targetId: "page",
+      type: "page",
+      url: "https://shop.example/checkout",
+    };
+    stub = await startCdpStub((command) => {
+      if (command.method === "Target.setAutoAttach") {
+        if (command.sessionId === "page-1") return autoAttach;
+        if (command.params.autoAttach) {
+          stub.emit({
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "page-1",
+              waitingForDebugger: true,
+              targetInfo,
+            },
+          });
+        }
+      }
+      if (command.method === "Page.addScriptToEvaluateOnNewDocument") {
+        return script;
+      }
+      return undefined;
+    });
+    const attaching = attachInterceptor(stub.url, {
+      placeholder: {
+        number: "4242424242424242",
+        injectionRef: "inj_watcher_race",
+      },
+      relay: {
+        async relay() {
+          throw new Error("unexpected relay");
+        },
+      },
+    });
+    try {
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Target.setAutoAttach" &&
+              command.sessionId === "page-1",
+          ),
+        "child auto-attach pending",
+      );
+      stub.emit({
+        method: "Target.targetInfoChanged",
+        params: { targetInfo },
+      });
+      await waitFor(
+        () =>
+          stub.commands.some(
+            (command) =>
+              command.method === "Page.addScriptToEvaluateOnNewDocument",
+          ),
+        "watcher script pending",
+      );
+      releaseAutoAttach();
+      // Let enableSession join the install started by the target update.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(
+        stub.commands.some(
+          (command) => command.method === "Runtime.runIfWaitingForDebugger",
+        ),
+      ).toBe(false);
+      releaseScript();
+      handle = await attaching;
+      expect(
+        stub.commands.filter(
+          (command) => command.method === "Runtime.runIfWaitingForDebugger",
+        ),
+      ).toHaveLength(1);
+      for (const method of [
+        "Page.enable",
+        "Runtime.enable",
+        "Runtime.addBinding",
+        "Page.addScriptToEvaluateOnNewDocument",
+      ]) {
+        expect(
+          stub.commands.filter((command) => command.method === method),
+        ).toHaveLength(1);
+      }
+    } finally {
+      releaseAutoAttach();
+      releaseScript();
+      handle = await attaching;
+    }
+  });
+
   const paths = ["checkout", "recaptcha/start"];
   it.each(paths)("watches once; relays after /%s", async (initialPath) => {
     const origin = "https://shop.example";
@@ -49,6 +147,7 @@ describe("Adyen observations in existing documents", () => {
       worlds.set(id, world(id, `${frameId}:${id}`));
     }
     let bindingWorld: string | undefined;
+    let newDocumentScript: string | undefined;
     const bind = (id: number) => {
       worlds.get(id)![ADYEN_BLOB_BINDING] = (payload: string) => {
         stub.emit({
@@ -93,6 +192,9 @@ describe("Adyen observations in existing documents", () => {
         for (const [id, { name }] of contexts) {
           if (name === bindingWorld) bind(id);
         }
+      }
+      if (command.method === "Page.addScriptToEvaluateOnNewDocument") {
+        newDocumentScript = command.params.source as string;
       }
       if (command.method === "Page.createIsolatedWorld") {
         const id = 10 + contexts.size;
@@ -181,18 +283,21 @@ describe("Adyen observations in existing documents", () => {
     const blobs = Object.fromEntries(
       ADYEN_ENCRYPTED_FIELDS.map((field) => [field, `eyJ.TEST_${field}`]),
     );
-    for (const [field, blob] of Object.entries(blobs)) {
-      listeners.get(`checkout:${ADYEN_WATCH_WORLD}`)?.({
-        isTrusted: true,
-        origin: "https://checkoutshopper-test.adyen.com",
-        data: JSON.stringify({
-          action: "encryption",
-          fieldType: field,
-          [field]: [{ encryptedFieldName: field, blob }],
-        }),
-      });
-    }
-    const pay = (requestId: string) =>
+    const postBlobs = (values: Record<string, string>) => {
+      for (const [field, blob] of Object.entries(values)) {
+        listeners.get(`checkout:${ADYEN_WATCH_WORLD}`)?.({
+          isTrusted: true,
+          origin: "https://checkoutshopper-test.adyen.com",
+          data: JSON.stringify({
+            action: "encryption",
+            fieldType: field,
+            [field]: [{ encryptedFieldName: field, blob }],
+          }),
+        });
+      }
+    };
+    postBlobs(blobs);
+    const pay = (requestId: string, paymentBlobs = blobs) =>
       stub.emit({
         method: "Fetch.requestPaused",
         sessionId: "page-1",
@@ -202,7 +307,7 @@ describe("Adyen observations in existing documents", () => {
             method: "POST",
             url: `${origin}/api/payments`,
             headers: { "content-type": "application/json" },
-            postData: JSON.stringify({ paymentMethod: blobs }),
+            postData: JSON.stringify({ paymentMethod: paymentBlobs }),
           },
         },
       });
@@ -241,7 +346,44 @@ describe("Adyen observations in existing documents", () => {
           .length > enables,
       "session re-armed",
     );
-    pay("pay-rearmed");
+    contexts.clear();
+    worlds.clear();
+    listeners.clear();
+    stub.emit({
+      method: "Runtime.executionContextsCleared",
+      sessionId: "page-1",
+      params: {},
+    });
+    for (const context of [
+      { id: 100, frameId: "top", name: "", isDefault: true },
+      { id: 101, frameId: "checkout", name: "", isDefault: true },
+      {
+        id: 102,
+        frameId: "checkout",
+        name: ADYEN_WATCH_WORLD,
+        isDefault: false,
+      },
+    ]) {
+      const { id, frameId, name, isDefault } = context;
+      contexts.set(id, context);
+      worlds.set(id, world(id, `${frameId}:${name || id}`));
+      if (name === bindingWorld) bind(id);
+      stub.emit({
+        method: "Runtime.executionContextCreated",
+        sessionId: "page-1",
+        params: {
+          context: { id, origin, name, auxData: { isDefault, frameId } },
+        },
+      });
+      if (name === ADYEN_WATCH_WORLD && newDocumentScript) {
+        runInContext(newDocumentScript, worlds.get(id)!);
+      }
+    }
+    const newBlobs = Object.fromEntries(
+      ADYEN_ENCRYPTED_FIELDS.map((field) => [field, `eyJ.REARMED_${field}`]),
+    );
+    postBlobs(newBlobs);
+    pay("pay-rearmed", newBlobs);
     await waitFor(
       () =>
         stub.commands.some(
@@ -252,6 +394,14 @@ describe("Adyen observations in existing documents", () => {
       "re-armed payment fulfilled",
     );
     expect(relayCalls).toHaveLength(2);
+    expect(relayCalls[1].adyen?.placeholderBlobHashes).toEqual(
+      Object.fromEntries(
+        Object.entries(newBlobs).map(([field, blob]) => [
+          field,
+          createHash("sha256").update(blob).digest("hex"),
+        ]),
+      ),
+    );
     for (const method of [
       "Page.enable",
       "Runtime.enable",

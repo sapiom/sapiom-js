@@ -60,8 +60,11 @@ export async function startCdpStub(
       ...(message.sessionId ? { sessionId: message.sessionId } : {}),
     };
     commands.push(command);
-    const result = reply(command) ?? {};
-    socket?.write(serverFrame(JSON.stringify({ id: message.id, result })));
+    void Promise.resolve(reply(command)).then((result) => {
+      socket?.write(
+        serverFrame(JSON.stringify({ id: message.id, result: result ?? {} })),
+      );
+    });
   };
 
   const parse = () => {
