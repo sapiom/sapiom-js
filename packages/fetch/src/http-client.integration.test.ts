@@ -809,3 +809,67 @@ describe("HTTP Client Integration Tests", () => {
     });
   });
 });
+
+describe("Facts sanitization", () => {
+  let mocks: jest.Mocked<TransactionAPI>;
+  let mockSapiomClient: SapiomClient;
+
+  beforeAll(() => {
+    fetchMock.mockGlobal();
+  });
+
+  beforeEach(() => {
+    const setup = createMockSapiomClient();
+    mockSapiomClient = setup.client;
+    mocks = setup.mocks;
+    fetchMock.removeRoutes();
+    fetchMock.clearHistory();
+  });
+
+  afterAll(() => {
+    fetchMock.unmockGlobal();
+  });
+
+  it("leaves credential headers out of facts and masks credential query values, without changing the request", async () => {
+    mocks.create.mockResolvedValue({
+      id: "tx-facts",
+      status: TransactionStatus.AUTHORIZED,
+    } as any);
+    mocks.complete.mockResolvedValue({
+      transaction: { id: "tx-facts", status: "completed" },
+    } as any);
+    fetchMock.get("begin:https://api.example.com/geocode", {
+      status: 200,
+      body: { ok: true },
+      headers: { "set-cookie": "sid=FAKE", "x-request-id": "r-1" },
+    });
+
+    const fetch = createFetch({ sapiomClient: mockSapiomClient });
+    await fetch("https://api.example.com/geocode?key=FAKEKEY&address=Paris", {
+      headers: {
+        "bt-api-key": "FAKEBT",
+        "api-key": "FAKEAPI",
+        accept: "application/json",
+      },
+    });
+    await flushPromises();
+
+    const request = mocks.create.mock.calls[0][0].requestFacts!.request as any;
+    expect(request.url).toBe(
+      "https://api.example.com/geocode?key=[REDACTED]&address=Paris",
+    );
+    expect(request.urlParsed.search).toBe("?key=[REDACTED]&address=Paris");
+    expect(request.headers).toEqual({ accept: "application/json" });
+    const response = (mocks.complete.mock.calls[0][1].responseFacts as any)
+      .facts;
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(response.headers["x-request-id"]).toBe("r-1");
+
+    // The request itself still carries the real URL and headers.
+    const sent = fetchMock.callHistory.lastCall()!;
+    expect(sent.url).toBe(
+      "https://api.example.com/geocode?key=FAKEKEY&address=Paris",
+    );
+    expect(JSON.stringify(sent.options.headers)).toContain("FAKEBT");
+  });
+});
