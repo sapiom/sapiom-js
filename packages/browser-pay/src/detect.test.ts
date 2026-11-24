@@ -1,5 +1,6 @@
 import {
   adyenClientKeysInRequest,
+  isAdyenCheckoutUrl,
   isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
@@ -40,6 +41,38 @@ describe("redactHeld", () => {
     const url = "https://shop.example/orders/100";
     expect(redactHeld(url, NUMBER)).toBe(url);
     expect(textHoldsPlaceholderNumber(url, NUMBER)).toBe(false);
+  });
+});
+
+describe("isAdyenCheckoutUrl", () => {
+  it("accepts only exact HTTPS checkoutshopper hosts, without requiring a key", () => {
+    for (const region of [
+      "test",
+      "live",
+      "live-us",
+      "live-au",
+      "live-apse",
+      "live-in",
+    ]) {
+      expect(
+        isAdyenCheckoutUrl(
+          `https://checkoutshopper-${region}.adyen.com/checkoutshopper/v3/analytics`,
+        ),
+      ).toBe(true);
+    }
+    for (const url of [
+      "http://checkoutshopper-test.adyen.com/checkoutshopper",
+      "https://checkoutshopper-test.adyen.com.evil.example/checkoutshopper",
+      "https://evil-checkoutshopper-test.adyen.com/checkoutshopper",
+      "https://checkoutshopper-live-eu.adyen.com/checkoutshopper",
+      "https://checkoutanalytics-test.adyen.com/checkoutanalytics",
+      "https://checkoutshopper-test.adyen.com:8443/checkoutshopper",
+      "https://shop.example/checkout",
+      "not a url",
+      "",
+    ]) {
+      expect(isAdyenCheckoutUrl(url)).toBe(false);
+    }
   });
 });
 

@@ -16,6 +16,7 @@ import {
 import {
   ADYEN_CHECKOUT_ORIGINS,
   adyenClientKeysInRequest,
+  isAdyenCheckoutUrl,
   isAdyenSecuredFieldsPayment,
   redactHeld,
   textHoldsPlaceholderNumber,
@@ -77,6 +78,7 @@ export type FailureReason =
   | "response_credential"
   | "headers_unrelayable"
   | "destination_not_allowed"
+  | "unsupported_encrypted_checkout"
   | "adyen_client_key"
   | "adyen_placeholder_unobserved";
 
@@ -363,6 +365,8 @@ class PaymentInterceptor {
   private readonly pendingArms = new Set<Promise<void>>();
   /** Every client key Adyen's own requests named: frame URLs and paused requests. */
   private readonly adyenClientKeys = new Set<string>();
+  private adyenSeen = false;
+  private unsupportedEncryptedCheckoutWarned = false;
   /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
   private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
   /** Per session, the ids of execution contexts in the watch world. */
@@ -482,7 +486,7 @@ class PaymentInterceptor {
     const session = this.byTarget.get(info.targetId);
     if (!session) return;
     session.url = info.url;
-    this.noteAdyenClientKeys(info.url);
+    this.noteAdyenCheckout(info.url);
     if (!shouldArm(session)) {
       this.disarm(session);
       return;
@@ -778,7 +782,7 @@ class PaymentInterceptor {
   }
 
   private trackSession(session: Session): Session {
-    this.noteAdyenClientKeys(session.url);
+    this.noteAdyenCheckout(session.url);
     this.sessions.set(session.sessionId, session);
     this.byTarget.set(session.targetId, session);
     return session;
@@ -868,6 +872,13 @@ class PaymentInterceptor {
     let route: Pick<RelayRequest, "profileId" | "adyen">;
     let forwarded = this.options.profileId ? profileHeader : genericHeader;
     if (adyen) {
+      if (!this.adyenSeen) {
+        if (!this.unsupportedEncryptedCheckoutWarned) {
+          this.unsupportedEncryptedCheckoutWarned = true;
+          this.logger.warn("encrypted checkout has no supported PSP signal");
+        }
+        return { action: "fail", reason: "unsupported_encrypted_checkout" };
+      }
       const clientKey = this.adyenClientKey();
       if (!clientKey) {
         this.logger.warn(
@@ -939,13 +950,14 @@ class PaymentInterceptor {
   }
 
   private noteAdyenRequest(request: PausedRequest): void {
-    this.noteAdyenClientKeys(
+    this.noteAdyenCheckout(
       request.url,
       headerValue(request.headers, "x-client-key"),
     );
   }
 
-  private noteAdyenClientKeys(url: string, clientKeyHeader?: string): void {
+  private noteAdyenCheckout(url: string, clientKeyHeader?: string): void {
+    if (isAdyenCheckoutUrl(url)) this.adyenSeen = true;
     for (const key of adyenClientKeysInRequest(url, clientKeyHeader)) {
       this.adyenClientKeys.add(key);
     }
