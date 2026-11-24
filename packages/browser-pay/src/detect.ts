@@ -129,6 +129,15 @@ export const ADYEN_CHECKOUT_ORIGINS = [...ADYEN_KEY_HOST_ENV.keys()].map(
   (host) => `https://${host}`,
 );
 
+export function isAdyenCheckoutUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && ADYEN_KEY_HOST_ENV.has(parsed.host);
+  } catch {
+    return false;
+  }
+}
+
 /** An Adyen client key: `test_` or `live_` and up to 64 letters and digits. */
 function isAdyenClientKey(value: unknown): value is string {
   return typeof value === "string" && ADYEN_CLIENT_KEY.test(value);
@@ -146,14 +155,9 @@ export function adyenClientKeysInRequest(
   url: string,
   clientKeyHeader = "",
 ): string[] {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return [];
-  }
+  if (!isAdyenCheckoutUrl(url)) return [];
+  const parsed = new URL(url);
   const env = ADYEN_KEY_HOST_ENV.get(parsed.host);
-  if (parsed.protocol !== "https:" || !env) return [];
   const candidates = [
     ...parsed.searchParams.getAll("clientKey"),
     /\/securedfields\/([^/]+)\//.exec(parsed.pathname)?.[1],

@@ -785,25 +785,91 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
     expect(harness.events).toStrictEqual([]);
   });
 
-  it("fails the request closed, without asking the relay, when no Adyen request named a client key", async () => {
+  it("refuses encrypted payments without any Adyen signal and warns once per attach", async () => {
     harness = await arm({});
-    pause(harness.stub, "req-nokey", ADVANCED);
-    const settled = await settle(harness.stub, "req-nokey");
-
-    expect(settled.method).toBe("Fetch.failRequest");
+    for (const id of ["req-unsupported", "req-retry"]) {
+      pause(harness.stub, id, ADVANCED);
+      expect((await settle(harness.stub, id)).method).toBe("Fetch.failRequest");
+    }
     expect(harness.relayCalls).toHaveLength(0);
-    await waitFor(() => harness!.events.length === 2, "two events");
+    await waitFor(() => harness!.events.length === 4, "four events");
+    const outcome = [
+      { type: "paused", url: PAGE_ORIGIN, method: "POST", targetType: "page" },
+      {
+        type: "failed",
+        url: PAGE_ORIGIN,
+        reason: "unsupported_encrypted_checkout",
+      },
+    ];
+    expect(harness.events).toStrictEqual([...outcome, ...outcome]);
     expect(harness.warnings).toStrictEqual([
       JSON.stringify({
-        message: "adyen client key not seen in adyen requests",
+        message: "encrypted checkout has no supported PSP signal",
       }),
     ]);
-    expect(harness.events[1]).toStrictEqual({
-      type: "failed",
-      url: PAGE_ORIGIN,
-      reason: "adyen_client_key",
-    });
+    assertNothingSecret(harness);
   });
+
+  it.each([
+    "http://checkoutshopper-test.adyen.com/checkoutshopper",
+    "https://checkoutshopper-test.adyen.com.evil.example/checkoutshopper",
+  ])(
+    "does not identify Adyen from an untrusted frame or request (%s)",
+    async (url) => {
+      harness = await arm({ frames: [{ sessionId: "frame-lookalike", url }] });
+      pause(harness.stub, "req-lookalike", { url, method: "GET" });
+      await settle(harness.stub, "req-lookalike");
+      pause(harness.stub, "req-pay", ADVANCED);
+      expect((await settle(harness.stub, "req-pay")).method).toBe(
+        "Fetch.failRequest",
+      );
+      expect(harness.relayCalls).toHaveLength(0);
+      await waitFor(() => harness!.events.length === 2, "two events");
+      expect(harness.events[1]).toStrictEqual({
+        type: "failed",
+        url: PAGE_ORIGIN,
+        reason: "unsupported_encrypted_checkout",
+      });
+      assertNothingSecret(harness);
+    },
+  );
+
+  it.each(["Fetch.requestPaused", "Network.requestWillBeSent"])(
+    "fails the request closed, without asking the relay, when no Adyen request named a client key (%s)",
+    async (method) => {
+      harness = await arm({});
+      harness.stub.emit({
+        method,
+        sessionId: "page-1",
+        params: {
+          requestId: "req-adyen",
+          request: {
+            url: `${ADYEN_TEST}/v3/analytics`,
+            method: "GET",
+            headers: {},
+          },
+        },
+      });
+      if (method === "Fetch.requestPaused")
+        await settle(harness.stub, "req-adyen");
+      pause(harness.stub, "req-nokey", ADVANCED);
+      const settled = await settle(harness.stub, "req-nokey");
+
+      expect(settled.method).toBe("Fetch.failRequest");
+      expect(harness.relayCalls).toHaveLength(0);
+      await waitFor(() => harness!.events.length === 2, "two events");
+      expect(harness.warnings).toStrictEqual([
+        JSON.stringify({
+          message: "adyen client key not seen in adyen requests",
+        }),
+      ]);
+      expect(harness.events[1]).toStrictEqual({
+        type: "failed",
+        url: PAGE_ORIGIN,
+        reason: "adyen_client_key",
+      });
+    },
+  );
 
   it("does not guess between two different client keys on one page", async () => {
     harness = await arm({
@@ -852,6 +918,23 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       clientKey: lowercase,
       placeholderBlobHashes: HASHES,
     });
+  });
+
+  it("relays a plain card request without an Adyen signal under the attach's own profile", async () => {
+    harness = await arm({ profileId: "shopify-card-vault" });
+    const request = { url: ADVANCED.url, body: { number: HELD.number } };
+    pause(harness.stub, "req-plain", request);
+    expect((await settle(harness.stub, "req-plain")).method).toBe(
+      "Fetch.fulfillRequest",
+    );
+    expect(harness.relayCalls).toHaveLength(1);
+    expect(harness.relayCalls[0]?.profileId).toBe("shopify-card-vault");
+    expect(harness.relayCalls[0]?.request.body).toBe(
+      JSON.stringify(request.body),
+    );
+    expect(harness.relayCalls[0]).not.toHaveProperty("adyen");
+    expect(harness.warnings).toStrictEqual([]);
+    assertNothingSecret(harness);
   });
 
   it("relays a body holding the placeholder digits as before, under the attach's own profile", async () => {
