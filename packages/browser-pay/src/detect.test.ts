@@ -255,22 +255,29 @@ describe("Adyen secured-fields payment bodies", () => {
       expect(adyenPayCandidate(body, [])).toBe(false);
     },
   );
+  // Quadrupling the input must not multiply the time by much more than four.
+  const growth = (body: (n: number) => string, candidate: boolean) => {
+    const time = (n: number) => {
+      const text = body(n);
+      const started = performance.now();
+      expect(adyenPayCandidate(text, [])).toBe(candidate);
+      return performance.now() - started;
+    };
+    time(6_250);
+    return Math.min(time(25_000), time(25_000)) / Math.max(time(6_250), 1);
+  };
   it("reads a long body of near-matches in linear time", () => {
-    const body = JSON.stringify({
-      note: 'name="x" '.repeat(25_000) + "&a".repeat(25_000),
-      encryptedCardNumber: "",
-    });
-    const started = performance.now();
-    expect(adyenPayCandidate(body, [])).toBe(true);
-    expect(performance.now() - started).toBeLessThan(250);
+    const body = (n: number) =>
+      JSON.stringify({
+        note: 'name="x" '.repeat(n) + "&a".repeat(n),
+        encryptedCardNumber: "",
+      });
+    expect(growth(body, true)).toBeLessThan(8);
   });
   it("reads a long line of multipart-header near-matches in linear time", () => {
-    const body = JSON.stringify({
-      note: "Content-Disposition: ".repeat(20_000),
-    });
-    const started = performance.now();
-    expect(adyenPayCandidate(body, [])).toBe(false);
-    expect(performance.now() - started).toBeLessThan(250);
+    const body = (n: number) =>
+      JSON.stringify({ note: "Content-Disposition: ".repeat(n) });
+    expect(growth(body, false)).toBeLessThan(8);
   });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
     const value = encodeURIComponent(
