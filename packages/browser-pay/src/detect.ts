@@ -178,14 +178,6 @@ export function isAdyenSecuredFieldsPayment(body: string): boolean {
   return adyenPaymentMethod(parseJson(body)) !== undefined;
 }
 
-function isAdyenHttps(url: URL): boolean {
-  const host = url.hostname.toLowerCase();
-  return (
-    url.protocol === "https:" &&
-    (host === "adyen.com" || host.endsWith(".adyen.com"))
-  );
-}
-
 /**
  * The checkout an Adyen payment or details call belongs to: its origin, and
  * for Adyen's `/sessions/{id}/...` the session too, since every merchant's
@@ -193,7 +185,7 @@ function isAdyenHttps(url: URL): boolean {
  * only its origin, like the `/payments/details` call that follows it.
  */
 export function adyenCheckout(url: URL): string {
-  const session = isAdyenHttps(url)
+  const session = isAdyenCheckoutUrl(url.href)
     ? /^(.*\/sessions\/[^/]+)\/(?:payments|paymentDetails)$/.exec(url.pathname)
     : null;
   return session ? `${url.origin}${session[1]}` : url.origin;
@@ -222,7 +214,7 @@ export function adyenDetailsCall(
   }
   return {
     checkout: adyenCheckout(parsed),
-    relay: sessions && isAdyenHttps(parsed),
+    relay: sessions && isAdyenCheckoutUrl(parsed.href),
   };
 }
 

@@ -96,12 +96,11 @@ async function arm(options: {
   existingPages?: number;
   answer?: (request: RelayRequest) => Promise<RelayResponse>;
   profileId?: string;
+  attemptTimeoutMs?: number;
   /** Answer bodies the browser read for requests paused at the Response stage. */
   responseBodies?: Record<string, string>;
   /** `null` gives a relay without `adyenResult`. */
-  adyenResult?:
-    | ((request: AdyenResultRequest) => Promise<AdyenResultResponse>)
-    | null;
+  adyenResult?: PaymentRelay["adyenResult"] | null;
   /** Blobs the page's secured fields posted; all four unless given. */
   observed?: Partial<Record<BlobField, string>>;
   /** Paused requests whose `Fetch.fulfillRequest` the browser rejects. */
@@ -196,15 +195,15 @@ async function arm(options: {
     },
   };
   if (options.adyenResult !== null) {
-    const report =
+    const report: NonNullable<PaymentRelay["adyenResult"]> =
       options.adyenResult ??
       (async (request: AdyenResultRequest) => ({
         outcome: "completed" as const,
         resultCode: request.resultCode,
       }));
-    relay.adyenResult = async (request) => {
+    relay.adyenResult = async (request, call) => {
       resultCalls.push(request);
-      return report(request);
+      return report(request, call);
     };
   }
   const logger: PayLogger = {
@@ -216,6 +215,7 @@ async function arm(options: {
     relay,
     placeholder: HELD,
     logger,
+    attemptTimeoutMs: options.attemptTimeoutMs,
     ...(options.profileId ? { profileId: options.profileId } : {}),
   });
   handle.on((event) => events.push(event));
@@ -2432,6 +2432,42 @@ describe("interceptor after an Adyen 3-D Secure challenge", () => {
       "adyen_result",
     );
     expect(harness.events.at(-1)).toMatchObject({ reported: false });
+  });
+
+  it("aborts a never-settling result reporter after continuing the page and finishes detach with reported: false", async () => {
+    let reportSignal: AbortSignal | undefined;
+    let continuedBeforeReport = false;
+    harness = await arm({
+      frames: KEY_FRAME,
+      answer: answersByPath({ "/api/payments": [CHALLENGE] }),
+      responseBodies: { "req-d": JSON.stringify({ resultCode: "Authorised" }) },
+      attemptTimeoutMs: 100,
+      adyenResult: (_request, call) => {
+        reportSignal = call?.signal;
+        continuedBeforeReport = continues(harness!.stub, "req-d").length === 2;
+        return new Promise<AdyenResultResponse>(() => {});
+      },
+    });
+    pause(harness.stub, "req-pay", ADVANCED);
+    await settle(harness.stub, "req-pay");
+    pause(harness.stub, "req-d", { url: MERCHANT_DETAILS, body: DETAILS_BODY });
+    await settle(harness.stub, "req-d");
+    answerPause(harness.stub, "req-d", MERCHANT_DETAILS);
+    await waitFor(() => harness!.resultCalls.length === 1, "report started");
+    let detached = false;
+    const detaching = harness.detach().then(() => {
+      detached = true;
+    });
+    await waitFor(() => detached, "detach after result report timeout");
+    await detaching;
+    expect(reportSignal?.aborted).toBe(true);
+    expect(continuedBeforeReport).toBe(true);
+    expect(continues(harness.stub, "req-d")).toHaveLength(2);
+    expect(harness.events.at(-1)).toMatchObject({
+      type: "adyen_result",
+      resultCode: "Authorised",
+      reported: false,
+    });
   });
 
   it("detach() waits for a details answer already paused to reach the page and be reported", async () => {

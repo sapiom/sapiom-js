@@ -1,4 +1,5 @@
 import {
+  adyenCheckout,
   adyenClientKeysInRequest,
   adyenDetailsCall,
   adyenPaymentResult,
@@ -201,6 +202,37 @@ describe("Adyen secured-fields payment bodies", () => {
       expect(isAdyenSecuredFieldsPayment(body)).toBe(false);
     }
   });
+});
+
+describe("adyenCheckout", () => {
+  it.each([
+    "https://merchant.adyen.com",
+    "https://checkoutshopper-test.adyen.com:8443",
+    "https://shop.example",
+  ])("keeps merchant session routes keyed by origin on %s", (origin) => {
+    expect(adyenCheckout(new URL(`${origin}/sessions/S1/payments`))).toBe(
+      origin,
+    );
+    expect(
+      adyenDetailsCall("POST", `${origin}/sessions/S1/paymentDetails`),
+    ).toStrictEqual({ checkout: origin, relay: false });
+    expect(
+      adyenDetailsCall("POST", `${origin}/payments/details`),
+    ).toStrictEqual({ checkout: origin, relay: false });
+  });
+
+  it.each(["", ":443"])(
+    "keys checkoutshopper payments by session on the default HTTPS port (%s)",
+    (port) => {
+      const origin = "https://checkoutshopper-test.adyen.com";
+      expect(
+        adyenCheckout(new URL(`${origin}${port}/sessions/S1/payments`)),
+      ).toBe(`${origin}/sessions/S1`);
+      expect(
+        adyenDetailsCall("POST", `${origin}${port}/sessions/S1/paymentDetails`),
+      ).toStrictEqual({ checkout: `${origin}/sessions/S1`, relay: true });
+    },
+  );
 });
 
 describe("Adyen 3-D Secure details calls", () => {
