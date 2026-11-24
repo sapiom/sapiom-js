@@ -1040,6 +1040,10 @@ class PaymentInterceptor {
     if (read.kind === "miss" && !adyen && !details) {
       return { action: "continue" };
     }
+    // Bytes that aren't UTF-8 were replaced when read: relaying the text would change them.
+    if (read.body.includes("\uFFFD")) {
+      return { action: "fail", reason: "unreadable_body" };
+    }
     if (this.closed) return { action: "fail", reason: "detached" };
     const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
     this.emit({

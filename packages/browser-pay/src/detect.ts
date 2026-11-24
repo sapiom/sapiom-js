@@ -297,16 +297,22 @@ export function bodyJweHashes(body: string): {
   return { raw, swappable };
 }
 
-const SECURED_FIELD_NAME =
-  "encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)";
+const SECURED_FIELD_KEY =
+  "[\\w$.\\[\\]-]*encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)\\]?";
 /**
- * A secured-field name given a value (even empty): a JSON member, a form field
- * (`paymentMethod[encryptedCardNumber]=`, `+` for a space too) or a multipart
- * part (`name="encryptedCardNumber"`).
+ * A secured field given a value (even empty), by its key: a JSON member
+ * (`"paymentMethod[encryptedCardNumber]":`, `+` for a space too), a form field
+ * (`encryptedCardNumber=`) or a multipart part (`Content-Disposition: …;
+ * name="encryptedCardNumber"`). The name inside a string value, as in a
+ * validation message, is not a key.
  */
 const SECURED_FIELD = new RegExp(
-  `${SECURED_FIELD_NAME}["'\\]]?[\\s+]*[:=]|\\bname\\s*=\\s*["']?[^"'\\r\\n;]*${SECURED_FIELD_NAME}`,
-  "i",
+  [
+    `["']${SECURED_FIELD_KEY}["'][\\s+]*:`,
+    `(?:^|[&?])${SECURED_FIELD_KEY}=`,
+    `content-disposition:[^\\r\\n]*;[ \\t]*name=["']?${SECURED_FIELD_KEY}["']?(?=[;\\s]|$)`,
+  ].join("|"),
+  "im",
 );
 
 /**

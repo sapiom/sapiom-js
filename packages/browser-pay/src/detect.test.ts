@@ -232,6 +232,33 @@ describe("Adyen secured-fields payment bodies", () => {
   ])("recognises a secured field given a value in %s", (_, body) => {
     expect(adyenPayCandidate(body, [])).toBe(true);
   });
+  it.each([
+    ["a bracketed JSON key", '{"paymentMethod[encryptedCardNumber]":""}'],
+    ["a dotted form key", "paymentMethod.encryptedExpiryYear=&x=1"],
+  ])("recognises a secured field keyed by %s", (_, body) => {
+    expect(adyenPayCandidate(body, [])).toBe(true);
+  });
+  it.each([
+    '{"message":"encryptedCardNumber: is required"}',
+    '{"message":"Required field: input[name=\\"encryptedCardNumber\\"]"}',
+    '{"message":"see name=encryptedSecurityCode"}',
+    // Adyen Web's own card BIN lookup carries a ciphertext the fields never made.
+    `{"encryptedBin":"${blob}","requestId":"1","supportedBrands":["visa"]}`,
+  ])(
+    "takes no secured-field mention or other ciphertext for a Pay: %s",
+    (body) => {
+      expect(adyenPayCandidate(body, [])).toBe(false);
+    },
+  );
+  it("reads a long body of near-matches in linear time", () => {
+    const body = JSON.stringify({
+      note: 'name="x" '.repeat(25_000) + "&a".repeat(25_000),
+      encryptedCardNumber: "",
+    });
+    const started = performance.now();
+    expect(adyenPayCandidate(body, [])).toBe(true);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
     const value = encodeURIComponent(
       encodeURIComponent(JSON.stringify({ n: blob })),
