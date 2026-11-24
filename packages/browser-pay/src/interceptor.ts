@@ -439,7 +439,7 @@ class PaymentInterceptor {
   private unsupportedEncryptedCheckoutWarned = false;
   /** Latest sha256 hex per field the page's secured fields encrypted. Never the blob. */
   private readonly adyenBlobHashes = new Map<AdyenEncryptedField, string>();
-  private readonly watchedSessions = new Set<string>();
+  private readonly watchedSessions = new Map<string, Promise<void>>();
   /** Per session, the ids of execution contexts in the watch world. */
   private readonly watchContexts = new Map<string, Set<number>>();
   private readonly timeoutMs: number;
@@ -620,19 +620,26 @@ class PaymentInterceptor {
    * in the current document when the target was already running. A target
    * where this fails cannot supply the hashes, so its Adyen Pay fails closed.
    */
-  private async watchAdyenBlobs(
+  private watchAdyenBlobs(
     session: Session,
     waitingForDebugger: boolean,
   ): Promise<void> {
     const { sessionId } = session;
-    if (
-      this.closed ||
-      this.sessions.get(sessionId) !== session ||
-      this.watchedSessions.has(sessionId)
-    ) {
-      return;
+    if (this.closed || this.sessions.get(sessionId) !== session) {
+      return Promise.resolve();
     }
-    this.watchedSessions.add(sessionId);
+    const existing = this.watchedSessions.get(sessionId);
+    if (existing) return existing;
+    const install = this.installAdyenBlobWatcher(session, waitingForDebugger);
+    this.watchedSessions.set(sessionId, install);
+    return install;
+  }
+
+  private async installAdyenBlobWatcher(
+    session: Session,
+    waitingForDebugger: boolean,
+  ): Promise<void> {
+    const { sessionId } = session;
     const script = adyenBlobWatchScript();
     // Runtime.enable reports existing documents' main-world contexts,
     // including same-target frames that Page's new-document hook cannot reach
