@@ -1,5 +1,8 @@
 import {
+  adyenCheckout,
   adyenClientKeysInRequest,
+  adyenDetailsCall,
+  adyenPaymentResult,
   isAdyenCheckoutUrl,
   isAdyenSecuredFieldsPayment,
   redactHeld,
@@ -198,5 +201,85 @@ describe("Adyen secured-fields payment bodies", () => {
     ]) {
       expect(isAdyenSecuredFieldsPayment(body)).toBe(false);
     }
+  });
+});
+
+describe("adyenCheckout", () => {
+  it.each([
+    "https://merchant.adyen.com",
+    "https://checkoutshopper-test.adyen.com:8443",
+    "https://shop.example",
+  ])("keeps merchant session routes keyed by origin on %s", (origin) => {
+    expect(adyenCheckout(new URL(`${origin}/sessions/S1/payments`))).toBe(
+      origin,
+    );
+    expect(
+      adyenDetailsCall("POST", `${origin}/sessions/S1/paymentDetails`),
+    ).toStrictEqual({ checkout: origin, relay: false });
+    expect(
+      adyenDetailsCall("POST", `${origin}/payments/details`),
+    ).toStrictEqual({ checkout: origin, relay: false });
+  });
+
+  it.each(["", ":443"])(
+    "keys checkoutshopper payments by session on the default HTTPS port (%s)",
+    (port) => {
+      const origin = "https://checkoutshopper-test.adyen.com";
+      expect(
+        adyenCheckout(new URL(`${origin}${port}/sessions/S1/payments`)),
+      ).toBe(`${origin}/sessions/S1`);
+      expect(
+        adyenDetailsCall("POST", `${origin}${port}/sessions/S1/paymentDetails`),
+      ).toStrictEqual({ checkout: `${origin}/sessions/S1`, relay: true });
+    },
+  );
+});
+
+describe("Adyen 3-D Secure details calls", () => {
+  const ADYEN = "https://checkoutshopper-test.adyen.com/checkoutshopper/v1";
+
+  it("relays only Adyen's own sessions paymentDetails, keyed by session", () => {
+    expect(
+      adyenDetailsCall(
+        "POST",
+        `${ADYEN}/sessions/CS1/paymentDetails?clientKey=k`,
+      ),
+    ).toStrictEqual({
+      checkout: `https://checkoutshopper-test.adyen.com/checkoutshopper/v1/sessions/CS1`,
+      relay: true,
+    });
+    expect(
+      adyenDetailsCall("post", "https://shop.example/api/payments/details"),
+    ).toStrictEqual({ checkout: "https://shop.example", relay: false });
+    expect(
+      adyenDetailsCall(
+        "POST",
+        "https://shop.example/sessions/S1/paymentDetails",
+      ),
+    ).toStrictEqual({ checkout: "https://shop.example", relay: false });
+  });
+
+  it("matches nothing else", () => {
+    for (const [method, url] of [
+      ["GET", `${ADYEN}/sessions/CS1/paymentDetails`],
+      ["POST", `${ADYEN}/sessions/CS1/payments`],
+      ["POST", "https://shop.example/api/payments"],
+      ["POST", "https://shop.example/api/payments/details/extra"],
+      ["POST", "not a url"],
+    ]) {
+      expect(adyenDetailsCall(method!, url!)).toBeUndefined();
+    }
+  });
+
+  it("reads a known resultCode and a well-formed pspReference, else unknown", () => {
+    expect(
+      adyenPaymentResult('{"resultCode":"Authorised","pspReference":"PSP1"}'),
+    ).toStrictEqual({ resultCode: "Authorised", pspReference: "PSP1" });
+    expect(
+      adyenPaymentResult('{"resultCode":"Paid","pspReference":"a b"}'),
+    ).toStrictEqual({ resultCode: "unknown" });
+    expect(adyenPaymentResult("<html>")).toStrictEqual({
+      resultCode: "unknown",
+    });
   });
 });

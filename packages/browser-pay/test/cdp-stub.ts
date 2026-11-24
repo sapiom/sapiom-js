@@ -9,7 +9,13 @@ export interface CdpCommand {
   sessionId?: string;
 }
 
-/** Returns the `result` for a command, or `undefined` for `{}`. */
+/** Returned by a `CdpReply` for a command the browser never acknowledges. */
+export const NO_REPLY = Symbol("no reply");
+
+/**
+ * Returns the `result` for a command (or a promise of it), or `undefined` for
+ * `{}`; throwing or rejecting answers with a CDP error.
+ */
 export type CdpReply = (command: CdpCommand) => unknown;
 
 export interface CdpStub {
@@ -60,11 +66,23 @@ export async function startCdpStub(
       ...(message.sessionId ? { sessionId: message.sessionId } : {}),
     };
     commands.push(command);
-    void Promise.resolve(reply(command)).then((result) => {
-      socket?.write(
-        serverFrame(JSON.stringify({ id: message.id, result: result ?? {} })),
-      );
-    });
+    const answer = (body: Record<string, unknown>) =>
+      socket?.write(serverFrame(JSON.stringify({ id: message.id, ...body })));
+    const fail = (error: unknown) =>
+      answer({ error: { message: String(error) } });
+    let result: unknown;
+    try {
+      result = reply(command);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (result === NO_REPLY) return;
+    // A promise answers when it settles, so a test can hold a command.
+    void Promise.resolve(result).then(
+      (value) => answer({ result: value ?? {} }),
+      fail,
+    );
   };
 
   const parse = () => {

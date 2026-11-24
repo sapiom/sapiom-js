@@ -1,3 +1,4 @@
+import { ADYEN_RESULT_CODES, type AdyenResultCode } from "./contract.js";
 import { isRecord } from "./guards.js";
 
 export interface HeldPlaceholder {
@@ -175,6 +176,68 @@ export function adyenClientKeysInRequest(
  */
 export function isAdyenSecuredFieldsPayment(body: string): boolean {
   return adyenPaymentMethod(parseJson(body)) !== undefined;
+}
+
+/**
+ * The checkout an Adyen payment or details call belongs to: its origin, and
+ * for Adyen's `/sessions/{id}/...` the session too, since every merchant's
+ * sessions share Adyen's host. A merchant's own `/sessions/{id}/` route is
+ * only its origin, like the `/payments/details` call that follows it.
+ */
+export function adyenCheckout(url: URL): string {
+  const session = isAdyenCheckoutUrl(url.href)
+    ? /^(.*\/sessions\/[^/]+)\/(?:payments|paymentDetails)$/.exec(url.pathname)
+    : null;
+  return session ? `${url.origin}${session[1]}` : url.origin;
+}
+
+/**
+ * A POST that submits 3-D Secure details, and the checkout it belongs to.
+ * `relay` is Adyen's own `/sessions/{id}/paymentDetails`, called from the
+ * browser, so the relay can send it and read the final answer; a merchant's
+ * `/payments/details` is sent on by its server, out of the relay's sight.
+ */
+export function adyenDetailsCall(
+  method: string,
+  url: string,
+): { checkout: string; relay: boolean } | undefined {
+  if (method.toUpperCase() !== "POST") return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  const sessions = /\/sessions\/[^/]+\/paymentDetails$/.test(parsed.pathname);
+  if (!sessions && !/\/payments\/details$/.test(parsed.pathname)) {
+    return undefined;
+  }
+  return {
+    checkout: adyenCheckout(parsed),
+    relay: sessions && isAdyenCheckoutUrl(parsed.href),
+  };
+}
+
+const PSP_REFERENCE_SHAPE = /^[A-Za-z0-9]{1,64}$/;
+
+/**
+ * The top-level `resultCode` (and `pspReference`) of the answer to an Adyen
+ * payment, from the merchant's `/payments` or Adyen's
+ * `/sessions/{id}/payments`. Anything unreadable is `unknown`.
+ */
+export function adyenPaymentResult(body: string): {
+  resultCode: AdyenResultCode;
+  pspReference?: string;
+} {
+  const parsed = parseJson(body);
+  if (!isRecord(parsed)) return { resultCode: "unknown" };
+  const code = parsed.resultCode;
+  const resultCode =
+    ADYEN_RESULT_CODES.find((known) => known === code) ?? "unknown";
+  const psp = parsed.pspReference;
+  return typeof psp === "string" && PSP_REFERENCE_SHAPE.test(psp)
+    ? { resultCode, pspReference: psp }
+    : { resultCode };
 }
 
 function parseJson(body: string): unknown {
