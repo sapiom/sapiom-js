@@ -180,16 +180,17 @@ const BODY_TOKENS =
   /%(?:25)*[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\["\\/bfnrt]|[A-Za-z0-9_.-]+/g;
 
 /**
- * The compact JWEs in a body: runs of five non-empty base64url segments whose
- * first decodes to a JWE header naming `alg` and `enc`, so a five-label
- * hostname or a version string is never taken for a ciphertext.
+ * The compact JWEs in a body: runs of five base64url segments whose first
+ * decodes to a JWE header naming `alg` and `enc`, so a five-label hostname or
+ * a version string is never taken for a ciphertext. The other segments may be
+ * empty, as a direct-encryption key is.
  */
 export function compactJweTokens(body: string): string[] {
   return (body.match(BODY_TOKENS) ?? []).filter(isCompactJwe);
 }
 
 function isCompactJwe(token: string): boolean {
-  if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){4}$/.test(token)) return false;
+  if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){4}$/.test(token)) return false;
   const encoded = token.slice(0, token.indexOf("."));
   try {
     const header: unknown = JSON.parse(
@@ -296,9 +297,17 @@ export function bodyJweHashes(body: string): {
   return { raw, swappable };
 }
 
-/** A secured-field name given a value (even empty), as a JSON member or form field. */
-const SECURED_FIELD =
-  /encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)["']?\s*[:=]/i;
+const SECURED_FIELD_NAME =
+  "encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)";
+/**
+ * A secured-field name given a value (even empty): a JSON member, a form field
+ * (`paymentMethod[encryptedCardNumber]=`, `+` for a space too) or a multipart
+ * part (`name="encryptedCardNumber"`).
+ */
+const SECURED_FIELD = new RegExp(
+  `${SECURED_FIELD_NAME}["'\\]]?[\\s+]*[:=]|\\bname\\s*=\\s*["']?[^"'\\r\\n;]*${SECURED_FIELD_NAME}`,
+  "i",
+);
 
 /**
  * Whether a body is an Adyen secured-fields Pay, in any format: it carries a

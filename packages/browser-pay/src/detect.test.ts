@@ -215,6 +215,23 @@ describe("Adyen secured-fields payment bodies", () => {
       adyenPayCandidate('{"paymentMethod":{"encryptedCardNumber":""}}', []),
     ).toBe(true);
   });
+  it.each([
+    [
+      "a form value with + for spaces",
+      new URLSearchParams({ data: '{"encryptedCardNumber" : ""}' }).toString(),
+    ],
+    ["a bracketed form field", "paymentMethod%5BencryptedCardNumber%5D=x"],
+    [
+      "a multipart part",
+      '--b\r\nContent-Disposition: form-data; name="encryptedCardNumber"\r\n\r\nx\r\n--b--',
+    ],
+    [
+      "a bracketed multipart part",
+      "--b\r\nContent-Disposition: form-data; name=paymentMethod[encryptedSecurityCode]\r\n\r\n\r\n--b--",
+    ],
+  ])("recognises a secured field given a value in %s", (_, body) => {
+    expect(adyenPayCandidate(body, [])).toBe(true);
+  });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
     const value = encodeURIComponent(
       encodeURIComponent(JSON.stringify({ n: blob })),
@@ -318,6 +335,13 @@ describe("Adyen secured-fields payment bodies", () => {
         `https://checkout.shop.example.co.uk/complete 1.2.3.4.5 ${noEnc}.a.b.c.d e30.a.b.c.d`,
       ),
     ).toEqual([]);
+  });
+  it("takes a ciphertext with an empty encrypted key, as direct encryption has", () => {
+    const header = Buffer.from('{"alg":"dir","enc":"A256GCM"}').toString(
+      "base64url",
+    );
+    const direct = `${header}..aXY.Y2lwaGVy.dGFn`;
+    expect(compactJweTokens(`${blob} ${direct}`)).toEqual([blob, direct]);
   });
   it("never extracts a five-part substring from a longer or incomplete run", () => {
     expect(compactJweTokens(`${blob}.extra a.b.c.d a..b.c.d ${blob}`)).toEqual([
