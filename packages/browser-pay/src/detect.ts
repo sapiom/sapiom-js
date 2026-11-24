@@ -172,14 +172,19 @@ export function adyenClientKeysInRequest(
 }
 
 /**
- * The compact JWEs in a raw body: maximal runs of five non-empty base64url
- * segments whose first decodes to a JWE header naming `alg` and `enc`, so a
- * five-label hostname or a version string is never taken for a ciphertext.
+ * A raw body as runs of base64url-and-dot characters, with each percent or
+ * JSON escape a token of its own, so an escape's letters never join a run.
+ */
+const BODY_TOKENS =
+  /%[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\["\\/bfnrt]|[A-Za-z0-9_.-]+/g;
+
+/**
+ * The compact JWEs in a body: runs of five non-empty base64url segments whose
+ * first decodes to a JWE header naming `alg` and `enc`, so a five-label
+ * hostname or a version string is never taken for a ciphertext.
  */
 export function compactJweTokens(body: string): string[] {
-  return (body.match(/%[0-9a-fA-F]{2}|[A-Za-z0-9_.-]+/g) ?? []).filter(
-    isCompactJwe,
-  );
+  return (body.match(BODY_TOKENS) ?? []).filter(isCompactJwe);
 }
 
 function isCompactJwe(token: string): boolean {
@@ -200,61 +205,115 @@ function isCompactJwe(token: string): boolean {
   }
 }
 
+const JSON_ESCAPES: Record<string, string> = {
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
+const INSPECTION_PASSES = 32;
+
 /**
- * An inspection copy of a body: backslash, JSON `\uXXXX` and percent escapes
- * undone until stable, so nested or escaped field names and ciphertexts show.
- * Only for matching; the body that is relayed is never rewritten.
+ * An inspection copy of a body: JSON and percent escapes undone, layer by
+ * layer, so nested or escaped field names and ciphertexts show. `settled` is
+ * false when layers remain after the last pass. Only for matching; the body
+ * that is relayed is never rewritten.
  */
-function inspectionText(body: string): string {
+function inspectionText(body: string): { text: string; settled: boolean } {
   let text = body;
-  for (let pass = 0; pass < 8; pass++) {
-    const next = text
-      .replace(/\\\\/g, "\\")
-      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
-        String.fromCharCode(Number.parseInt(hex, 16)),
-      )
-      .replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
-        String.fromCharCode(Number.parseInt(hex, 16)),
-      );
-    if (next === text) break;
+  for (let pass = 0; pass < INSPECTION_PASSES; pass++) {
+    const next = text.replace(
+      /\\u([0-9a-fA-F]{4})|\\(["\\/bfnrt])|%([0-9a-fA-F]{2})/g,
+      (_, unicode?: string, escaped?: string, percent?: string) =>
+        escaped !== undefined
+          ? (JSON_ESCAPES[escaped] ?? escaped)
+          : String.fromCharCode(Number.parseInt(unicode ?? percent ?? "", 16)),
+    );
+    if (next === text) return { text, settled: true };
     text = next;
   }
-  return text;
+  return { text, settled: false };
 }
 
 const sha256Hex = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
 
-/**
- * The sha256 of each compact JWE in the raw body (`raw`), and of each one an
- * escape or encoding hides from a raw scan (`hidden`), even when another copy
- * of it is raw. A hidden copy can't be swapped byte for byte, so callers
- * refuse it.
- */
-export function bodyJweHashes(body: string): {
+function sameTokens(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((token, i) => token === right[i]);
+}
+
+interface BodyScan {
+  /** The sha256 of each compact JWE in the raw body. */
   raw: Set<string>;
-  hidden: Set<string>;
-} {
-  const tokens = new Set(compactJweTokens(body));
-  // Inspect what is left once every raw copy is gone, so a raw copy can never
-  // stand in for an escaped one.
-  let rest = body;
-  for (const token of tokens) rest = rest.split(token).join(" ");
+  /** The sha256 of each ciphertext the unescaped body shows. */
+  unescaped: Set<string>;
+  /** Whether a relay can swap every ciphertext in place, byte for byte. */
+  swappable: boolean;
+  /** The unescaped body, for matching field names. */
+  text: string;
+  settled: boolean;
+}
+
+function scanBody(body: string): BodyScan {
+  const raw = compactJweTokens(body);
+  const inspected = inspectionText(body);
+  const decoded = compactJweTokens(inspected.text);
+  // Unescape what is left once every raw ciphertext is gone, so a raw copy can
+  // never stand in for an escaped one.
+  const rest = inspectionText(
+    body.replace(BODY_TOKENS, (token) => (isCompactJwe(token) ? " " : token)),
+  );
+  const revealed = compactJweTokens(rest.text);
   return {
-    raw: new Set([...tokens].map(sha256Hex)),
-    hidden: new Set(compactJweTokens(inspectionText(rest)).map(sha256Hex)),
+    raw: new Set(raw.map(sha256Hex)),
+    unescaped: new Set([...decoded, ...revealed].map(sha256Hex)),
+    // Unescaping must leave each raw ciphertext whole and reveal no other.
+    swappable:
+      inspected.settled &&
+      rest.settled &&
+      revealed.length === 0 &&
+      sameTokens(decoded, raw),
+    text: inspected.text,
+    settled: inspected.settled && rest.settled,
   };
 }
 
-/** A known placeholder ciphertext, or a secured-field name in any body format. */
+/**
+ * The sha256 of each compact JWE in the raw body, and whether every one can
+ * be swapped byte for byte: no escape hides a ciphertext or changes where one
+ * ends. A body that isn't swappable is refused.
+ */
+export function bodyJweHashes(body: string): {
+  raw: Set<string>;
+  swappable: boolean;
+} {
+  const { raw, swappable } = scanBody(body);
+  return { raw, swappable };
+}
+
+const SECURED_FIELD_NAME =
+  /encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)/i;
+
+/**
+ * Whether a body is an Adyen secured-fields Pay, in any format: it carries a
+ * ciphertext the page's Adyen fields produced, or a ciphertext beside a
+ * secured-field name. A body too deeply encoded to read counts too, so it is
+ * refused rather than sent on.
+ */
 export function adyenPayCandidate(
   body: string,
   observedHashes: Iterable<string>,
 ): boolean {
-  if (/encryptedcardnumber/i.test(inspectionText(body))) return true;
+  const scan = scanBody(body);
+  if (!scan.settled) return true;
+  const ciphertexts = [...scan.raw, ...scan.unescaped];
   const seen = new Set(observedHashes);
-  const { raw, hidden } = bodyJweHashes(body);
-  return [...raw, ...hidden].some((hash) => seen.has(hash));
+  if (ciphertexts.some((hash) => seen.has(hash))) return true;
+  return ciphertexts.length > 0 && SECURED_FIELD_NAME.test(scan.text);
 }
 
 /**

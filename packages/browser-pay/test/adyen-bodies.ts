@@ -1,8 +1,20 @@
 /** Merchant formats inferred from checkout JavaScript; synthetic JWE values only. */
 export function adyenBodies(blobs: Record<string, string>) {
   const returnUrl = "https://checkout.shop.example.co.uk/complete";
+  // Shaped like Adyen Web stateData: a checkoutAttemptId (uuid, epoch ms,
+  // hex), a base64 riskData blob and a dotted userAgent version.
   const state = {
-    paymentMethod: { type: "scheme", brand: "mc", ...blobs },
+    riskData: { clientData: "eyJ2ZXJzaW9uIjoiMS4wLjAifQ==" },
+    paymentMethod: {
+      type: "scheme",
+      brand: "mc",
+      ...blobs,
+      checkoutAttemptId:
+        "0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e51795508000000a1b2c3d4e5f60718",
+    },
+    browserInfo: {
+      userAgent: "Mozilla/5.0 Chrome/131.0.6778.85 Safari/537.36",
+    },
     returnUrl,
   };
   const json = JSON.stringify(state);

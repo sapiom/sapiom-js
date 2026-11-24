@@ -195,9 +195,18 @@ describe("Adyen secured-fields payment bodies", () => {
     expect(JSON.stringify(JSON.stringify(blob))).toContain(blob);
   });
   it("recognises case-insensitive names through nested percent escapes", () => {
-    expect(adyenPayCandidate("%22%45ncryptedCardNumber%22", [])).toBe(true);
-    expect(adyenPayCandidate("%2545ncryptedCardNumber", [])).toBe(true);
+    expect(
+      adyenPayCandidate(`%22%45ncryptedCardNumber%22:%22${blob}%22`, []),
+    ).toBe(true);
+    expect(adyenPayCandidate(`%2545ncryptedSecurityCode=${blob}`, [])).toBe(
+      true,
+    );
     expect(adyenPayCandidate('{"number":"plain"}', [])).toBe(false);
+  });
+  it("needs a ciphertext beside a field name", () => {
+    expect(
+      adyenPayCandidate('{"error":"encryptedCardNumber is required"}', []),
+    ).toBe(false);
   });
   it("separates raw hashes from percent-encoded and JSON-escaped hashes", () => {
     const other =
@@ -210,7 +219,7 @@ describe("Adyen secured-fields payment bodies", () => {
     ]) {
       expect(bodyJweHashes(`${blob} ${encoded}`)).toEqual({
         raw: new Set([hash]),
-        hidden: new Set([otherHash]),
+        swappable: false,
       });
       expect(adyenPayCandidate(`opaque=${encoded}`, [otherHash])).toBe(true);
       expect(adyenPayCandidate(`opaque=${encoded}`, [])).toBe(false);
@@ -219,28 +228,71 @@ describe("Adyen secured-fields payment bodies", () => {
   it("deduplicates raw hashes", () => {
     expect(bodyJweHashes(`${blob} ${blob}`)).toEqual({
       raw: new Set([hash]),
-      hidden: new Set(),
-    });
-  });
-  it("reports an escaped copy as hidden even when the ciphertext is also raw", () => {
-    expect(
-      bodyJweHashes(`${blob} ${blob.replace(/\./g, "%2e")} ${blob}`),
-    ).toEqual({
-      raw: new Set([hash]),
-      hidden: new Set([hash]),
+      swappable: true,
     });
     expect(bodyJweHashes("a.b.c.d a..b.c.d")).toEqual({
       raw: new Set(),
-      hidden: new Set(),
+      swappable: true,
     });
   });
-  it("reports an escaped copy as hidden when another run consumes a raw copy", () => {
-    expect(
-      bodyJweHashes(`${blob} ${blob}%2Eextra ${blob.replace(/\./g, "%2E")}`),
-    ).toEqual({
+  it.each([
+    ["beside a raw copy", `${blob} ${blob.replace(/\./g, "%2e")} ${blob}`],
+    [
+      "when another run consumes a raw copy",
+      `${blob} ${blob}%2Eextra ${blob.replace(/\./g, "%2E")}`,
+    ],
+  ])("refuses an escaped copy %s", (_, body) => {
+    expect(bodyJweHashes(body)).toEqual({
       raw: new Set([hash]),
-      hidden: new Set([hash]),
+      swappable: false,
     });
+  });
+  it.each([
+    ["a JSON escape", `"${blob}\\u0041\\u0041"`],
+    ["a percent escape", `${blob}%41%41`],
+    ["an encoded dot", `${blob}%2Ex`],
+  ])("refuses a raw ciphertext that %s extends", (_, body) => {
+    expect(bodyJweHashes(body)).toEqual({
+      raw: new Set([hash]),
+      swappable: false,
+    });
+  });
+  it.each([
+    ["a newline", `"\\n${blob}"`],
+    ["an escaped space", `"\\u0020${blob}"`],
+    ["an escaped quote", `"{\\"n\\":\\"${blob}\\"}"`],
+  ])("keeps a ciphertext after %s raw and swappable", (_, body) => {
+    expect(bodyJweHashes(body)).toEqual({
+      raw: new Set([hash]),
+      swappable: true,
+    });
+  });
+  it("keeps ciphertexts raw between any delimiters", () => {
+    for (const delimiter of [
+      "+",
+      "%20",
+      "%2B",
+      "\\",
+      "\\x",
+      "é",
+      "&",
+      "\r\n",
+    ]) {
+      expect(bodyJweHashes([blob, blob].join(delimiter))).toEqual({
+        raw: new Set([hash]),
+        swappable: true,
+      });
+    }
+  });
+  it("unescapes deeply nested percent encodings, and refuses past the limit", () => {
+    const encode = (layers: number) => {
+      let text = blob.replace(/\./g, "%2e");
+      for (let i = 1; i < layers; i++) text = text.replace(/%/g, "%25");
+      return text;
+    };
+    expect(adyenPayCandidate(`data=${encode(9)}`, [hash])).toBe(true);
+    expect(bodyJweHashes(`data=${encode(9)}`).swappable).toBe(false);
+    expect(adyenPayCandidate(`data=${encode(40)}`, [])).toBe(true);
   });
   it("takes only runs whose first segment is a JWE header for ciphertexts", () => {
     const noEnc = Buffer.from('{"alg":"RSA-OAEP"}').toString("base64url");

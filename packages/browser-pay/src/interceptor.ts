@@ -1115,11 +1115,11 @@ class PaymentInterceptor {
         const blobs = placeholderBlobHashes(this.adyenBlobHashes);
         // The body's ciphertexts must be exactly the four observed ones, each
         // in raw bytes the relay can swap without re-encoding the body.
-        const { raw, hidden } = bodyJweHashes(read.body);
+        const { raw, swappable } = bodyJweHashes(read.body);
         const observed = "missing" in blobs ? [] : Object.values(blobs.hashes);
         if (
           "missing" in blobs ||
-          hidden.size > 0 ||
+          !swappable ||
           raw.size !== observed.length ||
           observed.some((hash) => !raw.has(hash))
         ) {
