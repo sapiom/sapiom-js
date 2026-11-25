@@ -188,6 +188,10 @@ function chromeArgs(userDataDir: string): string[] {
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // Keep Chrome out of the macOS keychain ("Chrome Safe Storage" prompt),
+    // as Playwright's own launch does.
+    "--use-mock-keychain",
+    "--password-store=basic",
     "about:blank",
   ];
 }
