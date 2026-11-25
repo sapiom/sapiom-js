@@ -443,6 +443,7 @@ describe("interceptor on Adyen secured-fields checkouts", () => {
       profileId: "adyen-checkout",
       adyen: { clientKey: CLIENT_KEY, placeholderBlobHashes: HASHES },
       pageOrigin: PAGE_ORIGIN,
+      pageUrl: `${PAGE_ORIGIN}/checkout`,
       request: {
         method: "POST",
         url: ADVANCED.url,
