@@ -1065,10 +1065,13 @@ class PaymentInterceptor {
       method: request.method,
       targetType,
     });
+    // Resolved once, so pageUrl comes from the page that gave pageOrigin.
+    const pageSessionId = topPageSession(this.sessions, entry.sessionId);
     const pageOrigin = await readPageOrigin(
       this.connection,
       this.sessions,
       entry.sessionId,
+      pageSessionId,
     );
     if (!pageOrigin || this.closed) {
       return {
@@ -1076,13 +1079,15 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
-    const pageUrl = await readPageUrl(
-      this.connection,
-      this.sessions,
-      entry.sessionId,
-      pageOrigin,
-      this.number,
-    );
+    const pageUrl = pageSessionId
+      ? await readPageUrl(
+          this.connection,
+          this.sessions,
+          pageSessionId,
+          pageOrigin,
+          this.number,
+        )
+      : undefined;
     if (this.closed) return { action: "fail", reason: "detached" };
     const idempotencyKey = paymentIdempotencyKey(
       request.method,
@@ -1891,8 +1896,8 @@ async function readPageOrigin(
   connection: CdpConnection,
   sessions: Map<string, Session>,
   sessionId: string,
+  pageSessionId: string | undefined,
 ): Promise<string | undefined> {
-  const pageSessionId = topPageSession(sessions, sessionId);
   if (pageSessionId) {
     const fromPage = await originFromSession(
       connection,
@@ -1918,19 +1923,18 @@ async function readPageOrigin(
 }
 
 /**
- * The top-level page's origin and path, read like its origin. A frame's
- * `location.ancestorOrigins` has no path, so with no top page this is
- * `undefined` and the relay request leaves `pageUrl` out.
+ * The top-level page's origin and path, read from the page session that gave
+ * `pageOrigin`. A frame's `location.ancestorOrigins` has no path, so with no
+ * top page the caller leaves `pageUrl` out; so does a page that detached.
  */
 async function readPageUrl(
   connection: CdpConnection,
   sessions: Map<string, Session>,
-  sessionId: string,
+  pageSessionId: string,
   pageOrigin: string,
   heldNumber: string,
 ): Promise<string | undefined> {
-  const pageSessionId = topPageSession(sessions, sessionId);
-  if (!pageSessionId) return undefined;
+  if (!sessions.has(pageSessionId)) return undefined;
   const evaluated = await connection
     .send(
       "Runtime.evaluate",

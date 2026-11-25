@@ -15,7 +15,7 @@ const PAGE_URL_EXPRESSION = "location.origin + location.pathname";
 const ANCESTOR_EXPRESSION =
   "location.ancestorOrigins[location.ancestorOrigins.length - 1]";
 
-type Evaluate = (expression: string) => unknown;
+type Evaluate = (expression: string, sessionId?: string) => unknown;
 
 function evaluated(value: string) {
   return { result: { type: "string", value } };
@@ -38,14 +38,19 @@ describe("relay request pageUrl", () => {
    */
   async function relayRequestFor(
     evaluate: Evaluate,
-    targets: { sessionId: string; type: string; url: string }[],
+    targets: {
+      sessionId: string;
+      type: string;
+      url: string;
+      parent?: string;
+    }[],
     pausedIn: string,
   ): Promise<RelayRequest> {
     const calls: RelayRequest[] = [];
     stub = await startCdpStub((command: CdpCommand) => {
       if (command.method === "Target.getTargets") return { targetInfos: [] };
       if (command.method === "Runtime.evaluate") {
-        return evaluate(command.params.expression as string);
+        return evaluate(command.params.expression as string, command.sessionId);
       }
       return undefined;
     });
@@ -61,6 +66,7 @@ describe("relay request pageUrl", () => {
     for (const target of targets) {
       stub.emit({
         method: "Target.attachedToTarget",
+        ...(target.parent ? { sessionId: target.parent } : {}),
         params: {
           sessionId: target.sessionId,
           waitingForDebugger: true,
@@ -162,6 +168,45 @@ describe("relay request pageUrl", () => {
       },
       page(`${PAGE_ORIGIN}/`),
       "page-1",
+    );
+    expect(request.pageOrigin).toBe(PAGE_ORIGIN);
+    expect("pageUrl" in request).toBe(false);
+  });
+
+  it("leaves pageUrl out when the page that gave pageOrigin detaches, never reading another page", async () => {
+    const request = await relayRequestFor(
+      (expression, sessionId) => {
+        if (expression === ORIGIN_EXPRESSION && sessionId === "page-1") {
+          stub!.emit({
+            method: "Target.detachedFromTarget",
+            params: { sessionId: "page-1" },
+          });
+          return evaluated(PAGE_ORIGIN);
+        }
+        if (expression === PAGE_URL_EXPRESSION) {
+          return evaluated(`${PAGE_ORIGIN}/checkouts/cn/tok_other/en-us`);
+        }
+        return undefined;
+      },
+      [
+        {
+          sessionId: "page-1",
+          type: "page",
+          url: `${PAGE_ORIGIN}${CHECKOUT_PATH}`,
+        },
+        {
+          sessionId: "frame-1",
+          type: "iframe",
+          url: "https://checkout.pci.example/frame",
+          parent: "page-1",
+        },
+        {
+          sessionId: "page-2",
+          type: "page",
+          url: `${PAGE_ORIGIN}/checkouts/cn/tok_other/en-us`,
+        },
+      ],
+      "frame-1",
     );
     expect(request.pageOrigin).toBe(PAGE_ORIGIN);
     expect("pageUrl" in request).toBe(false);
