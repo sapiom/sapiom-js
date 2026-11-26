@@ -70,6 +70,7 @@ After a payment the relay answered `RedirectShopper`, `IdentifyShopper` or `Chal
   "injectionRef": "550e8400-e29b-41d4-a716-446655440000",
   "profileId": "shopify-card-vault",
   "pageOrigin": "https://shop.example",
+  "pageUrl": "https://shop.example/checkouts/cn/<token>/en-us",
   "request": {
     "method": "POST",
     "url": "https://checkout.pci.shopifyinc.com/sessions",
@@ -80,7 +81,7 @@ After a payment the relay answered `RedirectShopper`, `IdentifyShopper` or `Chal
 }
 ```
 
-`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set, or as `adyen-checkout` for an Adyen secured-fields payment, which also carries `"adyen": { "clientKey": "test_…", "placeholderBlobHashes": { "encryptedCardNumber": "<sha256 hex>", … } }` and no placeholder in its body; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, and the browser's `sec-fetch-*` and `sec-ch-*` hints. That includes `Cookie`, `Authorization`, and any other credential the checkout sends with its payment request, since the relay has to send the same request on; the relay records their names, never their values. The relay takes at most 32 headers, each name at most 128 characters and each value at most 8192. For generic requests, a `Cookie` value over 8192 characters first loses pairs whose names are exactly `_ga`, `_gid`, `_gat`, `_fbp`, `_fbc`, `_ttp`, `_clck`, or `_clsk`, or start with `_ga_`, `_gat_`, `_gcl_`, `_hj`, `_uet`, `ajs_`, `amplitude`, `amp_`, `mp_`, `_tt_`, or `_pin_`. Empty pairs are dropped on this trim path; an empty result omits `Cookie`. Fitting cookies stay unchanged. If the remaining cookie still exceeds the value limit (even from a single non-analytics cookie), or would exceed the header count, the whole `Cookie` header is omitted and payment still relays. When a paused request has any other header past those limits, it fails with `headers_unrelayable` and nothing is relayed: a request missing a header (a CSRF token, an authorization) could be refused after the card was sent. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
+`injectionRef` is a UUID. `profileId` is sent only when `AttachOptions.profileId` is set, or as `adyen-checkout` for an Adyen secured-fields payment, which also carries `"adyen": { "clientKey": "test_…", "placeholderBlobHashes": { "encryptedCardNumber": "<sha256 hex>", … } }` and no placeholder in its body; without it the relay sends the request to its own URL when that is https to a public host, and finds the card fields in a JSON or form body by the placeholder's values. `pageOrigin` is the top-level page origin. `pageUrl` is the top-level page's origin and path (`location.origin + location.pathname`), read from the top page, or from its target URL when that read fails; its query and fragment are never sent. It is left out when there is no top page to read (a frame's `location.ancestorOrigins` has no path), when it isn't on `pageOrigin`, or when it holds the placeholder. For a Shopify UCP purchase the relay compares the page's `/checkouts/cn/<token>` with the purchase's checkout and refuses `checkout_mismatch` when they differ; without `pageUrl` it sends as before. `headers` is a lowercased string map. With a profile this client sends only `accept`, `content-type`, and `shopify-identification-signature`. Without one it sends every header except the connection's, `host`, `content-length`, and the browser's `sec-fetch-*` and `sec-ch-*` hints. That includes `Cookie`, `Authorization`, and any other credential the checkout sends with its payment request, since the relay has to send the same request on; the relay records their names, never their values. The relay takes at most 32 headers, each name at most 128 characters and each value at most 8192. For generic requests, a `Cookie` value over 8192 characters first loses pairs whose names are exactly `_ga`, `_gid`, `_gat`, `_fbp`, `_fbc`, `_ttp`, `_clck`, or `_clsk`, or start with `_ga_`, `_gat_`, `_gcl_`, `_hj`, `_uet`, `ajs_`, `amplitude`, `amp_`, `mp_`, `_tt_`, or `_pin_`. Empty pairs are dropped on this trim path; an empty result omits `Cookie`. Fitting cookies stay unchanged. If the remaining cookie still exceeds the value limit (even from a single non-analytics cookie), or would exceed the header count, the whole `Cookie` header is omitted and payment still relays. When a paused request has any other header past those limits, it fails with `headers_unrelayable` and nothing is relayed: a request missing a header (a CSRF token, an authorization) could be refused after the card was sent. `idempotencyKey` is sha256 of method, URL, and body, separated by NUL. It is not sent as a header. Shopify's card iframe retries share one key. Do not log or persist `request.headers` or `request.body`.
 
 Success:
 
@@ -98,14 +99,15 @@ Success:
 
 `response.body` is the string the page should read. `response.headers` is a string map. Hop-by-hop headers are dropped because CDP sends the body bytes itself. `response.setCookies` is optional: the merchant's raw `Set-Cookie` values, one per entry and never comma-joined. Each becomes its own `Set-Cookie` header on the fulfilled response, with or without a profile, so the browser stores the cookies and sends them on its next request. If `response.headers` also contains `set-cookie`, both entries are emitted; `setCookies` is applied last, so it wins in the cookie jar. A relay response whose `setCookies` is not an array of strings is rejected like any other malformed response. Browser Pay never logs cookie values. End to end this works only when the Sapiom relay backend and Basis Theory return the merchant's `Set-Cookie` values in `setCookies`; until then the field is absent and nothing changes.
 
-Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay may omit either field.
+Refusal, nothing forwarded. `retryable`, `requestId` and `message` are optional. A relay may omit any of them. `message` is the agent's next step in plain text; it never names the request, the card or the page.
 
 ```json
 {
   "outcome": "refused",
-  "reason": "already_relayed",
+  "reason": "checkout_mismatch",
   "retryable": false,
-  "requestId": "req_example"
+  "requestId": "req_example",
+  "message": "Cancel this purchase and create a new one."
 }
 ```
 
@@ -130,12 +132,15 @@ Refusal, nothing forwarded. `retryable` and `requestId` are optional. A relay ma
 - `sapiom_error`
 - `relaying_under_other_key`
 - `stale_generation`
+- `checkout_mismatch`
 
 ### Refusal event
 
-On the `refused` event, a reason passes through when it matches `/^[a-z]+(_[a-z]+)*$/` and is at most 48 characters. The SDK replaces every other reason with `unrecognized`. `httpPaymentRelay().relay()` still returns the reason and `requestId` the relay sent, after it drops a non-boolean `retryable`, a `requestId` that is empty or not a string, and any other key.
+On the `refused` event, a reason passes through when it matches `/^[a-z]+(_[a-z]+)*$/` and is at most 48 characters. The SDK replaces every other reason with `unrecognized`. `httpPaymentRelay().relay()` still returns the reason, `requestId` and `message` the relay sent, after it drops a non-boolean `retryable`, a `requestId` or `message` that is empty or not a string, and any other key.
 
 If you do not handle a reason, stop and read the purchase.
+
+On the event, `message` is present when the relay sent one and it holds neither the placeholder nor a run of 13 or more digits. It is not logged.
 
 `retryable` is optional. If it is missing, the relay did not say whether to try again. The SDK does not invent `retryable` and does not retry on it. Only `relay_in_progress` keeps the pause. The paused request stays open and the same idempotency key is posted again until the outcome is terminal or the deadline passes.
 
@@ -180,6 +185,8 @@ const handle = await attachInterceptor(cdpUrl, {
 });
 ```
 
+On `checkout_mismatch` the card was paid from a checkout page other than the purchase's, and nothing was sent. Do not retry the payment on that page. Cancel the purchase, and create a new one under a new idempotency key only if the cancel result's `nextAction` says to. If the cancel times out, reports `change_unconfirmed`, leaves the checkout open or its `nextAction` is for a person (`actor: human`), stop: do not repeat the cancel, create another purchase or pay, and tell the user the outcome is unconfirmed. A person resolves it with the merchant, keeping the cancel request and its idempotency key. At a password-protected store, Shopify sends a browser without the store's password cookie to `/password`, and reopening `continueUrl` then opens a new, empty checkout. Enter the store password before opening the new purchase's `continueUrl`.
+
 The relay records every request it is asked to send (host, path, header names, the body's shape and where the card fields were, never a value). It refuses `destination_not_allowed` for a URL that isn't https to a public host or a method other than POST, and `card_fields_invalid` when the placeholder's number isn't in the body exactly once, a card field can't be told apart from another holding the same value, or a card number shows up in the URL or headers. A form that encrypts card fields in the page never shows the placeholder, so it can't be relayed this way; Adyen secured fields use the `adyen-checkout` profile instead (see above). A provider may decline a card sent from the card vault's servers rather than the user's browser.
 
 `baseUrl` must be https, or plain http to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). Any other `http://` URL makes `httpPaymentRelay` throw a `CredentialChannelError` before a request is sent. On a trusted private network, set `SAPIOM_ALLOW_INSECURE_HTTP=1`. Redirects from the relay are always refused.
@@ -192,7 +199,7 @@ A request is relayed when the held placeholder number appears in the URL or body
 
 A relayed response fails the paused request only when that response contains the held placeholder number.
 
-Identical in-flight retries (same method, URL, and body) share one relay poll, including the backoff. `AttachOptions.timeoutMs` is the total deadline. It defaults to 55 seconds: two 25 second attempts plus backoff, so a first attempt cut near the router limit can still be read back by a second POST. `AttachOptions.attemptTimeoutMs` is one POST. It defaults to 25 seconds so the client aborts before a router cuts the socket at 30 seconds. While the relay answers `relay_in_progress`, or an attempt times out, or the transport fails, or the router returns 502, 503, or 504, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. A relay that ignores abort still fails when the deadline passes. One waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. `outcome: "unknown"` is not sent again. HTTP 502, 503, and 504 retries are how `httpPaymentRelay` classifies a failure. A custom relay is retried when the attempt abort rejects its promise.
+Identical in-flight retries (same method, URL, and body) share one relay poll, including the backoff. This holds across tabs: one placeholder pays once, so a second tab sending the same request gets the first tab's outcome, and the relay sees only the first tab's `pageUrl`. `AttachOptions.timeoutMs` is the total deadline. It defaults to 55 seconds: two 25 second attempts plus backoff, so a first attempt cut near the router limit can still be read back by a second POST. `AttachOptions.attemptTimeoutMs` is one POST. It defaults to 25 seconds so the client aborts before a router cuts the socket at 30 seconds. While the relay answers `relay_in_progress`, or an attempt times out, or the transport fails, or the router returns 502, 503, or 504, the same key is posted again after a bounded backoff. At the deadline the paused request fails with `timeout`. A relay that ignores abort still fails when the deadline passes. One waiter's timeout does not abort a later waiter of the same flight. A terminal refusal is logged once. `outcome: "unknown"` is not sent again. HTTP 502, 503, and 504 retries are how `httpPaymentRelay` classifies a failure. A custom relay is retried when the attempt abort rejects its promise.
 
 Captcha widgets, extension pages, and workers are not paused. A blank iframe, including `about:blank`, stays paused so a navigation onto the card URL cannot slip through. A placeholder that shows up on any other page or iframe is relayed.
 

@@ -103,7 +103,9 @@ function startServer(
     const pathOnly = (req.url ?? "").split("?")[0];
     if (
       req.method === "GET" &&
-      (pathOnly === "/" || pathOnly === "/frame.html")
+      (pathOnly === "/" ||
+        pathOnly === "/frame.html" ||
+        pathOnly.startsWith("/checkouts/"))
     ) {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(html);
@@ -186,6 +188,10 @@ function chromeArgs(userDataDir: string): string[] {
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // Keep Chrome out of the macOS keychain ("Chrome Safe Storage" prompt),
+    // as Playwright's own launch does.
+    "--use-mock-keychain",
+    "--password-store=basic",
     "about:blank",
   ];
 }
@@ -326,6 +332,7 @@ if (!chromeBin) {
       relay: PaymentRelay,
       bodies: { ping: string; other?: string; mismatch?: string; card: string },
       timeoutMs = 5_000,
+      pagePath = "/",
     ) {
       const events: InterceptorEvent[] = [];
       const calls: RelayRequest[] = [];
@@ -349,7 +356,7 @@ if (!chromeBin) {
         const context = browser.contexts()[0];
         page = context.pages()[0] ?? (await context.newPage());
         const merchantOrigin = `http://localhost:${merchant.port}`;
-        await page.goto(`${merchantOrigin}/`, {
+        await page.goto(`${merchantOrigin}${pagePath}`, {
           waitUntil: "domcontentloaded",
         });
         // The driver's Playwright session is a second CDP client on this browser.
@@ -439,6 +446,7 @@ if (!chromeBin) {
       expect(calls[0].request.body).toBe(MISMATCH);
       expect(calls[0].idempotencyKey).not.toBe(calls[1].idempotencyKey);
       expect(calls[1].pageOrigin).not.toContain(String(card.port));
+      expect(calls[1].pageUrl).toBe(`${merchantOrigin}/`);
       expect(calls[0].request.headers["content-type"]).toBe("application/json");
       expect(events.filter((event) => event.type === "paused")).toEqual([
         expect.objectContaining({ type: "paused", targetType: "iframe" }),
@@ -466,6 +474,37 @@ if (!chromeBin) {
         expect.objectContaining({ status: 201 }),
       ]);
       expect(JSON.stringify(events)).not.toContain(PLACEHOLDER.number);
+    }, 60_000);
+
+    it("sends the top page's origin and path as pageUrl when the card iframe pays", async () => {
+      const message = "Cancel this purchase and create a new one.";
+      const { events, calls, merchantOrigin } = await drive(
+        stubPaymentRelay(async () => ({
+          outcome: "refused",
+          reason: "checkout_mismatch",
+          retryable: false,
+          message,
+        })),
+        { ping: PING, other: PING, mismatch: PING, card: CARD },
+        5_000,
+        "/checkouts/cn/tok_test/en-us?key=key_test#step",
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].pageOrigin).toBe(merchantOrigin);
+      expect(calls[0].pageUrl).toBe(
+        `${merchantOrigin}/checkouts/cn/tok_test/en-us`,
+      );
+      expect(new URL(calls[0].request.url).port).toBe(String(card.port));
+      expect(events.filter((event) => event.type === "paused")).toEqual([
+        expect.objectContaining({ targetType: "iframe" }),
+      ]);
+      expect(events.find((event) => event.type === "refused")).toEqual({
+        type: "refused",
+        url: `http://127.0.0.1:${card.port}`,
+        reason: "checkout_mismatch",
+        retryable: false,
+        message,
+      });
     }, 60_000);
 
     it("fails a refused placeholder request and never delivers it", async () => {

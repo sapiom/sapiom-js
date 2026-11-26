@@ -836,6 +836,33 @@ describe("interceptor event redaction", () => {
     assertNoMarkers(warnings);
   });
 
+  it("puts a refusal's message on the event unless it holds the placeholder or a long digit run", async () => {
+    const message = "Cancel this purchase and create a new one.";
+    const { events, warnings } = await captureRefusals([
+      { outcome: "refused", reason: "checkout_mismatch", message },
+      {
+        outcome: "refused",
+        reason: "checkout_mismatch",
+        message: `pay with 4242 4242 4242 4242`,
+      },
+      {
+        outcome: "refused",
+        reason: "checkout_mismatch",
+        message: "order 1234567890123",
+      },
+    ]);
+    expect(refusedEvents(events)).toStrictEqual([
+      { type: "refused", url: ORIGIN, reason: "checkout_mismatch", message },
+      { type: "refused", url: ORIGIN, reason: "checkout_mismatch" },
+      { type: "refused", url: ORIGIN, reason: "checkout_mismatch" },
+    ]);
+    expect(warnings.map((warning) => warning.fields)).toStrictEqual([
+      { reason: "checkout_mismatch" },
+      { reason: "checkout_mismatch" },
+      { reason: "checkout_mismatch" },
+    ]);
+  });
+
   it("lists known refusal reasons in the README in array order", () => {
     const readme = readFileSync(
       path.join(__dirname, "..", "README.md"),

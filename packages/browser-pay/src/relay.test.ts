@@ -264,6 +264,71 @@ describe("httpPaymentRelay", () => {
     }
   });
 
+  it("keeps a refusal's non-empty string message and drops any other message", async () => {
+    const message = "Cancel this purchase and create a new one.";
+    const cases = [
+      {
+        sent: { outcome: "refused", reason: "checkout_mismatch", message },
+        seen: { outcome: "refused", reason: "checkout_mismatch", message },
+      },
+      {
+        sent: { outcome: "refused", reason: "checkout_mismatch", message: "" },
+        seen: { outcome: "refused", reason: "checkout_mismatch" },
+      },
+      {
+        sent: { outcome: "refused", reason: "checkout_mismatch", message: 42 },
+        seen: { outcome: "refused", reason: "checkout_mismatch" },
+      },
+    ];
+    let index = 0;
+    const server = await listen((_req, res) => {
+      const payload = cases[index];
+      index += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(payload?.sent));
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      for (const entry of cases) {
+        await expect(relay.relay(REQUEST)).resolves.toStrictEqual(entry.seen);
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("POSTs pageUrl in the relay body when the request carries one", async () => {
+    let received: unknown;
+    const server = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ outcome: "unknown" }));
+      });
+    });
+    try {
+      const relay = httpPaymentRelay({
+        baseUrl: origin(server),
+        apiKey: "test-key",
+        transactionId: "tx_fixture_shopify",
+      });
+      const pageUrl = "https://shop.example/checkouts/cn/tok_test/en-us";
+      await relay.relay({ ...REQUEST, pageUrl });
+      expect(received).toMatchObject({
+        pageOrigin: "https://shop.example",
+        pageUrl,
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it("keeps a setCookies string array and rejects any other setCookies type", async () => {
     const withCookies = {
       outcome: "relayed",

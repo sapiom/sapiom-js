@@ -110,6 +110,7 @@ export const KNOWN_REFUSAL_REASONS = [
   "sapiom_error",
   "relaying_under_other_key",
   "stale_generation",
+  "checkout_mismatch",
 ] as const;
 
 export type KnownRefusalReason = (typeof KNOWN_REFUSAL_REASONS)[number];
@@ -148,6 +149,12 @@ export type InterceptorEvent =
       retryable?: boolean;
       /** Present only when the id passes the redaction checks. Not logged. */
       requestId?: string;
+      /**
+       * The relay's next step for the agent, for example to cancel and start a
+       * new purchase. Missing when the relay sent none, or when it holds the
+       * placeholder or a run of 13 or more digits. Not logged.
+       */
+      message?: string;
     }
   | { type: "failed"; url: string; reason: FailureReason };
 
@@ -223,6 +230,16 @@ function publicRequestId(id: unknown, heldNumber: string): string | undefined {
   return id;
 }
 
+function publicMessage(
+  message: unknown,
+  heldNumber: string,
+): string | undefined {
+  if (typeof message !== "string" || message.length === 0) return undefined;
+  if (textHoldsPlaceholderNumber(message, heldNumber)) return undefined;
+  if (RAW_PAN_RUN.test(message)) return undefined;
+  return message;
+}
+
 function publicRefusal(
   refusal: Extract<RelayResponse, { outcome: "refused" }>,
   heldNumber: string,
@@ -230,10 +247,12 @@ function publicRefusal(
   const reason = refusal.reason;
   const retryable = refusal.retryable;
   const requestId = publicRequestId(refusal.requestId, heldNumber);
+  const message = publicMessage(refusal.message, heldNumber);
   return {
     reason: publicReason(typeof reason === "string" ? reason : ""),
     ...(typeof retryable === "boolean" ? { retryable } : {}),
     ...(requestId !== undefined ? { requestId } : {}),
+    ...(message !== undefined ? { message } : {}),
   };
 }
 
@@ -1052,10 +1071,13 @@ class PaymentInterceptor {
       method: request.method,
       targetType,
     });
+    // Resolved once, so pageUrl comes from the page that gave pageOrigin.
+    const pageSessionId = topPageSession(this.sessions, entry.sessionId);
     const pageOrigin = await readPageOrigin(
       this.connection,
       this.sessions,
       entry.sessionId,
+      pageSessionId,
     );
     if (!pageOrigin || this.closed) {
       return {
@@ -1063,6 +1085,16 @@ class PaymentInterceptor {
         reason: pageOrigin ? "detached" : "page_origin",
       };
     }
+    const pageUrl = pageSessionId
+      ? await readPageUrl(
+          this.connection,
+          this.sessions,
+          pageSessionId,
+          pageOrigin,
+          this.number,
+        )
+      : undefined;
+    if (this.closed) return { action: "fail", reason: "detached" };
     const idempotencyKey = paymentIdempotencyKey(
       request.method,
       request.url,
@@ -1166,6 +1198,7 @@ class PaymentInterceptor {
       injectionRef: this.options.placeholder.injectionRef,
       ...route,
       pageOrigin,
+      ...(pageUrl !== undefined ? { pageUrl } : {}),
       request: {
         method: request.method,
         url: request.url,
@@ -1878,8 +1911,8 @@ async function readPageOrigin(
   connection: CdpConnection,
   sessions: Map<string, Session>,
   sessionId: string,
+  pageSessionId: string | undefined,
 ): Promise<string | undefined> {
-  const pageSessionId = topPageSession(sessions, sessionId);
   if (pageSessionId) {
     const fromPage = await originFromSession(
       connection,
@@ -1902,6 +1935,50 @@ async function readPageOrigin(
   const value = evaluatedString(ancestors);
   if (value && /^https?:\/\//.test(value)) return value;
   return undefined;
+}
+
+/**
+ * The top-level page's origin and path, read from the page session that gave
+ * `pageOrigin`. A frame's `location.ancestorOrigins` has no path, so with no
+ * top page the caller leaves `pageUrl` out; so does a page that detached.
+ */
+async function readPageUrl(
+  connection: CdpConnection,
+  sessions: Map<string, Session>,
+  pageSessionId: string,
+  pageOrigin: string,
+  heldNumber: string,
+): Promise<string | undefined> {
+  if (!sessions.has(pageSessionId)) return undefined;
+  const evaluated = await connection
+    .send(
+      "Runtime.evaluate",
+      {
+        expression: "location.origin + location.pathname",
+        returnByValue: true,
+      },
+      pageSessionId,
+    )
+    .catch(() => null);
+  const url =
+    originAndPath(evaluatedString(evaluated)) ??
+    originAndPath(sessions.get(pageSessionId)?.url);
+  if (!url || !isPageOrigin(url, pageOrigin)) return undefined;
+  return textHoldsPlaceholderNumber(url, heldNumber) ? undefined : url;
+}
+
+/** `origin + pathname` of an http(s) URL; query, fragment and userinfo dropped. */
+function originAndPath(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return undefined;
+    }
+    return url.origin + url.pathname;
+  } catch {
+    return undefined;
+  }
 }
 
 async function originFromSession(

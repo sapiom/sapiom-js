@@ -1,5 +1,19 @@
 # @sapiom/browser-pay
 
+## 0.8.0
+
+### Minor Changes
+
+- c83793d: Adyen Pay now carries `adyen.placeholderBlobHashes` (SAP-5180): the sha256 hex of the four `encrypted*` blobs the page's secured-field iframes posted, observed passively in the page and never kept or logged as blobs. A Pay with any of the four unobserved fails locally with the new `adyen_placeholder_unobserved` reason and the relay is not asked. The interceptor now enables the `Page` and `Runtime` domains on armed targets.
+- c83793d: Pay Adyen secured-fields checkouts through the payment relay (SAP-5180). The interceptor pauses an outgoing Adyen payment (`paymentMethod.encryptedCardNumber`, on the merchant's `/payments` call or Adyen's `/sessions/{id}/payments`) and relays it verbatim with `profileId: "adyen-checkout"` and `adyen: { clientKey }` (new optional `RelayRequest.adyen`). The relay encrypts the real card in place of the page's placeholder ciphertext and its response fulfils the page's request; a refusal fails it, so the placeholder's ciphertext is never sent on. `fillCard` types the placeholder into Adyen secured fields as on any other form.
+- c83793d: Require an Adyen iframe or network signal from the same attach before relaying encrypted card payments (SAP-5180). Without one, fail locally with `unsupported_encrypted_checkout` without asking the relay. Confirmed Adyen checkouts keep the existing client-key and placeholder-hash checks; plain card requests are unchanged.
+
+### Patch Changes
+
+- f5a1932: Follow an Adyen payment through 3-D Secure (SAP-5281). When the relay answers a payment with `RedirectShopper`, `IdentifyShopper` or `ChallengeShopper`, the page's next details call from the same tab and checkout is watched: Adyen's own `/sessions/{id}/paymentDetails` is relayed as `adyen-checkout` with the same client key, so the relay records the final answer; a merchant's own `/payments/details` goes on unchanged with `interceptResponse`, and only its final code is reported once through the new optional `PaymentRelay.adyenResult` (`POST /v1/transactions/{id}/payment/adyen/result`) and emitted as `adyen_result`. Challenges are counted, so one payment's final answer never clears another's. The SDK never drives the challenge.
+- c83793d: Take the Adyen client key only from the browser's own https requests to Adyen's checkoutshopper hosts (SAP-5180). A key the page puts in its DOM is never used; no key, or two different keys, fails the payment closed with `adyen_client_key`.
+- f126ec4: Send the paying page's URL with the card relay (SAP-5356). The relay request carries an optional `pageUrl`, the top-level page's origin and path without query or fragment, so the relay can refuse a payment from a Shopify checkout other than the purchase's with `checkout_mismatch`. `pageUrl` is left out when only the frame's `ancestorOrigins` names the page, when it is off `pageOrigin`, or when it holds the placeholder. A refusal's `message` is kept and put on the `refused` event. Release only after the relay backend accepts `pageUrl` (sapiom/Sapiom#7106); an older backend answers 400.
+
 ## 0.7.0
 
 ### Minor Changes

@@ -15,6 +15,13 @@ export interface RelayRequest {
   /** Omitted when the request matched no relay profile; the relay then sends it to its own URL. */
   profileId?: string;
   pageOrigin: string;
+  /**
+   * The top-level page's origin and path (`location.origin + location.pathname`),
+   * never its query or fragment. Omitted when it can't be read, isn't on
+   * `pageOrigin`, or holds the placeholder. The relay uses it to refuse a
+   * payment from a checkout other than the purchase's (`checkout_mismatch`).
+   */
+  pageUrl?: string;
   request: RelayHttpRequest;
   idempotencyKey: string;
   /**
@@ -42,6 +49,8 @@ export type RelayResponse =
       reason: string;
       retryable?: boolean;
       requestId?: string;
+      /** The relay's next step for the agent. Kept only when a non-empty string. */
+      message?: string;
     }
   | { outcome: "unknown" };
 
@@ -85,6 +94,7 @@ export function parseRelayResponse(value: unknown): RelayResponse {
     }
     const retryable = value.retryable;
     const requestId = value.requestId;
+    const message = value.message;
     return {
       outcome: "refused",
       reason: value.reason,
@@ -92,6 +102,7 @@ export function parseRelayResponse(value: unknown): RelayResponse {
       ...(typeof requestId === "string" && requestId.length > 0
         ? { requestId }
         : {}),
+      ...(typeof message === "string" && message.length > 0 ? { message } : {}),
     };
   }
   if (value.outcome !== "relayed" || !isRecord(value.response)) {
