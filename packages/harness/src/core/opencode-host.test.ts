@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   access,
   mkdtemp,
@@ -36,8 +36,8 @@ const observers: Array<{
   hosted: HostedOpenCode;
   id: string;
   update: (state: AssistantObservation) => void;
-  dispose: ReturnType<typeof vi.fn>;
-  start: ReturnType<typeof vi.fn>;
+  dispose: Mock<(...args: any[]) => any>;
+  start: Mock<(...args: any[]) => any>;
 }> = [];
 const createObserver = vi.fn(
   (
