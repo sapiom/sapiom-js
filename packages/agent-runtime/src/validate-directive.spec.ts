@@ -1,4 +1,12 @@
-import { DisallowedTransitionError, UnknownStepError, type AgentManifest, goto, retry, terminate } from '@sapiom/agent';
+import {
+  DisallowedTransitionError,
+  UnknownStepError,
+  type AgentManifest,
+  goto,
+  pauseUntilSignal,
+  retry,
+  terminate,
+} from '@sapiom/agent';
 
 import { decideRetry, validateDirective } from './validate-directive.js';
 
@@ -55,6 +63,65 @@ describe('validateDirective', () => {
       a: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'continue', target: 'a' }] },
     } as unknown as Steps);
     expect(validateDirective(m, 'a', retry())).toBeNull();
+  });
+
+  it('allows a pause whose timeoutStep matches the declared transition', () => {
+    const m = manifest({
+      a: {
+        timeoutMs: null,
+        inputSchema: null,
+        transitions: [{ kind: 'pause', signal: 's', resumeStep: 'b', timeoutStep: 'c' }],
+      },
+      b: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+      c: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+    } as unknown as Steps);
+    expect(
+      validateDirective(m, 'a', pauseUntilSignal({ signal: 's', resumeStep: 'b', timeoutStep: 'c' })),
+    ).toBeNull();
+  });
+
+  it('rejects a pause whose timeoutStep does not match the declared transition', () => {
+    const m = manifest({
+      a: {
+        timeoutMs: null,
+        inputSchema: null,
+        transitions: [{ kind: 'pause', signal: 's', resumeStep: 'b', timeoutStep: 'c' }],
+      },
+      b: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+      c: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+    } as unknown as Steps);
+    expect(
+      validateDirective(m, 'a', pauseUntilSignal({ signal: 's', resumeStep: 'b', timeoutStep: 'b' })),
+    ).toBeInstanceOf(DisallowedTransitionError);
+  });
+
+  it('rejects a timed pause that omits the timeoutStep its declaration names', () => {
+    // Accepting it would store no timeout branch, so the deadline would fail the run
+    // instead of taking the branch the step declared.
+    const m = manifest({
+      a: {
+        timeoutMs: null,
+        inputSchema: null,
+        transitions: [{ kind: 'pause', signal: 's', resumeStep: 'b', timeoutStep: 'c' }],
+      },
+      b: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+      c: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+    } as unknown as Steps);
+    expect(
+      validateDirective(m, 'a', pauseUntilSignal({ signal: 's', resumeStep: 'b', timeoutMs: 1000 })),
+    ).toBeInstanceOf(DisallowedTransitionError);
+    // Without a deadline there is nothing to route, so omitting it stays valid.
+    expect(validateDirective(m, 'a', pauseUntilSignal({ signal: 's', resumeStep: 'b' }))).toBeNull();
+  });
+
+  it('still allows a timed pause when the declaration has no timeoutStep', () => {
+    const m = manifest({
+      a: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'pause', signal: 's', resumeStep: 'b' }] },
+      b: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' }] },
+    } as unknown as Steps);
+    expect(
+      validateDirective(m, 'a', pauseUntilSignal({ signal: 's', resumeStep: 'b', timeoutMs: 1000 })),
+    ).toBeNull();
   });
 
   it('legacy manifest (no transitions) falls back to continue-target existence', () => {
