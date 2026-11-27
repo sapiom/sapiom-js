@@ -260,7 +260,7 @@ describe("Adyen secured-fields payment bodies", () => {
       expect(adyenPayCandidate(body, [])).toBe(false);
     },
   );
-  // Quadrupling the input must not multiply the time by much more than four.
+  // Growing the input eightfold must take far less than the 64 times a quadratic scan would.
   const growth = (body: (n: number) => string, candidate: boolean) => {
     const time = (n: number) => {
       const text = body(n);
@@ -272,7 +272,7 @@ describe("Adyen secured-fields payment bodies", () => {
     // doesn't read as growth.
     const best = (n: number) => Math.min(time(n), time(n), time(n));
     time(25_000);
-    return best(100_000) / Math.max(best(25_000), 1);
+    return best(200_000) / Math.max(best(25_000), 1);
   };
   it("reads a long body of near-matches in linear time", () => {
     const body = (n: number) =>
@@ -280,18 +280,23 @@ describe("Adyen secured-fields payment bodies", () => {
         note: 'name="x" '.repeat(n) + "&a".repeat(n),
         encryptedCardNumber: "",
       });
-    expect(growth(body, true)).toBeLessThan(8);
+    expect(growth(body, true)).toBeLessThan(24);
   });
   it("reads a long line of multipart-header near-matches in linear time", () => {
     const body = (n: number) =>
       JSON.stringify({ note: "Content-Disposition: ".repeat(n) });
-    expect(growth(body, false)).toBeLessThan(8);
+    expect(growth(body, false)).toBeLessThan(24);
   });
   it.each([
     ["blank lines", (n: number) => "\n".repeat(4 * n)],
     ["commas and blank lines", (n: number) => ",\n \n".repeat(n)],
+    [
+      "escaped Unicode line separators",
+      (n: number) => "\\u2028\\u2029".repeat(n),
+    ],
+    ["CRLF lines", (n: number) => "\r\n".repeat(2 * n)],
   ])("reads a long body of %s in linear time", (_, body) => {
-    expect(growth(body, false)).toBeLessThan(8);
+    expect(growth(body, false)).toBeLessThan(24);
   });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
     const value = encodeURIComponent(
