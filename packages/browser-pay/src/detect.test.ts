@@ -238,6 +238,11 @@ describe("Adyen secured-fields payment bodies", () => {
   });
   it.each([
     ["a bracketed JSON key", '{"paymentMethod[encryptedCardNumber]":""}'],
+    ["a key after a form feed", '\f"encryptedCardNumber":""'],
+    [
+      "a key after an encoded form feed",
+      "%0C%22encryptedCardNumber%22%3A%22%22",
+    ],
     ["a dotted form key", "paymentMethod.encryptedExpiryYear=&x=1"],
   ])("recognises a secured field keyed by %s", (_, body) => {
     expect(adyenPayCandidate(body, [])).toBe(true);
@@ -263,8 +268,11 @@ describe("Adyen secured-fields payment bodies", () => {
       expect(adyenPayCandidate(text, [])).toBe(candidate);
       return performance.now() - started;
     };
-    time(6_250);
-    return Math.min(time(25_000), time(25_000)) / Math.max(time(6_250), 1);
+    // Sizes large enough to take milliseconds, and the best of three runs each, so CI noise
+    // doesn't read as growth.
+    const best = (n: number) => Math.min(time(n), time(n), time(n));
+    time(25_000);
+    return best(100_000) / Math.max(best(25_000), 1);
   };
   it("reads a long body of near-matches in linear time", () => {
     const body = (n: number) =>
