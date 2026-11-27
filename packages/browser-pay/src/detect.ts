@@ -301,7 +301,8 @@ const SECURED_FIELD_KEY =
   "[\\w$.\\[\\]-]*encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)\\]?";
 /**
  * A secured field given a value (even empty), by its key: a JSON member, which
- * starts a line, opens an object or follows a comma
+ * starts a line (after spaces on that line only, so blank lines are never
+ * rescanned), opens an object or follows a comma
  * (`{"paymentMethod[encryptedCardNumber]":`, `+` for a space too), a form
  * field (`encryptedCardNumber=`, or a bare `encryptedCardNumber&`) or a
  * multipart part, whose header starts a line (`Content-Disposition: …;
@@ -310,7 +311,7 @@ const SECURED_FIELD_KEY =
  */
 const SECURED_FIELD = new RegExp(
   [
-    `(?:^|[{,])[\\s+]*["']${SECURED_FIELD_KEY}["'][\\s+]*:`,
+    `(?:^[ \\t+]*|[{,][\\s+]*)["']${SECURED_FIELD_KEY}["'][\\s+]*:`,
     `(?:^|[&?])${SECURED_FIELD_KEY}(?:=|&|$)`,
     `^content-disposition:[^\\r\\n]*;[ \\t]*name=["']?${SECURED_FIELD_KEY}["']?(?=[;\\s]|$)`,
   ].join("|"),

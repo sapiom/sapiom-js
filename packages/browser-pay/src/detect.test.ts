@@ -279,6 +279,12 @@ describe("Adyen secured-fields payment bodies", () => {
       JSON.stringify({ note: "Content-Disposition: ".repeat(n) });
     expect(growth(body, false)).toBeLessThan(8);
   });
+  it.each([
+    ["blank lines", (n: number) => "\n".repeat(4 * n)],
+    ["commas and blank lines", (n: number) => ",\n \n".repeat(n)],
+  ])("reads a long body of %s in linear time", (_, body) => {
+    expect(growth(body, false)).toBeLessThan(8);
+  });
   it("keeps a ciphertext raw in a doubly encoded form value", () => {
     const value = encodeURIComponent(
       encodeURIComponent(JSON.stringify({ n: blob })),

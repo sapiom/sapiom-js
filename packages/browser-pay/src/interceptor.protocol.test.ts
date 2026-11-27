@@ -2557,6 +2557,48 @@ describe("interceptor CDP decisions", () => {
     }
   });
 
+  it("relays a body whose UTF-8 bytes spell a replacement character, read from its entries", async () => {
+    const text = `{"number":"${HELD.number}","note":"\uFFFD"}`;
+    const stub = await startStub();
+    const calls: RelayRequest[] = [];
+    try {
+      const handle = await attachInterceptor(stub.url, {
+        relay: stubPaymentRelay(async (request) => {
+          calls.push(request);
+          return success();
+        }),
+        placeholder: HELD,
+        profileId: "shopify-card-vault",
+      });
+      attachPage(stub.emit);
+      await waitFor(
+        () =>
+          stub.commands.some((command) => command.method === "Fetch.enable"),
+        "Fetch.enable",
+      );
+      stub.emit({
+        method: "Fetch.requestPaused",
+        sessionId: "page-1",
+        params: {
+          requestId: "req-replacement-char",
+          request: {
+            url: "https://checkout.example/sessions",
+            method: "POST",
+            postData: text,
+            postDataEntries: [
+              { bytes: Buffer.from(text, "utf8").toString("base64") },
+            ],
+          },
+        },
+      });
+      await waitFor(() => calls.length === 1, "relay");
+      expect(calls[0].request.body).toBe(text);
+      await handle.detach();
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("refuses to relay postDataEntries that aren't UTF-8, which the text would change", async () => {
     const bytes = Buffer.concat([
       Buffer.from(`{"number":"${HELD.number}","file":"`),
