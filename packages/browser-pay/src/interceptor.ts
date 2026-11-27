@@ -23,7 +23,8 @@ import {
   adyenDetailsCall,
   adyenPaymentResult,
   isAdyenCheckoutUrl,
-  isAdyenSecuredFieldsPayment,
+  adyenPayCandidate,
+  bodyJweHashes,
   redactHeld,
   textHoldsPlaceholderNumber,
   type HeldPlaceholder,
@@ -362,10 +363,11 @@ interface Flight {
   waiters: number;
 }
 
+/** `exact`: the text is the body's bytes, not a lossy decoding of them. */
 type HeldRead =
   | { kind: "unreadable" }
-  | { kind: "miss"; body: string }
-  | { kind: "held"; body: string };
+  | { kind: "miss"; body: string; exact: boolean }
+  | { kind: "held"; body: string; exact: boolean };
 
 interface AdyenChallenge {
   readonly clientKey: string;
@@ -1045,7 +1047,8 @@ class PaymentInterceptor {
       return { action: "fail", reason: "unreadable_body" };
     }
     const adyen =
-      read.kind === "miss" && isAdyenSecuredFieldsPayment(read.body);
+      read.kind === "miss" &&
+      adyenPayCandidate(read.body, this.adyenBlobHashes.values());
     // A watched redirect already belongs to its original challenge.
     const details =
       read.kind === "miss" && !adyen && !redirectWatch
@@ -1056,6 +1059,10 @@ class PaymentInterceptor {
     }
     if (read.kind === "miss" && !adyen && !details) {
       return { action: "continue" };
+    }
+    // Bytes that aren't UTF-8 were replaced when read: relaying the text would change them.
+    if (!read.exact) {
+      return { action: "fail", reason: "unreadable_body" };
     }
     if (this.closed) return { action: "fail", reason: "detached" };
     const targetType = this.sessions.get(entry.sessionId)?.type ?? "";
@@ -1143,9 +1150,18 @@ class PaymentInterceptor {
           return { action: "fail", reason: "destination_not_allowed" };
         }
         const blobs = placeholderBlobHashes(this.adyenBlobHashes);
-        if ("missing" in blobs) {
+        // The body's ciphertexts must be exactly the four observed ones, each
+        // in raw bytes the relay can swap without re-encoding the body.
+        const { raw, swappable } = bodyJweHashes(read.body);
+        const observed = "missing" in blobs ? [] : Object.values(blobs.hashes);
+        if (
+          "missing" in blobs ||
+          !swappable ||
+          raw.size !== observed.length ||
+          observed.some((hash) => !raw.has(hash))
+        ) {
           this.safeWarn("adyen placeholder blobs not observed", {
-            missing: blobs.missing.join(","),
+            missing: "missing" in blobs ? blobs.missing.join(",") : "body",
           });
           return { action: "fail", reason: "adyen_placeholder_unobserved" };
         }
@@ -1533,16 +1549,17 @@ class PaymentInterceptor {
     request: PausedRequest,
   ): Promise<HeldRead> {
     const urlHeld = textHoldsPlaceholderNumber(request.url, this.number);
-    if (urlHeld && this.closed) return { kind: "held", body: "" };
+    if (urlHeld && this.closed) return { kind: "held", body: "", exact: true };
     if (postDataPlan(request) === "empty") {
-      return urlHeld ? { kind: "held", body: "" } : { kind: "miss", body: "" };
+      return { kind: urlHeld ? "held" : "miss", body: "", exact: true };
     }
-    const body = await readBody(this.connection, sessionId, request);
-    if (body === undefined) return { kind: "unreadable" };
+    const read = await readBody(this.connection, sessionId, request);
+    if (read === undefined) return { kind: "unreadable" };
+    const { text: body, exact } = read;
     if (urlHeld || textHoldsPlaceholderNumber(body, this.number)) {
-      return { kind: "held", body };
+      return { kind: "held", body, exact };
     }
-    return { kind: "miss", body };
+    return { kind: "miss", body, exact };
   }
 
   private decisionForOutcome(
@@ -1841,34 +1858,49 @@ function failAfter<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 type PostDataPlan = "inline" | "entries" | "fetch" | "empty";
 
+// The entries' bytes come first: Chrome's inline postData is already decoded, lossily.
 function postDataPlan(request: PausedRequest): PostDataPlan {
+  const entries = request.postDataEntries ?? [];
+  const complete =
+    entries.length > 0 &&
+    entries.every(
+      (entry) => typeof entry.bytes === "string" && entry.bytes.length > 0,
+    );
+  if (complete) return "entries";
   if (typeof request.postData === "string" && request.postData.length > 0) {
     return "inline";
   }
-  if (request.postDataEntries && request.postDataEntries.length > 0) {
-    const missing = request.postDataEntries.some(
-      (entry) => typeof entry.bytes !== "string" || entry.bytes.length === 0,
-    );
-    return missing ? "fetch" : "entries";
-  }
-  if (request.hasPostData) return "fetch";
+  if (entries.length > 0 || request.hasPostData) return "fetch";
   return "empty";
+}
+
+/** UTF-8 text of some bytes, and whether it is exactly those bytes. */
+function utf8Text(bytes: Buffer): { text: string; exact: boolean } {
+  const text = bytes.toString("utf8");
+  return { text, exact: Buffer.from(text, "utf8").equals(bytes) };
+}
+
+/** Text whose bytes are unknown: a replacement character may stand for bytes lost decoding it. */
+function decodedText(text: string): { text: string; exact: boolean } {
+  return { text, exact: !text.includes("\uFFFD") };
 }
 
 async function readBody(
   connection: CdpConnection,
   sessionId: string,
   request: PausedRequest,
-): Promise<string | undefined> {
+): Promise<{ text: string; exact: boolean } | undefined> {
   const plan = postDataPlan(request);
-  if (plan === "empty") return "";
-  if (plan === "inline") return request.postData ?? "";
+  if (plan === "empty") return { text: "", exact: true };
+  if (plan === "inline") return decodedText(request.postData ?? "");
   if (plan === "entries") {
-    return Buffer.concat(
-      (request.postDataEntries ?? []).map((entry) =>
-        Buffer.from(entry.bytes ?? "", "base64"),
+    return utf8Text(
+      Buffer.concat(
+        (request.postDataEntries ?? []).map((entry) =>
+          Buffer.from(entry.bytes ?? "", "base64"),
+        ),
       ),
-    ).toString("utf8");
+    );
   }
   if (!request.networkId) return undefined;
   try {
@@ -1881,9 +1913,9 @@ async function readBody(
     if (!postData) return undefined;
     const body =
       isRecord(result) && result.base64Encoded === true
-        ? Buffer.from(postData, "base64").toString("utf8")
-        : postData;
-    if (isMultipart(request.headers) && multipartOmitsFileBytes(body)) {
+        ? utf8Text(Buffer.from(postData, "base64"))
+        : decodedText(postData);
+    if (isMultipart(request.headers) && multipartOmitsFileBytes(body.text)) {
       return undefined;
     }
     return body;

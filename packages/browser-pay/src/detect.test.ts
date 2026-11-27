@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
+import { adyenBodies } from "../test/adyen-bodies";
 import {
   adyenCheckout,
   adyenClientKeysInRequest,
   adyenDetailsCall,
   adyenPaymentResult,
   isAdyenCheckoutUrl,
-  isAdyenSecuredFieldsPayment,
+  compactJweTokens,
+  bodyJweHashes,
+  adyenPayCandidate,
   redactHeld,
   textHoldsPlaceholderNumber,
 } from "./detect";
@@ -173,34 +177,242 @@ describe("adyenClientKeysInRequest", () => {
 });
 
 describe("Adyen secured-fields payment bodies", () => {
-  const BODY = JSON.stringify({
-    amount: { currency: "EUR", value: 1000 },
-    reference: "order-1",
-    paymentMethod: {
-      type: "scheme",
-      holderName: "J. Smith",
-      encryptedCardNumber: "eyJ.placeholder-number",
-      encryptedExpiryMonth: "eyJ.placeholder-month",
-      encryptedExpiryYear: "eyJ.placeholder-year",
-      encryptedSecurityCode: "eyJ.placeholder-cvc",
-      checkoutAttemptId: "attempt-1",
+  const blob =
+    "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.KEY_-1.aXY-2.Y2lwaGVy_3.dGFn-4";
+  const hash = createHash("sha256").update(blob).digest("hex");
+  it.each(adyenBodies({ encryptedCardNumber: blob }))(
+    "keeps a compact JWE verbatim through $name",
+    ({ body }) => {
+      expect(body).toContain(blob);
+      expect(compactJweTokens(body)).toContain(blob);
+      expect(adyenPayCandidate(body, [])).toBe(true);
     },
-    browserInfo: { userAgent: "x" },
+  );
+  it("recognises opaque field names only by observed hashes", () => {
+    expect(adyenPayCandidate(`opaque=${blob}`, [hash])).toBe(true);
+    expect(adyenPayCandidate(`opaque=${blob}`, [])).toBe(false);
+    expect(encodeURIComponent(blob)).toBe(blob);
+    expect(JSON.stringify(JSON.stringify(blob))).toContain(blob);
   });
-
-  it("recognises only JSON with paymentMethod.encryptedCardNumber", () => {
-    expect(isAdyenSecuredFieldsPayment(BODY)).toBe(true);
-    for (const body of [
-      "",
-      "encryptedCardNumber=eyJ",
-      JSON.stringify({ encryptedCardNumber: "eyJ" }),
-      JSON.stringify({ paymentMethod: { encryptedCardNumber: "" } }),
-      JSON.stringify({ paymentMethod: { encryptedCardNumber: 1 } }),
-      JSON.stringify({ paymentMethod: { type: "scheme" } }),
-      JSON.stringify([{ paymentMethod: { encryptedCardNumber: "eyJ" } }]),
+  it("recognises case-insensitive names through nested percent escapes", () => {
+    expect(
+      adyenPayCandidate(`%22%45ncryptedCardNumber%22:%22${blob}%22`, []),
+    ).toBe(true);
+    expect(adyenPayCandidate(`%2545ncryptedSecurityCode=${blob}`, [])).toBe(
+      true,
+    );
+    expect(adyenPayCandidate('{"number":"plain"}', [])).toBe(false);
+  });
+  it("needs a value given to a field name, not a mention", () => {
+    expect(
+      adyenPayCandidate('{"error":"encryptedCardNumber is required"}', []),
+    ).toBe(false);
+    expect(
+      adyenPayCandidate('{"paymentMethod":{"encryptedCardNumber":"x"}}', []),
+    ).toBe(true);
+    expect(adyenPayCandidate("encryptedSecurityCode=abc", [])).toBe(true);
+    expect(
+      adyenPayCandidate('{"paymentMethod":{"encryptedCardNumber":""}}', []),
+    ).toBe(true);
+  });
+  it.each([
+    [
+      "a form value with + for spaces",
+      new URLSearchParams({ data: '{"encryptedCardNumber" : ""}' }).toString(),
+    ],
+    ["a bracketed form field", "paymentMethod%5BencryptedCardNumber%5D=x"],
+    [
+      "a form key with no equals sign",
+      "encryptedCardNumber&encryptedSecurityCode",
+    ],
+    [
+      "a multipart part",
+      '--b\r\nContent-Disposition: form-data; name="encryptedCardNumber"\r\n\r\nx\r\n--b--',
+    ],
+    [
+      "a bracketed multipart part",
+      "--b\r\nContent-Disposition: form-data; name=paymentMethod[encryptedSecurityCode]\r\n\r\n\r\n--b--",
+    ],
+  ])("recognises a secured field given a value in %s", (_, body) => {
+    expect(adyenPayCandidate(body, [])).toBe(true);
+  });
+  it.each([
+    ["a bracketed JSON key", '{"paymentMethod[encryptedCardNumber]":""}'],
+    ["a key after a form feed", '\f"encryptedCardNumber":""'],
+    [
+      "a key after an encoded form feed",
+      "%0C%22encryptedCardNumber%22%3A%22%22",
+    ],
+    ["a dotted form key", "paymentMethod.encryptedExpiryYear=&x=1"],
+  ])("recognises a secured field keyed by %s", (_, body) => {
+    expect(adyenPayCandidate(body, [])).toBe(true);
+  });
+  it.each([
+    '{"message":"encryptedCardNumber: is required"}',
+    '{"message":"Required field: input[name=\\"encryptedCardNumber\\"]"}',
+    '{"message":"see name=encryptedSecurityCode"}',
+    '{"message":"Invalid \\"encryptedCardNumber\\": required"}',
+    // Adyen Web's own card BIN lookup carries a ciphertext the fields never made.
+    `{"encryptedBin":"${blob}","requestId":"1","supportedBrands":["visa"]}`,
+  ])(
+    "takes no secured-field mention or other ciphertext for a Pay: %s",
+    (body) => {
+      expect(adyenPayCandidate(body, [])).toBe(false);
+    },
+  );
+  // Growing the input eightfold must take far less than the 64 times a quadratic scan would.
+  const growth = (body: (n: number) => string, candidate: boolean) => {
+    const time = (n: number) => {
+      const text = body(n);
+      const started = performance.now();
+      expect(adyenPayCandidate(text, [])).toBe(candidate);
+      return performance.now() - started;
+    };
+    // Sizes large enough to take milliseconds, and the best of three runs each, so CI noise
+    // doesn't read as growth.
+    const best = (n: number) => Math.min(time(n), time(n), time(n));
+    time(25_000);
+    return best(200_000) / Math.max(best(25_000), 1);
+  };
+  it("reads a long body of near-matches in linear time", () => {
+    const body = (n: number) =>
+      JSON.stringify({
+        note: 'name="x" '.repeat(n) + "&a".repeat(n),
+        encryptedCardNumber: "",
+      });
+    expect(growth(body, true)).toBeLessThan(24);
+  });
+  it("reads a long line of multipart-header near-matches in linear time", () => {
+    const body = (n: number) =>
+      JSON.stringify({ note: "Content-Disposition: ".repeat(n) });
+    expect(growth(body, false)).toBeLessThan(24);
+  });
+  it.each([
+    ["blank lines", (n: number) => "\n".repeat(4 * n)],
+    ["commas and blank lines", (n: number) => ",\n \n".repeat(n)],
+    [
+      "escaped Unicode line separators",
+      (n: number) => "\\u2028\\u2029".repeat(n),
+    ],
+    ["CRLF lines", (n: number) => "\r\n".repeat(2 * n)],
+  ])("reads a long body of %s in linear time", (_, body) => {
+    expect(growth(body, false)).toBeLessThan(24);
+  });
+  it("keeps a ciphertext raw in a doubly encoded form value", () => {
+    const value = encodeURIComponent(
+      encodeURIComponent(JSON.stringify({ n: blob })),
+    );
+    expect(value).toContain("%2522");
+    expect(bodyJweHashes(`data=${value}`)).toEqual({
+      raw: new Set([hash]),
+      swappable: true,
+    });
+  });
+  it("separates raw hashes from percent-encoded and JSON-escaped hashes", () => {
+    const other =
+      "eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.UNKNOWN.aXY.Y2lwaGVy.dGFn";
+    const otherHash = createHash("sha256").update(other).digest("hex");
+    for (const encoded of [
+      other.replace(/\./g, "%2E"),
+      other.replace(/\./g, "\\u002e"),
+      other.replace(/\./g, "\\\\u002e"),
     ]) {
-      expect(isAdyenSecuredFieldsPayment(body)).toBe(false);
+      expect(bodyJweHashes(`${blob} ${encoded}`)).toEqual({
+        raw: new Set([hash]),
+        swappable: false,
+      });
+      expect(adyenPayCandidate(`opaque=${encoded}`, [otherHash])).toBe(true);
+      expect(adyenPayCandidate(`opaque=${encoded}`, [])).toBe(false);
     }
+  });
+  it("deduplicates raw hashes", () => {
+    expect(bodyJweHashes(`${blob} ${blob}`)).toEqual({
+      raw: new Set([hash]),
+      swappable: true,
+    });
+    expect(bodyJweHashes("a.b.c.d a..b.c.d")).toEqual({
+      raw: new Set(),
+      swappable: true,
+    });
+  });
+  it.each([
+    ["beside a raw copy", `${blob} ${blob.replace(/\./g, "%2e")} ${blob}`],
+    [
+      "when another run consumes a raw copy",
+      `${blob} ${blob}%2Eextra ${blob.replace(/\./g, "%2E")}`,
+    ],
+  ])("refuses an escaped copy %s", (_, body) => {
+    expect(bodyJweHashes(body)).toEqual({
+      raw: new Set([hash]),
+      swappable: false,
+    });
+  });
+  it.each([
+    ["a JSON escape", `"${blob}\\u0041\\u0041"`],
+    ["a percent escape", `${blob}%41%41`],
+    ["an encoded dot", `${blob}%2Ex`],
+  ])("refuses a raw ciphertext that %s extends", (_, body) => {
+    expect(bodyJweHashes(body)).toEqual({
+      raw: new Set([hash]),
+      swappable: false,
+    });
+  });
+  it.each([
+    ["a newline", `"\\n${blob}"`],
+    ["an escaped space", `"\\u0020${blob}"`],
+    ["an escaped quote", `"{\\"n\\":\\"${blob}\\"}"`],
+  ])("keeps a ciphertext after %s raw and swappable", (_, body) => {
+    expect(bodyJweHashes(body)).toEqual({
+      raw: new Set([hash]),
+      swappable: true,
+    });
+  });
+  it("keeps ciphertexts raw between any delimiters", () => {
+    for (const delimiter of [
+      "+",
+      "%20",
+      "%2B",
+      "\\",
+      "\\x",
+      "é",
+      "&",
+      "\r\n",
+    ]) {
+      expect(bodyJweHashes([blob, blob].join(delimiter))).toEqual({
+        raw: new Set([hash]),
+        swappable: true,
+      });
+    }
+  });
+  it("unescapes deeply nested percent encodings, and refuses past the limit", () => {
+    const encode = (layers: number) => {
+      let text = blob.replace(/\./g, "%2e");
+      for (let i = 1; i < layers; i++) text = text.replace(/%/g, "%25");
+      return text;
+    };
+    expect(adyenPayCandidate(`data=${encode(9)}`, [hash])).toBe(true);
+    expect(bodyJweHashes(`data=${encode(9)}`).swappable).toBe(false);
+    expect(adyenPayCandidate(`data=${encode(40)}`, [])).toBe(true);
+  });
+  it("takes only runs whose first segment is a JWE header for ciphertexts", () => {
+    const noEnc = Buffer.from('{"alg":"RSA-OAEP"}').toString("base64url");
+    expect(
+      compactJweTokens(
+        `https://checkout.shop.example.co.uk/complete 1.2.3.4.5 ${noEnc}.a.b.c.d e30.a.b.c.d`,
+      ),
+    ).toEqual([]);
+  });
+  it("takes a ciphertext with an empty encrypted key, as direct encryption has", () => {
+    const header = Buffer.from('{"alg":"dir","enc":"A256GCM"}').toString(
+      "base64url",
+    );
+    const direct = `${header}..aXY.Y2lwaGVy.dGFn`;
+    expect(compactJweTokens(`${blob} ${direct}`)).toEqual([blob, direct]);
+  });
+  it("never extracts a five-part substring from a longer or incomplete run", () => {
+    expect(compactJweTokens(`${blob}.extra a.b.c.d a..b.c.d ${blob}`)).toEqual([
+      blob,
+    ]);
   });
 });
 

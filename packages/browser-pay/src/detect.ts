@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { ADYEN_RESULT_CODES, type AdyenResultCode } from "./contract.js";
 import { isRecord } from "./guards.js";
 
@@ -170,12 +172,169 @@ export function adyenClientKeysInRequest(
 }
 
 /**
- * True when the body is JSON whose top-level `paymentMethod.encryptedCardNumber`
- * is a non-empty string: an Adyen secured-fields payment, on the merchant's
- * own `/payments` call or on Adyen's `/sessions/{id}/payments`.
+ * A raw body as runs of base64url-and-dot characters, with each percent or
+ * JSON escape a token of its own, so an escape's letters never join a run. A
+ * percent escape of a percent escape (`%2522`) is one token.
  */
-export function isAdyenSecuredFieldsPayment(body: string): boolean {
-  return adyenPaymentMethod(parseJson(body)) !== undefined;
+const BODY_TOKENS =
+  /%(?:25)*[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\["\\/bfnrt]|[A-Za-z0-9_.-]+/g;
+
+/**
+ * The compact JWEs in a body: runs of five base64url segments whose first
+ * decodes to a JWE header naming `alg` and `enc`, so a five-label hostname or
+ * a version string is never taken for a ciphertext. The other segments may be
+ * empty, as a direct-encryption key is.
+ */
+export function compactJweTokens(body: string): string[] {
+  return (body.match(BODY_TOKENS) ?? []).filter(isCompactJwe);
+}
+
+function isCompactJwe(token: string): boolean {
+  if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){4}$/.test(token)) return false;
+  const encoded = token.slice(0, token.indexOf("."));
+  try {
+    const header: unknown = JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8"),
+    );
+    return (
+      typeof header === "object" &&
+      header !== null &&
+      typeof (header as { alg?: unknown }).alg === "string" &&
+      typeof (header as { enc?: unknown }).enc === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
+const JSON_ESCAPES: Record<string, string> = {
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
+const INSPECTION_PASSES = 32;
+
+/**
+ * An inspection copy of a body: JSON and percent escapes undone, layer by
+ * layer, so nested or escaped field names and ciphertexts show. `settled` is
+ * false when layers remain after the last pass. Only for matching; the body
+ * that is relayed is never rewritten.
+ */
+function inspectionText(body: string): { text: string; settled: boolean } {
+  let text = body;
+  for (let pass = 0; pass < INSPECTION_PASSES; pass++) {
+    const next = text.replace(
+      /\\u([0-9a-fA-F]{4})|\\(["\\/bfnrt])|%([0-9a-fA-F]{2})/g,
+      (_, unicode?: string, escaped?: string, percent?: string) =>
+        escaped !== undefined
+          ? (JSON_ESCAPES[escaped] ?? escaped)
+          : String.fromCharCode(Number.parseInt(unicode ?? percent ?? "", 16)),
+    );
+    if (next === text) return { text, settled: true };
+    text = next;
+  }
+  return { text, settled: false };
+}
+
+const sha256Hex = (text: string) =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+
+function sameTokens(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((token, i) => token === right[i]);
+}
+
+interface BodyScan {
+  /** The sha256 of each compact JWE in the raw body. */
+  raw: Set<string>;
+  /** The sha256 of each ciphertext the unescaped body shows. */
+  unescaped: Set<string>;
+  /** Whether a relay can swap every ciphertext in place, byte for byte. */
+  swappable: boolean;
+  /** The unescaped body, for matching field names. */
+  text: string;
+  settled: boolean;
+}
+
+function scanBody(body: string): BodyScan {
+  const raw = compactJweTokens(body);
+  const inspected = inspectionText(body);
+  const decoded = compactJweTokens(inspected.text);
+  // Unescape what is left once every raw ciphertext is gone, so a raw copy can
+  // never stand in for an escaped one.
+  const rest = inspectionText(
+    body.replace(BODY_TOKENS, (token) => (isCompactJwe(token) ? " " : token)),
+  );
+  const revealed = compactJweTokens(rest.text);
+  return {
+    raw: new Set(raw.map(sha256Hex)),
+    unescaped: new Set([...decoded, ...revealed].map(sha256Hex)),
+    // Unescaping must leave each raw ciphertext whole and reveal no other.
+    swappable:
+      inspected.settled &&
+      rest.settled &&
+      revealed.length === 0 &&
+      sameTokens(decoded, raw),
+    text: inspected.text,
+    settled: inspected.settled && rest.settled,
+  };
+}
+
+/**
+ * The sha256 of each compact JWE in the raw body, and whether every one can
+ * be swapped byte for byte: no escape hides a ciphertext or changes where one
+ * ends. A body that isn't swappable is refused.
+ */
+export function bodyJweHashes(body: string): {
+  raw: Set<string>;
+  swappable: boolean;
+} {
+  const { raw, swappable } = scanBody(body);
+  return { raw, swappable };
+}
+
+const SECURED_FIELD_KEY =
+  "[\\w$.\\[\\]-]*encrypted(?:cardnumber|expirymonth|expiryyear|securitycode)\\]?";
+/**
+ * A secured field given a value (even empty), by its key: a JSON member, which
+ * starts a line (after whitespace on that line only, so blank lines are never
+ * rescanned), opens an object or follows a comma
+ * (`{"paymentMethod[encryptedCardNumber]":`, `+` for a space too), a form
+ * field (`encryptedCardNumber=`, or a bare `encryptedCardNumber&`) or a
+ * multipart part, whose header starts a line (`Content-Disposition: …;
+ * name="encryptedCardNumber"`). The name inside a string value, as in a
+ * validation message, is not a key.
+ */
+const SECURED_FIELD = new RegExp(
+  [
+    `(?:^(?:[^\\S\\r\\n\\u2028\\u2029]|\\+)*|[{,][\\s+]*)["']${SECURED_FIELD_KEY}["'][\\s+]*:`,
+    `(?:^|[&?])${SECURED_FIELD_KEY}(?:=|&|$)`,
+    `^content-disposition:[^\\r\\n]*;[ \\t]*name=["']?${SECURED_FIELD_KEY}["']?(?=[;\\s]|$)`,
+  ].join("|"),
+  "im",
+);
+
+/**
+ * Whether a body is an Adyen secured-fields Pay, in any format: it carries a
+ * ciphertext the page's Adyen fields produced, or gives a secured field a
+ * value. A name only mentioned, as in a validation message, doesn't count. A
+ * body too deeply encoded to read counts, so it is refused, not sent on.
+ */
+export function adyenPayCandidate(
+  body: string,
+  observedHashes: Iterable<string>,
+): boolean {
+  const scan = scanBody(body);
+  if (!scan.settled) return true;
+  const seen = new Set(observedHashes);
+  if ([...scan.raw, ...scan.unescaped].some((hash) => seen.has(hash))) {
+    return true;
+  }
+  return SECURED_FIELD.test(scan.text);
 }
 
 /**
@@ -246,15 +405,4 @@ function parseJson(body: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function adyenPaymentMethod(
-  value: unknown,
-): Record<string, unknown> | undefined {
-  if (!isRecord(value) || !isRecord(value.paymentMethod)) return undefined;
-  const method = value.paymentMethod;
-  return typeof method.encryptedCardNumber === "string" &&
-    method.encryptedCardNumber.length > 0
-    ? method
-    : undefined;
 }
